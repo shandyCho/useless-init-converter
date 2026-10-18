@@ -93,6 +93,11 @@ tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 정상이며 실패가 아닙니다.
 - `SKIP transient scope (needs a writable cgroup …)`. cgroup을 만들려면 root가 필요합니다.
 - `Call failed: Job type reload is not applicable …`. 오류가 제대로 반환되는지 확인하는 검사입니다.
+- `tests/sandbox.sh`가 출력하는 `sdcompat[bad.service]: ExecStart=/bin/sh failed: exit status 1`.
+  `bad.service`는 의존성 처리를 검사하려고 일부러 실패하게 만든 유닛입니다.
+
+`check.sh`는 샌드박스를 띄운 직후의 상태를 기대하므로 샌드박스마다 한 번만 실행됩니다. 다시
+실행하려면 샌드박스를 새로 만드세요: `tests/sandbox.sh ~/sdc stop && tests/sandbox.sh ~/sdc`.
 
 이어서 Fedora의 진짜 `systemctl`로 샌드박스를 조작해 보세요.
 

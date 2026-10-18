@@ -95,6 +95,12 @@ tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 lines are normal and not failures:
 - `SKIP transient scope (needs a writable cgroup …)`. Creating cgroups needs root.
 - `Call failed: Job type reload is not applicable …`. That one is a check that an error is returned.
+- `sdcompat[bad.service]: ExecStart=/bin/sh failed: exit status 1`, printed by `tests/sandbox.sh`.
+  `bad.service` fails on purpose, to test how its dependents are handled.
+
+`check.sh` expects the state right after the sandbox starts, so it runs once per
+sandbox. To run it again, recreate the sandbox:
+`tests/sandbox.sh ~/sdc stop && tests/sandbox.sh ~/sdc`.
 
 Then try Fedora's real `systemctl` against the sandbox:
 

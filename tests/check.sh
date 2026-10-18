@@ -11,6 +11,15 @@ MGR="$DEST /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager"
 pass=0
 fail=0
 
+# The checks expect the state right after tests/sandbox.sh (bad.service
+# failed, output files empty, ...), so each sandbox can be checked once.
+if [ -e "$W/checked" ]; then
+    echo "check.sh: $W was already checked; recreate the sandbox first:" >&2
+    echo "  tests/sandbox.sh $W stop && tests/sandbox.sh $W" >&2
+    exit 2
+fi
+touch "$W/checked"
+
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
 bad() { fail=$((fail + 1)); echo "FAIL $*"; }
 
@@ -189,6 +198,11 @@ if [ -n "$SR" ]; then
         && ok "systemd-run --on-active created a timer" || bad "systemd-run --on-active"
     sleep 4
     expect_eq "transient timer fired its service" "$(cat "$R/srt.out" 2>/dev/null)" "fired"
+    # The failed sr-wait.service stays loaded; a reload must not put it into
+    # the s6-rc database (its service directory collided with the daemon's).
+    call Reload && ok "daemon-reload with a failed transient unit loaded"
+    expect_state hello.service active/running
+    expect_state tick.timer active/waiting
 else
     echo "SKIP systemd-run (set SYSTEMD_ROOT or install systemd-run)"
 fi
@@ -252,12 +266,18 @@ fi
 kill $spid 2>/dev/null
 
 echo "== unprivileged caller (ALLOW_UIDS empty, no polkit)"
-pkill -f "sdcompat --config $W/sdcompat.conf daemon" 2>/dev/null
-sleep 0.5
+# Swap the daemon for one with config $1; its PID goes to daemon.pid so that
+# tests/sandbox.sh stop finds it.
+restart_daemon() {
+    kill "$(cat "$W/daemon.pid")" 2>/dev/null
+    sleep 0.5
+    "$BIN" --config "$1" daemon --address "unix:path=$R/bus" >>"$W/daemon.log" 2>&1 &
+    echo $! > "$W/daemon.pid"
+    sleep 1
+}
 grep -v '^ALLOW_UIDS=' "$W/sdcompat.conf" > "$W/unpriv.conf"
 BIN=$(sed -n 's/^RUNNER=//p' "$W/sdcompat.conf")
-"$BIN" --config "$W/unpriv.conf" daemon --address "unix:path=$R/bus" >>"$W/daemon.log" 2>&1 &
-sleep 1
+restart_daemon "$W/unpriv.conf"
 denied() { $B call $MGR "$@" 2>&1 | grep -q "Access denied"; }
 denied StartUnit ss once.service replace && ok "StartUnit denied" || bad "StartUnit allowed"
 denied StopUnit ss hello.service replace && ok "StopUnit denied" || bad "StopUnit allowed"
@@ -278,6 +298,8 @@ if [ -n "$SR" ]; then
     SYSTEMCTL=$(dirname "$SR")/systemctl "$(dirname "$0")/systemctl.sh" start once.service >/dev/null 2>&1 \
         && bad "private socket accepted an unprivileged peer" || ok "private socket refuses an unprivileged peer"
 fi
+# Back to the normal daemon, so the sandbox stays usable.
+restart_daemon "$W/sdcompat.conf"
 
 echo
 echo "passed: $pass  failed: $fail"

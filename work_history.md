@@ -180,14 +180,50 @@ sandbox: its last phase leaves a daemon running without `ALLOW_UIDS`, so a
 second run fails ~27 checks with "Access denied". Stop and recreate the
 sandbox between runs.
 
+Then, at the owner's request ("make check.sh"), made `check.sh` safe to
+rerun. Commits `f14df0e` (fix), and the tests/docs commit after it.
+
+- **Real bug found on the way (`f14df0e`):** `gen::plan()` seeded every unit
+  on the search path, and `TRANSIENT_DIR` is on it. A transient unit still
+  loaded at daemon-reload (a failed `systemd-run` unit stays loaded, as in
+  systemd) went into the s6-rc database while the daemon also supervised it
+  from `RUN_DIR/dyn`. `s6-rc-update` failed ("unable to manage new service
+  directories … File exists"); after the retry, enabled units (hello,
+  tick.timer, watch.path, after-bad) were down. On a real system: any
+  `daemon-reload` after a failed `systemd-run` would stop services. Fix:
+  plan() skips units whose fragment is under `TRANSIENT_DIR`. Regression
+  check added to the systemd-run phase (Reload, then hello and tick.timer
+  still up); it fails on the unfixed build (6 failures) and passes now.
+- **Not understood yet:** why the s6-rc-update retry after that failure left
+  the enabled units down. The fix removes the trigger; the retry path in
+  `gen::regenerate` may still be unsafe after other partial failures.
+- **check.sh reruns, decision:** the checks assume the state right after
+  `sandbox.sh` (bad.service failed, output files empty, sr-wait not created,
+  fd store unused); a second run fails 8 checks on leftover state only.
+  Making every check reset its state was judged not worth it. Instead:
+  `check.sh` marks `$W/checked` and refuses a second run with the recreate
+  command (exit 2); after the unprivileged phase it restarts the normal
+  daemon, so the sandbox stays usable by hand. The daemon PID is now kept in
+  `$W/daemon.pid` (sandbox.sh writes it, check.sh replaces it, `stop` kills
+  it), replacing check.sh's `pkill -f`.
+- **Docs:** check count 102 → 105 in both READMEs; both TESTING manuals say
+  the `bad.service` failure printed by sandbox.sh is expected, and that
+  check.sh runs once per sandbox.
+- **Verified:** `cargo test` ok; `bash -n` on both scripts; fresh sandbox →
+  check.sh 105/105 (1 SKIP: transient scope, needs root); second run refused;
+  `sandbox.sh stop` leaves no sdcompat/dbus-daemon/s6-svscan behind.
+  shellcheck not installed here, not run.
+
 ### Current state
 
 As in session 1, except: this machine is now Fedora 45 (not Artix). skalibs,
 execline and s6 build with rpmbuild on it; s6-rc and s6-linux-init pass the
 staged build against the real s6 RPMs but have not gone through rpmbuild.
-Sandbox suite: 102/102 on Fedora 45 as well as Artix.
+Sandbox suite: 105/105 on Fedora 45 (102/102 before the transient-reload check).
 
 ### Next steps
 
 1. Owner reruns `build-skarnet-rpms.sh` to finish s6, s6-rc, s6-linux-init.
-2. The session 1 next steps still apply.
+2. Look at the s6-rc-update retry in `gen::regenerate`: find out why units
+   were down after it, and whether a failed update should roll back instead.
+3. The session 1 next steps still apply.

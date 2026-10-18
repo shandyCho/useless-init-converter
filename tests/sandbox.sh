@@ -12,7 +12,8 @@ W=${1:-${TMPDIR:-/tmp}/sdcompat-sandbox}
 R=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sdc-test
 
 if [ "${2:-}" = stop ]; then
-    [ -f "$W/pids" ] && kill $(cat "$W/pids") 2>/dev/null || true
+    # The daemon's PID is kept apart: tests/check.sh replaces the daemon.
+    [ -f "$W/pids" ] && kill $(cat "$W/pids") $(cat "$W/daemon.pid" 2>/dev/null) 2>/dev/null || true
     sleep 0.5
     rm -rf "$W" "$R"
     exit 0
@@ -434,7 +435,7 @@ dbus-daemon --config-file="$W/bus.conf" --systemd-activation --nofork --nopidfil
 echo $! >> "$W/pids"
 sleep 0.3
 "$BIN" $C daemon --address "unix:path=$R/bus" >"$W/daemon.log" 2>&1 &
-echo $! >> "$W/pids"
+echo $! > "$W/daemon.pid"
 sleep 0.5
 
 echo "sandbox ready"
