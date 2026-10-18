@@ -13,6 +13,7 @@ Source0:        %{name}-%{version}.tar.gz
 BuildRequires:  cargo
 BuildRequires:  rust
 Requires:       s6
+Requires:       s6-linux-init
 Requires:       s6-rc
 Requires:       execline
 Requires:       dbus-daemon
