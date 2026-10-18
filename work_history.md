@@ -171,11 +171,21 @@ libs6auto.pc`.
   s6-devel needs sudo); their `make install` output matches the `%files`
   lists. No file of s6, s6-rc or s6-linux-init belongs to an installed package.
 
+Fix commit: `73f688a`.
+
+Sandbox suite on Fedora 45 (this machine): `tests/check.sh` passes 102/102
+after a fresh `tests/sandbox.sh`; transient scope SKIPs (needs root for
+`/sys/fs/cgroup/system.slice`). `check.sh` cannot be rerun against the same
+sandbox: its last phase leaves a daemon running without `ALLOW_UIDS`, so a
+second run fails ~27 checks with "Access denied". Stop and recreate the
+sandbox between runs.
+
 ### Current state
 
 As in session 1, except: this machine is now Fedora 45 (not Artix). skalibs,
 execline and s6 build with rpmbuild on it; s6-rc and s6-linux-init pass the
 staged build against the real s6 RPMs but have not gone through rpmbuild.
+Sandbox suite: 102/102 on Fedora 45 as well as Artix.
 
 ### Next steps
 
