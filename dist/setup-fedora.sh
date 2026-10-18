@@ -167,6 +167,34 @@ remove_grub_entry() {
 
 # ---------------------------------------------------------------- steps
 
+# LUKS: volumes the initramfs unlocks (rd.luks.uuid=) are open before s6
+# starts. Anything else in /etc/crypttab is opened by systemd-cryptsetup@
+# units on a systemd boot, which do not exist under s6.
+check_luks() {
+    [ -s /etc/crypttab ] || return 0
+    say "Checking encrypted volumes (/etc/crypttab)"
+    local cmdline name dev uuid late=()
+    cmdline=$(cat /proc/cmdline)
+    while read -r name dev _; do
+        case $name in ''|\#*) continue ;; esac
+        uuid=${dev#UUID=}
+        if [[ " $cmdline " == *" rd.luks.uuid=$uuid "* || " $cmdline " == *" rd.luks.uuid=luks-$uuid "* \
+              || " $cmdline " == *" rd.luks.name=$uuid="* ]]; then
+            echo "  $name: unlocked by the initramfs (fine)"
+        else
+            late+=("$name")
+        fi
+    done </etc/crypttab
+    if [ ${#late[@]} -gt 0 ]; then
+        warn "not unlocked by the initramfs: ${late[*]}"
+        warn "  Under s6 nothing opens these (systemd-cryptsetup@ units are systemd-only),"
+        warn "  so filesystems on them will not be mounted. Add them to the initramfs with"
+        warn "  rd.luks.uuid= on the kernel command line, or leave them unused for this test."
+        confirm "Continue anyway?"
+    fi
+    echo "  The LUKS passphrase prompt will be plain text (the s6 entry disables plymouth)."
+}
+
 install_packages() {
     say "Installing Fedora packages"
     local pkgs=(dbus-daemon earlyoom chrony NetworkManager
@@ -462,6 +490,7 @@ main() {
     check_system
     [ "$UNINSTALL" = 1 ] && uninstall
     print_plan
+    check_luks
     confirm "Continue?"
     install_packages
     install_skarnet

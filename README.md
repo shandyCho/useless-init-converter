@@ -100,6 +100,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 
 ## 아직 구현되지 않은 것
 
+- initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `setup-fedora.sh`가 경고합니다.
 - `Accept=yes` 소켓과 요청 시(on-demand) 소켓 활성화. 서비스는 소켓과 함께 미리 시작됩니다.
 - 시스템 매니저에서의 `systemd-run --pipe`/`--stdio`(파일 디스크립터 전달). `--pty`, `--wait`, `--scope`, `--on-*`, `--user`는 동작합니다.
 - autofs: `.automount` 유닛은 바로 마운트됩니다.

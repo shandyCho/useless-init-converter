@@ -158,6 +158,13 @@ sudo reboot
 In the GRUB menu choose **Fedora (s6 + sdcompat) …**. You will see text
 boot messages instead of the splash screen, then the GDM login screen.
 
+**With LUKS encryption**, the passphrase prompt is plain text
+(`Please enter passphrase for disk …`) among the boot messages, because the s6
+entry disables plymouth. Type the passphrase there as usual. The root disk is
+unlocked by the initramfs exactly as on a normal boot. Additional encrypted
+volumes that the initramfs does not unlock are not opened under s6; the setup
+script warns about them in stage 5.
+
 **If it never reaches GDM,** see [If the s6 boot fails](#if-the-s6-boot-fails).
 
 After logging in to GNOME, open a terminal and go through this list:

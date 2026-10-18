@@ -109,6 +109,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 
 ## Not implemented (yet)
 
+- Encrypted volumes in `/etc/crypttab` that the initramfs does not unlock (systemd opens them with `systemd-cryptsetup@` units). The LUKS root disk is unlocked by the initramfs and works; `setup-fedora.sh` warns about the others.
 - `Accept=yes` sockets, and on-demand socket activation: services are started eagerly, with their sockets.
 - `systemd-run --pipe`/`--stdio` (passing file descriptors) on the system manager. `--pty`, `--wait`, `--scope`, `--on-*` and `--user` work.
 - autofs: `.automount` units mount eagerly.
