@@ -39,8 +39,9 @@ pub fn send(sock: RawFd, data: &[u8], fd: Option<RawFd>) -> std::io::Result<()> 
     Ok(())
 }
 
-/// Receive one message; returns (data, fds).
-pub fn recv(sock: RawFd) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>)> {
+/// Receive one message; returns (data, fds, sender credentials). The
+/// credentials are only present if the socket has SO_PASSCRED set.
+pub fn recv(sock: RawFd) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>, Option<libc::ucred>)> {
     unsafe {
         let mut buf = vec![0u8; 8192];
         let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut libc::c_void, iov_len: buf.len() };
@@ -56,6 +57,7 @@ pub fn recv(sock: RawFd) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>)> {
         }
         buf.truncate(n as usize);
         let mut fds = Vec::new();
+        let mut cred = None;
         let mut c = libc::CMSG_FIRSTHDR(&msg);
         while !c.is_null() {
             if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_RIGHTS {
@@ -64,10 +66,12 @@ pub fn recv(sock: RawFd) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>)> {
                 for i in 0..count {
                     fds.push(OwnedFd::from_raw_fd(std::ptr::read_unaligned(data.add(i))));
                 }
+            } else if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_CREDENTIALS {
+                cred = Some(std::ptr::read_unaligned(libc::CMSG_DATA(c) as *const libc::ucred));
             }
             c = libc::CMSG_NXTHDR(&msg, c);
         }
-        Ok((buf, fds))
+        Ok((buf, fds, cred))
     }
 }
 
@@ -99,7 +103,7 @@ fn connect(path: &Path) -> Option<OwnedFd> {
 pub fn put(path: &Path, key: &str, name: &str, fd: RawFd) -> Result<(), String> {
     let s = connect(path).ok_or("fd store not reachable")?;
     send(s.as_raw_fd(), format!("PUT\0{key}\0{name}").as_bytes(), Some(fd)).map_err(|e| e.to_string())?;
-    let (reply, _) = recv(s.as_raw_fd()).map_err(|e| e.to_string())?;
+    let (reply, _, _) = recv(s.as_raw_fd()).map_err(|e| e.to_string())?;
     if reply == b"OK" {
         Ok(())
     } else {
@@ -115,7 +119,7 @@ pub fn get(path: &Path, key: &str) -> Vec<(String, OwnedFd)> {
     }
     let mut out = Vec::new();
     loop {
-        let Ok((data, mut fds)) = recv(s.as_raw_fd()) else { break };
+        let Ok((data, mut fds, _)) = recv(s.as_raw_fd()) else { break };
         if data == b"END" || data.is_empty() {
             break;
         }
@@ -203,7 +207,7 @@ impl Store {
     }
 
     fn handle(&self, conn: &OwnedFd, limit: &dyn Fn(&str) -> usize) {
-        let Ok((data, mut fds)) = recv(conn.as_raw_fd()) else { return };
+        let Ok((data, mut fds, _)) = recv(conn.as_raw_fd()) else { return };
         let parts: Vec<String> = data.split(|&b| b == 0).map(|p| String::from_utf8_lossy(p).into_owned()).collect();
         let reply = |m: &[u8]| {
             let _ = send(conn.as_raw_fd(), m, None);

@@ -1226,16 +1226,25 @@ impl Runner {
         // sun_path is 108 bytes; fall back to an abstract socket for long paths.
         let path_s = if path_s.len() >= 100 { format!("@sdcompat/notify/{inv}") } else { path_s };
         let fd = socket::bind_unix(&path_s, libc::SOCK_DGRAM, &self.unit)?;
+        // World-writable, as systemd's notify socket: daemons such as chronyd
+        // start as root, drop to their own user, and only then send READY=1.
+        // Senders are checked by their credentials instead (notify_sender_ok).
+        let on: libc::c_int = 1;
+        unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PASSCRED,
+                &on as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as u32,
+            );
+        }
         if !path_s.starts_with('@') {
             let c = cstr(&path_s);
-            unsafe {
-                if let Some(u) = &self.user {
-                    libc::chown(c.as_ptr(), u.uid, self.gid.unwrap_or(u.gid));
-                }
-                libc::chmod(c.as_ptr(), 0o600);
-            }
+            unsafe { libc::chmod(c.as_ptr(), 0o666) };
         }
         self.st.set(keys::NOTIFY_SOCKET, &path_s);
+        let unit_uid = self.user.as_ref().map(|u| u.uid);
 
         let notify = self.notify_fd;
         let timeout_ms = self
@@ -1282,7 +1291,10 @@ impl Runner {
                     (unsafe { libc::kill(main_pid as i32, 0) }) < 0
                 };
                 if pfds[0].revents & libc::POLLIN != 0 {
-                    let Ok((data, fds)) = crate::fdstore::recv(fd) else { continue };
+                    let Ok((data, fds, cred)) = crate::fdstore::recv(fd) else { continue };
+                    if !notify_sender_ok(cred, main_pid, unit_uid) {
+                        continue;
+                    }
                     let msg = String::from_utf8_lossy(&data).into_owned();
                     let mut fdname = "stored".to_string();
                     let (mut store_fds, mut remove) = (false, false);
@@ -1897,6 +1909,18 @@ fn double_fork<F: FnOnce()>(f: F) -> Result<(), String> {
 }
 
 /// s6-svstat on the current directory (finish runs in the service dir).
+/// May this sender talk to a unit's notify socket? Root, the unit's User=,
+/// the main process, or any process in the main process's cgroup (systemd's
+/// NotifyAccess=all; children may notify via systemd-notify).
+fn notify_sender_ok(cred: Option<libc::ucred>, main_pid: u32, unit_uid: Option<u32>) -> bool {
+    let Some(c) = cred else { return false };
+    if c.uid == 0 || Some(c.uid) == unit_uid || c.pid as u32 == main_pid {
+        return true;
+    }
+    let cg = |pid: u32| fs::read_to_string(format!("/proc/{pid}/cgroup")).ok();
+    matches!((cg(c.pid as u32), cg(main_pid)), (Some(a), Some(b)) if a == b)
+}
+
 fn wanted_up() -> bool {
     std::process::Command::new("s6-svstat")
         .args(["-o", "wantedup", "."])
