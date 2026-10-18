@@ -135,13 +135,35 @@ Owner reported `dist/rpm/build-skarnet-rpms.sh` failing in the skalibs build
   `libskarnet.so.2.15.1.0` and the `.so.2.15` / `.so` symlinks. The other four
   were not built here (the script installs each -devel package with sudo dnf).
 
+Fix commit: `6c61147`.
+
+Second report: `dnf install` of execline conflicted with bash on
+`/usr/bin/cd`, `/usr/bin/umask`, `/usr/bin/wait` (bash ships POSIX wrapper
+scripts around its builtins).
+
+- **Decision:** bash keeps those paths. execline-2.9.9.2-2 drops the `cd`
+  and `umask` symlinks (their targets `execline-cd`/`execline-umask` stay) and
+  moves `wait` to `/usr/libexec/execline/wait`. Checked first: sdcompat's
+  stage-2 scripts are `/bin/sh`, setup runs s6-linux-init-maker without `-C`,
+  and in the s6/s6-rc/s6-linux-init sources only the container-mode scripts
+  of s6-linux-init-maker call `/usr/bin/wait`. Hand-written execline scripts
+  must use `execline-cd`/`execline-umask` and the full path of `wait`.
+- **Script bug:** `build-skarnet-rpms.sh` collected RPMs with
+  `find -name "$name-[0-9]*.rpm"`, so after a release bump it picked up both
+  the old and new builds. It now deletes a package's earlier RPMs (in `RPMS/`
+  and `rpms/`) before building it.
+- **Verified:** execline-2.9.9.2-2 builds on fc45; none of its `/usr/bin`
+  files belongs to an installed package. `bash -n` passes on the script;
+  shellcheck is not installed on this machine, not run.
+
 ### Current state
 
-As in session 1, except: skalibs.spec builds with rpmbuild on Fedora 45. The
-other four specs are still verified only by staged build.
+As in session 1, except: skalibs and execline specs build with rpmbuild on
+Fedora 45 (this machine is now Fedora 45, not Artix). s6, s6-rc and
+s6-linux-init are still verified only by staged build.
 
 ### Next steps
 
 1. Owner reruns `build-skarnet-rpms.sh`; the next likely failures are in the
-   `%files` lists of execline/s6/s6-rc/s6-linux-init.
+   `%files` lists or file conflicts of s6/s6-rc/s6-linux-init.
 2. The session 1 next steps still apply.

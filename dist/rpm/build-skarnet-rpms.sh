@@ -55,6 +55,9 @@ else
     echo "==> Building with rpmbuild (each -devel package is installed for the next build)"
     for name in "${ORDER[@]}"; do
         echo "  building $name"
+        # Drop RPMs of earlier releases so only this build is installed/copied.
+        find "$OUT/RPMS" "$OUT/rpms" \( -name "$name-[0-9]*.rpm" -o -name "$name-devel-[0-9]*.rpm" \
+            -o -name "$name-debuginfo-[0-9]*.rpm" -o -name "$name-debugsource-[0-9]*.rpm" \) -delete
         rpmbuild "${TOP[@]}" -ba "$OUT/SPECS/$name.spec" >"$OUT/$name.build.log" 2>&1 \
             || die "$name failed, see $OUT/$name.build.log"
         mapfile -t built < <(find "$OUT/RPMS" -name "$name-[0-9]*.rpm" -o -name "$name-devel-[0-9]*.rpm" | grep -v debug)

@@ -1,6 +1,6 @@
 Name:           execline
 Version:        2.9.9.2
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Non-interactive scripting language
 License:        ISC
 URL:            https://skarnet.org/software/execline/
@@ -47,11 +47,19 @@ Headers, shared library links and pkg-config files for execline.
 # Not %make_install: it sets INSTALL=/usr/bin/install, which lacks the -l
 # (symlink) option of the bundled tools/install.sh.
 %{__make} install DESTDIR=%{buildroot}
+# bash owns /usr/bin/cd, umask and wait (POSIX wrappers around its builtins).
+# The cd and umask links point to execline-cd and execline-umask, which stay;
+# wait moves out of PATH. Only s6-linux-init's container mode (-C, not used by
+# sdcompat) calls it, as /usr/bin/wait.
+rm %{buildroot}%{_bindir}/cd %{buildroot}%{_bindir}/umask
+mkdir -p %{buildroot}%{_libexecdir}/%{name}
+mv %{buildroot}%{_bindir}/wait %{buildroot}%{_libexecdir}/%{name}/wait
 
 %files
 %license COPYING
 %doc AUTHORS NEWS README
 %{_bindir}/*
+%{_libexecdir}/%{name}/
 %{_libdir}/lib*.so.*
 
 
@@ -61,5 +69,9 @@ Headers, shared library links and pkg-config files for execline.
 %{_libdir}/pkgconfig/libexecline.pc
 
 %changelog
+* Mon Oct 19 2026 sdcompat - 2.9.9.2-2
+- Do not ship /usr/bin/cd, umask, wait (owned by bash); wait moves to
+  /usr/libexec/execline
+
 * Sun Oct 18 2026 sdcompat - 2.9.9.2-1
 - Initial package
