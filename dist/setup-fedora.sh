@@ -15,8 +15,10 @@
 #   --enforcing     do not add enforcing=0 to the s6 boot entry (default: SELinux
 #                   permissive on that entry only, until you have a local policy)
 #   --no-grub       do not add the boot entry
-#   --build-s6      build skalibs/execline/s6/s6-rc/s6-linux-init from source
-#                   even if Fedora packages exist
+#   --rpms=DIR      install skalibs/execline/s6/s6-rc/s6-linux-init from RPMs
+#                   built with dist/rpm/build-skarnet-rpms.sh (recommended:
+#                   Fedora does not package them)
+#   --build-s6      instead build them from source into /usr (untracked by rpm)
 #   --rebuild       rebuild sdcompat even if target/release/sdcompat exists
 #   --remove-s6     with --uninstall: also remove the skarnet tools this script built
 #   --no-journal    no systemd-journald: rsyslog + per-service s6-log directories
@@ -47,6 +49,7 @@ declare -A SKARNET_SHA256=(
 )
 SKARNET_MANIFEST=/var/lib/sdcompat/skarnet-files.txt
 
+RPM_DIR=""
 DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0 JOURNAL=1 REMOVE_S6=0
 KI_PLUGIN=/etc/kernel/install.d/90-sdcompat.install
 for a in "$@"; do
@@ -56,11 +59,12 @@ for a in "$@"; do
         --enforcing) ENFORCING=1 ;;
         --no-grub) GRUB=0 ;;
         --build-s6) BUILD_S6=1 ;;
+        --rpms=*) RPM_DIR=${a#--rpms=} ;;
         --rebuild) REBUILD=1 ;;
         --uninstall) UNINSTALL=1 ;;
         --no-journal) JOURNAL=0 ;;
         --remove-s6) REMOVE_S6=1 ;;
-        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -179,6 +183,16 @@ install_packages() {
 install_skarnet() {
     say "Installing skalibs, execline, s6, s6-rc, s6-linux-init"
     local missing=()
+    if [ -n "$RPM_DIR" ]; then
+        local rpms=()
+        local f
+        for f in "$RPM_DIR"/*.rpm; do
+            case $f in *.src.rpm|*-debuginfo-*|*-debugsource-*) ;; *) [ -e "$f" ] && rpms+=("$f") ;; esac
+        done
+        [ ${#rpms[@]} -gt 0 ] || [ "$DRY" = 1 ] || die "no RPMs in $RPM_DIR (build them with dist/rpm/build-skarnet-rpms.sh)"
+        run dnf install -y "${rpms[@]}"
+        return
+    fi
     if [ "$BUILD_S6" = 0 ]; then
         local p
         for p in skalibs execline s6 s6-rc s6-linux-init; do
@@ -190,7 +204,13 @@ install_skarnet() {
             run dnf install -y skalibs execline s6 s6-rc s6-linux-init
             return
         fi
-        warn "not packaged for this Fedora release: ${missing[*]}; building all five from source"
+        if [ "$DRY" = 0 ]; then
+            die "not packaged for this Fedora release: ${missing[*]}.
+  Recommended: build RPMs with   dist/rpm/build-skarnet-rpms.sh
+               then run          sudo $0 --rpms=\$HOME/rpmbuild-skarnet/rpms
+  Or install from source into /usr (not tracked by rpm) with --build-s6."
+        fi
+        warn "not packaged: ${missing[*]} (dry run continues as if --build-s6 were given)"
     fi
     # Building into /usr must not overwrite files owned by installed RPMs, and
     # the five must be versions that fit together.
@@ -400,7 +420,7 @@ print_plan() {
 This will set up booting Fedora with s6-linux-init + s6-rc + sdcompat:
 
   * install: dbus-daemon earlyoom chrony NetworkManager$([ "$JOURNAL" = 1 ] || echo " rsyslog"), the skarnet tools
-    (from Fedora if packaged, else built from skarnet.org into /usr), sdcompat
+    ($( [ -n "$RPM_DIR" ] && echo "RPMs from $RPM_DIR" || { [ "$BUILD_S6" = 1 ] && echo "built from skarnet.org into /usr" || echo "Fedora packages"; } )), sdcompat
   * write:   /etc/sdcompat/ (config, s6 services, boot options),
              $S6LI_BASE, /usr/sbin/init-selinux, $LIBEXEC
   * enable:  chronyd, NetworkManager, gdm; default target graphical.target

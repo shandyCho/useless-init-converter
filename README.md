@@ -145,19 +145,24 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 ## Deploying on Fedora (do it in a VM first)
 
+Fedora doesn't package skalibs, execline, s6, s6-rc or s6-linux-init, so build
+RPMs for them first (specs in `dist/rpm/`, sources checked against pinned SHA-256 sums):
+
 ```sh
-dist/setup-fedora.sh --dry-run     # show every command, change nothing
-sudo dist/setup-fedora.sh          # prints the plan and asks before starting
+dist/rpm/build-skarnet-rpms.sh                        # uses mock if you're in the mock group
+dist/setup-fedora.sh --dry-run --rpms=$HOME/rpmbuild-skarnet/rpms
+sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 ```
+
+`--build-s6` installs them from source into `/usr` instead (not tracked by rpm).
 
 The script keeps the normal systemd boot as the default and **adds** a GRUB
 entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
 `/var/lib/sdcompat/setup-backup/`. It does the following:
 
-1. Installs `dbus-daemon`, `rsyslog`, `earlyoom`, `chrony`, `NetworkManager`, and the
-   skarnet tools: from Fedora if all five are packaged, otherwise built from
-   skarnet.org into `/usr` (skalibs 2.15.1.0, execline 2.9.9.2, s6 2.15.1.0,
-   s6-rc 0.7.0.0, s6-linux-init 1.2.0.2).
+1. Installs `dbus-daemon`, `earlyoom`, `chrony`, `NetworkManager`, and the
+   skarnet tools (skalibs 2.15.1.0, execline 2.9.9.2, s6 2.15.1.0, s6-rc 0.7.0.0,
+   s6-linux-init 1.2.0.2) from your RPMs (`--rpms=DIR`) or from source (`--build-s6`).
 2. Builds and installs sdcompat. If the sdcompat RPM from `dist/sdcompat.spec` is installed, it uses that instead.
 3. Writes `/etc/sdcompat/`: the config, the s6 services (early boot, dbus-daemon,
    the daemon, earlyoom) and the boot options. systemd-journald runs as an s6
