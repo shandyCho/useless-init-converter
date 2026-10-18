@@ -118,3 +118,30 @@ Bugs found while working, worth remembering:
    TPM2/FIDO2 auto-unlock. Waiting for the owner's answer on whether they use
    TPM2/FIDO2 or type the LUKS passphrase.
 3. After testing: make the s6 entry the default (`grubby --set-default=…`).
+
+## Session 2: 2026-10-19
+
+Owner reported `dist/rpm/build-skarnet-rpms.sh` failing in the skalibs build
+(first run on a real Fedora machine, fc45).
+
+- **Bug:** `%make_install` passes `INSTALL=/usr/bin/install -p` to make. That
+  replaces skarnet's bundled `tools/install.sh`, whose `-l` option makes
+  symlinks (`libskarnet.so.2.15 -> …`); coreutils `install` has no `-l`, so
+  `%install` failed with "invalid option -- 'l'".
+- **Fix:** all five specs now use `%{__make} install DESTDIR=%{buildroot}`.
+  execline, s6, s6-rc and s6-linux-init use the same Makefile pattern, so they
+  would have failed the same way.
+- **Verified:** skalibs builds with rpmbuild on fc45; the RPMs contain
+  `libskarnet.so.2.15.1.0` and the `.so.2.15` / `.so` symlinks. The other four
+  were not built here (the script installs each -devel package with sudo dnf).
+
+### Current state
+
+As in session 1, except: skalibs.spec builds with rpmbuild on Fedora 45. The
+other four specs are still verified only by staged build.
+
+### Next steps
+
+1. Owner reruns `build-skarnet-rpms.sh`; the next likely failures are in the
+   `%files` lists of execline/s6/s6-rc/s6-linux-init.
+2. The session 1 next steps still apply.

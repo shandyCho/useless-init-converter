@@ -40,7 +40,9 @@ directory needed to build skarnet.org software.
 %make_build
 
 %install
-%make_install
+# Not %make_install: it sets INSTALL=/usr/bin/install, which lacks the -l
+# (symlink) option of the bundled tools/install.sh.
+%{__make} install DESTDIR=%{buildroot}
 
 %files
 %license COPYING

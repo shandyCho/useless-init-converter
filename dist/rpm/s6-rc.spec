@@ -44,7 +44,9 @@ Headers, shared library links and pkg-config files for s6-rc.
 %make_build
 
 %install
-%make_install
+# Not %make_install: it sets INSTALL=/usr/bin/install, which lacks the -l
+# (symlink) option of the bundled tools/install.sh.
+%{__make} install DESTDIR=%{buildroot}
 
 %files
 %license COPYING
