@@ -1,0 +1,120 @@
+# Work history
+
+Running log of the work on sdcompat: goals, decisions and their reasons,
+current state, and what is left. Newest session last. Read this before
+starting work; append a new session entry when you finish.
+
+## Project goal (from the owner)
+
+- Run **Fedora with GNOME** while replacing **systemd as PID 1 with s6**
+  (s6-linux-init + s6-rc). Not OpenRC.
+- Keep Fedora's tooling: dnf, SELinux enforcing by default, fresh packages.
+- Approach chosen by the owner: a **translation layer**. Programs keep using
+  systemd's interfaces (`systemctl`, libsystemd, D-Bus), and sdcompat carries
+  them out with s6-rc.
+- The owner builds Fedora packages and tests in a Fedora VM. The development
+  machine is Artix Linux (s6 init), user `fraufaust37`.
+- The owner's disk is encrypted with LUKS2.
+
+## Key design decisions (and why)
+
+1. **Protocol-level emulation, not library replacement.** sdcompat serves
+   `org.freedesktop.systemd1` on the system bus and on `/run/systemd/private`.
+   The real `systemctl`/libsystemd talk to it unchanged. libsystemd works
+   without systemd as PID 1, and clients that speak the protocols directly
+   (Go/Python/Rust libraries) are covered too.
+2. **Keep the `systemd` package installed (Mode A).** It still provides
+   systemctl, udevd, tmpfiles, sysusers, kernel-install and libsystemd; only
+   PID 1 changes. This avoids dnf's protected-package problems, and systemd's
+   RPM file triggers (`daemon-reload`, `preset`) reach sdcompat.
+3. **GNOME needs a real user manager.** GNOME 49 starts its session through
+   `systemd --user`. Rewriting that was judged out of scope, so the **real
+   systemd-logind and `systemd --user` run as supervised services**, and
+   sdcompat provides the PID 1 API they need (transient slices/scopes with
+   PIDFDs, on-demand `user@UID.service`, PAMName=, Delegate=, shutdown targets).
+   elogind was rejected: no user manager, so no GNOME 49.
+4. **s6-rc only orders; sdcompat enforces requirements.** s6-rc has no soft
+   dependencies, so a failing wanted unit would block everything after it.
+   Every start is reported to s6-rc as successful; the real result is recorded
+   in state files; the runner of a dependent refuses to start (result
+   `dependency`) when a `Requires=/BindsTo=/Requisite=` unit failed; the daemon
+   retries failed requirements on start.
+5. **Real journald as an s6 service** (default `JOURNAL=yes`). The runner
+   connects service output to journald's stdout stream like PID 1 does, and
+   the cgroup layout matches systemd's (`system.slice/<unit>`), so
+   `journalctl -u` and `systemctl status` logs work. `JOURNAL=no` keeps
+   rsyslog + per-service s6-log.
+6. **The initramfs is still Fedora's systemd-based dracut image.** It unlocks
+   LUKS and mounts root, then `init=/usr/sbin/init-selinux` loads the SELinux
+   policy and execs s6-linux-init. No systemd process survives the switch.
+7. **Safety at install:** the normal systemd boot stays the default; setup only
+   adds a GRUB entry "Fedora (s6 + sdcompat)" (SELinux permissive, no plymouth),
+   keeps backups, and offers rollback (`sdcompat.db=previous`, `sdcompat.reload=0`).
+
+## Session 1: 2026-10-18 to 2026-10-19
+
+Built the whole project from scratch in one long session. Commits, in order:
+
+| Commit | What |
+|---|---|
+| `9f0fd45` | Core: unit parser/loader, s6-rc generator, runner, D-Bus daemon |
+| `69c8e29` | Fedora dist files; `/run/systemd/private` (systemd 259's root systemctl uses only that socket) |
+| `6e4e928` | Timer units (calendar engine, monotonic timers, Persistent=, list-timers) |
+| `252d6da` | GNOME stack: logind + user manager support |
+| `509f8b7` | `dist/setup-fedora.sh` |
+| `101d05a` | Path/mount/swap units, systemd-run, journald integration, offline updates, kernel-install plugin |
+| `dfea75e` | Fixes for a hostile review (16 findings) and an unprivileged-caller test phase |
+| `b3c81d2` | RPM specs for skalibs, execline, s6, s6-rc, s6-linux-init (Fedora does not package them) |
+| `97e1e4a` | `dist/rpm/build-skarnet-rpms.sh`; setup `--rpms=DIR` |
+| `983ba8c` | README in Korean (`README.md`) and English (`README-us.md`) |
+| `86a7e68` | Testing manual `TESTING.md` / `TESTING-us.md`; `tests/collect-diagnostics.sh` |
+| `110e5f2` | LUKS: setup warns about crypttab volumes the initramfs does not unlock |
+
+Hostile review highlights (all fixed in `dfea75e`): forged `ActivationRequest`
+let any user start units as root (now only the bus daemon is accepted); one
+failing wanted unit blocked all services (design change, see decision 4);
+plus polkit, fd store, caches, job queue/cancel, capability and group fixes.
+
+Bugs found while working, worth remembering:
+- Rust 2021: a `MutexGuard` in an `if let` condition lives through the `else`
+  branch. Re-locking there deadlocked the daemon. Bind the value first.
+- Reading inotify events from an unaligned `u8` buffer panics in debug builds;
+  use `read_unaligned`.
+- `pkill -f` with a pattern contained in your own shell command line kills the
+  shell; match on process name (`pkill -x`).
+- zsh does not word-split `$var`; run such loops under bash.
+- Heredocs nested in a heredoc: use distinct delimiters (`PYEOF`).
+
+## Current state (end of session 1)
+
+- **Sandbox suite:** `tests/check.sh` passes 102/102 on Artix (unprivileged,
+  private s6-svscan/s6-rc/D-Bus), including Fedora 44's real `systemctl` and
+  `systemd-run` (extracted RPM, `SYSTEMD_ROOT=`).
+- **Verified only by staged build, not rpmbuild:** the five skarnet specs
+  (no rpm tooling or containers on the Artix machine).
+- **Implemented but never run (need root / a real Fedora boot):** cgroup
+  delegation, PAMName=, sandboxing, transient scopes creating cgroups, real
+  journald with the invocation-ID xattr, real logind and `systemd --user`,
+  polkit granting access, an actual s6 boot, offline updates.
+- **Unverified risk:** whether `systemctl daemon-reload` (s6-rc-update) during
+  a GNOME session disturbs on-demand units such as `user@1000.service`.
+- **Not implemented:** `Accept=yes` sockets and on-demand socket activation,
+  `systemd-run --pipe/--stdio`, autofs, `AccuracySec=`/`WakeSystem=`, watchdog,
+  credentials, more sandboxing (`PrivateDevices/Network`, seccomp), cancelling
+  running jobs, `ExecStop=` when s6-rc stops units directly, crypttab volumes
+  not unlocked by the initramfs.
+- **Repository:** `https://github.com/shandyCho/sdcompat` (private). The owner
+  pushes; this machine has no GitHub credentials. At the end of session 1,
+  `110e5f2` and this file were not pushed yet.
+
+## Next steps
+
+1. Owner runs `TESTING.md` stages 1–6 on a Fedora 44 Workstation VM and sends
+   `tests/collect-diagnostics.sh` archives. Likely trouble, in order: RPM
+   `%files` lists, the first s6 boot, the GNOME login.
+2. Optional, discussed but not started: a systemd-free initramfs for the s6
+   entry only (dracut without its systemd modules, separate
+   `initramfs-<kver>-s6.img`, rebuilt by the kernel-install plugin). Loses
+   TPM2/FIDO2 auto-unlock. Waiting for the owner's answer on whether they use
+   TPM2/FIDO2 or type the LUKS passphrase.
+3. After testing: make the s6 entry the default (`grubby --set-default=…`).
