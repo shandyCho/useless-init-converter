@@ -1244,7 +1244,9 @@ impl Runner {
             unsafe { libc::chmod(c.as_ptr(), 0o666) };
         }
         self.st.set(keys::NOTIFY_SOCKET, &path_s);
-        let unit_uid = self.user.as_ref().map(|u| u.uid);
+        // Without User= the service runs as we do. Matching the uid also
+        // covers a notifying child that exits before its cgroup is read.
+        let unit_uid = Some(self.user.as_ref().map(|u| u.uid).unwrap_or_else(|| unsafe { libc::geteuid() }));
 
         let notify = self.notify_fd;
         let timeout_ms = self
