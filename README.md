@@ -119,6 +119,11 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
   만드는 BLS 항목을 복사하고 `/etc/sdcompat/boot-options`의 s6 옵션을 추가합니다. s6 항목은
   커널 업데이트를 따라가고, 제거된 커널의 항목은 함께 지워집니다.
 
+## Fedora에서 시험하기
+
+새로 클론하는 것부터 s6 위의 GNOME 세션까지, 확인할 것과 문제를 보고하는 방법을 단계별로
+정리한 안내서: [TESTING.md](TESTING.md).
+
 ## root 없이 시험해 보기
 
 s6, s6-rc, execline, dbus-daemon, busctl, python3가 필요합니다(Fedora에서는 먼저

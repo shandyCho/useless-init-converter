@@ -1,0 +1,239 @@
+# Fedora에서 sdcompat 시험하기
+
+[English](TESTING-us.md) | **한국어**
+
+이 안내서는 `https://github.com/shandyCho/sdcompat`을 새로 클론하는 것부터, s6를
+PID 1로 두고 Fedora의 GNOME 세션을 띄우는 것까지 다룹니다. 단계는 영향이 없는 것부터
+시스템을 바꾸는 것 순서로 나뉘어 있습니다. 실패한 첫 단계에서 멈추고 알려 주세요
+([문제 보고하기](#문제-보고하기) 참고).
+
+| 단계 | root 필요 | 시스템 변경 | 소요 시간 |
+|---|---|---|---|
+| 1. 코드와 도구 받기 | 예 (dnf) | 빌드 도구 설치 | 10분 |
+| 2. s6 RPM 빌드 | 예 (dnf) | 패키지 5개 설치 | 10분 |
+| 3. 샌드박스 테스트 | 아니요 | 없음 | 5분 |
+| 4. 변환 미리보기 | 예 (읽기 전용) | 없음 | 2분 |
+| 5. 설치 | 예 | 부팅 항목, `/etc/sdcompat` 추가 | 10분 |
+| 6. s6로 부팅 | 예 | 새 항목으로 부팅 | 15분 |
+
+## 0. 시작하기 전에
+
+- **가상 머신**에 **Fedora 44 Workstation**(GNOME)을 설치해 쓰세요. 메모리 4 GB,
+  디스크 30 GB 이상이 좋습니다. 5단계 전에 **스냅샷을 찍어 두세요**. 부팅이
+  잘못됐을 때 가장 빨리 되돌리는 방법입니다.
+- `sudo`를 쓸 수 있는 일반 사용자로 로그인하세요.
+- **root 비밀번호를 설정하세요.** Fedora Workstation은 기본적으로 root가 잠겨 있어서,
+  설정하지 않으면 6단계의 복구 콘솔을 쓸 수 없습니다.
+  ```sh
+  sudo passwd root
+  ```
+- 부팅 항목을 고를 수 있도록 GRUB 메뉴가 항상 보이게 하세요.
+  ```sh
+  sudo grub2-editenv - unset menu_auto_hide
+  ```
+
+## 1. 코드와 빌드 도구 받기
+
+저장소가 비공개이므로 먼저 GitHub에 로그인해야 합니다. GitHub CLI가 가장 간단합니다.
+
+```sh
+sudo dnf install -y git gh
+gh auth login                      # GitHub.com, HTTPS를 고르고 브라우저로 로그인
+gh repo clone shandyCho/sdcompat
+cd sdcompat
+git log -1 --oneline               # 보고할 때 쓸 커밋 해시를 적어 두세요
+```
+
+(GitHub에 SSH 키를 등록해 두었다면 `git clone git@github.com:shandyCho/sdcompat.git`도
+됩니다.)
+
+빌드와 테스트에 필요한 것을 모두 설치합니다.
+
+```sh
+sudo dnf install -y gcc make rpm-build cargo rust dbus-daemon python3 curl
+```
+
+## 2. s6 패키지 빌드와 설치
+
+Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init를 패키지로 제공하지 않습니다.
+빌드 스크립트가 소스를 내려받아 고정된 SHA-256 값으로 검증하고, 의존성 순서대로
+RPM을 빌드합니다.
+
+```sh
+dist/rpm/build-skarnet-rpms.sh
+```
+
+- mock이 없으면 `rpmbuild`를 씁니다. 다음 패키지가 앞 패키지를 이용해 빌드되므로,
+  각 `-devel` 패키지를 설치할 때 `sudo` 비밀번호를 묻습니다.
+- mock을 쓰려면(`sudo dnf install mock && sudo usermod -aG mock $USER` 후 로그아웃했다가
+  다시 로그인) 깨끗한 chroot 안에서 모두 빌드합니다.
+
+RPM은 `~/rpmbuild-skarnet/rpms`에 생깁니다. 전부 설치하세요.
+
+```sh
+sudo dnf install -y ~/rpmbuild-skarnet/rpms/*.rpm
+rpm -q skalibs execline s6 s6-rc s6-linux-init     # 다섯 개가 모두 나와야 합니다
+```
+
+**패키지 빌드가 실패하면** 로그가 `~/rpmbuild-skarnet/<이름>.build.log`에 있습니다.
+마지막 50줄을 보내 주세요.
+
+## 3. 샌드박스 테스트 (root 불필요, 시스템 변경 없음)
+
+샌드박스는 별도의 s6-svscan, s6-rc, D-Bus 버스를 사용자 권한으로 실행합니다. 시스템이
+systemd로 부팅되어 있어도 실행 중인 시스템은 건드리지 않습니다.
+
+```sh
+cargo build
+tests/sandbox.sh ~/sdc
+tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
+```
+
+**기대 결과:** 마지막 줄이 `passed: N  failed: 0`입니다(N은 100개 정도). 다음 줄은
+정상이며 실패가 아닙니다.
+- `SKIP transient scope (needs a writable cgroup …)`. cgroup을 만들려면 root가 필요합니다.
+- `Call failed: Job type reload is not applicable …`. 오류가 제대로 반환되는지 확인하는 검사입니다.
+
+이어서 Fedora의 진짜 `systemctl`로 샌드박스를 조작해 보세요.
+
+```sh
+tests/systemctl.sh status hello.service
+tests/systemctl.sh list-units --all
+tests/systemctl.sh list-timers
+tests/sandbox.sh ~/sdc stop
+```
+
+**검사가 실패하면** 샌드박스를 멈추기 전에 로그를 모으세요.
+
+```sh
+tests/collect-diagnostics.sh ~/sdc
+```
+
+## 4. 변환 미리보기 (읽기 전용)
+
+아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 sdcompat이 어떻게 변환할지 보여줍니다.
+
+```sh
+cargo build --release
+sudo ./target/release/sdcompat plan > ~/sdcompat-plan.txt
+head -3 ~/sdcompat-plan.txt
+grep -A3 -E '^(gdm|NetworkManager|systemd-logind|chronyd|accounts-daemon)\.service ' ~/sdcompat-plan.txt
+```
+
+확인할 것:
+- 첫 줄들: 변환된 유닛과 건너뛴 유닛의 수.
+- 위 서비스들의 `warning:` 줄. 대부분 적용되지 않는 샌드박스 지시어이며 예상된 것입니다.
+- 끝의 `skipped units:` 목록. `systemd-*` 유닛은 의도적으로 건너뜁니다.
+
+## 5. 설치 (먼저 VM 스냅샷을 찍으세요)
+
+미리 본 뒤 설치합니다.
+
+```sh
+dist/setup-fedora.sh --dry-run --rpms=$HOME/rpmbuild-skarnet/rpms
+sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
+```
+
+스크립트는 계획을 보여주고, 무엇이든 바꾸기 전에 확인을 받습니다. 일반 systemd 부팅을
+기본값으로 두고 **"Fedora (s6 + sdcompat)"** 부팅 항목을 추가합니다. 이 항목은 SELinux를
+permissive 모드로 부팅합니다.
+
+결과 확인:
+
+```sh
+ls /boot/loader/entries/ | grep sdcompat           # 새 부팅 항목
+head -3 /var/lib/sdcompat/current/report.txt       # 변환 요약
+```
+
+## 6. s6로 부팅하기
+
+```sh
+sudo reboot
+```
+
+GRUB 메뉴에서 **Fedora (s6 + sdcompat) …**를 고르세요. 스플래시 화면 대신 텍스트 부팅
+메시지가 보이고, 이어서 GDM 로그인 화면이 나옵니다.
+
+**GDM까지 가지 못하면** [s6 부팅이 실패할 때](#s6-부팅이-실패할-때)를 보세요.
+
+GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세요.
+
+| 확인 항목 | 명령 | 기대 결과 |
+|---|---|---|
+| s6가 PID 1 | `cat /proc/1/comm` | `s6-svscan` |
+| 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |
+| 실패한 유닛 | `systemctl --failed` | 없는 것이 좋습니다. 있으면 적어 두세요 |
+| 저널 | `journalctl -b \| head` | 이번 부팅의 로그 |
+| status의 로그 | `systemctl status NetworkManager` | 서비스의 최근 로그 줄이 보입니다 |
+| 로그인 세션 | `loginctl` | 내 사용자의 세션 |
+| 사용자 매니저 | `systemctl --user status` | 사용자 서비스 트리 |
+| 네트워크 | `ping -c 3 fedoraproject.org` | 응답이 옵니다 |
+| 시간 동기화 | `chronyc tracking` | 기준 시간 소스가 있습니다 |
+| 타이머 | `systemctl list-timers` | 다음 실행 시각이 있는 타이머들 |
+| systemd-run | `sudo systemd-run --wait true` | `Finished with result: success` |
+| 마운트 | `systemctl status tmp.mount` | `active (mounted)` |
+| GNOME | 설정, 파일, 터미널을 열고 화면 잠금과 해제 | 모두 동작 |
+| 전원 | 로그아웃 후 다시 로그인, 그다음 GNOME 메뉴로 전원 끄기 | 둘 다 동작 |
+
+그다음 결과를 모으세요(모두 잘 동작해도 해 주세요).
+
+```sh
+sudo tests/collect-diagnostics.sh
+```
+
+## s6 부팅이 실패할 때
+
+1. **Ctrl+Alt+F9**를 누르세요. 나머지 부팅이 실패해도 그곳에서는 복구용 로그인
+   프롬프트가 실행됩니다. root로 로그인한 뒤:
+   ```sh
+   tail -50 /run/uncaught-logs/current      # s6와 서비스가 출력한 내용
+   s6-rc -a list                            # 실행 중인 것
+   ```
+2. 최신 s6 데이터베이스가 문제라면, 재부팅해서 GRUB의 s6 항목에서 **e**를 누르고
+   `linux` 줄에 다음 중 하나를 추가하세요.
+   - `sdcompat.db=previous`는 마지막 변경 이전의 데이터베이스로 부팅합니다.
+   - `sdcompat.reload=0`은 부팅 시 데이터베이스 재생성을 건너뜁니다.
+3. 빠져나오려면 재부팅해서 일반 Fedora 항목을 고르세요. journald가 실행됐었다면 실패한
+   s6 부팅의 로그를 `journalctl -b -1`로 볼 수 있습니다.
+4. 들어갈 수 있는 부팅에서 `sudo tests/collect-diagnostics.sh`를 실행하고 압축 파일을
+   보내 주세요. 복구 콘솔만 쓸 수 있다면 `/run/uncaught-logs/current`를 보내 주세요.
+
+VM 스냅샷으로 되돌리면 모든 변경이 사라집니다.
+
+## 새 버전으로 업데이트하기
+
+```sh
+cd sdcompat
+git pull
+cargo build --release
+sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms --yes
+```
+
+설정 스크립트를 다시 실행해도 안전합니다. `/etc/sdcompat` 설정은 그대로 두고, 새
+바이너리를 설치하고, 데이터베이스와 부팅 항목을 다시 만들며, 바꾸는 파일은 백업합니다.
+
+업데이트에서 `dist/rpm/`이 바뀌었다면 먼저 s6 패키지를 다시 빌드해 설치하세요(2단계).
+
+## 제거하기
+
+일반 Fedora 항목으로 부팅한 뒤:
+
+```sh
+sudo dist/setup-fedora.sh --uninstall
+sudo dnf remove skalibs execline s6 s6-rc s6-linux-init \
+    skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel
+```
+
+`/etc/sdcompat`, `/var/lib/sdcompat`, 활성화한 유닛은 남습니다. systemd 부팅에서는 아무
+영향이 없습니다.
+
+## 문제 보고하기
+
+다음을 함께 보내 주세요.
+1. 커밋 해시(`git log -1 --oneline`)
+2. 단계와 실패한 정확한 명령
+3. 기대한 결과와 실제로 일어난 일
+4. `tests/collect-diagnostics.sh`가 만든 진단 압축 파일(3단계:
+   `tests/collect-diagnostics.sh ~/sdc`, 6단계: `sudo tests/collect-diagnostics.sh`).
+   보내기 전에 내용을 확인하세요(`tar -tzf 파일`). 시험 머신의 로그, 유닛 이름, 부팅
+   설정이 들어 있습니다.

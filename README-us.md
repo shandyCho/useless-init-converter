@@ -130,6 +130,11 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
   options from `/etc/sdcompat/boot-options`. The s6 entry follows kernel
   updates, and removed kernels lose theirs.
 
+## Testing on Fedora
+
+Step-by-step instructions from a fresh clone to a GNOME session on s6, with
+what to check and how to report problems: [TESTING-us.md](TESTING-us.md).
+
 ## Try it without root
 
 Needs s6, s6-rc, execline, dbus-daemon, busctl and python3 (on Fedora, build
