@@ -216,6 +216,13 @@ pub fn plan(cfg: &Config) -> Plan {
             plan.skipped.insert(name, "excluded by configuration".into());
             continue;
         }
+        // Transient units (systemd-run) are supervised by the daemon from
+        // RUN_DIR/dyn; in the database they would collide with that service
+        // directory and make s6-rc-update fail.
+        if unit.fragment.as_ref().map(|f| f.starts_with(&cfg.transient_dir)).unwrap_or(false) {
+            plan.skipped.insert(name, "transient (supervised on demand by the daemon)".into());
+            continue;
+        }
         if plan.extra_names.contains(&unit.id) {
             plan.skipped.insert(name, "provided by extra s6-rc source".into());
             continue;
