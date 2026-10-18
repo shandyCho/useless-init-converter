@@ -98,7 +98,15 @@ impl Daemon {
     /// for the s6-rc lock while a job runs; that layout is not documented, so
     /// it is checked against `s6-rc -a list` for every database, and if they
     /// disagree twice in a row the slower `s6-rc -a list` is used instead.
+    /// Atoms that are up: s6-rc's view plus the longruns started beside an
+    /// s6-rc change that s6-rc has not been told about yet.
     pub(super) async fn active_atoms(&self) -> BTreeSet<String> {
+        let mut active = self.active_atoms_live().await;
+        active.extend(self.beside.lock().unwrap().iter().cloned());
+        active
+    }
+
+    async fn active_atoms_live(&self) -> BTreeSet<String> {
         let order = self.atom_order().await;
         let from_file = self.active_from_state_file(&order);
         let (trusted, last) = *self.state_reader.lock().unwrap();
@@ -401,6 +409,10 @@ impl Daemon {
 
     async fn s6rc(&self, args: &[&str], names: &[String]) -> Result<(), String> {
         let _guard = self.s6_lock.lock().await;
+        self.s6rc_locked(args, names).await
+    }
+
+    async fn s6rc_locked(&self, args: &[&str], names: &[String]) -> Result<(), String> {
         let out = Command::new("s6-rc")
             .arg("-l")
             .arg(&self.cfg.live_dir)
@@ -415,6 +427,111 @@ impl Daemon {
         } else {
             Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
         }
+    }
+
+    /// Whether some process (the boot's `s6-rc change`, or one of ours) holds
+    /// s6-rc's change lock. skalibs locks with fcntl(); F_GETLK only looks.
+    fn s6rc_lock_held(&self) -> bool {
+        use std::os::fd::AsRawFd;
+        let Ok(f) = std::fs::File::open(self.cfg.live_dir.join("lock")) else { return false };
+        let mut fl: libc::flock = unsafe { std::mem::zeroed() };
+        fl.l_type = libc::F_RDLCK as libc::c_short;
+        fl.l_whence = libc::SEEK_SET as libc::c_short;
+        let r = unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GETLK, &mut fl) };
+        r == 0 && fl.l_type != libc::F_UNLCK as libc::c_short
+    }
+
+    async fn all_dependencies(&self, id: &str) -> Option<Vec<String>> {
+        let out = Command::new("s6-rc-db")
+            .arg("-l")
+            .arg(&self.cfg.live_dir)
+            .args(["all-dependencies", id])
+            .output()
+            .await
+            .ok()?;
+        out.status.success().then(|| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty() && l != id)
+                .collect()
+        })
+    }
+
+    /// Start a longrun with s6-svc while another s6-rc change holds the lock.
+    /// s6-rc keeps the lock for a whole change, including the wait for each
+    /// service's readiness. At boot, upowerd and accounts-daemon (Type=dbus,
+    /// in the default bundle) need polkit before they take their bus names,
+    /// and polkit is D-Bus activated: its `s6-rc change` waited for the boot's
+    /// change, which waited for them, until their 105 s start timeout. When
+    /// every dependency is up, s6-rc would do nothing but `s6-svc -u` anyway;
+    /// reconcile_beside() records the unit in s6-rc once the lock is free.
+    async fn start_beside(&self, id: &str, unit: &Unit) -> Option<&'static str> {
+        // rc.shutdown is bringing everything down: do not start anything.
+        if self.cfg.run_dir.join("shutting-down").exists() {
+            return None;
+        }
+        if self.s6_lock.try_lock().is_ok() && !self.s6rc_lock_held() {
+            return None;
+        }
+        let deps = self.all_dependencies(id).await?;
+        let active = self.active_atoms().await;
+        if !deps.iter().all(|d| active.contains(d)) {
+            return None;
+        }
+        self.beside.lock().unwrap().insert(id.to_string());
+        eprintln!("sdcompatd: start {id}: s6-rc is busy with another change, starting it beside");
+        let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(id)).status().await;
+        Some(self.wait_ready(id, unit, None).await)
+    }
+
+    /// Record the longruns start_beside() started as up in s6-rc, once no
+    /// other change holds the lock.
+    pub(super) async fn reconcile_beside(&self) {
+        if self.beside.lock().unwrap().is_empty() || self.s6rc_lock_held() {
+            return;
+        }
+        let _guard = self.s6_lock.lock().await;
+        self.reconcile_beside_locked().await;
+    }
+
+    /// The caller holds `s6_lock`.
+    pub(super) async fn reconcile_beside_locked(&self) {
+        let ids: Vec<String> = self.beside.lock().unwrap().iter().cloned().collect();
+        for id in ids {
+            // Stopped or given up since: s6-rc already considers it down.
+            if self.svstat(&id).await.map(|s| s.wanted_up).unwrap_or(false) {
+                // The service is up, so this only updates s6-rc's state.
+                if let Err(e) = self.s6rc_locked(&["-u", "change"], &[id.clone()]).await {
+                    eprintln!("sdcompatd: recording {id} in s6-rc: {e}");
+                }
+            }
+            self.beside.lock().unwrap().remove(&id);
+            self.forget_unit_state(&id);
+        }
+    }
+
+    /// Stop a longrun that start_beside() started and s6-rc does not know
+    /// about yet (`s6-rc -d change` would do nothing). False if it is not one.
+    async fn stop_beside(&self, id: &str, unit: &Unit) -> bool {
+        {
+            let _guard = self.s6_lock.lock().await;
+            if !self.beside.lock().unwrap().remove(id) {
+                return false;
+            }
+        }
+        let usec = unit
+            .get("Service", "TimeoutStopSec")
+            .or_else(|| unit.get("Service", "TimeoutSec"))
+            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
+            .unwrap_or(90_000_000);
+        let ms = (usec / 1000).saturating_add(5000).min(u32::MAX as u64);
+        let _ = Command::new("s6-svc")
+            .args(["-wD", "-T", &ms.to_string(), "-d"])
+            .arg(self.scandir(id))
+            .status()
+            .await;
+        true
     }
 
     pub(super) async fn run_runner(&self, sub: &str, id: &str, main_pid: Option<u32>) -> bool {
@@ -550,6 +667,9 @@ impl Daemon {
                     let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(id)).status().await;
                     return self.wait_ready(id, unit, None).await;
                 }
+                if let Some(r) = self.start_beside(id, unit).await {
+                    return r;
+                }
                 match self.s6rc(&["-u", "change"], &[id.to_string()]).await {
                     Ok(()) => {
                         let st = state::for_unit(&self.cfg.run_dir, id);
@@ -645,11 +765,15 @@ impl Daemon {
                     let pid = self.svstat(id).await.map(|s| s.pid).filter(|&p| p > 0);
                     self.run_runner("stop-exec", id, pid).await;
                 }
-                let r = match self.s6rc(&["-d", "change"], &[id.to_string()]).await {
-                    Ok(()) => "done",
-                    Err(e) => {
-                        eprintln!("sdcompatd: stop {id}: {e}");
-                        "failed"
+                let r = if kind == Kind::Longrun && self.stop_beside(id, unit).await {
+                    "done"
+                } else {
+                    match self.s6rc(&["-d", "change"], &[id.to_string()]).await {
+                        Ok(()) => "done",
+                        Err(e) => {
+                            eprintln!("sdcompatd: stop {id}: {e}");
+                            "failed"
+                        }
                     }
                 };
                 // FileDescriptorStorePreserve=restart: a real stop discards

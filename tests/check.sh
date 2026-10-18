@@ -255,6 +255,45 @@ $B --timeout=3 call org.example.Act / org.example.Act Ping >/dev/null 2>&1
 sleep 1
 expect_eq "real activation via dbus-daemon" "$(cat "$R/act.out" 2>/dev/null)" "activated"
 
+echo "== start beside a busy s6-rc change"
+L="s6-rc -l $R/live"
+in_s6rc() { $L -a list | grep -qx "$1"; }
+# Without this, beside1 waits for the lock, which hold1's change keeps
+# until beside1 runs: a deadlock until hold1's start timeout.
+$L -u change hold1.service &
+hold=$!
+sleep 0.5
+call StartUnit ss beside1.service replace
+expect_state beside1.service active/running
+tries=50
+while [ $tries -gt 0 ] && kill -0 $hold 2>/dev/null; do tries=$((tries - 1)); sleep 0.2; done
+if kill -0 $hold 2>/dev/null; then
+    bad "the holding change did not finish"
+    kill $hold
+else
+    ok "the holding change finished"
+fi
+wait $hold 2>/dev/null
+tries=30
+while [ $tries -gt 0 ] && ! in_s6rc beside1.service; do tries=$((tries - 1)); sleep 0.2; done
+in_s6rc beside1.service && ok "beside1 recorded in s6-rc afterwards" || bad "beside1 not in s6-rc -a list"
+call StopUnit ss beside1.service replace
+expect_state beside1.service inactive/dead
+in_s6rc beside1.service && bad "beside1 still up in s6-rc after stop" || ok "beside1 down in s6-rc after stop"
+# Stopped before s6-rc knew about it: s6-rc -d change would do nothing.
+$L -u change hold2.service &
+hold=$!
+sleep 0.5
+timeout 10 $B call $MGR StartUnit ss beside2.service replace >/dev/null 2>&1
+expect_state beside2.service active/running
+timeout 10 $B call $MGR StopUnit ss beside2.service replace >/dev/null 2>&1
+expect_state beside2.service inactive/dead
+touch "$R/hold2-ready"
+wait $hold
+sleep 1.5
+in_s6rc beside2.service && bad "beside2 recorded in s6-rc after its stop" || ok "beside2 stopped beside the change stays down"
+$L -d change hold1.service hold2.service
+
 echo "== transient scope"
 sleep 1000 &
 spid=$!

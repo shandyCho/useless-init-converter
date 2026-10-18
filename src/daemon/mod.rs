@@ -91,6 +91,9 @@ pub struct Daemon {
     pub jobs: Mutex<BTreeMap<u32, Job>>,
     pub next_job: AtomicU32,
     pub s6_lock: tokio::sync::Mutex<()>,
+    /// Longruns started with s6-svc while another s6-rc change held the
+    /// lock, not yet recorded in s6-rc's state (see s6.rs start_beside).
+    pub beside: Mutex<BTreeSet<String>>,
     pub started_targets: Mutex<BTreeSet<String>>,
     pub transient: Mutex<BTreeMap<String, Transient>>,
     pub manager_env: Mutex<Vec<String>>,
@@ -359,6 +362,8 @@ impl Daemon {
         let cfg = self.cfg.clone();
         let res = {
             let _guard = self.s6_lock.lock().await;
+            // s6-rc-update must see those units as up, or it keeps them down.
+            self.reconcile_beside_locked().await;
             tokio::task::spawn_blocking(move || gen::regenerate(&cfg, true))
                 .await
                 .map_err(|e| e.to_string())?
@@ -1455,6 +1460,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         jobs: Mutex::new(BTreeMap::new()),
         next_job: AtomicU32::new(0),
         s6_lock: tokio::sync::Mutex::new(()),
+        beside: Mutex::new(BTreeSet::new()),
         started_targets: Mutex::new(BTreeSet::new()),
         transient: Mutex::new(BTreeMap::new()),
         manager_env: Mutex::new(manager_env),
@@ -1525,6 +1531,14 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             watcher.watch_dynamic(&mut last).await;
+        }
+    });
+
+    let rec = daemon.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            rec.reconcile_beside().await;
         }
     });
 

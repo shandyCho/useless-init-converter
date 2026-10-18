@@ -347,6 +347,36 @@ cat > "$U/act.service" <<EOF
 ExecStart=/bin/sh -c 'echo activated >> $R/act.out; exec sleep 1000'
 EOF
 
+# --- starting beside a busy s6-rc change ---
+# hold.service is ready only once $R/hold-<name> exists, so an s6-rc change
+# that starts it keeps the s6-rc lock until then.
+cat > "$W/wait-ready.py" <<'PYT'
+import os, socket, sys, time
+while not os.path.exists(sys.argv[1]):
+    time.sleep(0.1)
+addr = os.environ["NOTIFY_SOCKET"]
+if addr.startswith("@"):
+    addr = "\0" + addr[1:]
+socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM).sendto(b"READY=1", addr)
+os.execv("/bin/sleep", ["sleep", "1000"])
+PYT
+for n in 1 2; do
+cat > "$U/hold$n.service" <<EOF
+[Service]
+Type=notify
+ExecStart=/usr/bin/python3 $W/wait-ready.py $R/hold$n-ready
+EOF
+done
+# Makes hold1 ready, like polkit made upowerd ready at boot.
+cat > "$U/beside1.service" <<EOF
+[Service]
+ExecStart=/bin/sh -c 'touch $R/hold1-ready; exec sleep 1000'
+EOF
+cat > "$U/beside2.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+
 # --- path units ---
 cat > "$U/watch.service" <<EOF
 [Service]
