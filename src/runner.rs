@@ -94,6 +94,7 @@ fn wait_pid(pid: i32) -> i32 {
 
 fn log(unit: &str, msg: &str) {
     eprintln!("sdcompat[{unit}]: {msg}");
+    util::syslog_line(libc::LOG_ERR, &format!("{unit}: {msg}"));
 }
 
 impl Runner {

@@ -212,6 +212,9 @@ sudo tests/collect-diagnostics.sh
    - `sdcompat.reload=0` skips regenerating the database at boot.
 3. To get out, reboot and choose the normal Fedora entry. Logs from the failed
    s6 boot are then visible with `journalctl -b -1`, if journald was running.
+   sdcompat's own messages (the daemon, and the runner's errors such as a
+   failed PAM session or exec) are there too:
+   `journalctl -b -1 -t sdcompatd -t sdcompat`.
 4. Run `sudo tests/collect-diagnostics.sh` from whichever boot you can reach
    and send the archive. If you can only use the rescue console, send
    `/run/uncaught-logs/current`.

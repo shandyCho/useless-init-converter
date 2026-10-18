@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::exit;
 
 use sdcompat::config::Config;
-use sdcompat::{daemon, gen, install, runner};
+use sdcompat::{daemon, gen, install, runner, util};
 
 const USAGE: &str = "\
 usage: sdcompat [--config PATH] COMMAND [ARGS]
@@ -155,6 +155,7 @@ fn main() {
                     o => die(&format!("unknown daemon option {o}")),
                 }
             }
+            util::tee_stderr_to_syslog(c"sdcompatd");
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()

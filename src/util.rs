@@ -286,3 +286,52 @@ mod tests {
         assert_eq!(unit_name_unescape("a\\x2db"), "a-b");
     }
 }
+
+/// One line to syslog (journald's /dev/log), as root only: the sandbox runs
+/// unprivileged and would otherwise write into the host's journal. glibc
+/// drops the message when /dev/log is not there (before journald is up).
+pub fn syslog_line(prio: libc::c_int, line: &str) {
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    let Ok(c) = CString::new(line) else { return };
+    unsafe { libc::syslog(libc::LOG_DAEMON | prio, c"%s".as_ptr(), c.as_ptr()) };
+}
+
+/// Copy everything written to stderr, ours and our children's, to syslog
+/// too. stderr is s6's catch-all log, which lives in /run and is lost at
+/// power-off, the very case where the messages are needed. Root only.
+pub fn tee_stderr_to_syslog(ident: &'static CStr) {
+    use std::io::BufRead;
+    use std::os::fd::FromRawFd;
+    let (r, orig) = unsafe {
+        if libc::geteuid() != 0 {
+            return;
+        }
+        let mut fds = [0i32; 2];
+        if libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) < 0 {
+            return;
+        }
+        let orig = libc::fcntl(2, libc::F_DUPFD_CLOEXEC, 3);
+        if orig < 0 || libc::dup2(fds[1], 2) < 0 {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+            if orig >= 0 {
+                libc::close(orig);
+            }
+            return;
+        }
+        libc::close(fds[1]);
+        libc::openlog(ident.as_ptr(), libc::LOG_PID, libc::LOG_DAEMON);
+        (fs::File::from_raw_fd(fds[0]), fs::File::from_raw_fd(orig))
+    };
+    std::thread::spawn(move || {
+        let mut orig = orig;
+        for line in io::BufReader::new(r).lines() {
+            let Ok(line) = line else { break };
+            let _ = writeln!(orig, "{line}");
+            let Ok(c) = CString::new(line) else { continue };
+            unsafe { libc::syslog(libc::LOG_NOTICE, c"%s".as_ptr(), c.as_ptr()) };
+        }
+    });
+}

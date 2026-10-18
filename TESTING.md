@@ -204,7 +204,9 @@ sudo tests/collect-diagnostics.sh
    - `sdcompat.db=previous`는 마지막 변경 이전의 데이터베이스로 부팅합니다.
    - `sdcompat.reload=0`은 부팅 시 데이터베이스 재생성을 건너뜁니다.
 3. 빠져나오려면 재부팅해서 일반 Fedora 항목을 고르세요. journald가 실행됐었다면 실패한
-   s6 부팅의 로그를 `journalctl -b -1`로 볼 수 있습니다.
+   s6 부팅의 로그를 `journalctl -b -1`로 볼 수 있습니다. sdcompat 자신의 메시지(데몬,
+   그리고 PAM 세션이나 exec 실패 같은 러너의 오류)도 그곳에 남습니다:
+   `journalctl -b -1 -t sdcompatd -t sdcompat`.
 4. 들어갈 수 있는 부팅에서 `sudo tests/collect-diagnostics.sh`를 실행하고 압축 파일을
    보내 주세요. 복구 콘솔만 쓸 수 있다면 `/run/uncaught-logs/current`를 보내 주세요.
 
