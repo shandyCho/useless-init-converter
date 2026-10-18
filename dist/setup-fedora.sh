@@ -18,6 +18,7 @@
 #   --build-s6      build skalibs/execline/s6/s6-rc/s6-linux-init from source
 #                   even if Fedora packages exist
 #   --rebuild       rebuild sdcompat even if target/release/sdcompat exists
+#   --remove-s6     with --uninstall: also remove the skarnet tools this script built
 #   --no-journal    no systemd-journald: rsyslog + per-service s6-log directories
 #                   (journalctl and the log lines in systemctl status won't work)
 set -euo pipefail
@@ -36,8 +37,17 @@ EXECLINE_VER=2.9.9.2
 S6_VER=2.15.1.0
 S6RC_VER=0.7.0.0
 S6LI_VER=1.2.0.2
+# SHA-256 of the release tarballs (pinned; a mismatch aborts the build).
+declare -A SKARNET_SHA256=(
+    [skalibs-2.15.1.0]=f9c905e74935c6fe911c7e344e3e89d5fbd2014c1a04650b524b15ce9b5635d1
+    [execline-2.9.9.2]=908ed4db3a6b3a23a205d8fd4cf2a71089156f2aeae0f54656045aafad2dee32
+    [s6-2.15.1.0]=eab9c46e22b66b16135f9a05ec68a0ea287d9060b84d10defaaa2caad158ab52
+    [s6-rc-0.7.0.0]=bf5b8ce0da5a4ee70d642b818b61d9916a7a9b64a457595f388113e54a188688
+    [s6-linux-init-1.2.0.2]=6fad014da162c0c81924197c57d16e1a75c133b34a20e423431a1b741e907b1d
+)
+SKARNET_MANIFEST=/var/lib/sdcompat/skarnet-files.txt
 
-DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0 JOURNAL=1
+DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0 JOURNAL=1 REMOVE_S6=0
 KI_PLUGIN=/etc/kernel/install.d/90-sdcompat.install
 for a in "$@"; do
     case $a in
@@ -49,7 +59,8 @@ for a in "$@"; do
         --rebuild) REBUILD=1 ;;
         --uninstall) UNINSTALL=1 ;;
         --no-journal) JOURNAL=0 ;;
-        -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+        --remove-s6) REMOVE_S6=1 ;;
+        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -124,6 +135,13 @@ uninstall() {
         run rm -rf "$LIBEXEC" "$SHARE" /usr/bin/sdcompat /usr/sbin/init-selinux \
             /usr/share/dbus-1/system.d/sdcompat.conf
     fi
+    if [ "$REMOVE_S6" = 1 ] && [ -r "$SKARNET_MANIFEST" ]; then
+        echo "  removing the skarnet tools listed in $SKARNET_MANIFEST"
+        while read -r f; do
+            case $f in /usr/*) run rm -f "$f" ;; esac
+        done <"$SKARNET_MANIFEST"
+        run rm -f "$SKARNET_MANIFEST"
+    fi
     echo "  Kept: /etc/sdcompat (your configuration), /var/lib/sdcompat, /var/log/sdcompat,"
     echo "  installed packages, and enabled units (all harmless for the systemd boot)."
     exit 0
@@ -193,14 +211,29 @@ install_skarnet() {
         local name=$1 ver=$2
         echo "  building $name $ver"
         run curl -fsSL -o "$work/$name.tar.gz" "https://skarnet.org/software/$name/$name-$ver.tar.gz"
+        local want=${SKARNET_SHA256[$name-$ver]:-}
+        [ -n "$want" ] || die "no pinned checksum for $name-$ver"
+        if [ "$DRY" = 0 ]; then
+            echo "$want  $work/$name.tar.gz" | sha256sum -c --quiet - || die "checksum mismatch for $name-$ver"
+        else
+            printf '  + verify sha256 %s\n' "$want"
+        fi
         run tar -xzf "$work/$name.tar.gz" -C "$work"
         if [ "$DRY" = 0 ]; then
-            (cd "$work/$name-$ver" && ./configure --prefix=/usr >/dev/null && make -j"$(nproc)" >/dev/null && make install >/dev/null)
+            # Stage once to record what gets installed (for --uninstall --remove-s6),
+            # then install for real: later packages build against it.
+            (cd "$work/$name-$ver" && ./configure --prefix=/usr >/dev/null && make -j"$(nproc)" >/dev/null \
+                && make install DESTDIR="$work/stage" >/dev/null && make install >/dev/null)
+            (cd "$work/stage" && find . \( -type f -o -type l \) | sed 's|^\.||') >>"$work/manifest"
         else
             printf '  + (cd %s && ./configure --prefix=/usr && make && make install)\n' "$work/$name-$ver"
         fi
     done
-    [ "$DRY" = 1 ] || rm -rf "$work"
+    if [ "$DRY" = 0 ]; then
+        mkdir -p "$(dirname "$SKARNET_MANIFEST")"
+        sort -u "$work/manifest" >"$SKARNET_MANIFEST"
+        rm -rf "$work"
+    fi
 }
 
 install_sdcompat() {
@@ -396,8 +429,12 @@ Done. Next:
   4. SELinux: the entry boots permissive. Collect denials with
        ausearch -m AVC -ts boot | audit2allow -M sdcompat_local
      review sdcompat_local.te, load it with semodule -i, then re-run with --enforcing.
-  5. To go back: boot the normal Fedora entry. To remove everything:
-       sudo $0 --uninstall
+  5. If a new s6 database breaks booting, add one of these to the kernel
+     command line in GRUB (press e):
+       sdcompat.db=previous    boot the database from before the last change
+       sdcompat.reload=0       do not regenerate the database at boot
+  6. To go back: boot the normal Fedora entry. To remove everything:
+       sudo $0 --uninstall [--remove-s6]
 EOF
 }
 

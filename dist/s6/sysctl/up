@@ -1,1 +1,1 @@
-/usr/sbin/sysctl -q --system
+/usr/libexec/sdcompat/early sysctl

@@ -55,6 +55,9 @@ pub struct Runner {
     sandbox: Sandbox,
     notify_fd: Option<i32>,
     is_root: bool,
+    /// Start timeout for commands run by the runner itself (oneshots, forking).
+    deadline: std::cell::Cell<Option<std::time::Instant>>,
+    timed_out: std::cell::Cell<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -138,6 +141,8 @@ impl Runner {
             writable_dirs: Vec::new(),
             notify_fd: None,
             is_root,
+            deadline: std::cell::Cell::new(None),
+            timed_out: std::cell::Cell::new(false),
         };
         r.build_env()?;
         Ok(r)
@@ -353,7 +358,8 @@ impl Runner {
         }
 
         let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities");
-        if let (Some(u), false, true) = (&self.user, cmd.privileged, self.is_root) {
+        let switch_ids = !cmd.privileged && !cmd.no_setuid && self.is_root;
+        if let (Some(u), true) = (&self.user, switch_ids) {
             if u.uid != 0 {
                 if ambient.is_some() {
                     unsafe { libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) };
@@ -374,12 +380,25 @@ impl Runner {
             } else if let Some(g) = self.gid {
                 unsafe { libc::setresgid(g, g, g) };
             }
-        }
-        if let Some(caps) = ambient {
-            if !cmd.privileged {
-                if let Err(e) = sandbox::raise_ambient(caps) {
-                    return (EXIT_CAPABILITIES, e);
+        } else if self.user.is_none() && switch_ids {
+            // Group=/SupplementaryGroups= without User=.
+            unsafe {
+                if !self.groups.is_empty() && libc::setgroups(self.groups.len(), self.groups.as_ptr()) < 0 {
+                    return (EXIT_GROUP, format!("setgroups: {}", errno()));
                 }
+                if let Some(g) = self.gid {
+                    if libc::setresgid(g, g, g) < 0 {
+                        return (EXIT_GROUP, format!("setgid {g}: {}", errno()));
+                    }
+                }
+            }
+        }
+        // Ambient capabilities matter only after dropping root; a root service
+        // keeps its full capability set (raising "ambient" would shrink it).
+        let non_root_user = self.user.as_ref().map(|u| u.uid != 0).unwrap_or(false);
+        if let (Some(caps), true, true) = (ambient, switch_ids, non_root_user) {
+            if let Err(e) = sandbox::raise_ambient(caps) {
+                return (EXIT_CAPABILITIES, e);
             }
         }
 
@@ -645,7 +664,79 @@ impl Runner {
             log(self.id(), &format!("fork: {}", errno()));
             return Status::Exited(EXIT_EXEC);
         }
-        Status::from_wait(wait_pid(pid))
+        let Some(deadline) = self.deadline.get() else {
+            return Status::from_wait(wait_pid(pid));
+        };
+        // TimeoutStartSec=: SIGTERM at the deadline, SIGKILL 5 s later.
+        let mut status = 0;
+        let mut killed_at: Option<std::time::Instant> = None;
+        loop {
+            let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if r == pid {
+                return Status::from_wait(status);
+            }
+            if r < 0 {
+                return Status::Exited(0);
+            }
+            let now = std::time::Instant::now();
+            match killed_at {
+                None if now >= deadline => {
+                    log(self.id(), "start timeout, terminating");
+                    self.timed_out.set(true);
+                    unsafe { libc::kill(pid, libc::SIGTERM) };
+                    killed_at = Some(now);
+                }
+                Some(t) if now >= t + std::time::Duration::from_secs(5) => {
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                }
+                _ => {}
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn start_timeout(&self) -> Option<std::time::Duration> {
+        self.unit
+            .get("Service", "TimeoutStartSec")
+            .or_else(|| self.unit.get("Service", "TimeoutSec"))
+            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
+            .or(Some(90_000_000))
+            .filter(|&u| u != u64::MAX && u != 0)
+            .map(std::time::Duration::from_micros)
+    }
+
+    /// A required unit (Requires=/Requisite=/BindsTo=) that failed. s6-rc
+    /// only orders units; requirement failures are enforced here.
+    fn failed_requirement(&self) -> Option<String> {
+        let ld = Loader::new(&self.cfg);
+        let idx = crate::gen::Index::load(&self.cfg);
+        let mut deps = self.unit.get_words("Unit", "Requires");
+        deps.extend(self.unit.get_words("Unit", "Requisite"));
+        deps.extend(self.unit.get_words("Unit", "BindsTo"));
+        deps.extend(ld.dir_deps(&self.unit, "requires"));
+        for d in deps {
+            let d = idx.resolve(&d).to_string();
+            if d == self.unit.id {
+                continue;
+            }
+            let st = crate::state::for_unit(&self.cfg.run_dir, &d);
+            if st.has(keys::START_FAILED) || st.has(keys::DEPENDENCY_FAILED) {
+                return Some(d);
+            }
+            let failed = st.get(keys::RESULT).map(|r| !matches!(r.as_str(), "success" | "running")).unwrap_or(false);
+            if failed && st.get_u64(keys::INACTIVE_ENTER) >= st.get_u64(keys::INACTIVE_EXIT) {
+                return Some(d);
+            }
+        }
+        None
+    }
+
+    /// Start failed: record it, but still tell s6-rc "ready" so units that
+    /// merely want this one are not blocked (systemd semantics).
+    fn soft_fail(&mut self, reason: &str) {
+        log(self.id(), reason);
+        self.st.set(keys::START_FAILED, reason);
+        self.signal_ready();
     }
 
     /// Run a list of Exec*= settings in order. Returns false on a non-ignored failure.
@@ -710,13 +801,25 @@ impl Runner {
     }
 
     fn prepare_start(&mut self) -> Result<(), String> {
-        for k in [keys::CONDITION_FAILED, keys::ASSERT_FAILED, keys::STATUS_TEXT, keys::MAIN_PID] {
+        for k in [
+            keys::CONDITION_FAILED, keys::ASSERT_FAILED, keys::STATUS_TEXT, keys::MAIN_PID,
+            keys::START_FAILED, keys::DEPENDENCY_FAILED,
+        ] {
             self.st.clear(k);
         }
         let inv = util::read_trimmed(Path::new("/proc/sys/kernel/random/uuid"))
             .unwrap_or_default()
             .replace('-', "");
         self.st.set(keys::INVOCATION, &inv);
+        // journald reads the invocation ID from this xattr on the unit's cgroup
+        // (systemctl status uses it to pick the current run's log lines).
+        if let Some(dir) = self.cgroup_dir() {
+            let bytes: Vec<u8> = (0..inv.len() / 2).filter_map(|i| u8::from_str_radix(&inv[i * 2..i * 2 + 2], 16).ok()).collect();
+            let p = cstr(&dir.display().to_string());
+            unsafe {
+                libc::setxattr(p.as_ptr(), c"trusted.invocation_id".as_ptr(), bytes.as_ptr() as *const libc::c_void, bytes.len(), 0);
+            }
+        }
         self.setenv("INVOCATION_ID", &inv);
         self.st.stamp(keys::INACTIVE_EXIT);
         self.create_directories()?;
@@ -814,32 +917,57 @@ impl Runner {
             .collect()
     }
 
-    /// Bind sockets and arrange them on fds 3.. for the final exec.
+    /// Sockets (kept open by the daemon across restarts) and FDSTORE=
+    /// descriptors, arranged on fds 3.. for the final exec.
     fn setup_listen_fds(&mut self) -> Result<(), String> {
+        use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+        let store = self.cfg.run_dir.join("fdstore");
+        let mut fds: Vec<(String, OwnedFd)> = Vec::new();
         let socks = self.socket_units();
-        if socks.is_empty() {
-            return Ok(());
+        if !socks.is_empty() {
+            let key = format!("{}#sockets", self.unit.id);
+            let held = crate::fdstore::get(&store, &key);
+            if !held.is_empty() {
+                fds = held;
+            } else {
+                for s in &socks {
+                    for b in socket::bind_all(s)? {
+                        let owned = unsafe { OwnedFd::from_raw_fd(b.fd) };
+                        // Best effort: without the daemon we just rebind next time.
+                        let _ = crate::fdstore::put(&store, &key, &b.name, owned.as_raw_fd());
+                        fds.push((b.name, owned));
+                    }
+                }
+            }
         }
-        let mut bound = Vec::new();
-        for s in &socks {
-            bound.extend(socket::bind_all(s)?);
+        let max: usize = self
+            .unit
+            .get("Service", "FileDescriptorStoreMax")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if max > 0 {
+            fds.extend(crate::fdstore::get(&store, &self.unit.id));
+        }
+        if fds.is_empty() {
+            return Ok(());
         }
         // Move every fd above the target range first to avoid clobbering.
         let mut high = Vec::new();
-        for b in &bound {
-            let fd = unsafe { libc::fcntl(b.fd, libc::F_DUPFD_CLOEXEC, 100) };
-            unsafe { libc::close(b.fd) };
+        let mut names = Vec::new();
+        for (name, f) in fds {
+            let raw = f.into_raw_fd();
+            let fd = unsafe { libc::fcntl(raw, libc::F_DUPFD_CLOEXEC, 100) };
+            unsafe { libc::close(raw) };
             high.push(fd);
+            names.push(name);
         }
         for (i, fd) in high.iter().enumerate() {
-            let target = 3 + i as i32;
             unsafe {
-                libc::dup2(*fd, target);
+                libc::dup2(*fd, 3 + i as i32);
                 libc::close(*fd);
             }
         }
-        let names: Vec<String> = bound.iter().map(|b| b.name.clone()).collect();
-        self.setenv("LISTEN_FDS", &bound.len().to_string());
+        self.setenv("LISTEN_FDS", &high.len().to_string());
         self.setenv("LISTEN_PID", &std::process::id().to_string());
         self.setenv("LISTEN_FDNAMES", &names.join(":"));
         Ok(())
@@ -852,8 +980,17 @@ impl Runner {
         self.take_notify_fd();
         self.enter_cgroup();
         if let Err(e) = self.prepare_start() {
-            log(self.id(), &e);
+            self.soft_fail(&e);
             return 1;
+        }
+        if let Some(dep) = self.failed_requirement() {
+            // Like systemd's "dependency" job result: not started, not failed.
+            log(self.id(), &format!("not starting: required unit {dep} failed"));
+            self.st.set(keys::DEPENDENCY_FAILED, &dep);
+            self.signal_ready();
+            loop {
+                unsafe { libc::pause() };
+            }
         }
         match self.check_conditions() {
             Ok(true) => {}
@@ -866,19 +1003,21 @@ impl Runner {
                 }
             }
             Err(e) => {
-                log(self.id(), &e);
                 self.st.set(keys::RESULT, "exit-code");
+                self.soft_fail(&e);
                 return 1;
             }
         }
+        self.deadline.set(self.start_timeout().map(|t| std::time::Instant::now() + t));
         if let Err(st) = self.run_list("ExecStartPre", &[]) {
-            self.st.set(keys::RESULT, result_for(st));
+            self.st.set(keys::RESULT, if self.timed_out.get() { "timeout" } else { result_for(st) });
+            self.soft_fail("ExecStartPre= failed");
             return exit_code_for(st);
         }
         let main = match self.main_command() {
             Ok(c) => c,
             Err(e) => {
-                log(self.id(), &e);
+                self.soft_fail(&e);
                 return EXIT_EXEC;
             }
         };
@@ -886,10 +1025,11 @@ impl Runner {
         if ty == "forking" {
             return self.run_forking(&main);
         }
+        self.deadline.set(None);
 
         if let Err(e) = self.setup_listen_fds() {
-            log(self.id(), &e);
             self.st.set(keys::RESULT, "resources");
+            self.soft_fail(&e);
             return 1;
         }
 
@@ -901,14 +1041,14 @@ impl Runner {
             "notify" | "notify-reload" => match self.start_notify_helper(pid) {
                 Ok(sock) => self.setenv("NOTIFY_SOCKET", &sock),
                 Err(e) => {
-                    log(self.id(), &e);
+                    self.soft_fail(&e);
                     return 1;
                 }
             },
             "dbus" => self.start_dbus_helper(pid),
             _ => {
                 if let Err(e) = self.start_exec_helper() {
-                    log(self.id(), &e);
+                    self.soft_fail(&e);
                     return 1;
                 }
             }
@@ -1058,10 +1198,14 @@ impl Runner {
             unsafe { libc::close(w) };
             let mut buf = [0u8; 4];
             let n = unsafe { libc::read(r, buf.as_mut_ptr() as *mut libc::c_void, 4) };
+            if n != 0 {
+                // exec() failed: record it, still release s6-rc.
+                self.st.set(keys::START_FAILED, "exec failed");
+            }
+            if let Some(fd) = notify {
+                unsafe { libc::write(fd, b"\n".as_ptr() as *const libc::c_void, 1) };
+            }
             if n == 0 {
-                if let Some(fd) = notify {
-                    unsafe { libc::write(fd, b"\n".as_ptr() as *const libc::c_void, 1) };
-                }
                 self.after_ready(main_pid);
             }
         })?;
@@ -1102,53 +1246,89 @@ impl Runner {
             .map(|u| if u == u64::MAX { -1 } else { (u / 1000) as i32 })
             .unwrap_or(90_000);
         let st_dir = self.st.dir.clone();
+        let store = self.cfg.run_dir.join("fdstore");
+        let unit_id = self.unit.id.clone();
         double_fork(|| {
             let st = UnitState::new(st_dir);
             let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, main_pid as i32, 0) } as i32;
             let mut ready = false;
-            let started = util::now_monotonic_usec();
+            let release = |reason: Option<&str>| {
+                if let Some(r) = reason {
+                    st.set(keys::START_FAILED, r);
+                }
+                if let Some(nfd) = notify {
+                    unsafe {
+                        libc::write(nfd, b"\n".as_ptr() as *const libc::c_void, 1);
+                        libc::close(nfd);
+                    }
+                }
+            };
+            let deadline = (timeout_ms >= 0).then(|| util::now_monotonic_usec() + timeout_ms as u64 * 1000);
             loop {
                 let mut pfds = [
                     libc::pollfd { fd, events: libc::POLLIN, revents: 0 },
                     libc::pollfd { fd: pidfd, events: libc::POLLIN, revents: 0 },
                 ];
                 let nfds = if pidfd >= 0 { 2 } else { 1 };
-                let wait = if pidfd < 0 { 1000 } else if ready || timeout_ms < 0 { -1 } else { timeout_ms };
-                let n = unsafe { libc::poll(pfds.as_mut_ptr(), nfds, wait) };
-                if pidfd < 0 && unsafe { libc::kill(main_pid as i32, 0) } < 0 {
-                    break;
-                }
-                if n == 0 && !ready && pidfd >= 0 {
-                    break; // start timeout: s6-rc gives up on its own
-                }
-                if pidfd >= 0 && pfds[1].revents != 0 {
-                    break;
-                }
+                let wait = match (ready, deadline) {
+                    _ if pidfd < 0 => 1000,
+                    (false, Some(d)) => ((d.saturating_sub(util::now_monotonic_usec())) / 1000) as i32,
+                    _ => -1,
+                };
+                unsafe { libc::poll(pfds.as_mut_ptr(), nfds, wait.max(0)) };
+                let died = if pidfd >= 0 {
+                    pfds[1].revents != 0
+                } else {
+                    (unsafe { libc::kill(main_pid as i32, 0) }) < 0
+                };
                 if pfds[0].revents & libc::POLLIN != 0 {
-                    let mut buf = [0u8; 4096];
-                    let r = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
-                    if r <= 0 {
-                        continue;
-                    }
-                    let msg = String::from_utf8_lossy(&buf[..r as usize]).into_owned();
+                    let Ok((data, fds)) = crate::fdstore::recv(fd) else { continue };
+                    let msg = String::from_utf8_lossy(&data).into_owned();
+                    let mut fdname = "stored".to_string();
+                    let (mut store_fds, mut remove) = (false, false);
                     for line in msg.lines() {
                         if line == "READY=1" && !ready {
                             ready = true;
-                            if let Some(nfd) = notify {
-                                unsafe {
-                                    libc::write(nfd, b"\n".as_ptr() as *const libc::c_void, 1);
-                                    libc::close(nfd);
-                                }
-                            }
+                            release(None);
                             self.after_ready(main_pid);
                         } else if let Some(s) = line.strip_prefix("STATUS=") {
                             st.set(keys::STATUS_TEXT, s);
                         } else if let Some(p) = line.strip_prefix("MAINPID=") {
                             st.set(keys::MAIN_PID, p);
+                        } else if let Some(n) = line.strip_prefix("FDNAME=") {
+                            fdname = n.to_string();
+                        } else if line == "FDSTORE=1" {
+                            store_fds = true;
+                        } else if line == "FDSTOREREMOVE=1" {
+                            remove = true;
                         }
                     }
+                    if store_fds {
+                        for f in &fds {
+                            use std::os::fd::AsRawFd;
+                            if let Err(e) = crate::fdstore::put(&store, &unit_id, &fdname, f.as_raw_fd()) {
+                                eprintln!("sdcompat[{unit_id}]: FDSTORE: {e}");
+                            }
+                        }
+                    }
+                    if remove {
+                        crate::fdstore::del(&store, &unit_id, Some(&fdname));
+                    }
+                    continue;
                 }
-                let _ = started;
+                if died {
+                    if !ready {
+                        release(Some("exited before sending READY=1"));
+                    }
+                    break;
+                }
+                if !ready && deadline.map(|d| util::now_monotonic_usec() >= d).unwrap_or(false) {
+                    // TimeoutStartSec=: fail the start and terminate the service.
+                    st.set(keys::RESULT, "timeout");
+                    release(Some("start timeout"));
+                    unsafe { libc::kill(main_pid as i32, libc::SIGTERM) };
+                    ready = true;
+                }
             }
             let _ = fs::remove_file(&path);
         })?;
@@ -1159,6 +1339,7 @@ impl Runner {
     /// Type=dbus: ready once BusName= appears on the system bus.
     fn start_dbus_helper(&mut self, main_pid: u32) {
         let notify = self.notify_fd;
+        let tries = self.start_timeout().map(|t| (t.as_millis() / 100) as u32).unwrap_or(u32::MAX);
         let Some(bus_name) = self.unit.get("Service", "BusName") else {
             let _ = self.start_exec_helper();
             return;
@@ -1168,25 +1349,37 @@ impl Runner {
                 Ok(rt) => rt,
                 Err(_) => return,
             };
-            let ok = rt.block_on(async {
-                let Ok(conn) = zbus::Connection::system().await else { return false };
-                let Ok(proxy) = zbus::fdo::DBusProxy::new(&conn).await else { return false };
-                let Ok(name) = zbus::names::BusName::try_from(bus_name.as_str()) else { return false };
-                for _ in 0..1800 {
+            // Ok(true) ready, Ok(false) died, Err timeout/bus error.
+            let outcome: Result<bool, &str> = rt.block_on(async {
+                let Ok(conn) = zbus::Connection::system().await else { return Err("no system bus") };
+                let Ok(proxy) = zbus::fdo::DBusProxy::new(&conn).await else { return Err("no system bus") };
+                let Ok(name) = zbus::names::BusName::try_from(bus_name.as_str()) else { return Err("bad BusName=") };
+                for _ in 0..tries {
                     if unsafe { libc::kill(main_pid as i32, 0) } < 0 {
-                        return false;
+                        return Ok(false);
                     }
                     if proxy.name_has_owner(name.clone()).await.unwrap_or(false) {
-                        return true;
+                        return Ok(true);
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
-                false
+                Err("start timeout")
             });
-            if ok {
-                if let Some(fd) = notify {
-                    unsafe { libc::write(fd, b"\n".as_ptr() as *const libc::c_void, 1) };
+            match outcome {
+                Ok(true) => {}
+                Ok(false) => self.st.set(keys::START_FAILED, "exited before acquiring its bus name"),
+                Err(why) => {
+                    self.st.set(keys::START_FAILED, why);
+                    if why == "start timeout" {
+                        self.st.set(keys::RESULT, "timeout");
+                        unsafe { libc::kill(main_pid as i32, libc::SIGTERM) };
+                    }
                 }
+            }
+            if let Some(fd) = notify {
+                unsafe { libc::write(fd, b"\n".as_ptr() as *const libc::c_void, 1) };
+            }
+            if outcome == Ok(true) {
                 self.after_ready(main_pid);
             }
         });
@@ -1196,14 +1389,15 @@ impl Runner {
     fn run_forking(&mut self, main: &ExecCommand) -> i32 {
         unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
         if let Err(e) = self.setup_listen_fds() {
-            log(self.id(), &e);
+            self.soft_fail(&e);
             return 1;
         }
         self.st.stamp(keys::EXEC_MAIN_START);
         let st = self.spawn_wait(main, &[]);
+        self.deadline.set(None);
         if !st.ok() {
-            log(self.id(), &format!("start command failed: {}", describe(st)));
-            self.st.set(keys::RESULT, result_for(st));
+            self.st.set(keys::RESULT, if self.timed_out.get() { "timeout" } else { result_for(st) });
+            self.soft_fail(&format!("start command failed: {}", describe(st)));
             return exit_code_for(st);
         }
         let me = std::process::id() as i32;
@@ -1340,7 +1534,7 @@ impl Runner {
             }
         }
 
-        self.cleanup(&result, status);
+        self.cleanup(&result, status, stopping);
 
         if stopping {
             self.st.set(keys::RESULT, &result);
@@ -1433,7 +1627,7 @@ impl Runner {
         }
     }
 
-    fn cleanup(&self, result: &str, status: Status) {
+    fn cleanup(&self, result: &str, status: Status, stopping: bool) {
         let (code, st) = match status {
             Status::Exited(c) => ("exited", c.to_string()),
             Status::Killed(s) => ("killed", util::signal_name(s)),
@@ -1467,8 +1661,12 @@ impl Runner {
             let _ = fs::remove_file(sock);
             self.st.clear(keys::NOTIFY_SOCKET);
         }
-        for s in self.socket_units() {
-            socket::remove_paths(&s);
+        // Listening sockets stay in the daemon's fd store across restarts;
+        // only a real stop removes their paths (RemoveOnStop=).
+        if stopping {
+            for s in self.socket_units() {
+                socket::remove_paths(&s);
+            }
         }
         self.remove_runtime_dirs();
         let _ = fs::remove_dir_all(self.st.dir.join("private"));
@@ -1501,6 +1699,14 @@ impl Runner {
 
     /// oneshot `up` script.
     pub fn cmd_up(mut self) -> i32 {
+        // Every outcome is reported to s6-rc as success: a failing oneshot
+        // must not block units that only want it. The result is recorded and
+        // dependents with Requires= check it (see failed_requirement()).
+        if let Some(dep) = self.failed_requirement() {
+            log(self.id(), &format!("not starting: required unit {dep} failed"));
+            self.st.set(keys::DEPENDENCY_FAILED, &dep);
+            return 0;
+        }
         if matches!(self.unit.utype(), "mount" | "swap") {
             match conditions::evaluate(&self.unit) {
                 ev if !ev.conditions_ok => {
@@ -1509,12 +1715,18 @@ impl Runner {
                 }
                 _ => self.st.clear(keys::CONDITION_FAILED),
             }
-            return self.mount_job(true);
+            let code = self.mount_job(true);
+            if code != 0 {
+                self.on_result(false);
+            }
+            return 0;
         }
         self.enter_cgroup();
         if let Err(e) = self.prepare_start() {
             log(self.id(), &e);
-            return 1;
+            self.st.set(keys::RESULT, "resources");
+            self.st.stamp(keys::INACTIVE_ENTER);
+            return 0;
         }
         match self.check_conditions() {
             Ok(true) => {}
@@ -1526,11 +1738,14 @@ impl Runner {
             Err(e) => {
                 log(self.id(), &e);
                 self.st.set(keys::RESULT, "exit-code");
-                return 1;
+                self.st.stamp(keys::INACTIVE_ENTER);
+                self.on_result(false);
+                return 0;
             }
         }
         self.st.set(keys::RESULT, "running");
         self.st.stamp(keys::EXEC_MAIN_START);
+        self.deadline.set(self.start_timeout().map(|t| std::time::Instant::now() + t));
         let mut failed: Option<Status> = None;
         for key in ["ExecStartPre", "ExecStart", "ExecStartPost"] {
             if let Err(st) = self.run_list(key, &[]) {
@@ -1538,19 +1753,21 @@ impl Runner {
                 break;
             }
         }
+        self.deadline.set(None);
         self.st.stamp(keys::EXEC_MAIN_EXIT);
         if let Some(st) = failed {
             let (code, val) = match st {
                 Status::Exited(c) => (1, c),
                 Status::Killed(s) => (2, s),
             };
+            let result = if self.timed_out.get() { "timeout" } else { result_for(st) };
             self.st.set(keys::EXEC_MAIN_CODE, &code.to_string());
             self.st.set(keys::EXEC_MAIN_STATUS, &val.to_string());
-            self.st.set(keys::RESULT, result_for(st));
-            self.cleanup(result_for(st), st);
+            self.st.set(keys::RESULT, result);
+            self.cleanup(result, st, true);
             self.st.stamp(keys::INACTIVE_ENTER);
             self.on_result(false);
-            return 1;
+            return 0;
         }
         self.st.set(keys::EXEC_MAIN_CODE, "1");
         self.st.set(keys::EXEC_MAIN_STATUS, "0");
@@ -1559,12 +1776,13 @@ impl Runner {
         if !self.unit.get_bool("Service", "RemainAfterExit", false) {
             // systemd stops a oneshot right after it finished.
             let _ = self.run_list("ExecStop", &[]);
-            self.cleanup("success", Status::Exited(0));
+            self.cleanup("success", Status::Exited(0), true);
             self.st.stamp(keys::INACTIVE_ENTER);
         }
         self.on_result(true);
         0
     }
+
 
     /// oneshot `down` script.
     pub fn cmd_down(self) -> i32 {
@@ -1573,7 +1791,7 @@ impl Runner {
         }
         if self.unit.get_bool("Service", "RemainAfterExit", false) {
             let _ = self.run_list("ExecStop", &[]);
-            self.cleanup("success", Status::Exited(0));
+            self.cleanup("success", Status::Exited(0), true);
         }
         self.st.stamp(keys::ACTIVE_EXIT);
         self.st.stamp(keys::INACTIVE_ENTER);

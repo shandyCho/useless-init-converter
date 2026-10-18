@@ -77,6 +77,10 @@ pub mod keys {
     pub const INVOCATION: &str = "invocation";
     pub const CGROUP: &str = "cgroup";
     pub const NOTIFY_SOCKET: &str = "notify";
+    /// The start failed (s6-rc was still told "ready" so wanted-by units go on).
+    pub const START_FAILED: &str = "start-failed";
+    /// Not started because a required unit (Requires=/BindsTo=/Requisite=) failed.
+    pub const DEPENDENCY_FAILED: &str = "dependency-failed";
     /// Set by the daemon before `s6-svc -r`, so finish restarts regardless of Restart=.
     pub const RESTART_REQUESTED: &str = "restart-requested";
 }

@@ -8,6 +8,7 @@ pub mod config;
 pub mod daemon;
 pub mod envfile;
 pub mod execcmd;
+pub mod fdstore;
 pub mod gen;
 pub mod install;
 pub mod loader;

@@ -257,6 +257,95 @@ Type=oneshot
 ExecStart=/bin/sh -c 'echo cleaned > $R/cleanup.out'
 EOF
 
+# --- failure propagation (s6-rc only orders; sdcompat enforces Requires=) ---
+cat > "$U/bad.service" <<EOF
+[Unit]
+Description=Fails unless \$R/bad-ok exists
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'test -e $R/bad-ok'
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > "$U/after-bad.service" <<EOF
+[Unit]
+Description=Ordered after a failing wanted unit
+After=bad.service
+Wants=bad.service
+[Service]
+ExecStart=/bin/sleep 1000
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > "$U/needs-bad.service" <<EOF
+[Unit]
+Description=Requires the failing unit
+Requires=bad.service
+After=bad.service
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat > "$U/t.target" <<EOF
+[Unit]
+Wants=bad.service
+EOF
+cat > "$U/consumer.service" <<EOF
+[Unit]
+Requires=t.target
+After=t.target
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat > "$U/cond2.service" <<EOF
+[Unit]
+ConditionPathExists=$R/cond-flag
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat > "$U/slow.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sleep 3
+EOF
+
+# --- fd store: FDSTORE=1 descriptors survive a restart ---
+cat > "$W/fdstore-test.py" <<'PYT'
+import os, socket, sys
+out = sys.argv[1]
+names = os.environ.get("LISTEN_FDNAMES", "")
+with open(out, "a") as f:
+    f.write("start names=%s\n" % names)
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+addr = os.environ["NOTIFY_SOCKET"]
+if addr.startswith("@"):
+    addr = "\0" + addr[1:]
+if not names:
+    fd = os.open(out, os.O_RDONLY)
+    s.sendmsg([b"FDSTORE=1\nFDNAME=kept"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, fd.to_bytes(4, sys.byteorder))], 0, addr)
+s.sendto(b"READY=1", addr)
+os.execv("/bin/sleep", ["sleep", "1000"])
+PYT
+cat > "$U/fdkeep.service" <<EOF
+[Service]
+Type=notify
+FileDescriptorStoreMax=4
+ExecStart=/usr/bin/python3 $W/fdstore-test.py $R/fdkeep.out
+EOF
+
+# --- D-Bus activation through dbus-daemon --systemd-activation ---
+mkdir -p "$W/dbus-services"
+cat > "$W/dbus-services/org.example.Act.service" <<EOF
+[D-BUS Service]
+Name=org.example.Act
+Exec=/bin/false
+SystemdService=act.service
+EOF
+cat > "$U/act.service" <<EOF
+[Service]
+ExecStart=/bin/sh -c 'echo activated >> $R/act.out; exec sleep 1000'
+EOF
+
 # --- path units ---
 cat > "$U/watch.service" <<EOF
 [Service]
@@ -295,7 +384,7 @@ disable *
 EOF
 
 C="--config $W/sdcompat.conf"
-"$BIN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket watch.path chg.path >/dev/null
+"$BIN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket watch.path chg.path bad.service after-bad.service >/dev/null
 
 # Stand-in for journald's stdout stream socket: records each connection.
 mkdir -p "$R/journal"
@@ -327,7 +416,21 @@ sleep 0.3
 s6-rc-init -c "$W/state/compiled" -l "$R/live" "$W/scan"
 s6-rc -l "$R/live" -u change sdcompat-default || true
 
-dbus-daemon --session --address="unix:path=$R/bus" --nofork --nopidfile >"$W/dbus.log" 2>&1 &
+cat > "$W/bus.conf" <<EOF
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:path=$R/bus</listen>
+  <servicedir>$W/dbus-services</servicedir>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+EOF
+dbus-daemon --config-file="$W/bus.conf" --systemd-activation --nofork --nopidfile >"$W/dbus.log" 2>&1 &
 echo $! >> "$W/pids"
 sleep 0.3
 "$BIN" $C daemon --address "unix:path=$R/bus" >"$W/daemon.log" 2>&1 &

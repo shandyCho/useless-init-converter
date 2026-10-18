@@ -67,7 +67,8 @@ expect_eq "forking MainPID from PIDFile" "$(prop forking.service Service MainPID
 
 echo "== system state"
 expect_eq "SystemState degraded" "$($B get-property $MGR SystemState | cut -d'"' -f2)" "degraded"
-expect_eq "NFailedUnits" "$($B get-property $MGR NFailedUnits | cut -d' ' -f2)" "2"
+# failing, flappy, and bad.service (fails at boot on purpose)
+expect_eq "NFailedUnits" "$($B get-property $MGR NFailedUnits | cut -d' ' -f2)" "3"
 
 echo "== reload / restart / stop"
 call ReloadUnit ss reloadable.service replace && sleep 1.5
@@ -192,6 +193,54 @@ else
     echo "SKIP systemd-run (set SYSTEMD_ROOT or install systemd-run)"
 fi
 
+echo "== failure propagation"
+expect_state bad.service failed/failed
+expect_state after-bad.service active/running
+call StartUnit ss consumer.service replace
+expect_state consumer.service active/running
+out=$($B call $MGR StartUnit ss needs-bad.service replace 2>&1)
+sleep 1
+expect_state needs-bad.service inactive/dead
+touch "$R/bad-ok"
+call StartUnit ss needs-bad.service replace
+expect_state needs-bad.service active/running
+expect_state bad.service active/exited
+
+echo "== conditions are re-checked on start"
+call StartUnit ss cond2.service replace
+expect_state cond2.service inactive/dead
+touch "$R/cond-flag"
+call StartUnit ss cond2.service replace
+expect_state cond2.service active/running
+
+echo "== job queue"
+call StartUnit ss slow.service replace &
+sleep 0.3
+job=$($B call $MGR RestartUnit ss slow.service replace | cut -d'"' -f2)
+jid=${job##*/}
+$B get-property $DEST "$job" org.freedesktop.systemd1.Job State | grep -q waiting && ok "second job waits for the first" || bad "job not queued"
+$B call $MGR CancelJob u "$jid" >/dev/null 2>&1 && ok "CancelJob on a queued job" || bad "CancelJob failed"
+wait
+
+echo "== fd store"
+call StartUnit ss fdkeep.service replace
+expect_state fdkeep.service active/running
+call RestartUnit ss fdkeep.service replace
+sleep 1
+expect_eq "FDSTORE=1 fd handed back after restart" "$(tail -1 "$R/fdkeep.out" 2>/dev/null)" "start names=kept"
+i1=$(stat -c %i "$R/test.sock")
+call RestartUnit ss sock.service replace
+sleep 1
+expect_eq "listening socket kept across restart" "$(stat -c %i "$R/test.sock")" "$i1"
+
+echo "== D-Bus activation"
+$B emit /org/freedesktop/DBus org.freedesktop.systemd1.Activator ActivationRequest s act.service
+sleep 1.5
+[ ! -e "$R/act.out" ] && ok "forged ActivationRequest ignored" || bad "forged ActivationRequest started act.service"
+$B --timeout=3 call org.example.Act / org.example.Act Ping >/dev/null 2>&1
+sleep 1
+expect_eq "real activation via dbus-daemon" "$(cat "$R/act.out" 2>/dev/null)" "activated"
+
 echo "== transient scope"
 sleep 1000 &
 spid=$!
@@ -201,6 +250,34 @@ else
     echo "SKIP transient scope (needs a writable cgroup: $(cat "$W/last-error"))"
 fi
 kill $spid 2>/dev/null
+
+echo "== unprivileged caller (ALLOW_UIDS empty, no polkit)"
+pkill -f "sdcompat --config $W/sdcompat.conf daemon" 2>/dev/null
+sleep 0.5
+grep -v '^ALLOW_UIDS=' "$W/sdcompat.conf" > "$W/unpriv.conf"
+BIN=$(sed -n 's/^RUNNER=//p' "$W/sdcompat.conf")
+"$BIN" --config "$W/unpriv.conf" daemon --address "unix:path=$R/bus" >>"$W/daemon.log" 2>&1 &
+sleep 1
+denied() { $B call $MGR "$@" 2>&1 | grep -q "Access denied"; }
+denied StartUnit ss once.service replace && ok "StartUnit denied" || bad "StartUnit allowed"
+denied StopUnit ss hello.service replace && ok "StopUnit denied" || bad "StopUnit allowed"
+denied EnableUnitFiles asbb 1 once.service false false && ok "EnableUnitFiles denied" || bad "EnableUnitFiles allowed"
+denied Reload && ok "Reload denied" || bad "Reload allowed"
+denied SetEnvironment as 1 X=1 && ok "SetEnvironment denied" || bad "SetEnvironment allowed"
+denied KillUnit ssi hello.service all 15 && ok "KillUnit denied" || bad "KillUnit allowed"
+denied StartTransientUnit 'ssa(sv)a(sa(sv))' x.service fail 1 ExecStart 'a(sasb)' 1 /bin/true 1 /bin/true false 0 \
+    && ok "StartTransientUnit denied" || bad "StartTransientUnit allowed"
+expect_state hello.service active/running
+$B call $MGR ListUnits >/dev/null && ok "read-only ListUnits allowed" || bad "ListUnits denied"
+rm -f "$R/act.out"
+$B emit /org/freedesktop/DBus org.freedesktop.systemd1.Activator ActivationRequest s act.service
+sleep 1.5
+expect_state act.service active/running  # still running from the real activation
+[ ! -e "$R/act.out" ] && ok "forged ActivationRequest ignored for unprivileged caller" || bad "forged activation worked"
+if [ -n "$SR" ]; then
+    SYSTEMCTL=$(dirname "$SR")/systemctl "$(dirname "$0")/systemctl.sh" start once.service >/dev/null 2>&1 \
+        && bad "private socket accepted an unprivileged peer" || ok "private socket refuses an unprivileged peer"
+fi
 
 echo
 echo "passed: $pass  failed: $fail"

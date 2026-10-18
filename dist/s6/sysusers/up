@@ -1,1 +1,1 @@
-/usr/bin/systemd-sysusers
+/usr/libexec/sdcompat/early sysusers

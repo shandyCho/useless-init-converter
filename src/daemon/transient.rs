@@ -228,12 +228,14 @@ impl Daemon {
                 return Err(format!("Unit {n} already exists."));
             }
             fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+            self.unit_cache.lock().unwrap().remove(&n);
         }
         Ok(())
     }
 
     pub(super) fn remove_transient_file(&self, id: &str) {
         let _ = fs::remove_file(self.cfg.transient_dir.join(id));
+        self.unit_cache.lock().unwrap().remove(id);
         let _ = fs::remove_dir_all(self.cfg.unit_run_dir(id));
     }
 

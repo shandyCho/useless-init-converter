@@ -459,7 +459,9 @@ pub fn plan(cfg: &Config) -> Plan {
                 deps,
                 log_atom,
                 warnings,
-                timeout_up_ms: ms(timeout_start),
+                // The runner enforces TimeoutStartSec= itself (soft failure);
+                // s6-rc's own timeout is only a backstop.
+                timeout_up_ms: if timeout_start == u64::MAX { 0 } else { ms(timeout_start) + 15_000 },
                 timeout_down_ms: ms(timeout_stop),
                 timeout_finish_ms: ms(restart_sec).saturating_add(5000),
                 down_signal,
@@ -863,6 +865,17 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
         updated_live = true;
     }
 
+    // Keep the database we are replacing as "previous" (rollback with
+    // sdcompat.db=previous on the kernel command line).
+    if let Ok(prev) = fs::read_link(cfg.state_dir.join("current")) {
+        for (link, target) in [("previous", prev.clone()), ("compiled.previous", prev.join("compiled"))] {
+            let tmp = cfg.state_dir.join(format!(".{link}.tmp"));
+            let _ = fs::remove_file(&tmp);
+            if std::os::unix::fs::symlink(&target, &tmp).is_ok() {
+                let _ = fs::rename(&tmp, cfg.state_dir.join(link));
+            }
+        }
+    }
     // Point "current" and "compiled" (used by s6-rc-init at boot) at the new db.
     for (link, target) in [("current", PathBuf::from("db").join(&stamp)), ("compiled", PathBuf::from("db").join(&stamp).join("compiled"))] {
         let tmp = cfg.state_dir.join(format!(".{link}.tmp"));
@@ -871,12 +884,13 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
         fs::rename(&tmp, cfg.state_dir.join(link)).map_err(|e| e.to_string())?;
     }
 
-    // Garbage-collect databases that are neither current nor live.
+    // Garbage-collect databases that are neither current, previous nor live.
     let live_target = fs::canonicalize(&live_compiled).ok();
+    let previous = fs::canonicalize(cfg.state_dir.join("previous")).ok();
     if let Ok(rd) = fs::read_dir(&db_root) {
         for e in rd.flatten() {
             let p = e.path();
-            if p == db_dir {
+            if p == db_dir || fs::canonicalize(&p).ok() == previous {
                 continue;
             }
             let pc = fs::canonicalize(p.join("compiled")).ok();

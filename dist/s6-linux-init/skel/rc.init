@@ -7,12 +7,25 @@ shift
 # The initramfs mounts / read-only; the database lives in /var/lib/sdcompat.
 mount -o remount,rw / || true
 
+# Kernel command line options:
+#   sdcompat.db=previous   boot the database from before the last change
+#   sdcompat.reload=0      do not regenerate the database at boot
+db=/var/lib/sdcompat/compiled
+reload=1
+for opt in $(cat /proc/cmdline); do
+    case $opt in
+        sdcompat.db=previous) db=/var/lib/sdcompat/compiled.previous; reload=0 ;;
+        sdcompat.reload=0) reload=0 ;;
+    esac
+done
+
 # Pick up unit files installed or enabled while the system was down.
-if ! /usr/libexec/sdcompat/sdcompat reload --no-update; then
+if [ "$reload" = 1 ] && ! /usr/libexec/sdcompat/sdcompat reload --no-update; then
     echo "rc.init: sdcompat reload failed, booting the previous database" >&2
 fi
+[ -e "$db" ] || db=/var/lib/sdcompat/compiled
 
-s6-rc-init -c /var/lib/sdcompat/compiled -l /run/s6-rc /run/service
+s6-rc-init -c "$db" -l /run/s6-rc /run/service
 
 # Offline updates (dnf system-upgrade / dnf offline): like systemd's
 # system-update generator, boot into system-update.target instead.

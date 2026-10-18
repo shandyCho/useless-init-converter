@@ -227,7 +227,16 @@ impl Daemon {
         let ufs = if self.transient.lock().unwrap().contains_key(id) || self.is_transient_file(unit) {
             "transient".to_string()
         } else {
-            install::unit_file_state(&self.cfg, id).unwrap_or_default()
+            // Bind first: a guard in an `if let` condition lives through `else`.
+            let cached = self.file_state_cache.lock().unwrap().get(id).cloned();
+            match cached {
+                Some(v) => v,
+                None => {
+                    let v = install::unit_file_state(&self.cfg, id).unwrap_or_default();
+                    self.file_state_cache.lock().unwrap().insert(id.to_string(), v.clone());
+                    v
+                }
+            }
         };
         p.insert("UnitFileState".into(), s(ufs));
         p.insert("UnitFilePreset".into(), s(install::preset_state(&self.cfg, id)));
@@ -625,7 +634,7 @@ impl Daemon {
         p.insert("Id".into(), Value::from(j.id));
         p.insert("Unit".into(), Value::from((j.unit.clone(), op(unit_path(&j.unit)))));
         p.insert("JobType".into(), s(j.jtype.clone()));
-        p.insert("State".into(), s("running"));
+        p.insert("State".into(), s(j.state));
         p.insert("ActivationDetails".into(), Value::from(Vec::<(String, String)>::new()));
         Some(p)
     }

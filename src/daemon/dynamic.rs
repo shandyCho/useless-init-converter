@@ -167,7 +167,9 @@ impl Daemon {
             if self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false) {
                 return "done";
             }
-            let ok = self.run_runner("up", id, None).await;
+            let started_at = crate::util::now_realtime_usec();
+            let ok = self.run_runner("up", id, None).await
+                && self.job_outcome(id, started_at, "done") == "done";
             let remain = unit.get_bool("Service", "RemainAfterExit", false);
             self.dynamic
                 .lock()
@@ -205,8 +207,10 @@ impl Daemon {
                 .unwrap()
                 .insert(id.to_string(), Dynamic { kind: Kind::Longrun, active: false });
         }
+        let started_at = crate::util::now_realtime_usec();
         let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(id)).status().await;
-        self.wait_ready(id, unit, None).await
+        let r = self.wait_ready(id, unit, None).await;
+        self.job_outcome(id, started_at, r)
     }
 
     /// Dynamic units that require (Requires/BindsTo) `id`.
@@ -246,6 +250,8 @@ impl Daemon {
         if let Ok(scan) = fs::canonicalize(self.cfg.live_dir.join("scandir")) {
             let _ = Command::new("s6-svunlink").arg(&scan).arg(id).status().await;
         }
+        self.fdstore.drop_key(id);
+        self.fdstore.drop_key(&format!("{id}#sockets"));
         // Give s6-supervise a moment to exit before removing its directory.
         tokio::time::sleep(Duration::from_millis(200)).await;
         let _ = fs::remove_dir_all(self.dyn_dir(id));

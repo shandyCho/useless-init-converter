@@ -56,6 +56,16 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 - `Persistent=` (catches up a missed run), `RandomizedDelaySec=`, `FixedRandomDelay=`, `Unit=`.
 - `systemctl list-timers` and `systemctl status x.timer` show next and last elapse.
 
+**Failure semantics.** s6-rc has no soft dependencies: depending on a bundle
+means depending on every service in it, so one failing wanted unit would stop
+everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
+- every start is reported to s6-rc as successful, and the real result is
+  recorded (`failed`, `timeout`, ...);
+- a unit whose `Requires=`, `BindsTo=` or `Requisite=` failed is not started,
+  and its job result is `dependency`, as with systemd;
+- starting a unit retries its failed requirements, and re-checks conditions of
+  a unit that was skipped earlier.
+
 **Execution** (runner)
 - `Type=simple|exec|notify|notify-reload|dbus|forking|oneshot|idle`. Readiness for each type is mapped onto s6's notification fd.
 - `ExecStartPre/Post`, `ExecCondition`, `ExecStop`, `ExecStopPost`, `ExecReload`, with the `-@+!:` prefixes and `$VAR`/`${VAR}` expansion.
@@ -68,6 +78,10 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 - Socket activation for `Accept=no`: `ListenStream/Datagram/SequentialPacket/FIFO`, with `LISTEN_FDS`, `LISTEN_PID` and `LISTEN_FDNAMES` set.
 - `Restart=` (all modes), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=` (reboot/poweroff/halt).
+- `FDSTORE=1` / `FileDescriptorStoreMax=`: the daemon holds stored fds and hands
+  them back after a restart (journald and logind use this). Listening sockets
+  are held the same way, so they stay open across service restarts.
+- `TimeoutStartSec=` is enforced by the runner: on timeout the start fails and the service is terminated.
 - Output goes to **systemd-journald** through its stdout stream protocol (as PID 1 does). journald attributes it to the unit from the cgroup, so `journalctl -u UNIT` and the log lines in `systemctl status` work. With `JOURNAL=no`, each service gets an s6-log directory instead.
 - Conditions and asserts: `Condition*=`/`Assert*=` for paths, the kernel command line, virtualization, security and more.
 - cgroup v2 at systemd's paths (`system.slice/<unit>`), `KillMode=`, and `MemoryMax/High`, `CPUQuota/Weight`, `TasksMax`, `IOWeight`.
@@ -83,7 +97,13 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 - Template instances are created on demand without recompiling the database, for example `user@1000.service` and `user-runtime-dir@1000.service`. Their dependencies start first, and units that require a stopped unit are stopped with it.
 - Starting `poweroff.target`, `reboot.target` or `halt.target` (which is how logind powers off) runs the configured shutdown command.
 - D-Bus activation: answers dbus-daemon's `ActivationRequest` and replies with `ActivationFailure` when a start fails.
-- Authorization: mutating calls require root, or a uid listed in `ALLOW_UIDS`.
+- Authorization: mutating calls need root, a uid in `ALLOW_UIDS`, or a polkit
+  grant for systemd's action IDs (`manage-units`, `manage-unit-files`,
+  `reload-daemon`, `set-environment`; the policy ships with systemd). Without
+  polkit, non-root callers are denied. `ALLOW_UIDS` is root-equivalent.
+- D-Bus activation is accepted only from the bus daemon itself, and never makes
+  the daemon regenerate its database.
+- Jobs on the same unit run one after another; queued jobs can be cancelled.
 
 ## Not implemented (yet)
 
@@ -91,7 +111,8 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 - `systemd-run --pipe`/`--stdio` (passing file descriptors) on the system manager. `--pty`, `--wait`, `--scope`, `--on-*` and `--user` work.
 - autofs: `.automount` units mount eagerly.
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`.
-- Watchdog, file descriptor store, credentials (`LoadCredential=`), `PrivateDevices/Network/Users`, seccomp, `ProtectKernel*`.
+- Watchdog, credentials (`LoadCredential=`), `PrivateDevices/Network/Users`, seccomp, `ProtectKernel*`.
+- Cancelling a job that is already running.
 - `ExecStop=` only runs when a unit is stopped through the daemon (`systemctl stop`), not when s6-rc stops services directly, for example at shutdown.
 
 ## Offline updates and kernel updates
@@ -112,7 +133,7 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 ```sh
 cargo build
 tests/sandbox.sh ~/sdc-sandbox        # private s6-svscan, s6-rc and D-Bus bus
-tests/check.sh ~/sdc-sandbox          # 75 scenario checks (set SYSTEMD_ROOT for systemd-run)
+tests/check.sh ~/sdc-sandbox          # 102 scenario checks, ending with an unprivileged-caller phase
 tests/systemctl.sh status hello.service   # the real systemctl, in a namespace
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop
@@ -168,7 +189,13 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 | Login, user manager | systemd-logind and `systemd --user`, as supervised services |
 
 If stage 2 fails, log in on tty9 (Ctrl+Alt+F9) and read
-`/run/uncaught-logs/current`.
+`/run/uncaught-logs/current`. To boot the s6 database from before the last
+change, add `sdcompat.db=previous` to the kernel command line; to skip
+regenerating it at boot, add `sdcompat.reload=0`.
+
+The skarnet tarballs are verified against pinned SHA-256 sums (taken from the
+releases on 2026-10-18), and the installed files are recorded in
+`/var/lib/sdcompat/skarnet-files.txt` for `--uninstall --remove-s6`.
 
 ### Running the tests on Fedora
 

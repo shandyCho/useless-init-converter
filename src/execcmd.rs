@@ -9,8 +9,10 @@ pub struct ExecCommand {
     pub argv: Vec<String>,
     /// '-' prefix: failure is ignored.
     pub ignore_failure: bool,
-    /// '+', '!' or '!!': run with full privileges (no User=, no sandboxing).
+    /// '+': run with full privileges (no User=, no sandboxing).
     pub privileged: bool,
+    /// '!' or '!!': keep sandboxing, but skip the User=/Group= switch.
+    pub no_setuid: bool,
     /// ':' prefix: no environment variable substitution.
     pub no_env_expand: bool,
 }
@@ -41,7 +43,7 @@ fn build(mut words: Vec<String>) -> Result<ExecCommand, String> {
     let mut rest = first.as_str();
     loop {
         if let Some(r) = rest.strip_prefix("!!") {
-            cmd.privileged = true;
+            cmd.no_setuid = true;
             rest = r;
         } else if let Some(r) = rest.strip_prefix('-') {
             cmd.ignore_failure = true;
@@ -53,7 +55,7 @@ fn build(mut words: Vec<String>) -> Result<ExecCommand, String> {
             cmd.privileged = true;
             rest = r;
         } else if let Some(r) = rest.strip_prefix('!') {
-            cmd.privileged = true;
+            cmd.no_setuid = true;
             rest = r;
         } else if let Some(r) = rest.strip_prefix(':') {
             cmd.no_env_expand = true;
@@ -163,6 +165,8 @@ mod tests {
         assert_eq!(c.argv, vec!["foo-argv0", "--x"]);
         let c = &parse("+/bin/true").unwrap()[0];
         assert!(c.privileged);
+        let c = &parse("!/bin/true").unwrap()[0];
+        assert!(c.no_setuid && !c.privileged);
     }
 
     #[test]

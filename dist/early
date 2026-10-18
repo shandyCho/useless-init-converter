@@ -3,7 +3,13 @@
 # They replace the systemd units that only make sense with systemd as PID 1
 # (systemd-remount-fs, systemd-modules-load, the API filesystem mounts, ...).
 # Review them for your machine before booting with them.
+#
+# Every step exits 0: s6-rc treats a failed oneshot as a failed dependency
+# of everything after it, but these steps only degrade the system when they
+# fail (a sysctl key, one tmpfiles line). Failures are logged instead.
 set -u
+
+warn() { echo "sdcompat early: $*" >&2; }
 
 mnt() { # mnt FSTYPE TARGET OPTIONS
     mountpoint -q "$2" && return 0
@@ -33,7 +39,7 @@ mount-fs)
     # fsck of the root filesystem is not done here; the initramfs normally
     # handles it (rd.fsck / fsck.mode kernel options).
     mount -o remount,rw / 2>/dev/null
-    mount -a -O no_netdev
+    mount -a -O no_netdev || warn "mount -a: some filesystems did not mount"
     swapon -a 2>/dev/null
     ;;
 umount-fs)
@@ -43,7 +49,7 @@ umount-fs)
 udev-trigger)
     udevadm trigger --type=subsystems --action=add
     udevadm trigger --type=devices --action=add
-    udevadm settle --timeout=60
+    udevadm settle --timeout=60 || warn "udevadm settle timed out"
     ;;
 modules-load)
     # /etc overrides /run overrides /usr/lib by file name, like systemd.
@@ -64,8 +70,20 @@ hostname)
     h=$(sed -n '/^[^#]/{p;q}' /etc/hostname 2>/dev/null)
     hostname "${h:-localhost}"
     ;;
+tmpfiles)
+    # Like systemd-tmpfiles-setup.service: SuccessExitStatus=DATAERR CANTCREAT
+    /usr/bin/systemd-tmpfiles --create --remove --boot --exclude-prefix=/dev
+    rc=$?
+    case $rc in 0|65|73) ;; *) warn "systemd-tmpfiles exited $rc" ;; esac
+    ;;
+sysusers)
+    /usr/bin/systemd-sysusers || warn "systemd-sysusers exited $?"
+    ;;
+sysctl)
+    /usr/sbin/sysctl -q --system || warn "sysctl --system exited $?"
+    ;;
 *)
-    echo "usage: $0 mount-api|mount-fs|umount-fs|udev-trigger|modules-load|hostname" >&2
+    echo "usage: $0 mount-api|mount-fs|umount-fs|udev-trigger|modules-load|hostname|tmpfiles|sysusers|sysctl" >&2
     exit 2
     ;;
 esac
