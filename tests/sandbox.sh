@@ -37,6 +37,10 @@ BUS_ADDRESS=unix:path=$R/bus
 ALLOW_UIDS=$(id -u)
 RUNNER=$BIN
 POWEROFF_CMD=touch $R/poweroff-requested
+REBOOT_CMD=touch $R/reboot-requested
+JOURNAL=yes
+JOURNAL_STDOUT=$R/jstdout
+TRANSIENT_DIR=$R/transient
 EOF
 
 cat > "$U/multi-user.target" <<EOF
@@ -237,6 +241,51 @@ Service=vl.service
 WantedBy=sockets.target
 EOF
 
+# --- OnFailure= / FailureAction= (offline-update style) ---
+cat > "$U/upd.service" <<EOF
+[Unit]
+Description=Fails, starts its cleanup and asks for a reboot
+OnFailure=upd-cleanup.service
+FailureAction=reboot
+[Service]
+Type=oneshot
+ExecStart=/bin/false
+EOF
+cat > "$U/upd-cleanup.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo cleaned > $R/cleanup.out'
+EOF
+
+# --- path units ---
+cat > "$U/watch.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo started >> $R/watch.out; rm -f $R/flag'
+EOF
+cat > "$U/watch.path" <<EOF
+[Unit]
+Description=Level-triggered path unit
+[Path]
+PathExists=$R/flag
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > "$U/chg.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo changed >> $R/chg.out'
+EOF
+cat > "$U/chg.path" <<EOF
+[Unit]
+Description=Edge-triggered path unit
+[Path]
+PathChanged=$R/chgdir
+MakeDirectory=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+
 mkdir -p "$W/state/timers"
 echo 1000000000000000 > "$W/state/timers/persist.timer"
 
@@ -246,12 +295,34 @@ disable *
 EOF
 
 C="--config $W/sdcompat.conf"
-"$BIN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket >/dev/null
+"$BIN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket watch.path chg.path >/dev/null
+
+# Stand-in for journald's stdout stream socket: records each connection.
+mkdir -p "$R/journal"
+python3 -c '
+import os, socket, sys, threading
+path, out = sys.argv[1], sys.argv[2]
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(path); s.listen(64)
+n = 0
+def handle(c, i):
+    with open(os.path.join(out, "%d.log" % i), "ab", buffering=0) as f:
+        while True:
+            d = c.recv(65536)
+            if not d:
+                break
+            f.write(d)
+while True:
+    c, _ = s.accept(); n += 1
+    threading.Thread(target=handle, args=(c, n), daemon=True).start()
+' "$R/jstdout" "$R/journal" &
+echo $! > "$W/pids"
+sleep 0.3
 "$BIN" $C preset notifier.service >/dev/null
 "$BIN" $C reload --no-update
 
 s6-svscan "$W/scan" >"$W/svscan.log" 2>&1 &
-echo $! > "$W/pids"
+echo $! >> "$W/pids"
 sleep 0.3
 s6-rc-init -c "$W/state/compiled" -l "$R/live" "$W/scan"
 s6-rc -l "$R/live" -u change sdcompat-default || true

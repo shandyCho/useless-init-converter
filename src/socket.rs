@@ -172,6 +172,18 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
         .and_then(|b| b.parse().ok())
         .unwrap_or(libc::SOMAXCONN);
     let pass_cred = sock.get_bool("Socket", "PassCredentials", false);
+    let pass_sec = sock.get_bool("Socket", "PassSecurity", false);
+    let size = |k: &str| -> Option<i32> {
+        let v = sock.get("Socket", k)?;
+        let (n, m) = match v.chars().last()? {
+            'K' => (&v[..v.len() - 1], 1i64 << 10),
+            'M' => (&v[..v.len() - 1], 1 << 20),
+            'G' => (&v[..v.len() - 1], 1 << 30),
+            _ => (v.as_str(), 1),
+        };
+        n.parse::<i64>().ok().map(|n| (n * m).min(i32::MAX as i64) as i32)
+    };
+    let (rcvbuf, sndbuf) = (size("ReceiveBuffer"), size("SendBuffer"));
     let mut out = Vec::new();
 
     for (key, ty) in [
@@ -188,6 +200,18 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
             };
             if pass_cred {
                 set_opt(fd, libc::SOL_SOCKET, libc::SO_PASSCRED, 1);
+            }
+            if pass_sec {
+                set_opt(fd, libc::SOL_SOCKET, libc::SO_PASSSEC, 1);
+            }
+            if let Some(b) = rcvbuf {
+                // FORCE needs CAP_NET_ADMIN; fall back to the capped variant.
+                set_opt(fd, libc::SOL_SOCKET, libc::SO_RCVBUFFORCE, b);
+                set_opt(fd, libc::SOL_SOCKET, libc::SO_RCVBUF, b);
+            }
+            if let Some(b) = sndbuf {
+                set_opt(fd, libc::SOL_SOCKET, libc::SO_SNDBUFFORCE, b);
+                set_opt(fd, libc::SOL_SOCKET, libc::SO_SNDBUF, b);
             }
             if ty != libc::SOCK_DGRAM && unsafe { libc::listen(fd, backlog) } < 0 {
                 return Err(format!("listen {spec}: {}", errno()));
@@ -211,6 +235,16 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
             return Err(format!("open fifo {spec}: {}", errno()));
         }
         out.push(BoundSocket { fd, name: name.clone(), path: Some(spec.clone()) });
+    }
+    // Symlinks= (e.g. /dev/log -> /run/systemd/journal/dev-log)
+    let first_path = out.iter().find_map(|b| b.path.clone());
+    if let Some(target) = first_path {
+        for link in sock.get_words("Socket", "Symlinks") {
+            let _ = fs::remove_file(&link);
+            if let Err(e) = std::os::unix::fs::symlink(&target, &link) {
+                eprintln!("sdcompat: {}: symlink {link}: {e}", sock.id);
+            }
+        }
     }
     for key in ["ListenNetlink", "ListenSpecial", "ListenMessageQueue", "ListenUSBFunction"] {
         if sock.get("Socket", key).is_some() {

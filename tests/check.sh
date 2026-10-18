@@ -144,6 +144,54 @@ call StartUnit ss poweroff.target replace-irreversibly
 sleep 0.5
 [ -e "$R/poweroff-requested" ] && ok "poweroff.target ran POWEROFF_CMD" || bad "poweroff.target did nothing"
 
+echo "== OnFailure= / FailureAction="
+call StartUnit ss upd.service replace
+sleep 2
+expect_eq "OnFailure= unit ran" "$(cat "$R/cleanup.out" 2>/dev/null)" "cleaned"
+[ -e "$R/reboot-requested" ] && ok "FailureAction=reboot ran REBOOT_CMD" || bad "FailureAction did nothing"
+
+echo "== journal stream"
+f=$(grep -l "^sh\$" "$R"/journal/*.log 2>/dev/null | xargs grep -l "hello.service" 2>/dev/null | head -1)
+if [ -n "$f" ] && head -7 "$f" | tr '\n' ' ' | grep -q "^sh hello.service 6 1 0 0 0 " && grep -q "hello from" "$f"; then
+    ok "service output arrives on the journal stream with the stdout header"
+else
+    bad "no journal stream for hello.service: $(ls "$R/journal" | wc -l) streams"
+fi
+
+echo "== path units"
+expect_state watch.path active/waiting
+touch "$R/flag"
+sleep 3
+expect_eq "PathExists= started the unit" "$(head -1 "$R/watch.out" 2>/dev/null)" "started"
+touch "$R/chgdir/file1"
+sleep 3
+[ -s "$R/chg.out" ] && ok "PathChanged= started the unit" || bad "PathChanged= did nothing"
+expect_eq "path Triggers" "$(prop chg.path Unit Triggers)" "1 chg.service"
+
+echo "== systemd-run"
+SR=""
+if [ -n "${SYSTEMD_ROOT:-}" ]; then SR=$SYSTEMD_ROOT/usr/bin/systemd-run; elif command -v systemd-run >/dev/null; then SR=$(command -v systemd-run); fi
+if [ -n "$SR" ]; then
+    run_sr() { SYSTEMCTL=$SR "$(dirname "$0")/systemctl.sh" "$@"; }
+    out=$(run_sr --unit=sr-wait --wait /bin/sh -c 'echo ran > '"$R"'/sr.out; exit 3' 2>&1); rc=$?
+    case "$out" in *"status=3"*) ok "systemd-run --wait reports the exit status" ;; *) bad "systemd-run --wait: rc=$rc $out" ;; esac
+    expect_eq "transient service ran" "$(cat "$R/sr.out" 2>/dev/null)" "ran"
+    run_sr --unit=sr-long /bin/sleep 1000 >/dev/null 2>&1 && ok "systemd-run started sr-long" || bad "systemd-run sr-long"
+    expect_state sr-long.service active/running
+    expect_eq "UnitFileState transient" "$(prop sr-long.service Unit UnitFileState)" "transient"
+    call StopUnit ss sr-long.service replace
+    sleep 0.5
+    # Like systemd, a stopped transient unit is unloaded.
+    $B call $MGR GetUnit s sr-long.service >/dev/null 2>&1 && bad "sr-long still loaded" || ok "stopped transient unit unloaded"
+    [ ! -e "$R/transient/sr-long.service" ] && ok "transient unit file removed" || bad "transient file left behind"
+    run_sr --unit=sr-timer --on-active=1 /bin/sh -c 'echo fired > '"$R"'/srt.out' >/dev/null 2>&1 \
+        && ok "systemd-run --on-active created a timer" || bad "systemd-run --on-active"
+    sleep 4
+    expect_eq "transient timer fired its service" "$(cat "$R/srt.out" 2>/dev/null)" "fired"
+else
+    echo "SKIP systemd-run (set SYSTEMD_ROOT or install systemd-run)"
+fi
+
 echo "== transient scope"
 sleep 1000 &
 spid=$!

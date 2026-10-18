@@ -13,4 +13,11 @@ if ! /usr/libexec/sdcompat/sdcompat reload --no-update; then
 fi
 
 s6-rc-init -c /var/lib/sdcompat/compiled -l /run/s6-rc /run/service
+
+# Offline updates (dnf system-upgrade / dnf offline): like systemd's
+# system-update generator, boot into system-update.target instead.
+if [ -L /system-update ] || [ -e /system-update ] || [ -L /etc/system-update ]; then
+    echo "rc.init: /system-update exists, booting the offline update" >&2
+    rl=system-update
+fi
 exec /etc/s6-linux-init/current/scripts/runlevel "$rl"

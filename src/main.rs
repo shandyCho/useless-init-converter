@@ -26,7 +26,7 @@ Tools:
   log UNIT [-f]            show (or follow) a service's s6-log output
 
 Internal (used by generated s6-rc scripts and the daemon):
-  run|finish|up|down|stop-exec|reload-exec|timer-run [--mainpid N] (-- UNIT | --unit-hex HEX) [ARGS]
+  run|finish|up|down|stop-exec|reload-exec|timer-run|path-run [--mainpid N] (-- UNIT | --unit-hex HEX) [ARGS]
 ";
 
 fn die(msg: &str) -> ! {
@@ -187,6 +187,13 @@ fn main() {
         "log" => {
             let follow = rest.iter().any(|a| a == "-f" || a == "--follow");
             let Some(unit) = rest.iter().find(|a| !a.starts_with('-')) else { die("usage: sdcompat log UNIT [-f]") };
+            if cfg.journal {
+                let mut j = std::process::Command::new("journalctl");
+                j.args(["-u", unit, "--no-pager"]);
+                j.arg(if follow { "-f" } else { "-n200" });
+                let err = std::os::unix::process::CommandExt::exec(&mut j);
+                die(&format!("journalctl: {err}"))
+            }
             let Some(dir) = &cfg.log_dir else { die("LOG_DIR is not configured") };
             let file = dir.join(unit).join("current");
             let mut tail = std::process::Command::new("tail");
@@ -234,6 +241,10 @@ fn main() {
         "timer-run" => {
             let a = parse_internal(rest);
             sdcompat::timer::cmd_timer_run(cfg, &a.unit)
+        }
+        "path-run" => {
+            let a = parse_internal(rest);
+            sdcompat::pathunit::cmd_path_run(cfg, &a.unit)
         }
         "run" | "finish" | "up" | "down" | "stop-exec" | "reload-exec" => {
             let a = parse_internal(rest);

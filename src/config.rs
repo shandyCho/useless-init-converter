@@ -56,7 +56,22 @@ pub struct Config {
     pub halt_cmd: String,
     /// Users (besides root) allowed to call mutating D-Bus methods.
     pub allow_uids: Vec<u32>,
+    /// Run systemd-journald and send service output to it (journalctl works).
+    /// When false, each service gets an s6-log directory under LOG_DIR.
+    pub journal: bool,
+    /// journald's stdout stream socket.
+    pub journal_stdout: PathBuf,
+    /// Where StartTransientUnit writes unit files (systemd-run).
+    pub transient_dir: PathBuf,
 }
+
+/// Units added to INCLUDE when JOURNAL=yes.
+const JOURNAL_UNITS: &[&str] = &[
+    "systemd-journald.service",
+    "systemd-journald.socket",
+    "systemd-journald-dev-log.socket",
+    "systemd-journal-flush.service",
+];
 
 impl Config {
     pub fn defaults() -> Config {
@@ -66,6 +81,7 @@ impl Config {
             config_path: PathBuf::from(DEFAULT_CONFIG),
             unit_path: [
                 "/etc/systemd/system",
+                "/run/systemd/transient",
                 "/run/systemd/system",
                 "/usr/local/lib/systemd/system",
                 "/usr/lib/systemd/system",
@@ -134,7 +150,6 @@ impl Config {
                 ("systemd-tmpfiles-setup.service", "tmpfiles-setup"),
                 ("systemd-sysusers.service", "sysusers"),
                 ("systemd-remount-fs.service", "mount-fs"),
-                ("local-fs.target", "mount-fs"),
             ]
             .iter()
             .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -150,6 +165,9 @@ impl Config {
             reboot_cmd: "s6-linux-init-shutdown -r now".into(),
             halt_cmd: "s6-linux-init-shutdown -h now".into(),
             allow_uids: Vec::new(),
+            journal: true,
+            journal_stdout: PathBuf::from("/run/systemd/journal/stdout"),
+            transient_dir: PathBuf::from("/run/systemd/transient"),
         }
     }
 
@@ -165,7 +183,7 @@ impl Config {
 
         let vars = match envfile::load(&path) {
             Ok(v) => v,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => return Ok(cfg),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => return Ok(cfg.finish()),
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
         for (k, v) in vars {
@@ -206,13 +224,32 @@ impl Config {
                 "POWEROFF_CMD" => cfg.poweroff_cmd = v,
                 "REBOOT_CMD" => cfg.reboot_cmd = v,
                 "HALT_CMD" => cfg.halt_cmd = v,
+                "JOURNAL" => cfg.journal = crate::unit::parse_bool(&v).unwrap_or(true),
+                "TRANSIENT_DIR" => cfg.transient_dir = PathBuf::from(&v),
+                "JOURNAL_STDOUT" => cfg.journal_stdout = PathBuf::from(&v),
                 "ALLOW_UIDS" => {
                     cfg.allow_uids = v.split_whitespace().filter_map(|s| s.parse().ok()).collect()
                 }
                 other => eprintln!("sdcompat: {}: unknown key {other}", path.display()),
             }
         }
-        Ok(cfg)
+        Ok(cfg.finish())
+    }
+
+    fn finish(mut self) -> Config {
+        if self.journal {
+            for u in JOURNAL_UNITS {
+                if !self.include.iter().any(|i| i == u) {
+                    self.include.push(u.to_string());
+                }
+            }
+            // journalctl replaces the per-service s6-log directories.
+            self.log_dir = None;
+        }
+        if !self.unit_path.contains(&self.transient_dir) {
+            self.unit_path.insert(1.min(self.unit_path.len()), self.transient_dir.clone());
+        }
+        self
     }
 
     /// Writable unit directory for enable/disable/mask.

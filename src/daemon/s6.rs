@@ -210,6 +210,11 @@ impl Daemon {
                 return s;
             }
             let Some(sv) = self.svstat(id).await else { return s };
+            if sv.up && (id.ends_with(".timer") || id.ends_with(".path")) {
+                s.active = "active";
+                s.sub = if st.has(crate::timer::ELAPSED) { "elapsed" } else { "waiting" };
+                return s;
+            }
             if sv.up {
                 s.main_pid = st.get(keys::MAIN_PID).and_then(|p| p.parse().ok()).unwrap_or(sv.pid);
                 (s.active, s.sub) = if sv.ready { ("active", "running") } else { ("activating", "start") };
@@ -238,6 +243,18 @@ impl Daemon {
                     (s.active, s.sub) = ("active", "active");
                 }
             }
+            Some(Kind::Oneshot) if matches!(unit.utype(), "mount" | "swap") => {
+                let up = if unit.utype() == "mount" {
+                    crate::mountunit::is_mounted(&crate::mountunit::where_of(unit))
+                } else {
+                    unit.get("Swap", "What").map(|w| crate::mountunit::swap_active(&w)).unwrap_or(false)
+                };
+                if up {
+                    (s.active, s.sub) = ("active", if unit.utype() == "mount" { "mounted" } else { "active" });
+                } else if failed_result {
+                    (s.active, s.sub) = ("failed", "failed");
+                }
+            }
             Some(Kind::Oneshot) => {
                 let remain = unit.get_bool("Service", "RemainAfterExit", false);
                 if active.contains(id) && remain {
@@ -246,7 +263,7 @@ impl Daemon {
                     (s.active, s.sub) = ("failed", "failed");
                 }
             }
-            Some(Kind::Longrun) if id.ends_with(".timer") => {
+            Some(Kind::Longrun) if id.ends_with(".timer") || id.ends_with(".path") => {
                 if !active.contains(id) || !self.svstat(id).await.map(|s| s.up).unwrap_or(false) {
                     return s;
                 }
@@ -403,6 +420,13 @@ impl Daemon {
             }
             Some(Kind::Oneshot) => {
                 if active.contains(id) {
+                    if matches!(unit.utype(), "mount" | "swap") {
+                        let st = self.unit_status(id, &active, unit).await;
+                        if st.active == "active" {
+                            return "done";
+                        }
+                        return if self.run_runner("up", id, None).await { "done" } else { "failed" };
+                    }
                     if unit.get_bool("Service", "RemainAfterExit", false) {
                         return "done";
                     }
@@ -464,6 +488,10 @@ impl Daemon {
             Some(kind) => {
                 let active = self.active_atoms().await;
                 if !active.contains(id) {
+                    // Mounted outside s6-rc (fstab, by hand): still unmount it.
+                    if matches!(unit.utype(), "mount" | "swap") {
+                        return if self.run_runner("down", id, None).await { "done" } else { "failed" };
+                    }
                     return "done";
                 }
                 if kind == Kind::Longrun && !unit.get_all("Service", "ExecStop").is_empty() {

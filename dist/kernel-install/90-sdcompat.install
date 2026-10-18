@@ -1,0 +1,35 @@
+#!/bin/sh
+# kernel-install plugin: keep a "Fedora (s6 + sdcompat)" boot entry for every
+# installed kernel. It copies the BLS entry that 20-grub.install just wrote
+# and adds the s6 options. Options come from /etc/sdcompat/boot-options.
+#   kernel-install add VERSION IMAGE  /  kernel-install remove VERSION
+COMMAND=$1
+KVER=$2
+ENTRIES=${SDCOMPAT_BLS_DIR:-/boot/loader/entries}
+TITLE="Fedora (s6 + sdcompat)"
+OPTS_FILE=${SDCOMPAT_BOOT_OPTIONS:-/etc/sdcompat/boot-options}
+[ -d "$ENTRIES" ] || exit 0
+
+case "$COMMAND" in
+add)
+    [ -r "$OPTS_FILE" ] || exit 0
+    args=$(sed -e 's/#.*//' "$OPTS_FILE" | tr '\n' ' ')
+    src=""
+    for f in "$ENTRIES"/*"$KVER".conf; do
+        [ -e "$f" ] || continue
+        grep -q "^title $TITLE" "$f" && continue
+        src=$f
+        break
+    done
+    [ -n "$src" ] || exit 0
+    dest=${src%.conf}-sdcompat.conf
+    sed -e "s/^title .*/title $TITLE $KVER/" \
+        -e "/^options /{s/ rhgb//; s/ quiet//; s|\$| $args|}" "$src" >"$dest"
+    ;;
+remove)
+    for f in "$ENTRIES"/*"$KVER"-sdcompat.conf; do
+        [ -e "$f" ] && rm -f "$f"
+    done
+    ;;
+esac
+exit 0

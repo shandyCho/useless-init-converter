@@ -27,14 +27,15 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 | `sdcompat daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
 | `sdcompat run/finish/up/down` | Called by the generated s6 scripts; does what systemd does between `fork()` and `exec()`. |
 | `sdcompat timer-run` | Runs one `.timer` as an s6 longrun: computes elapses and asks the daemon to start the unit. |
+| `sdcompat path-run` | Runs one `.path` unit as an s6 longrun, watching with inotify. |
 | `sdcompat start/stop/restart UNIT` | Minimal client for the daemon (private socket or bus). |
 | `sdcompat notify` | `systemd-notify` replacement. |
-| `sdcompat log UNIT [-f]` | Shows a service's s6-log output (there is no journal). |
+| `sdcompat log UNIT [-f]` | Shows a service's log (`journalctl -u`, or the s6-log directory with `JOURNAL=no`). |
 | `sdcompat enable/disable/mask/preset/is-enabled` | Offline unit file management. |
 
 ## What is implemented
 
-**Translation** (`.service` → longrun/oneshot, `.target` → bundle, `.timer` → longrun)
+**Translation** (`.service` → longrun/oneshot, `.target` → bundle, `.timer`/`.path` → longrun, `.mount`/`.swap` → oneshot)
 - `Requires=`, `Requisite=`, `BindsTo=`, and `Wants=` combined with `After=`/`Before=`, become s6-rc dependencies. Targets pull in all of their `Wants=`.
 - `.wants/`, `.requires/` and `.upholds/` directories, aliases, templates/instances, masking, drop-ins, specifiers.
 - Implicit dependencies: `DefaultDependencies=` → `sysinit.target`; `Type=dbus` → `dbus.socket`.
@@ -42,6 +43,12 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 - `DEP_MAP` maps systemd units to hand-written s6 services. For example, `dbus.service` → `dbus`.
 - An enabled `.socket` pulls in its service. The runner binds the sockets, matched by name or by `Service=`.
 - `Conflicts=`: if both units would start at boot, the conflicted one is dropped from the targets (for example `gdm.service` over `getty@tty1.service`). At runtime, starting or restarting a unit stops the units it conflicts with.
+
+**Mounts, swap, path units**
+- `.mount` and `.swap` units run `mount(8)`/`swapon(8)`. Their state comes from the kernel (`mountinfo`, `/proc/swaps`), so `systemctl status tmp.mount` is correct whoever mounted it. `RequiresMountsFor=` becomes a dependency on the covering mount units.
+- `.automount` units are mounted eagerly at boot (there is no autofs support).
+- `/etc/fstab` is still mounted by the early `mount-fs` service, which `local-fs.target` contains.
+- `.path` units: `PathExists=`, `PathExistsGlob=`, `DirectoryNotEmpty=` (re-checked while the unit is inactive), `PathChanged=`, `PathModified=` (inotify), `MakeDirectory=`, `TriggerLimitBurst=`.
 
 **Timers**
 - `OnCalendar=` with the full `systemd.time(7)` syntax: weekdays, lists, ranges, `/step` repetitions, `~` (days from the end of the month), the shorthands, and `UTC` or IANA time zones.
@@ -60,6 +67,8 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 - `StandardInput/Output/Error=` (null, tty, file:, append:, truncate:), `TTYPath=` and `TTYVHangup=`, which are enough for `getty@.service`.
 - Socket activation for `Accept=no`: `ListenStream/Datagram/SequentialPacket/FIFO`, with `LISTEN_FDS`, `LISTEN_PID` and `LISTEN_FDNAMES` set.
 - `Restart=` (all modes), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
+- `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=` (reboot/poweroff/halt).
+- Output goes to **systemd-journald** through its stdout stream protocol (as PID 1 does). journald attributes it to the unit from the cgroup, so `journalctl -u UNIT` and the log lines in `systemctl status` work. With `JOURNAL=no`, each service gets an s6-log directory instead.
 - Conditions and asserts: `Condition*=`/`Assert*=` for paths, the kernel command line, virtualization, security and more.
 - cgroup v2 at systemd's paths (`system.slice/<unit>`), `KillMode=`, and `MemoryMax/High`, `CPUQuota/Weight`, `TasksMax`, `IOWeight`.
 - Sandboxing subset: `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `Read{Write,Only}Paths`, `InaccessiblePaths`, `NoNewPrivileges`, `CapabilityBoundingSet`, `AmbientCapabilities`. Every other directive is listed as "ignored" in the report.
@@ -70,6 +79,7 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 - Unit files: `Enable/Disable/Reenable/Mask/Unmask/Preset*UnitFiles`, `GetUnitFileState`, `ListUnitFiles*`, `Get/SetDefaultTarget`.
 - Manager: `Reload`/`Reexecute` (regenerate and update the s6 database), `KillUnit`, `ResetFailed*`, `Set/UnsetEnvironment`, `PowerOff/Reboot/Halt`.
 - Transient units: `StartTransientUnit` for `.scope` and `.slice` units, with `PIDs` or `PIDFDs` (used by logind, podman and flatpak). Also `AttachProcessesToUnit`, `Scope.Abandon`, and the reference-counting calls (accepted).
+- **`systemd-run`**: transient `.service`, `.timer` and `.path` units, including auxiliary units (`--on-calendar`/`--on-active` send a timer and its service). Properties become a unit file in `/run/systemd/transient/`. `systemd-run --wait` gets `PropertiesChanged` and the exit status. Finished transient units are unloaded.
 - Template instances are created on demand without recompiling the database, for example `user@1000.service` and `user-runtime-dir@1000.service`. Their dependencies start first, and units that require a stopped unit are stopped with it.
 - Starting `poweroff.target`, `reboot.target` or `halt.target` (which is how logind powers off) runs the configured shutdown command.
 - D-Bus activation: answers dbus-daemon's `ActivationRequest` and replies with `ActivationFailure` when a start fails.
@@ -77,21 +87,32 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 
 ## Not implemented (yet)
 
-- `.path`, `.mount`, `.automount`, `.swap` units. They are skipped and listed in the report. Mounts come from `/etc/fstab` (see `dist/early`).
 - `Accept=yes` sockets, and on-demand socket activation: services are started eagerly, with their sockets.
-- Transient `.service` units (`systemd-run` on the system manager). Inside a user session `systemd-run --user` works, because the user manager is the real one.
+- `systemd-run --pipe`/`--stdio` (passing file descriptors) on the system manager. `--pty`, `--wait`, `--scope`, `--on-*` and `--user` work.
+- autofs: `.automount` units mount eagerly.
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`.
-- The journal. Logs are in `/var/log/sdcompat/<unit>/current` (s6-log), so `journalctl` shows nothing.
-- `dnf system-upgrade` and offline updates, because they depend on systemd's offline update target.
 - Watchdog, file descriptor store, credentials (`LoadCredential=`), `PrivateDevices/Network/Users`, seccomp, `ProtectKernel*`.
 - `ExecStop=` only runs when a unit is stopped through the daemon (`systemctl stop`), not when s6-rc stops services directly, for example at shutdown.
+
+## Offline updates and kernel updates
+
+- **`dnf system-upgrade` / `dnf offline`:** they create `/system-update` and reboot. rc.init then
+  boots the `system-update` bundle instead of `default`: early boot, D-Bus,
+  sdcompat, logind, and `system-update.target`, whose wanted units run the
+  transaction. This is the same switch systemd's system-update generator makes.
+  `OnFailure=`/`SuccessAction=` in those units are honored, and the
+  reboot at the end goes through sdcompat's `Reboot`.
+- **New kernels:** `/etc/kernel/install.d/90-sdcompat.install` copies the BLS
+  entry that Fedora's grub plugin writes for each kernel and adds the s6
+  options from `/etc/sdcompat/boot-options`. The s6 entry follows kernel
+  updates, and removed kernels lose theirs.
 
 ## Try it without root (any distro with s6, s6-rc and dbus-daemon)
 
 ```sh
 cargo build
 tests/sandbox.sh ~/sdc-sandbox        # private s6-svscan, s6-rc and D-Bus bus
-tests/check.sh ~/sdc-sandbox          # 59 scenario checks over D-Bus
+tests/check.sh ~/sdc-sandbox          # 75 scenario checks (set SYSTEMD_ROOT for systemd-run)
 tests/systemctl.sh status hello.service   # the real systemctl, in a namespace
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop
@@ -118,19 +139,20 @@ entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
    s6-rc 0.7.0.0, s6-linux-init 1.2.0.2).
 2. Builds and installs sdcompat. If the sdcompat RPM from `dist/sdcompat.spec` is installed, it uses that instead.
 3. Writes `/etc/sdcompat/`: the config, the s6 services (early boot, dbus-daemon,
-   the daemon, earlyoom) and an s6-only rsyslog config. Under systemd, journald
-   keeps `/dev/log`, so the systemd boot is unaffected.
+   the daemon, earlyoom) and the boot options. systemd-journald runs as an s6
+   service. With `--no-journal`, an s6-only rsyslog config is used instead, so the
+   systemd boot, where journald owns `/dev/log`, is unaffected.
 4. Enables chronyd, NetworkManager and gdm, and sets `graphical.target` as the default.
 5. Runs `sdcompat reload --no-update` and prints the translation summary.
 6. Generates `/etc/s6-linux-init/current` with a rescue getty on tty9.
 7. Labels `bin/init` as `init_exec_t` for SELinux.
-8. Copies the default boot entry and adds `init=/usr/sbin/init-selinux`. It removes the
+8. Installs the kernel-install plugin and uses it to copy the default boot entry with `init=/usr/sbin/init-selinux` added. It removes the
    splash (`rhgb quiet`, `plymouth.enable=0`), because plymouth's quit unit is
    systemd-only. It also adds `enforcing=0`; pass `--enforcing` to leave that out.
 
 Other options: `--yes`, `--no-grub`, `--build-s6`, `--rebuild`, and
 `--uninstall`, which removes the entry and installed files and keeps your config.
-After a kernel update, re-run the script to move the entry to the new kernel.
+A kernel-install plugin adds the s6 entry for every new kernel.
 
 What systemd components are replaced, and why logind and `systemd --user` stay
 (GNOME needs them; see the next section):
@@ -139,7 +161,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 |---|---|
 | PID 1 / services | s6-linux-init, s6-rc, sdcompat |
 | System bus | dbus-daemon (dbus-broker stays for the user bus) |
-| Logging | rsyslog + s6-log (`sdcompat log UNIT`) instead of journald |
+| Logging | systemd-journald as an s6 service (`--no-journal`: rsyslog + s6-log) |
 | Network / DNS / time | NetworkManager, chrony |
 | OOM handling | earlyoom instead of systemd-oomd |
 | Devices | systemd-udevd as a plain service |
@@ -224,10 +246,12 @@ src/cgroup.rs      systemd-compatible cgroup layout and resource control
 src/conditions.rs  Condition*/Assert*
 src/calendar.rs    OnCalendar= parser and next-elapse search
 src/timer.rs       timer runner (one s6 longrun per .timer)
+src/pathunit.rs    path unit runner (inotify)
+src/mountunit.rs   .mount/.swap units
 src/pam.rs         PAMName= via dlopen(libpam)
 src/client.rs      small client for the daemon
 src/daemon/        D-Bus API: dispatch, properties, s6 backend, private socket,
-                   on-demand instances (dynamic.rs)
+                   on-demand instances (dynamic.rs), systemd-run (transient.rs)
 dist/              D-Bus policy, config, s6 services, s6-linux-init, RPM spec
 tests/             unprivileged sandbox, scenario checks, systemctl wrapper
 ```

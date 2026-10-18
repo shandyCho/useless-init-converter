@@ -143,6 +143,29 @@ impl Daemon {
             "scope" => {
                 out.insert("org.freedesktop.systemd1.Scope".into(), self.scope_iface(id));
             }
+            "mount" => {
+                out.insert("org.freedesktop.systemd1.Mount".into(), self.mount_iface(id, unit));
+            }
+            "swap" => {
+                let mut p = Props::new();
+                p.insert("What".into(), s(unit.get("Swap", "What").unwrap_or_default()));
+                p.insert("Priority".into(), Value::from(unit.get("Swap", "Priority").and_then(|v| v.parse::<i32>().ok()).unwrap_or(-1)));
+                p.insert("Options".into(), s(unit.get("Swap", "Options").unwrap_or_default()));
+                p.insert("Result".into(), s("success"));
+                self.cgroup_props(&mut p, id, unit);
+                out.insert("org.freedesktop.systemd1.Swap".into(), p);
+            }
+            "path" => {
+                let mut p = Props::new();
+                p.insert("Unit".into(), s(crate::pathunit::trigger_unit(unit)));
+                p.insert("Paths".into(), Value::from(crate::pathunit::specs(unit)));
+                p.insert("MakeDirectory".into(), Value::from(unit.get_bool("Path", "MakeDirectory", false)));
+                p.insert("DirectoryMode".into(), Value::from(unit.get("Path", "DirectoryMode").and_then(|m| u32::from_str_radix(&m, 8).ok()).unwrap_or(0o755)));
+                p.insert("Result".into(), s("success"));
+                p.insert("TriggerLimitIntervalUSec".into(), Value::from(2_000_000u64));
+                p.insert("TriggerLimitBurst".into(), Value::from(200u32));
+                out.insert("org.freedesktop.systemd1.Path".into(), p);
+            }
             "slice" => {
                 let mut p = Props::new();
                 self.cgroup_props(&mut p, id, unit);
@@ -201,7 +224,7 @@ impl Daemon {
             "DropInPaths".into(),
             strv(unit.dropins.iter().map(|d| d.display().to_string()).collect()),
         );
-        let ufs = if self.transient.lock().unwrap().contains_key(id) {
+        let ufs = if self.transient.lock().unwrap().contains_key(id) || self.is_transient_file(unit) {
             "transient".to_string()
         } else {
             install::unit_file_state(&self.cfg, id).unwrap_or_default()
@@ -290,7 +313,7 @@ impl Daemon {
             None => (String::new(), String::new()),
         };
         p.insert("LoadError".into(), Value::from(load_error));
-        p.insert("Transient".into(), Value::from(self.transient.lock().unwrap().contains_key(id)));
+        p.insert("Transient".into(), Value::from(self.transient.lock().unwrap().contains_key(id) || self.is_transient_file(unit)));
         p.insert("Perpetual".into(), Value::from(false));
         p.insert("StartLimitIntervalUSec".into(), Value::from(timespan(unit, "Unit", &["StartLimitIntervalSec"], 10_000_000)));
         p.insert(
@@ -558,6 +581,26 @@ impl Daemon {
         p.insert("WakeSystem".into(), Value::from(unit.get_bool("Timer", "WakeSystem", false)));
         p.insert("RemainAfterElapse".into(), Value::from(unit.get_bool("Timer", "RemainAfterElapse", true)));
         p.insert("DeferReactivation".into(), Value::from(false));
+        p
+    }
+
+    fn mount_iface(&self, id: &str, unit: &Unit) -> Props {
+        let mut p = Props::new();
+        p.insert("Where".into(), s(crate::mountunit::where_of(unit)));
+        p.insert("What".into(), s(unit.get("Mount", "What").unwrap_or_default()));
+        p.insert("Options".into(), s(unit.get("Mount", "Options").unwrap_or_default()));
+        p.insert("Type".into(), s(unit.get("Mount", "Type").unwrap_or_default()));
+        p.insert("TimeoutUSec".into(), Value::from(timespan(unit, "Mount", &["TimeoutSec"], 90_000_000)));
+        p.insert("ControlPID".into(), Value::from(0u32));
+        p.insert("DirectoryMode".into(), Value::from(0o755u32));
+        p.insert("SloppyOptions".into(), Value::from(unit.get_bool("Mount", "SloppyOptions", false)));
+        p.insert("LazyUnmount".into(), Value::from(unit.get_bool("Mount", "LazyUnmount", false)));
+        p.insert("ForceUnmount".into(), Value::from(unit.get_bool("Mount", "ForceUnmount", false)));
+        p.insert("ReadWriteOnly".into(), Value::from(unit.get_bool("Mount", "ReadWriteOnly", false)));
+        p.insert("Result".into(), s("success"));
+        p.insert("UID".into(), Value::from(u32::MAX));
+        p.insert("GID".into(), Value::from(u32::MAX));
+        self.cgroup_props(&mut p, id, unit);
         p
     }
 

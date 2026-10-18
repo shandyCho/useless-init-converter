@@ -38,11 +38,16 @@ impl Daemon {
     /// Only instances of templates are created on demand; other units come
     /// from the compiled database.
     pub(super) fn can_be_dynamic(&self, id: &str, unit: &Unit) -> bool {
-        unit.is_loaded()
-            && unit.utype() == "service"
+        if !unit.is_loaded() || self.kind_of(id).is_some() {
+            return false;
+        }
+        // Transient units from systemd-run.
+        if self.is_transient_file(unit) {
+            return matches!(unit.utype(), "service" | "timer" | "path");
+        }
+        unit.utype() == "service"
             && loader::parse_name(id).map(|n| n.instance.is_some()).unwrap_or(false)
             && !self.cfg.is_excluded(id)
-            && self.kind_of(id).is_none()
     }
 
     pub(super) fn dynamic_kind(&self, id: &str) -> Option<Kind> {
@@ -61,6 +66,13 @@ impl Daemon {
         let args = self.cfg.runner_args();
         let arg = crate::gen::unit_arg(id);
         let e = |e: std::io::Error| e.to_string();
+        if matches!(unit.utype(), "timer" | "path") {
+            let sub = if unit.utype() == "timer" { "timer-run" } else { "path-run" };
+            write(dir.join("run"), &format!("#!/bin/sh\nexec {runner} {sub}{args} {arg}\n"), true).map_err(e)?;
+            write(dir.join("notification-fd"), "3\n", false).map_err(e)?;
+            write(dir.join("down"), "", false).map_err(e)?;
+            return Ok(dir);
+        }
         write(dir.join("run"), &format!("#!/bin/sh\nexec {runner} run{args} {arg}\n"), true).map_err(e)?;
         write(dir.join("finish"), &format!("#!/bin/sh\nexec {runner} finish{args} {arg} \"$@\"\n"), true).map_err(e)?;
         write(dir.join("notification-fd"), "3\n", false).map_err(e)?;
@@ -83,7 +95,7 @@ impl Daemon {
                 write(dir.join("down-signal"), &format!("SIG{}\n", util::signal_name(sig)), false).map_err(e)?;
             }
         }
-        if let Some(log_dir) = &self.cfg.log_dir {
+        if let Some(log_dir) = self.cfg.log_dir.as_ref().filter(|_| !self.cfg.journal) {
             let ldir = dir.join("log");
             fs::create_dir_all(&ldir).map_err(e)?;
             let logdir = util::sh_quote(&log_dir.join(id).display().to_string());
@@ -148,8 +160,9 @@ impl Daemon {
         }
         self.stop_conflicts(id, unit).await;
 
-        let oneshot = unit.get("Service", "Type").as_deref() == Some("oneshot")
-            || unit.file.get("Service", "ExecStart").is_none();
+        let oneshot = unit.utype() == "service"
+            && (unit.get("Service", "Type").as_deref() == Some("oneshot")
+                || unit.file.get("Service", "ExecStart").is_none());
         if oneshot {
             if self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false) {
                 return "done";

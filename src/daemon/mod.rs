@@ -10,6 +10,7 @@ mod introspect;
 mod private;
 mod props;
 mod s6;
+mod transient;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -392,6 +393,9 @@ impl Daemon {
                 "start" => self.dyn_start(id, unit).await,
                 "stop" => {
                     let r = self.dyn_stop(id, unit).await;
+                    if self.is_transient_file(unit) {
+                        self.remove_transient_file(id);
+                    }
                     self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitRemoved", &(id.to_string(), op(unit_path(id)))).await;
                     r
                 }
@@ -567,7 +571,10 @@ impl Daemon {
     async fn start_transient(&self, c: &Peer, msg: &Message) -> R<()> {
         self.require_privileged(c, msg).await?;
         type Aux = Vec<(String, Vec<(String, OwnedValue)>)>;
-        let (name, _mode, props, _aux): (String, String, Vec<(String, OwnedValue)>, Aux) = Self::args(msg)?;
+        let (name, mode, props, aux): (String, String, Vec<(String, OwnedValue)>, Aux) = Self::args(msg)?;
+        if name.ends_with(".service") || name.ends_with(".timer") || name.ends_with(".path") {
+            return self.start_transient_file(c, msg, &name, &mode, &props, &aux).await;
+        }
         let kind: &'static str = if name.ends_with(".scope") {
             "scope"
         } else if name.ends_with(".slice") {
@@ -641,6 +648,39 @@ impl Daemon {
         self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitNew", &(name.clone(), op(unit_path(&name)))).await;
         self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), name.clone())).await;
         self.finish_job(job, &name, "done").await;
+        Ok(())
+    }
+
+    /// systemd-run: write the unit file(s), then start the main unit on demand.
+    async fn start_transient_file(
+        &self,
+        c: &Peer,
+        msg: &Message,
+        name: &str,
+        mode: &str,
+        props: &[(String, OwnedValue)],
+        aux: &[(String, Vec<(String, OwnedValue)>)],
+    ) -> R<()> {
+        if crate::loader::parse_name(name).is_none() {
+            return Err(err(E_INVALID_ARGS, format!("Invalid unit name {name}")));
+        }
+        if self.kind_of(name).is_some() || self.dynamic_kind(name).is_some() {
+            return Err(err("org.freedesktop.systemd1.UnitExists", format!("Unit {name} already exists.")));
+        }
+        self.write_transient(name, props, aux).map_err(|e| {
+            if e.contains("not supported") { err(E_NOT_SUPPORTED, e) } else { err("org.freedesktop.systemd1.UnitExists", e) }
+        })?;
+        let (id, unit) = self.load_unit(name);
+        if !unit.is_loaded() {
+            self.remove_transient_file(name);
+            return Err(err(E_LOAD_FAILED, unit.load_error.unwrap_or_else(|| format!("Unit {name} failed to load."))));
+        }
+        let job = self.new_job(&id, "start");
+        self.reply(c, msg, &(op(job_path(job)),)).await?;
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitNew", &(id.clone(), op(unit_path(&id)))).await;
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), id.clone())).await;
+        let result = self.run_job(&id, &unit, "start", mode).await;
+        self.finish_job(job, &id, result).await;
         Ok(())
     }
 
@@ -1313,6 +1353,15 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     if let Some(sock) = daemon.cfg.private_socket.clone() {
         tokio::spawn(private::listen(daemon.clone(), sock));
     }
+
+    let watcher = daemon.clone();
+    tokio::spawn(async move {
+        let mut last = HashMap::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            watcher.watch_dynamic(&mut last).await;
+        }
+    });
 
     let gc = daemon.clone();
     tokio::spawn(async move {

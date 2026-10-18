@@ -18,6 +18,8 @@
 #   --build-s6      build skalibs/execline/s6/s6-rc/s6-linux-init from source
 #                   even if Fedora packages exist
 #   --rebuild       rebuild sdcompat even if target/release/sdcompat exists
+#   --no-journal    no systemd-journald: rsyslog + per-service s6-log directories
+#                   (journalctl and the log lines in systemctl status won't work)
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
@@ -35,7 +37,8 @@ S6_VER=2.15.1.0
 S6RC_VER=0.7.0.0
 S6LI_VER=1.2.0.2
 
-DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0
+DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0 JOURNAL=1
+KI_PLUGIN=/etc/kernel/install.d/90-sdcompat.install
 for a in "$@"; do
     case $a in
         --dry-run) DRY=1 ;;
@@ -45,7 +48,8 @@ for a in "$@"; do
         --build-s6) BUILD_S6=1 ;;
         --rebuild) REBUILD=1 ;;
         --uninstall) UNINSTALL=1 ;;
-        -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
+        --no-journal) JOURNAL=0 ;;
+        -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -112,6 +116,7 @@ uninstall() {
     say "Removing the s6 boot entry and sdcompat files"
     confirm "Remove the '$TITLE' boot entry, $S6LI_BASE and sdcompat's files?"
     remove_grub_entry
+    run rm -f "$KI_PLUGIN" /etc/sdcompat/boot-options
     run rm -rf "$S6LI_BASE"
     if command -v rpm >/dev/null && rpm -q sdcompat >/dev/null 2>&1; then
         echo "  sdcompat is installed as an RPM; remove it with: dnf remove sdcompat"
@@ -142,8 +147,9 @@ remove_grub_entry() {
 
 install_packages() {
     say "Installing Fedora packages"
-    local pkgs=(dbus-daemon rsyslog earlyoom chrony NetworkManager
+    local pkgs=(dbus-daemon earlyoom chrony NetworkManager
                 policycoreutils-python-utils grubby curl tar gcc make)
+    [ "$JOURNAL" = 1 ] || pkgs+=(rsyslog)
     [ -x "$REPO/target/release/sdcompat" ] && [ "$REBUILD" = 0 ] || pkgs+=(cargo rust)
     if ! rpm -q gdm gnome-shell >/dev/null 2>&1; then
         warn "gdm/gnome-shell are not installed. For a full desktop run:"
@@ -226,10 +232,13 @@ configure_sdcompat() {
     say "Configuring /etc/sdcompat"
     if [ -e /etc/sdcompat/sdcompat.conf ]; then
         echo "  keeping existing /etc/sdcompat/sdcompat.conf"
-    else
+    elif [ "$JOURNAL" = 1 ]; then
         put /etc/sdcompat/sdcompat.conf <"$DIST/sdcompat.conf"
+    else
+        { cat "$DIST/sdcompat.conf"; printf '\n# set by setup-fedora.sh --no-journal\nJOURNAL=no\n'; } |
+            put /etc/sdcompat/sdcompat.conf
     fi
-    put /etc/sdcompat/rsyslog.conf <"$DIST/rsyslog.conf"
+    [ "$JOURNAL" = 1 ] || put /etc/sdcompat/rsyslog.conf <"$DIST/rsyslog.conf"
 
     # Hand-written s6 services: add missing ones, never overwrite your edits.
     run mkdir -p /etc/sdcompat/s6
@@ -244,6 +253,12 @@ configure_sdcompat() {
             run cp -a "$d" "/etc/sdcompat/s6/$name"
         fi
     done
+    # With journald, it owns /dev/log; the s6-only rsyslog is not started.
+    if [ "$JOURNAL" = 1 ]; then
+        run rm -f /etc/sdcompat/s6/sdcompat-sysinit/contents.d/syslog
+    elif [ ! -e /etc/sdcompat/s6/sdcompat-sysinit/contents.d/syslog ]; then
+        run touch /etc/sdcompat/s6/sdcompat-sysinit/contents.d/syslog
+    fi
     run mkdir -p /var/lib/sdcompat /var/log/sdcompat /var/lib/rsyslog
 }
 
@@ -309,14 +324,21 @@ setup_selinux() {
         /var/lib/sdcompat /var/log/sdcompat /usr/share/dbus-1/system.d/sdcompat.conf
 }
 
-add_grub_entry() {
-    [ "$GRUB" = 1 ] || return 0
-    say "Adding boot entry: $TITLE"
-    remove_grub_entry
+boot_args() {
     # plymouth's splash would keep the display (plymouth-quit.service is a
     # systemd-only unit), so the s6 entry boots without it and shows messages.
     local args="init=/usr/sbin/init-selinux plymouth.enable=0 rd.plymouth=0"
     [ "$ENFORCING" = 1 ] || args="$args enforcing=0"
+    echo "$args"
+}
+
+add_grub_entry() {
+    [ "$GRUB" = 1 ] || return 0
+    say "Adding boot entry: $TITLE"
+    local args
+    args=$(boot_args)
+    printf '# Extra kernel options for the "%s" boot entries.\n%s\n' "$TITLE" "$args" |
+        put /etc/sdcompat/boot-options
     local kernel
     if [ "$DRY" = 1 ] && ! command -v grubby >/dev/null; then
         kernel=/boot/vmlinuz-KVER
@@ -324,26 +346,19 @@ add_grub_entry() {
         kernel=$(grubby --default-kernel)
     fi
     local kver=${kernel#/boot/vmlinuz-}
-    if [ -d /boot/loader/entries ]; then
-        # Copy the default BLS entry, rename it and append the init= option.
-        local src="" f
-        for f in /boot/loader/entries/*"$kver".conf; do
-            [ -e "$f" ] && ! grep -q "^title $TITLE" "$f" && src=$f && break
-        done
-        [ -n "$src" ] || die "no boot entry found for $kver"
-        local dest=${src%.conf}-sdcompat.conf
-        if [ "$DRY" = 1 ]; then
-            printf '  + write %s (copy of %s, options += %s)\n' "$dest" "$src" "$args"
-        else
-            sed -e "s/^title .*/title $TITLE $kver/" \
-                -e "/^options /{s/ rhgb//; s/ quiet//; s|\$| $args|}" "$src" >"$dest"
-        fi
+    if [ -d /boot/loader/entries ] || [ "$DRY" = 1 ]; then
+        # The kernel-install plugin copies the BLS entry for each kernel,
+        # now and on every future kernel update.
+        run install -Dm0755 "$DIST/kernel-install/90-sdcompat.install" "$KI_PLUGIN"
+        remove_grub_entry
+        run "$KI_PLUGIN" add "$kver"
     else
+        remove_grub_entry
         run grubby --add-kernel="$kernel" --initrd="/boot/initramfs-$kver.img" \
             --copy-default --title="$TITLE $kver" --args="$args"
+        warn "no BLS entries: future kernels will not get an s6 entry automatically"
     fi
     echo "  The systemd entry stays the default. Pick '$TITLE' in the GRUB menu."
-    echo "  After a kernel update, re-run this script to move the entry to the new kernel."
 }
 
 print_plan() {
@@ -351,13 +366,15 @@ print_plan() {
 
 This will set up booting Fedora with s6-linux-init + s6-rc + sdcompat:
 
-  * install: dbus-daemon rsyslog earlyoom chrony NetworkManager, the skarnet tools
+  * install: dbus-daemon earlyoom chrony NetworkManager$([ "$JOURNAL" = 1 ] || echo " rsyslog"), the skarnet tools
     (from Fedora if packaged, else built from skarnet.org into /usr), sdcompat
-  * write:   /etc/sdcompat/ (config, s6 services, s6-only rsyslog config),
+  * write:   /etc/sdcompat/ (config, s6 services, boot options),
              $S6LI_BASE, /usr/sbin/init-selinux, $LIBEXEC
   * enable:  chronyd, NetworkManager, gdm; default target graphical.target
   * SELinux: label $S6LI_BASE/bin/init as init_exec_t
-  * GRUB:    add "$TITLE" with init=/usr/sbin/init-selinux, no splash$([ "$ENFORCING" = 1 ] || echo ", SELinux permissive")
+  * logs:    $([ "$JOURNAL" = 1 ] && echo "systemd-journald as an s6 service (journalctl works)" || echo "rsyslog + s6-log directories, no journal")
+  * GRUB:    add "$TITLE" with init=/usr/sbin/init-selinux, no splash$([ "$ENFORCING" = 1 ] || echo ", SELinux permissive"),
+             and a kernel-install plugin that adds it for every new kernel
 
 Nothing about the normal systemd boot changes: systemd, dbus-broker, journald
 and all your units stay installed; the new entry is not made the default.
@@ -375,7 +392,7 @@ Done. Next:
        /run/uncaught-logs/current        (s6 catch-all log)
        s6-rc -a list                     (what is up)
   3. Once booted:  systemctl status, systemctl list-units --failed,
-                   sdcompat log systemd-logind.service, sdcompat log user@1000.service
+                   journalctl -b, journalctl -u systemd-logind, journalctl -u user@1000
   4. SELinux: the entry boots permissive. Collect denials with
        ausearch -m AVC -ts boot | audit2allow -M sdcompat_local
      review sdcompat_local.te, load it with semodule -i, then re-run with --enforcing.

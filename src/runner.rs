@@ -301,7 +301,7 @@ impl Runner {
             }
         }
 
-        if let Err(e) = self.setup_stdio() {
+        if let Err(e) = self.setup_stdio(cmd) {
             return e;
         }
 
@@ -411,7 +411,61 @@ impl Runner {
         (EXIT_EXEC, format!("exec {path}: {}", errno()))
     }
 
-    fn setup_stdio(&self) -> Result<(), (i32, String)> {
+    /// Connect to journald's stdout stream (the protocol PID 1 uses). journald
+    /// attributes the stream to the unit through our cgroup.
+    fn journal_stream(&self, cmd: &ExecCommand) -> Option<i32> {
+        if !self.cfg.journal || self.unit.id == "systemd-journald.service" {
+            return None;
+        }
+        let path_buf = self.cfg.journal_stdout.display().to_string();
+        let path = path_buf.as_str();
+        if !Path::new(path).exists() || path.len() >= 100 {
+            return None;
+        }
+        let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+        if fd < 0 {
+            return None;
+        }
+        let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        addr.sun_family = libc::AF_UNIX as u16;
+        for (i, b) in path.bytes().enumerate() {
+            addr.sun_path[i] = b as libc::c_char;
+        }
+        let len = (std::mem::size_of::<libc::sa_family_t>() + path.len() + 1) as u32;
+        if unsafe { libc::connect(fd, &addr as *const _ as *const libc::sockaddr, len) } < 0 {
+            unsafe { libc::close(fd) };
+            return None;
+        }
+        unsafe { libc::shutdown(fd, libc::SHUT_RD) };
+        let ident = self.unit.get("Service", "SyslogIdentifier").unwrap_or_else(|| {
+            let a0 = cmd.argv.first().map(String::as_str).unwrap_or(&cmd.path);
+            a0.rsplit('/').next().unwrap_or(a0).to_string()
+        });
+        let prio = self
+            .unit
+            .get("Service", "SyslogLevel")
+            .map(|l| match l.as_str() {
+                "emerg" => 0,
+                "alert" => 1,
+                "crit" => 2,
+                "err" => 3,
+                "warning" => 4,
+                "notice" => 5,
+                "debug" => 7,
+                _ => 6,
+            })
+            .unwrap_or(6);
+        let prefix = i32::from(self.unit.get_bool("Service", "SyslogLevelPrefix", true));
+        let header = format!("{ident}\n{}\n{prio}\n{prefix}\n0\n0\n0\n", self.unit.id);
+        let r = unsafe { libc::write(fd, header.as_ptr() as *const libc::c_void, header.len()) };
+        if r != header.len() as isize {
+            unsafe { libc::close(fd) };
+            return None;
+        }
+        Some(fd)
+    }
+
+    fn setup_stdio(&self, cmd: &ExecCommand) -> Result<(), (i32, String)> {
         let input = self.unit.get("Service", "StandardInput").unwrap_or_else(|| "null".into());
         let default_out = if input.starts_with("tty") { "inherit" } else { "journal" };
         let output = self.unit.get("Service", "StandardOutput").unwrap_or_else(|| default_out.into());
@@ -436,6 +490,8 @@ impl Runner {
             }
         };
 
+        let wants_journal = |x: &str| x.starts_with("journal") || x.starts_with("kmsg") || x == "syslog";
+        let journal = if wants_journal(&output) || wants_journal(&error) { self.journal_stream(cmd) } else { None };
         let mut tty_fd: Option<i32> = None;
         if input.starts_with("tty") || output == "tty" || error == "tty" {
             tty_fd = Some(self.open_tty(input == "tty-force").map_err(|e| (EXIT_STDIN, e))?);
@@ -473,7 +529,13 @@ impl Runner {
                     open(&s[9..], libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC).map_err(|e| (code, e))?,
                     target,
                 ),
-                // journal, kmsg, syslog, inherit: keep the s6 log pipe.
+                // journal, kmsg, syslog: journald's stream if available,
+                // otherwise keep the s6 log pipe.
+                s if s.starts_with("journal") || s.starts_with("kmsg") || s == "syslog" || s == "inherit" => {
+                    if let Some(fd) = journal.filter(|_| s != "inherit") {
+                        unsafe { libc::dup2(fd, target) };
+                    }
+                }
                 _ => {}
             }
             Ok(())
@@ -488,6 +550,9 @@ impl Runner {
             if fd > 2 {
                 unsafe { libc::close(fd) };
             }
+        }
+        if let Some(fd) = journal {
+            unsafe { libc::close(fd) };
         }
         Ok(())
     }
@@ -927,6 +992,51 @@ impl Runner {
         }
     }
 
+    /// OnSuccess=/OnFailure= and SuccessAction=/FailureAction= after the unit finished.
+    fn on_result(&self, success: bool) {
+        let (units_key, action_key) = if success { ("OnSuccess", "SuccessAction") } else { ("OnFailure", "FailureAction") };
+        let units = self.unit.get_words("Unit", units_key);
+        if !units.is_empty() {
+            let cfg = self.cfg.clone();
+            let id = self.unit.id.clone();
+            let run = || -> Result<(), String> {
+                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+                rt.block_on(async {
+                    let conn = crate::client::connect(&cfg).await?;
+                    for u in &units {
+                        let u = u.replace("%n", &id);
+                        if let Err(e) = crate::client::manager_call(&conn, "StartUnit", &(u.as_str(), "replace")).await {
+                            eprintln!("sdcompat[{id}]: {units_key}={u}: {e}");
+                        }
+                    }
+                    Ok(())
+                })
+            };
+            // Detached: the daemon may be busy with the very job that ran us.
+            let _ = double_fork(|| {
+                if let Err(e) = run() {
+                    log(self.id(), &format!("{units_key}: {e}"));
+                }
+            });
+        }
+        if let Some(action) = self.unit.get("Unit", action_key) {
+            let cmd = match action.as_str() {
+                "none" => None,
+                a if a.starts_with("reboot") || a == "soft-reboot" || a == "kexec" => Some(self.cfg.reboot_cmd.clone()),
+                a if a.starts_with("poweroff") || a.starts_with("exit") => Some(self.cfg.poweroff_cmd.clone()),
+                a if a.starts_with("halt") => Some(self.cfg.halt_cmd.clone()),
+                other => {
+                    log(self.id(), &format!("{action_key}={other} is not supported"));
+                    None
+                }
+            };
+            if let Some(cmd) = cmd {
+                log(self.id(), &format!("{action_key}={action}: running {cmd}"));
+                let _ = std::process::Command::new("/bin/sh").arg("-c").arg(cmd).spawn();
+            }
+        }
+    }
+
     fn after_ready(&self, main_pid: u32) {
         self.st.stamp(keys::ACTIVE_ENTER);
         if let Err(st) = self.run_list("ExecStartPost", &[("MAINPID".into(), main_pid.to_string())]) {
@@ -1289,6 +1399,7 @@ impl Runner {
                 log(self.id(), "start request repeated too quickly, giving up");
                 self.st.set(keys::RESULT, "start-limit-hit");
                 self.st.stamp(keys::INACTIVE_ENTER);
+                self.on_result(false);
                 return 125;
             }
             let n = self.st.get_u64(keys::NRESTARTS) + 1;
@@ -1307,6 +1418,7 @@ impl Runner {
         }
         self.st.set(keys::RESULT, &result);
         self.st.stamp(keys::INACTIVE_ENTER);
+        self.on_result(result == "success");
         125
     }
 
@@ -1362,8 +1474,43 @@ impl Runner {
         let _ = fs::remove_dir_all(self.st.dir.join("private"));
     }
 
+    /// .mount/.swap: mount(8) or swapon(8), with the usual state bookkeeping.
+    fn mount_job(&self, up: bool) -> i32 {
+        use crate::mountunit;
+        let code = match (self.unit.utype(), up) {
+            ("mount", true) => mountunit::mount_up(&self.unit),
+            ("mount", false) => mountunit::mount_down(&self.unit),
+            ("swap", true) => mountunit::swap_up(&self.unit),
+            _ => mountunit::swap_down(&self.unit),
+        };
+        if up {
+            self.st.stamp(keys::INACTIVE_EXIT);
+            self.st.set(keys::RESULT, if code == 0 { "success" } else { "exit-code" });
+            self.st.set(keys::EXEC_MAIN_STATUS, &code.to_string());
+            if code == 0 {
+                self.st.stamp(keys::ACTIVE_ENTER);
+            } else {
+                self.st.stamp(keys::INACTIVE_ENTER);
+            }
+        } else {
+            self.st.stamp(keys::ACTIVE_EXIT);
+            self.st.stamp(keys::INACTIVE_ENTER);
+        }
+        code
+    }
+
     /// oneshot `up` script.
     pub fn cmd_up(mut self) -> i32 {
+        if matches!(self.unit.utype(), "mount" | "swap") {
+            match conditions::evaluate(&self.unit) {
+                ev if !ev.conditions_ok => {
+                    self.st.set(keys::CONDITION_FAILED, &ev.failure.unwrap_or_default());
+                    return 0;
+                }
+                _ => self.st.clear(keys::CONDITION_FAILED),
+            }
+            return self.mount_job(true);
+        }
         self.enter_cgroup();
         if let Err(e) = self.prepare_start() {
             log(self.id(), &e);
@@ -1402,6 +1549,7 @@ impl Runner {
             self.st.set(keys::RESULT, result_for(st));
             self.cleanup(result_for(st), st);
             self.st.stamp(keys::INACTIVE_ENTER);
+            self.on_result(false);
             return 1;
         }
         self.st.set(keys::EXEC_MAIN_CODE, "1");
@@ -1414,11 +1562,15 @@ impl Runner {
             self.cleanup("success", Status::Exited(0));
             self.st.stamp(keys::INACTIVE_ENTER);
         }
+        self.on_result(true);
         0
     }
 
     /// oneshot `down` script.
     pub fn cmd_down(self) -> i32 {
+        if matches!(self.unit.utype(), "mount" | "swap") {
+            return self.mount_job(false);
+        }
         if self.unit.get_bool("Service", "RemainAfterExit", false) {
             let _ = self.run_list("ExecStop", &[]);
             self.cleanup("success", Status::Exited(0));

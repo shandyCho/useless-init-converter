@@ -49,6 +49,8 @@ install -d %{buildroot}%{_datadir}/sdcompat/s6-linux-init
 cp -a dist/s6-linux-init/skel %{buildroot}%{_datadir}/sdcompat/s6-linux-init/skel
 install -Dm0644 dist/rsyslog.conf %{buildroot}%{_datadir}/sdcompat/rsyslog.conf
 install -Dm0755 dist/s6-linux-init/init-selinux %{buildroot}%{_sbindir}/init-selinux
+%{_prefix}/lib/kernel/install.d/90-sdcompat.install
+install -Dm0755 dist/kernel-install/90-sdcompat.install %{buildroot}%{_prefix}/lib/kernel/install.d/90-sdcompat.install
 install -d %{buildroot}%{_sharedstatedir}/sdcompat %{buildroot}%{_localstatedir}/log/sdcompat
 
 %files

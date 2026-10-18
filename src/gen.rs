@@ -78,7 +78,8 @@ const UNIT_KEYS: &[&str] = &[
     "Description", "Documentation", "Requires", "Requisite", "Wants", "BindsTo", "PartOf",
     "Upholds", "Before", "After", "DefaultDependencies", "RefuseManualStart",
     "RefuseManualStop", "AllowIsolate", "IgnoreOnIsolate", "StopWhenUnneeded",
-    "StartLimitIntervalSec", "StartLimitBurst", "SourcePath", "Conflicts",
+    "StartLimitIntervalSec", "StartLimitBurst", "SourcePath", "Conflicts", "OnFailure", "OnSuccess",
+    "SuccessAction", "FailureAction", "RequiresMountsFor", "OnFailureJobMode",
 ];
 
 const TIMER_KEYS: &[&str] = &[
@@ -86,6 +87,16 @@ const TIMER_KEYS: &[&str] = &[
     "OnUnitInactiveSec", "Unit", "Persistent", "RandomizedDelaySec", "FixedRandomDelay",
     "AccuracySec", "RemainAfterElapse", "WakeSystem", "OnClockChange", "OnTimezoneChange",
 ];
+
+const PATH_KEYS: &[&str] = &[
+    "PathExists", "PathExistsGlob", "PathChanged", "PathModified", "DirectoryNotEmpty", "Unit",
+    "MakeDirectory", "DirectoryMode", "TriggerLimitBurst", "TriggerLimitIntervalSec",
+];
+const MOUNT_KEYS: &[&str] = &[
+    "What", "Where", "Type", "Options", "SloppyOptions", "LazyUnmount", "ForceUnmount",
+    "DirectoryMode", "TimeoutSec", "ReadWriteOnly",
+];
+const SWAP_KEYS: &[&str] = &["What", "Priority", "Options", "TimeoutSec"];
 
 const SERVICE_KEYS: &[&str] = &[
     "Type", "RemainAfterExit", "GuessMainPID", "PIDFile", "BusName", "ExecStart",
@@ -155,7 +166,8 @@ pub fn plan(cfg: &Config) -> Plan {
         .into_iter()
         .filter(|n| {
             let ty = loader::unit_type(n);
-            (ty == "service" || ty == "target" || ty == "timer") && !n.contains("@.")
+            matches!(ty, "service" | "target" | "timer" | "path" | "mount" | "swap" | "automount")
+                && !n.contains("@.")
         })
         .collect();
     let def = ld.load("default.target");
@@ -210,7 +222,20 @@ pub fn plan(cfg: &Config) -> Plan {
         }
 
         match unit.utype() {
-            "service" | "target" => {}
+            "service" | "target" | "mount" | "swap" => {}
+            "path" => {
+                let t = crate::pathunit::trigger_unit(&unit);
+                plan.triggers.insert(unit.id.clone(), t.clone());
+                queue.push(t);
+            }
+            "automount" => {
+                // No autofs: the matching .mount is mounted eagerly instead.
+                let m = format!("{}.mount", unit.id.trim_end_matches(".automount"));
+                socket_service.insert(unit.id.clone(), m.clone());
+                queue.push(m);
+                plan.skipped.insert(name, "automount: the .mount is mounted at boot instead".into());
+                continue;
+            }
             "timer" => {
                 let t = crate::timer::trigger_unit(&unit);
                 plan.triggers.insert(unit.id.clone(), t.clone());
@@ -251,7 +276,7 @@ pub fn plan(cfg: &Config) -> Plan {
         wants.extend(ld.dir_deps(&unit, "upholds"));
         let mut after = unit.get_words("Unit", "After");
         let before = unit.get_words("Unit", "Before");
-        if matches!(unit.utype(), "service" | "timer") && unit.get_bool("Unit", "DefaultDependencies", true) {
+        if matches!(unit.utype(), "service" | "timer" | "path") && unit.get_bool("Unit", "DefaultDependencies", true) {
             requires.push("sysinit.target".into());
             after.push("basic.target".into());
         }
@@ -295,6 +320,12 @@ pub fn plan(cfg: &Config) -> Plan {
         }
     }
 
+    let mount_points: Vec<(String, String)> = loaded
+        .iter()
+        .filter(|(_, u)| u.utype() == "mount")
+        .map(|(id, u)| (id.clone(), crate::mountunit::where_of(u)))
+        .collect();
+
     for (id, unit) in &loaded {
         let (requires, wants, _, _) = &raw[id];
         let after = after_sets.get(id).cloned().unwrap_or_default();
@@ -316,9 +347,17 @@ pub fn plan(cfg: &Config) -> Plan {
                 }
             }
         }
+        // RequiresMountsFor=: depend on the mount units covering those paths.
+        for path in unit.get_words("Unit", "RequiresMountsFor") {
+            for (m, w) in &mount_points {
+                if w != "/" && (path == *w || path.starts_with(&format!("{w}/"))) {
+                    deps.insert(m.clone());
+                }
+            }
+        }
         deps.remove(id);
-        // Timers start their unit through the daemon.
-        if unit.utype() == "timer" && plan.extra_names.contains(&cfg.daemon_service) {
+        // Timers and path units start their unit through the daemon.
+        if matches!(unit.utype(), "timer" | "path") && plan.extra_names.contains(&cfg.daemon_service) {
             deps.insert(cfg.daemon_service.clone());
         }
 
@@ -326,8 +365,17 @@ pub fn plan(cfg: &Config) -> Plan {
             if *id == "sysinit.target" && plan.extra_names.contains(&cfg.sysinit_bundle) {
                 deps.insert(cfg.sysinit_bundle.clone());
             }
+            // fstab is mounted by the early mount-fs service.
+            if *id == "local-fs.target" && plan.extra_names.contains("mount-fs") {
+                deps.insert("mount-fs".into());
+            }
+            if *id == "sysinit.target" && cfg.journal && loaded.contains_key("systemd-journald.service") {
+                deps.insert("systemd-journald.service".into());
+            }
             Kind::Bundle
-        } else if unit.utype() == "timer" || longrun_type(unit) {
+        } else if matches!(unit.utype(), "mount" | "swap") {
+            Kind::Oneshot
+        } else if matches!(unit.utype(), "timer" | "path") || longrun_type(unit) {
             Kind::Longrun
         } else {
             Kind::Oneshot
@@ -349,13 +397,20 @@ pub fn plan(cfg: &Config) -> Plan {
                     warnings.push(format!("[Timer] {key}= is ignored"));
                 }
             }
+            for (sec, known) in [("Path", PATH_KEYS), ("Mount", MOUNT_KEYS), ("Swap", SWAP_KEYS)] {
+                for key in unit.file.keys_in(sec) {
+                    if !known.contains(&key) {
+                        warnings.push(format!("[{sec}] {key}= is ignored"));
+                    }
+                }
+            }
             for (raw, spec) in crate::timer::calendars(unit) {
                 if spec.is_none() {
                     warnings.push(format!("OnCalendar={raw} cannot be parsed"));
                 }
             }
             for sec in unit.file.sections() {
-                if !["Unit", "Service", "Timer", "Install"].contains(&sec) && !sec.starts_with("X-") {
+                if !["Unit", "Service", "Timer", "Path", "Mount", "Swap", "Install"].contains(&sec) && !sec.starts_with("X-") {
                     warnings.push(format!("[{sec}] section is ignored"));
                 }
             }
@@ -391,6 +446,7 @@ pub fn plan(cfg: &Config) -> Plan {
 
         let log_atom = (kind == Kind::Longrun
             && unit.utype() == "service"
+            && !cfg.journal
             && cfg.log_dir.is_some()
             && !uses_tty_or_file(unit))
             .then(|| format!("{id}.log"));
@@ -561,11 +617,12 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
                 write_file(&sdir.join("timeout-up"), &format!("{}\n", p.timeout_up_ms), false)?;
                 write_file(&sdir.join("timeout-down"), &format!("{}\n", p.timeout_down_ms), false)?;
             }
-            Kind::Longrun if p.id.ends_with(".timer") => {
+            Kind::Longrun if p.id.ends_with(".timer") || p.id.ends_with(".path") => {
                 let arg = unit_arg(&p.id);
+                let sub = if p.id.ends_with(".timer") { "timer-run" } else { "path-run" };
                 write_file(
                     &sdir.join("run"),
-                    &format!("#!/bin/sh\nexec {runner} timer-run{args} {arg}\n"),
+                    &format!("#!/bin/sh\nexec {runner} {sub}{args} {arg}\n"),
                     true,
                 )?;
                 write_file(&sdir.join("notification-fd"), "3\n", false)?;
@@ -621,6 +678,17 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
             fs::create_dir_all(b.join("contents.d"))?;
             write_file(&b.join("type"), "bundle\n", false)?;
             fs::write(b.join("contents.d").join(def), "")?;
+        }
+    }
+
+    // Booted when /system-update exists (offline updates, dnf system-upgrade).
+    let b = dir.join("sdcompat-system-update");
+    fs::create_dir_all(b.join("contents.d"))?;
+    write_file(&b.join("type"), "bundle\n", false)?;
+    // logind too: update tools may ask it to reboot when they are done.
+    for u in ["system-update.target", "systemd-logind.service"] {
+        if plan.units.contains_key(u) {
+            fs::write(b.join("contents.d").join(u), "")?;
         }
     }
 
