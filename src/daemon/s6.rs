@@ -1,0 +1,485 @@
+//! s6 / s6-rc backend: unit state queries and job execution.
+
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use tokio::process::Command;
+
+use super::Daemon;
+use crate::gen::Kind;
+use crate::loader::Unit;
+use crate::state::{self, keys};
+use crate::util;
+
+#[derive(Debug, Clone, Default)]
+pub struct SvStat {
+    pub up: bool,
+    pub wanted_up: bool,
+    pub ready: bool,
+    pub pid: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct Status {
+    pub active: &'static str,
+    pub sub: &'static str,
+    pub main_pid: u32,
+    pub result: String,
+    pub condition_ok: bool,
+}
+
+impl Daemon {
+    pub(super) fn runner_cmd(&self, sub: &str) -> Command {
+        let mut c = Command::new(&self.cfg.runner);
+        c.arg(sub);
+        if !self.cfg.runner_args().is_empty() {
+            c.arg("--config").arg(&self.cfg.config_path);
+        }
+        c
+    }
+
+    pub(super) fn scandir(&self, atom: &str) -> PathBuf {
+        self.cfg.live_dir.join("scandir").join(atom)
+    }
+
+    async fn s6rc_db_list(&self, what: &str) -> Vec<String> {
+        let out = Command::new("s6-rc-db")
+            .arg("-l")
+            .arg(&self.cfg.live_dir)
+            .args(["list", what])
+            .output()
+            .await;
+        match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Atom names in the order of the live `state` file, cached per compiled db.
+    async fn atom_order(&self) -> Vec<String> {
+        let db = std::fs::canonicalize(self.cfg.live_dir.join("compiled")).unwrap_or_default();
+        if let Some((cached_db, order)) = self.atom_order.lock().unwrap().as_ref() {
+            if *cached_db == db {
+                return order.clone();
+            }
+        }
+        let mut atomic: BTreeSet<String> = self.s6rc_db_list("longruns").await.into_iter().collect();
+        atomic.extend(self.s6rc_db_list("oneshots").await);
+        // s6-rc-db lists services in descending index order.
+        let mut order: Vec<String> = self
+            .s6rc_db_list("all")
+            .await
+            .into_iter()
+            .filter(|n| atomic.contains(n))
+            .collect();
+        order.reverse();
+        *self.atom_order.lock().unwrap() = Some((db, order.clone()));
+        order
+    }
+
+    /// Active atoms, read from the live state file so that queries never
+    /// contend for the s6-rc lock while a job is running.
+    pub(super) async fn active_atoms(&self) -> BTreeSet<String> {
+        let order = self.atom_order().await;
+        if let Ok(bytes) = std::fs::read(self.cfg.live_dir.join("state")) {
+            if bytes.len() == order.len() && !order.is_empty() {
+                return order
+                    .iter()
+                    .zip(bytes.iter())
+                    .filter(|(_, b)| *b & 1 != 0)
+                    .map(|(n, _)| n.clone())
+                    .collect();
+            }
+        }
+        self.active_atoms_s6rc().await.unwrap_or_default()
+    }
+
+    pub(super) async fn active_atoms_s6rc(&self) -> Option<BTreeSet<String>> {
+        let out = Command::new("s6-rc")
+            .arg("-l")
+            .arg(&self.cfg.live_dir)
+            .args(["-a", "list"])
+            .output()
+            .await
+            .ok()?;
+        out.status.success().then(|| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+    }
+
+    /// Compare the state-file reader with `s6-rc -a list` (startup sanity check).
+    pub(super) async fn verify_state_reader(&self) {
+        let Some(reference) = self.active_atoms_s6rc().await else { return };
+        let ours = self.active_atoms().await;
+        if ours != reference {
+            eprintln!(
+                "sdcompatd: warning: live state file layout differs from `s6-rc -a list`; status may be wrong (ours={ours:?} s6-rc={reference:?})"
+            );
+        }
+    }
+
+    /// Atoms contained in a bundle (flattened by s6-rc-db).
+    pub(super) async fn bundle_atoms(&self, bundle: &str) -> Vec<String> {
+        let out = Command::new("s6-rc-db")
+            .arg("-l")
+            .arg(&self.cfg.live_dir)
+            .args(["contents", bundle])
+            .output()
+            .await;
+        match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub(super) async fn svstat(&self, atom: &str) -> Option<SvStat> {
+        let out = Command::new("s6-svstat")
+            .args(["-o", "up,wantedup,ready,pid"])
+            .arg(self.scandir(atom))
+            .output()
+            .await
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let f: Vec<&str> = text.split_whitespace().collect();
+        if f.len() < 4 {
+            return None;
+        }
+        Some(SvStat {
+            up: f[0] == "true",
+            wanted_up: f[1] == "true",
+            ready: f[2] == "true",
+            pid: f[3].parse::<i64>().ok().filter(|&p| p > 0).unwrap_or(0) as u32,
+        })
+    }
+
+    pub(super) fn kind_of(&self, id: &str) -> Option<Kind> {
+        self.index.read().unwrap().units.get(id).map(|(k, _)| *k)
+    }
+
+    /// Runtime status of a unit, combining s6-rc state, s6-svstat and the
+    /// runner's state files.
+    pub(super) async fn unit_status(&self, id: &str, active: &BTreeSet<String>, unit: &Unit) -> Status {
+        let st = state::for_unit(&self.cfg.run_dir, id);
+        let result = st.get(keys::RESULT).unwrap_or_else(|| "success".into());
+        let failed_result = !matches!(result.as_str(), "success" | "running");
+        let condition_ok = !st.has(keys::CONDITION_FAILED);
+        let mut s = Status { active: "inactive", sub: "dead", main_pid: 0, result: result.clone(), condition_ok };
+
+        if let Some(scope) = self.transient.lock().unwrap().get(id) {
+            let populated = !util::cgroup_pids(&scope.cgroup).is_empty();
+            s.active = if populated { "active" } else { "inactive" };
+            s.sub = if populated { "running" } else { "dead" };
+            return s;
+        }
+
+        if let Some(job) = self.jobs.lock().unwrap().values().find(|j| j.unit == id) {
+            match job.jtype.as_str() {
+                "stop" => (s.active, s.sub) = ("deactivating", "stop"),
+                "reload" => {}
+                _ => (s.active, s.sub) = ("activating", "start"),
+            }
+            if job.jtype != "reload" {
+                return s;
+            }
+        }
+
+        match self.kind_of(id) {
+            None => {
+                if failed_result && st.has(keys::INACTIVE_ENTER) {
+                    (s.active, s.sub) = ("failed", "failed");
+                }
+            }
+            Some(Kind::Bundle) => {
+                let atoms = self.bundle_atoms(id).await;
+                let up = if atoms.is_empty() {
+                    self.started_targets.lock().unwrap().contains(id) || self.default_active(active)
+                } else {
+                    atoms.iter().any(|a| active.contains(a))
+                };
+                if up {
+                    (s.active, s.sub) = ("active", "active");
+                }
+            }
+            Some(Kind::Oneshot) => {
+                let remain = unit.get_bool("Service", "RemainAfterExit", false);
+                if active.contains(id) && remain {
+                    (s.active, s.sub) = ("active", "exited");
+                } else if failed_result {
+                    (s.active, s.sub) = ("failed", "failed");
+                }
+            }
+            Some(Kind::Longrun) => {
+                if !active.contains(id) {
+                    if failed_result && st.has(keys::INACTIVE_ENTER) {
+                        (s.active, s.sub) = ("failed", "failed");
+                    }
+                    return s;
+                }
+                let Some(sv) = self.svstat(id).await else { return s };
+                if !condition_ok {
+                    return s;
+                }
+                if sv.up {
+                    s.main_pid = st.get(keys::MAIN_PID).and_then(|p| p.parse().ok()).unwrap_or(sv.pid);
+                    if sv.ready {
+                        let reloading = self.jobs.lock().unwrap().values().any(|j| j.unit == id && j.jtype == "reload");
+                        (s.active, s.sub) = if reloading { ("reloading", "reload") } else { ("active", "running") };
+                    } else {
+                        (s.active, s.sub) = ("activating", "start");
+                    }
+                } else if sv.wanted_up {
+                    (s.active, s.sub) = ("activating", "auto-restart");
+                } else if failed_result {
+                    (s.active, s.sub) = ("failed", "failed");
+                }
+            }
+        }
+        s
+    }
+
+    fn default_active(&self, active: &BTreeSet<String>) -> bool {
+        !active.is_empty()
+    }
+
+    async fn s6rc(&self, args: &[&str], names: &[String]) -> Result<(), String> {
+        let _guard = self.s6_lock.lock().await;
+        let out = Command::new("s6-rc")
+            .arg("-l")
+            .arg(&self.cfg.live_dir)
+            .arg("-b")
+            .args(args)
+            .args(names)
+            .output()
+            .await
+            .map_err(|e| format!("s6-rc: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+    }
+
+    async fn run_runner(&self, sub: &str, id: &str, main_pid: Option<u32>) -> bool {
+        let mut c = self.runner_cmd(sub);
+        if let Some(p) = main_pid {
+            c.arg("--mainpid").arg(p.to_string());
+        }
+        c.arg("--").arg(id);
+        match c.status().await {
+            Ok(s) => s.success(),
+            Err(e) => {
+                eprintln!("sdcompatd: {sub} {id}: {e}");
+                false
+            }
+        }
+    }
+
+    fn start_timeout(unit: &Unit) -> Duration {
+        let usec = unit
+            .get("Service", "TimeoutStartSec")
+            .or_else(|| unit.get("Service", "TimeoutSec"))
+            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
+            .unwrap_or(90_000_000);
+        if usec == u64::MAX {
+            Duration::from_secs(86400 * 365)
+        } else {
+            Duration::from_micros(usec) + Duration::from_secs(1)
+        }
+    }
+
+    /// Wait until a longrun is up and ready (and, if `old_pid` is given, has a new PID).
+    async fn wait_ready(&self, id: &str, unit: &Unit, old_pid: Option<u32>) -> &'static str {
+        let started_at = util::now_realtime_usec();
+        let deadline = Instant::now() + Self::start_timeout(unit);
+        let st = state::for_unit(&self.cfg.run_dir, id);
+        loop {
+            if let Some(sv) = self.svstat(id).await {
+                if sv.up && sv.ready && old_pid.map(|o| o != sv.pid).unwrap_or(true) {
+                    return "done";
+                }
+                if !sv.up && !sv.wanted_up {
+                    // Like systemd: a service that became active during this
+                    // job and died afterwards still completed its start job.
+                    let became_active = st.get_u64(keys::ACTIVE_ENTER) >= started_at;
+                    return if st.has(keys::CONDITION_FAILED) || became_active { "done" } else { "failed" };
+                }
+            } else {
+                return "failed";
+            }
+            if Instant::now() > deadline {
+                return "timeout";
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    pub(super) async fn do_start(&self, id: &str, unit: &Unit, isolate: bool) -> &'static str {
+        let started_at = util::now_realtime_usec();
+        let kind = self.kind_of(id);
+        let active = self.active_atoms().await;
+        match kind {
+            None => "failed",
+            Some(Kind::Bundle) => {
+                self.started_targets.lock().unwrap().insert(id.to_string());
+                let mut names = vec![id.to_string()];
+                let mut args = vec!["-u", "change"];
+                if isolate {
+                    args = vec!["-p", "-u", "change"];
+                    let extra = self.cfg.sysinit_bundle.clone();
+                    if self.bundle_atoms(&extra).await.len() > 0 || active.contains(&extra) {
+                        names.push(extra);
+                    }
+                    if active.contains("sdcompatd") {
+                        names.push("sdcompatd".into());
+                    }
+                }
+                match self.s6rc(&args, &names).await {
+                    Ok(()) => "done",
+                    Err(e) => {
+                        eprintln!("sdcompatd: start {id}: {e}");
+                        // Wanted units failing does not fail a target.
+                        "done"
+                    }
+                }
+            }
+            Some(Kind::Oneshot) => {
+                if active.contains(id) {
+                    if unit.get_bool("Service", "RemainAfterExit", false) {
+                        return "done";
+                    }
+                    return if self.run_runner("up", id, None).await { "done" } else { "failed" };
+                }
+                match self.s6rc(&["-u", "change"], &[id.to_string()]).await {
+                    Ok(()) => "done",
+                    Err(e) => {
+                        eprintln!("sdcompatd: start {id}: {e}");
+                        self.dependency_or_failed(id, started_at)
+                    }
+                }
+            }
+            Some(Kind::Longrun) => {
+                if active.contains(id) {
+                    let sv = self.svstat(id).await.unwrap_or_default();
+                    if sv.up {
+                        return self.wait_ready(id, unit, None).await;
+                    }
+                    let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(id)).status().await;
+                    return self.wait_ready(id, unit, None).await;
+                }
+                match self.s6rc(&["-u", "change"], &[id.to_string()]).await {
+                    Ok(()) => {
+                        let st = state::for_unit(&self.cfg.run_dir, id);
+                        let became_active = st.get_u64(keys::ACTIVE_ENTER) >= started_at;
+                        match self.svstat(id).await {
+                            Some(sv) if !sv.up && !sv.wanted_up && !st.has(keys::CONDITION_FAILED) && !became_active => "failed",
+                            _ => "done",
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("sdcompatd: start {id}: {e}");
+                        self.dependency_or_failed(id, started_at)
+                    }
+                }
+            }
+        }
+    }
+
+    /// After a failed s6-rc start: did the unit itself run and fail, or did
+    /// a dependency fail before it was attempted?
+    fn dependency_or_failed(&self, id: &str, started_at: u64) -> &'static str {
+        let st = state::for_unit(&self.cfg.run_dir, id);
+        if st.get_u64(keys::INACTIVE_EXIT) >= started_at {
+            "failed"
+        } else {
+            "dependency"
+        }
+    }
+
+    pub(super) async fn do_stop(&self, id: &str, unit: &Unit) -> &'static str {
+        match self.kind_of(id) {
+            None => "done",
+            Some(Kind::Bundle) => {
+                self.started_targets.lock().unwrap().remove(id);
+                "done"
+            }
+            Some(kind) => {
+                let active = self.active_atoms().await;
+                if !active.contains(id) {
+                    return "done";
+                }
+                if kind == Kind::Longrun && !unit.get_all("Service", "ExecStop").is_empty() {
+                    let pid = self.svstat(id).await.map(|s| s.pid).filter(|&p| p > 0);
+                    self.run_runner("stop-exec", id, pid).await;
+                }
+                match self.s6rc(&["-d", "change"], &[id.to_string()]).await {
+                    Ok(()) => "done",
+                    Err(e) => {
+                        eprintln!("sdcompatd: stop {id}: {e}");
+                        "failed"
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) async fn do_restart(&self, id: &str, unit: &Unit, only_if_active: bool) -> &'static str {
+        let active = self.active_atoms().await;
+        match self.kind_of(id) {
+            Some(Kind::Longrun) if active.contains(id) => {
+                let sv = self.svstat(id).await.unwrap_or_default();
+                if !sv.up {
+                    if only_if_active {
+                        return "done";
+                    }
+                    return self.do_start(id, unit, false).await;
+                }
+                if !unit.get_all("Service", "ExecStop").is_empty() {
+                    self.run_runner("stop-exec", id, Some(sv.pid)).await;
+                }
+                state::for_unit(&self.cfg.run_dir, id).set(keys::RESTART_REQUESTED, "1");
+                let _ = Command::new("s6-svc").arg("-r").arg(self.scandir(id)).status().await;
+                self.wait_ready(id, unit, Some(sv.pid)).await
+            }
+            Some(Kind::Oneshot) if active.contains(id) => {
+                self.run_runner("down", id, None).await;
+                if self.run_runner("up", id, None).await {
+                    "done"
+                } else {
+                    "failed"
+                }
+            }
+            _ if only_if_active => "done",
+            _ => self.do_start(id, unit, false).await,
+        }
+    }
+
+    pub(super) async fn do_reload(&self, id: &str) -> &'static str {
+        let pid = self.svstat(id).await.map(|s| s.pid).filter(|&p| p > 0);
+        if self.run_runner("reload-exec", id, pid).await {
+            "done"
+        } else {
+            "failed"
+        }
+    }
+
+    pub(super) fn can_reload(unit: &Unit) -> bool {
+        !unit.get_all("Service", "ExecReload").is_empty()
+            || unit.get("Service", "Type").as_deref() == Some("notify-reload")
+    }
+}

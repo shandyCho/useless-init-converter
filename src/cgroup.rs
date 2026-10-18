@@ -1,0 +1,200 @@
+//! cgroup v2 layout compatible with systemd: /sys/fs/cgroup/system.slice/<unit>.
+//!
+//! Using the same paths means sd_pid_get_unit(), `systemctl status` process
+//! trees and resource-control settings work as on systemd.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::loader::Unit;
+
+pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
+
+pub fn available() -> bool {
+    Path::new(CGROUP_ROOT).join("cgroup.controllers").exists()
+}
+
+/// "foo-bar.slice" -> "foo.slice/foo-bar.slice"
+pub fn slice_path(slice: &str) -> PathBuf {
+    let stem = slice.trim_end_matches(".slice");
+    if stem == "-" || stem.is_empty() {
+        return PathBuf::new();
+    }
+    let mut p = PathBuf::new();
+    let mut acc = String::new();
+    for part in stem.split('-') {
+        if !acc.is_empty() {
+            acc.push('-');
+        }
+        acc.push_str(part);
+        p.push(format!("{acc}.slice"));
+    }
+    p
+}
+
+pub fn slice_of(unit: &Unit) -> String {
+    unit.get("Service", "Slice")
+        .or_else(|| unit.get("Scope", "Slice"))
+        .unwrap_or_else(|| "system.slice".into())
+}
+
+/// Relative cgroup path as systemd reports it in ControlGroup (leading '/').
+pub fn unit_cgroup_rel(unit_id: &str, slice: &str) -> String {
+    format!("/{}", slice_path(slice).join(unit_id).display())
+}
+
+pub fn unit_cgroup_dir(unit_id: &str, slice: &str) -> PathBuf {
+    Path::new(CGROUP_ROOT).join(slice_path(slice)).join(unit_id)
+}
+
+/// Enable the controllers we may need along the path from the root.
+fn enable_controllers(dir: &Path) {
+    let root = Path::new(CGROUP_ROOT);
+    let Ok(rel) = dir.strip_prefix(root) else { return };
+    let mut cur = root.to_path_buf();
+    for comp in rel.components() {
+        let avail = fs::read_to_string(cur.join("cgroup.controllers")).unwrap_or_default();
+        for c in ["cpu", "memory", "pids", "io"] {
+            if avail.split_whitespace().any(|a| a == c) {
+                let _ = fs::write(cur.join("cgroup.subtree_control"), format!("+{c}"));
+            }
+        }
+        cur.push(comp);
+    }
+}
+
+fn parse_bytes(v: &str) -> Option<String> {
+    let v = v.trim();
+    if v == "infinity" {
+        return Some("max".into());
+    }
+    if let Some(pct) = v.strip_suffix('%') {
+        let pct: f64 = pct.parse().ok()?;
+        let total = fs::read_to_string("/proc/meminfo")
+            .ok()?
+            .lines()
+            .find_map(|l| l.strip_prefix("MemTotal:"))
+            .and_then(|l| l.trim().trim_end_matches("kB").trim().parse::<u64>().ok())?
+            * 1024;
+        return Some(((total as f64) * pct / 100.0) as u64).map(|b| b.to_string());
+    }
+    let (num, mult) = match v.chars().last()? {
+        'K' => (&v[..v.len() - 1], 1u64 << 10),
+        'M' => (&v[..v.len() - 1], 1 << 20),
+        'G' => (&v[..v.len() - 1], 1 << 30),
+        'T' => (&v[..v.len() - 1], 1 << 40),
+        _ => (v, 1),
+    };
+    let n: f64 = num.parse().ok()?;
+    Some(((n * mult as f64) as u64).to_string())
+}
+
+/// Create the unit's cgroup, apply resource settings and move `pid` into it.
+pub fn enter(unit: &Unit, pid: u32) -> Result<PathBuf, String> {
+    if !available() {
+        return Err("cgroup2 not mounted".into());
+    }
+    let dir = unit_cgroup_dir(&unit.id, &slice_of(unit));
+    fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    enable_controllers(&dir);
+
+    let sec = unit.type_section();
+    let set = |file: &str, val: String| {
+        if let Err(e) = fs::write(dir.join(file), &val) {
+            eprintln!("sdcompat: {}: cannot set {file}={val}: {e}", unit.id);
+        }
+    };
+    if let Some(v) = unit.get(&sec, "MemoryMax").or_else(|| unit.get(&sec, "MemoryLimit")) {
+        if let Some(b) = parse_bytes(&v) {
+            set("memory.max", b);
+        }
+    }
+    if let Some(b) = unit.get(&sec, "MemoryHigh").and_then(|v| parse_bytes(&v)) {
+        set("memory.high", b);
+    }
+    if let Some(v) = unit.get(&sec, "CPUQuota") {
+        if let Ok(pct) = v.trim_end_matches('%').parse::<f64>() {
+            set("cpu.max", format!("{} 100000", (pct * 1000.0) as u64));
+        }
+    }
+    if let Some(v) = unit.get(&sec, "CPUWeight") {
+        set("cpu.weight", v.replace("idle", "1"));
+    }
+    if let Some(v) = unit.get(&sec, "IOWeight") {
+        set("io.weight", format!("default {v}"));
+    }
+    if let Some(v) = unit.get(&sec, "TasksMax") {
+        let val = if v == "infinity" {
+            "max".to_string()
+        } else if let Some(p) = v.strip_suffix('%') {
+            let max: u64 = fs::read_to_string("/proc/sys/kernel/pid_max")
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(4194304);
+            let pct: f64 = p.parse().unwrap_or(100.0);
+            ((max as f64 * pct / 100.0) as u64).to_string()
+        } else {
+            v
+        };
+        set("pids.max", val);
+    }
+
+    fs::write(dir.join("cgroup.procs"), pid.to_string())
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Signal every process in the unit's cgroup except `except`.
+pub fn kill_all(dir: &Path, sig: i32, except: u32) -> usize {
+    if sig == libc::SIGKILL && except == 0 && dir.join("cgroup.kill").exists() {
+        let n = crate::util::cgroup_pids(dir).len();
+        let _ = fs::write(dir.join("cgroup.kill"), "1");
+        return n;
+    }
+    let mut n = 0;
+    for pid in crate::util::cgroup_pids(dir) {
+        if pid != except && pid != 0 {
+            unsafe { libc::kill(pid as i32, sig) };
+            n += 1;
+        }
+    }
+    n
+}
+
+pub fn remove(dir: &Path) {
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.flatten() {
+            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                remove(&e.path());
+            }
+        }
+    }
+    let _ = fs::remove_dir(dir);
+}
+
+pub fn read_u64(dir: &Path, file: &str) -> Option<u64> {
+    let s = fs::read_to_string(dir.join(file)).ok()?;
+    s.split_whitespace().next()?.parse().ok()
+}
+
+pub fn cpu_usage_nsec(dir: &Path) -> Option<u64> {
+    let s = fs::read_to_string(dir.join("cpu.stat")).ok()?;
+    s.lines()
+        .find_map(|l| l.strip_prefix("usage_usec "))
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|u| u * 1000)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slices() {
+        assert_eq!(slice_path("system.slice"), PathBuf::from("system.slice"));
+        assert_eq!(
+            slice_path("system-getty.slice"),
+            PathBuf::from("system.slice/system-getty.slice")
+        );
+    }
+}

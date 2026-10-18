@@ -1,0 +1,1158 @@
+//! `sdcompat daemon`: serves org.freedesktop.systemd1 on the system bus and
+//! carries out requests with s6-rc. The real `systemctl`, libsystemd and other
+//! D-Bus clients talk to it as if it were systemd.
+//!
+//! Dispatch is done by hand (no zbus ObjectServer) because systemd clients
+//! rely on details such as Properties.GetAll("") returning every interface.
+
+mod introspect;
+mod private;
+mod props;
+mod s6;
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+
+use futures_util::StreamExt;
+use zbus::message::Type as MsgType;
+use zbus::zvariant::{ObjectPath, OwnedValue, Value};
+use zbus::{Connection, Message, MessageStream};
+
+use crate::config::Config;
+use crate::gen::{self, Index, Kind};
+use crate::install;
+use crate::loader::{LoadState, Loader, Unit};
+use crate::state::{self, keys};
+use crate::unit::UnitFile;
+use crate::util;
+use props::{Ifaces, Props, MANAGER_IFACE, UNIT_IFACE};
+
+/// systemd version we claim API compatibility with.
+pub const COMPAT_VERSION: &str = "259";
+
+const BUS_NAME: &str = "org.freedesktop.systemd1";
+const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
+const UNIT_PREFIX: &str = "/org/freedesktop/systemd1/unit/";
+const JOB_PREFIX: &str = "/org/freedesktop/systemd1/job/";
+const PROPS_IFACE: &str = "org.freedesktop.DBus.Properties";
+
+const E_NO_UNIT: &str = "org.freedesktop.systemd1.NoSuchUnit";
+const E_NO_JOB: &str = "org.freedesktop.systemd1.NoSuchJob";
+const E_MASKED: &str = "org.freedesktop.systemd1.UnitMasked";
+const E_LOAD_FAILED: &str = "org.freedesktop.systemd1.LoadFailed";
+const E_NOT_APPLICABLE: &str = "org.freedesktop.systemd1.JobTypeNotApplicable";
+const E_INACTIVE: &str = "org.freedesktop.systemd1.UnitInactive";
+const E_ONLY_BY_DEP: &str = "org.freedesktop.systemd1.OnlyByDependency";
+const E_NO_UNIT_FOR_PID: &str = "org.freedesktop.systemd1.NoUnitForPID";
+const E_ACCESS: &str = "org.freedesktop.DBus.Error.AccessDenied";
+const E_UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
+const E_UNKNOWN_OBJECT: &str = "org.freedesktop.DBus.Error.UnknownObject";
+const E_UNKNOWN_PROPERTY: &str = "org.freedesktop.DBus.Error.UnknownProperty";
+const E_INVALID_ARGS: &str = "org.freedesktop.DBus.Error.InvalidArgs";
+const E_READ_ONLY: &str = "org.freedesktop.DBus.Error.PropertyReadOnly";
+const E_NOT_SUPPORTED: &str = "org.freedesktop.DBus.Error.NotSupported";
+const E_FAILED: &str = "org.freedesktop.DBus.Error.Failed";
+
+pub struct Job {
+    pub id: u32,
+    pub unit: String,
+    pub jtype: String,
+}
+
+/// The connection a request arrived on: the system bus, or a peer-to-peer
+/// connection on the private socket (which carries the peer's credentials).
+#[derive(Clone)]
+pub struct Peer {
+    pub conn: Connection,
+    pub uid: Option<u32>,
+    pub pid: Option<u32>,
+}
+
+pub struct Transient {
+    pub cgroup: PathBuf,
+    pub slice: String,
+    pub description: String,
+}
+
+pub struct Daemon {
+    pub cfg: Config,
+    conn: Connection,
+    pub index: RwLock<Index>,
+    pub jobs: Mutex<BTreeMap<u32, Job>>,
+    pub next_job: AtomicU32,
+    pub s6_lock: tokio::sync::Mutex<()>,
+    pub started_targets: Mutex<BTreeSet<String>>,
+    pub transient: Mutex<BTreeMap<String, Transient>>,
+    pub manager_env: Mutex<Vec<String>>,
+    uid_cache: Mutex<HashMap<String, u32>>,
+    pub started: (u64, u64),
+    pub boot_done: AtomicBool,
+    pub boot_finished: Mutex<Option<(u64, u64)>>,
+    /// (compiled db path, atom names in live state order)
+    pub atom_order: Mutex<Option<(PathBuf, Vec<String>)>>,
+    /// Peer-to-peer connections on the private socket (signals go to these too).
+    pub private: Mutex<Vec<(u64, Connection)>>,
+}
+
+struct DErr {
+    name: &'static str,
+    msg: String,
+}
+
+type R<T> = Result<T, DErr>;
+
+fn err(name: &'static str, msg: impl Into<String>) -> DErr {
+    DErr { name, msg: msg.into() }
+}
+
+fn zerr(e: zbus::Error) -> DErr {
+    err(E_FAILED, e.to_string())
+}
+
+pub fn unit_path(name: &str) -> String {
+    format!("{UNIT_PREFIX}{}", util::bus_label_escape(name))
+}
+
+pub fn job_path(id: u32) -> String {
+    format!("{JOB_PREFIX}{id}")
+}
+
+fn op(p: String) -> ObjectPath<'static> {
+    ObjectPath::try_from(p).unwrap_or_else(|_| ObjectPath::try_from("/").unwrap())
+}
+
+type UnitEntry = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    ObjectPath<'static>,
+    u32,
+    String,
+    ObjectPath<'static>,
+);
+
+type Changes = Vec<(String, String, String)>;
+
+fn changes(c: Vec<install::Change>) -> Changes {
+    c.into_iter().map(|c| (c.kind, c.path, c.source)).collect()
+}
+
+const FLAG_RUNTIME: u64 = 1;
+const FLAG_FORCE: u64 = 2;
+
+impl Daemon {
+    fn args<T>(msg: &Message) -> R<T>
+    where
+        T: for<'d> zbus::zvariant::DynamicDeserialize<'d>,
+    {
+        msg.body()
+            .deserialize::<T>()
+            .map_err(|e| err(E_INVALID_ARGS, e.to_string()))
+    }
+
+    async fn reply<B>(&self, c: &Peer, msg: &Message, body: &B) -> R<()>
+    where
+        B: serde::Serialize + zbus::zvariant::DynamicType,
+    {
+        c.conn.reply(&msg.header(), body).await.map_err(zerr)
+    }
+
+    async fn caller_uid(&self, c: &Peer, msg: &Message) -> Option<u32> {
+        if c.uid.is_some() {
+            return c.uid;
+        }
+        let hdr = msg.header();
+        let sender = hdr.sender()?.to_string();
+        if let Some(u) = self.uid_cache.lock().unwrap().get(&sender) {
+            return Some(*u);
+        }
+        let proxy = zbus::fdo::DBusProxy::new(&self.conn).await.ok()?;
+        let name = zbus::names::BusName::try_from(sender.clone()).ok()?;
+        let uid = proxy.get_connection_unix_user(name).await.ok()?;
+        self.uid_cache.lock().unwrap().insert(sender, uid);
+        Some(uid)
+    }
+
+    async fn caller_pid(&self, c: &Peer, msg: &Message) -> Option<u32> {
+        if c.pid.is_some() {
+            return c.pid;
+        }
+        let hdr = msg.header();
+        let sender = hdr.sender()?.to_string();
+        let proxy = zbus::fdo::DBusProxy::new(&self.conn).await.ok()?;
+        let name = zbus::names::BusName::try_from(sender).ok()?;
+        proxy.get_connection_unix_process_id(name).await.ok()
+    }
+
+    async fn require_privileged(&self, c: &Peer, msg: &Message) -> R<()> {
+        match self.caller_uid(c, msg).await {
+            Some(0) => Ok(()),
+            Some(u) if self.cfg.allow_uids.contains(&u) => Ok(()),
+            _ => Err(err(E_ACCESS, "Access denied")),
+        }
+    }
+
+    /// Resolve aliases and load the unit file.
+    fn load_unit(&self, name: &str) -> (String, Unit) {
+        let resolved = self.index.read().unwrap().resolve(name).to_string();
+        if let Some(t) = self.transient.lock().unwrap().get(&resolved) {
+            let mut file = UnitFile::default();
+            file.entries.push(("Unit".into(), "Description".into(), t.description.clone()));
+            return (
+                resolved.clone(),
+                Unit {
+                    id: resolved.clone(),
+                    names: vec![resolved],
+                    fragment: None,
+                    dropins: Vec::new(),
+                    load_state: LoadState::Loaded,
+                    load_error: None,
+                    file,
+                },
+            );
+        }
+        let unit = Loader::new(&self.cfg).load(&resolved);
+        (unit.id.clone(), unit)
+    }
+
+    fn unit_from_path(&self, path: &str) -> Option<String> {
+        let label = path.strip_prefix(UNIT_PREFIX)?;
+        if label.contains('/') {
+            return None;
+        }
+        Some(util::bus_label_unescape(label))
+    }
+
+    async fn emit(&self, path: &str, iface: &str, member: &str, body: &(impl serde::Serialize + zbus::zvariant::DynamicType)) {
+        if let Err(e) = self.conn.emit_signal(None::<&str>, path, iface, member, body).await {
+            eprintln!("sdcompatd: emit {member}: {e}");
+        }
+        let peers: Vec<Connection> = self.private.lock().unwrap().iter().map(|(_, c)| c.clone()).collect();
+        for p in peers {
+            // A peer that went away is dropped by its own reader task.
+            let _ = p.emit_signal(None::<&str>, path, iface, member, body).await;
+        }
+    }
+
+    async fn reload_db(&self) -> Result<(), String> {
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(true,)).await;
+        let cfg = self.cfg.clone();
+        let res = {
+            let _guard = self.s6_lock.lock().await;
+            tokio::task::spawn_blocking(move || gen::regenerate(&cfg, true))
+                .await
+                .map_err(|e| e.to_string())?
+        };
+        if let Ok(r) = &res {
+            eprintln!(
+                "sdcompatd: reloaded: {} units, database {}",
+                r.plan.units.len(),
+                r.db_dir.display()
+            );
+        }
+        *self.index.write().unwrap() = Index::load(&self.cfg);
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(false,)).await;
+        res.map(|_| ())
+    }
+
+    // ---- jobs ----
+
+    fn new_job(&self, unit: &str, jtype: &str) -> u32 {
+        let id = self.next_job.fetch_add(1, Ordering::SeqCst) + 1;
+        self.jobs.lock().unwrap().insert(id, Job { id, unit: unit.into(), jtype: jtype.into() });
+        id
+    }
+
+    /// Validate a job request; returns the canonical unit id.
+    async fn check_job(&self, name: &str, jtype: &str) -> R<(String, Unit)> {
+        let (id, unit) = self.load_unit(name);
+        match unit.load_state {
+            LoadState::NotFound => return Err(err(E_NO_UNIT, format!("Unit {name} not found."))),
+            LoadState::Masked => return Err(err(E_MASKED, format!("Unit {name} is masked."))),
+            LoadState::BadSetting => {
+                return Err(err(E_LOAD_FAILED, unit.load_error.clone().unwrap_or_default()))
+            }
+            LoadState::Loaded => {}
+        }
+        let starts = matches!(jtype, "start" | "restart" | "reload-or-restart");
+        if starts && unit.get_bool("Unit", "RefuseManualStart", false) {
+            return Err(err(
+                E_ONLY_BY_DEP,
+                format!("Operation refused, unit {name} may be requested by dependency only (it is configured to refuse manual start/stop)."),
+            ));
+        }
+        if jtype == "stop" && unit.get_bool("Unit", "RefuseManualStop", false) {
+            return Err(err(E_ONLY_BY_DEP, format!("Operation refused, unit {name} may be requested by dependency only (it is configured to refuse manual start/stop).")));
+        }
+        if jtype == "reload" && !Self::can_reload(&unit) {
+            return Err(err(E_NOT_APPLICABLE, format!("Job type reload is not applicable for unit {name}.")));
+        }
+        if jtype == "reload" {
+            let active = self.active_atoms().await;
+            if self.unit_status(&id, &active, &unit).await.active != "active" {
+                return Err(err(E_INACTIVE, format!("Unit {name} is not active.")));
+            }
+        }
+        let transient = self.transient.lock().unwrap().contains_key(&id);
+        if !transient && self.kind_of(&id).is_none() && jtype != "stop" {
+            // New unit file since the last reload: translate it now.
+            if !self.cfg.is_excluded(&id) {
+                let _ = self.reload_db().await;
+            }
+            if self.kind_of(&id).is_none() {
+                let why = if self.cfg.is_excluded(&id) {
+                    "excluded by sdcompat configuration".to_string()
+                } else {
+                    gen::plan(&self.cfg)
+                        .skipped
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| "not translated to s6-rc".into())
+                };
+                return Err(err(E_LOAD_FAILED, format!("Unit {name} cannot be managed: {why}.")));
+            }
+        }
+        Ok((id, unit))
+    }
+
+    async fn run_job(&self, id: &str, unit: &Unit, jtype: &str, mode: &str) -> &'static str {
+        let transient = self.transient.lock().unwrap().contains_key(id);
+        if transient {
+            if jtype == "stop" {
+                self.stop_scope(id);
+            }
+            return "done";
+        }
+        match jtype {
+            "start" => self.do_start(id, unit, mode == "isolate").await,
+            "stop" => self.do_stop(id, unit).await,
+            "restart" => self.do_restart(id, unit, false).await,
+            "try-restart" => self.do_restart(id, unit, true).await,
+            "reload" => self.do_reload(id).await,
+            "reload-or-restart" => {
+                if Self::can_reload(unit) && self.active_atoms().await.contains(id) {
+                    self.do_reload(id).await
+                } else {
+                    self.do_restart(id, unit, false).await
+                }
+            }
+            "reload-or-try-restart" => {
+                if Self::can_reload(unit) {
+                    self.do_reload(id).await
+                } else {
+                    self.do_restart(id, unit, true).await
+                }
+            }
+            _ => "failed",
+        }
+    }
+
+    async fn finish_job(&self, job: u32, id: &str, result: &str) {
+        self.jobs.lock().unwrap().remove(&job);
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "JobRemoved", &(job, op(job_path(job)), id.to_string(), result.to_string()))
+            .await;
+        let (_, unit) = self.load_unit(id);
+        let active = self.active_atoms().await;
+        let st = self.unit_status(id, &active, &unit).await;
+        let mut changed: HashMap<String, Value<'static>> = HashMap::new();
+        changed.insert("ActiveState".into(), Value::from(st.active.to_string()));
+        changed.insert("SubState".into(), Value::from(st.sub.to_string()));
+        self.emit(&unit_path(id), PROPS_IFACE, "PropertiesChanged", &(UNIT_IFACE, changed, Vec::<String>::new()))
+            .await;
+    }
+
+    async fn job_method(&self, c: &Peer, msg: &Message, name: &str, mode: &str, jtype: &str) -> R<()> {
+        self.require_privileged(c, msg).await?;
+        let (id, unit) = self.check_job(name, jtype).await?;
+        let job = self.new_job(&id, jtype);
+        self.reply(c, msg, &(op(job_path(job)),)).await?;
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), id.clone())).await;
+        let result = self.run_job(&id, &unit, jtype, mode).await;
+        self.finish_job(job, &id, result).await;
+        Ok(())
+    }
+
+    /// dbus-daemon --systemd-activation asks us to start a service.
+    async fn handle_activation(&self, name: String) {
+        let res = match self.check_job(&name, "start").await {
+            Ok((id, unit)) => {
+                let job = self.new_job(&id, "start");
+                self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), id.clone())).await;
+                let r = self.run_job(&id, &unit, "start", "replace").await;
+                self.finish_job(job, &id, r).await;
+                if r == "done" {
+                    Ok(())
+                } else {
+                    Err(err(E_FAILED, format!("Unit {name} failed to start ({r}).")))
+                }
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = res {
+            eprintln!("sdcompatd: activation of {name} failed: {}", e.msg);
+            let r = self
+                .conn
+                .emit_signal(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.systemd1.Activator",
+                    "ActivationFailure",
+                    &(name, e.name.to_string(), e.msg),
+                )
+                .await;
+            if let Err(e) = r {
+                eprintln!("sdcompatd: ActivationFailure: {e}");
+            }
+        }
+    }
+
+    // ---- transient scopes ----
+
+    fn stop_scope(&self, id: &str) {
+        if let Some(t) = self.transient.lock().unwrap().get(id) {
+            crate::cgroup::kill_all(&t.cgroup, libc::SIGTERM, 0);
+        }
+    }
+
+    async fn start_transient(&self, c: &Peer, msg: &Message) -> R<()> {
+        self.require_privileged(c, msg).await?;
+        type Aux = Vec<(String, Vec<(String, OwnedValue)>)>;
+        let (name, _mode, props, _aux): (String, String, Vec<(String, OwnedValue)>, Aux) = Self::args(msg)?;
+        if !name.ends_with(".scope") {
+            return Err(err(
+                E_NOT_SUPPORTED,
+                format!("Transient units of this type are not supported by sdcompat: {name}"),
+            ));
+        }
+        if self.transient.lock().unwrap().contains_key(&name) {
+            return Err(err("org.freedesktop.systemd1.UnitExists", format!("Unit {name} already exists.")));
+        }
+        let mut pids: Vec<u32> = Vec::new();
+        let mut slice = "system.slice".to_string();
+        let mut description = name.clone();
+        for (k, v) in props {
+            match k.as_str() {
+                "PIDs" => {
+                    if let Ok(list) = <Vec<u32>>::try_from(v) {
+                        pids.extend(list);
+                    }
+                }
+                "Slice" => {
+                    if let Ok(s) = <String>::try_from(v) {
+                        slice = s;
+                    }
+                }
+                "Description" => {
+                    if let Ok(s) = <String>::try_from(v) {
+                        description = s;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if pids.is_empty() {
+            if let Some(p) = self.caller_pid(c, msg).await {
+                pids.push(p);
+            }
+        }
+        let dir = crate::cgroup::unit_cgroup_dir(&name, &slice);
+        std::fs::create_dir_all(&dir).map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
+        for p in &pids {
+            if let Err(e) = std::fs::write(dir.join("cgroup.procs"), p.to_string()) {
+                return Err(err(E_FAILED, format!("cannot move PID {p} into {}: {e}", dir.display())));
+            }
+        }
+        let st = state::for_unit(&self.cfg.run_dir, &name);
+        st.stamp(keys::ACTIVE_ENTER);
+        self.transient
+            .lock()
+            .unwrap()
+            .insert(name.clone(), Transient { cgroup: dir, slice, description });
+        let job = self.new_job(&name, "start");
+        self.reply(c, msg, &(op(job_path(job)),)).await?;
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitNew", &(name.clone(), op(unit_path(&name)))).await;
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), name.clone())).await;
+        self.finish_job(job, &name, "done").await;
+        Ok(())
+    }
+
+    async fn gc_scopes(&self) {
+        let empty: Vec<(String, PathBuf)> = self
+            .transient
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, t)| util::cgroup_pids(&t.cgroup).is_empty())
+            .map(|(n, t)| (n.clone(), t.cgroup.clone()))
+            .collect();
+        for (name, dir) in empty {
+            self.transient.lock().unwrap().remove(&name);
+            crate::cgroup::remove(&dir);
+            let _ = std::fs::remove_dir_all(self.cfg.unit_run_dir(&name));
+            self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitRemoved", &(name.clone(), op(unit_path(&name)))).await;
+        }
+    }
+
+    // ---- listing ----
+
+    async fn unit_entry(&self, id: &str, unit: &Unit, active: &BTreeSet<String>) -> UnitEntry {
+        let st = self.unit_status(id, active, unit).await;
+        let (job_id, job_type) = self
+            .jobs
+            .lock()
+            .unwrap()
+            .values()
+            .find(|j| j.unit == id)
+            .map(|j| (j.id, j.jtype.clone()))
+            .unwrap_or((0, String::new()));
+        (
+            id.to_string(),
+            unit.description(),
+            unit.load_state.as_str().to_string(),
+            st.active.to_string(),
+            st.sub.to_string(),
+            String::new(),
+            op(unit_path(id)),
+            job_id,
+            job_type,
+            op(if job_id > 0 { job_path(job_id) } else { "/".into() }),
+        )
+    }
+
+    async fn list_units(&self, states: &[String], patterns: &[String], names: Option<&[String]>) -> Vec<UnitEntry> {
+        let active = self.active_atoms().await;
+        let ids: Vec<String> = match names {
+            Some(n) => n.to_vec(),
+            None => self.known_units(),
+        };
+        let mut out = Vec::new();
+        for name in ids {
+            if !patterns.is_empty() && !patterns.iter().any(|p| util::fnmatch(p, &name)) {
+                continue;
+            }
+            let (id, unit) = self.load_unit(&name);
+            let e = self.unit_entry(&id, &unit, &active).await;
+            if !states.is_empty() && !states.iter().any(|s| *s == e.2 || *s == e.3 || *s == e.4) {
+                continue;
+            }
+            out.push(e);
+        }
+        out
+    }
+
+    async fn count_failed(&self) -> u32 {
+        let ids = self.known_units();
+        let mut candidates = Vec::new();
+        for id in ids {
+            let st = state::for_unit(&self.cfg.run_dir, &id);
+            if st.get(keys::RESULT).map(|r| !matches!(r.as_str(), "success" | "running")).unwrap_or(false) {
+                candidates.push(id);
+            }
+        }
+        if candidates.is_empty() {
+            return 0;
+        }
+        let active = self.active_atoms().await;
+        let mut n = 0;
+        for id in candidates {
+            let (_, unit) = self.load_unit(&id);
+            if self.unit_status(&id, &active, &unit).await.active == "failed" {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    // ---- properties ----
+
+    async fn object_props(&self, path: &str) -> R<Ifaces> {
+        if path == MANAGER_PATH {
+            let mut m = Ifaces::new();
+            let nnames = self.known_units().len() as u32;
+            let nfailed = self.count_failed().await;
+            m.insert(MANAGER_IFACE.into(), self.manager_props(nfailed, nnames));
+            return Ok(m);
+        }
+        if let Some(name) = self.unit_from_path(path) {
+            let (id, unit) = self.load_unit(&name);
+            let active = self.active_atoms().await;
+            return Ok(self.unit_props(&id, &unit, &active).await);
+        }
+        if let Some(job) = path.strip_prefix(JOB_PREFIX).and_then(|j| j.parse::<u32>().ok()) {
+            let p = self.job_props(job).ok_or_else(|| err(E_NO_JOB, format!("Job {job} does not exist.")))?;
+            let mut m = Ifaces::new();
+            m.insert("org.freedesktop.systemd1.Job".into(), p);
+            return Ok(m);
+        }
+        Err(err(E_UNKNOWN_OBJECT, format!("Unknown object '{path}'.")))
+    }
+
+    async fn properties(&self, c: &Peer, msg: &Message, path: &str, member: &str) -> R<()> {
+        match member {
+            "GetAll" => {
+                let (iface,): (String,) = Self::args(msg)?;
+                let all = self.object_props(path).await?;
+                let mut out: Props = Props::new();
+                for (name, props) in all {
+                    if iface.is_empty() || iface == name {
+                        out.extend(props);
+                    }
+                }
+                let out: HashMap<String, Value<'static>> = out.into_iter().collect();
+                self.reply(c, msg, &(out,)).await
+            }
+            "Get" => {
+                let (iface, prop): (String, String) = Self::args(msg)?;
+                let all = self.object_props(path).await?;
+                for (name, props) in all {
+                    if iface.is_empty() || iface == name {
+                        if let Some(v) = props.get(&prop) {
+                            return self.reply(c, msg, &(v,)).await;
+                        }
+                    }
+                }
+                Err(err(E_UNKNOWN_PROPERTY, format!("Unknown property {iface}.{prop}")))
+            }
+            "Set" => Err(err(E_READ_ONLY, "Properties are read-only in sdcompat")),
+            _ => Err(err(E_UNKNOWN_METHOD, format!("Unknown method {member}"))),
+        }
+    }
+
+    async fn introspect(&self, c: &Peer, msg: &Message, path: &str) -> R<()> {
+        let xml = match path {
+            "/" => introspect::node("", &["org".into()]),
+            "/org" => introspect::node("", &["freedesktop".into()]),
+            "/org/freedesktop" => introspect::node("", &["systemd1".into()]),
+            MANAGER_PATH => introspect::node(introspect::MANAGER, &["unit".into(), "job".into()]),
+            "/org/freedesktop/systemd1/unit" => {
+                let kids: Vec<String> = self.known_units().iter().map(|u| util::bus_label_escape(u)).collect();
+                introspect::node("", &kids)
+            }
+            "/org/freedesktop/systemd1/job" => {
+                let kids: Vec<String> = self.jobs.lock().unwrap().keys().map(|k| k.to_string()).collect();
+                introspect::node("", &kids)
+            }
+            p if p.starts_with(UNIT_PREFIX) => introspect::node(introspect::UNIT, &[]),
+            p if p.starts_with(JOB_PREFIX) => introspect::node("", &[]),
+            _ => return Err(err(E_UNKNOWN_OBJECT, format!("Unknown object '{path}'."))),
+        };
+        self.reply(c, msg, &(xml,)).await
+    }
+
+    // ---- method dispatch ----
+
+    async fn handle_call(self: Arc<Self>, c: Peer, msg: Message) {
+        let hdr = msg.header();
+        let path = hdr.path().map(|p| p.as_str().to_string()).unwrap_or_default();
+        let iface = hdr.interface().map(|i| i.as_str().to_string()).unwrap_or_default();
+        let member = hdr.member().map(|m| m.as_str().to_string()).unwrap_or_default();
+        drop(hdr);
+        let r = self.dispatch(&c, &msg, &path, &iface, &member).await;
+        if let Err(e) = r {
+            let _ = c.conn.reply_error(&msg.header(), e.name, &(e.msg,)).await;
+        }
+    }
+
+    async fn dispatch(&self, c: &Peer, msg: &Message, path: &str, iface: &str, member: &str) -> R<()> {
+        match iface {
+            PROPS_IFACE => return self.properties(c, msg, path, member).await,
+            "org.freedesktop.DBus.Introspectable" => return self.introspect(c, msg, path).await,
+            "org.freedesktop.DBus.Peer" => {
+                return match member {
+                    "Ping" => self.reply(c, msg, &()).await,
+                    "GetMachineId" => self.reply(c, msg, &(util::machine_id(),)).await,
+                    _ => Err(err(E_UNKNOWN_METHOD, member.to_string())),
+                };
+            }
+            _ => {}
+        }
+        if path == MANAGER_PATH && (iface.is_empty() || iface == MANAGER_IFACE) {
+            return self.manager_method(c, msg, member).await;
+        }
+        if let Some(name) = self.unit_from_path(path) {
+            if iface.is_empty() || iface == UNIT_IFACE {
+                return self.unit_method(c, msg, &name, member).await;
+            }
+        }
+        if let Some(job) = path.strip_prefix(JOB_PREFIX).and_then(|j| j.parse::<u32>().ok()) {
+            if member == "Cancel" {
+                self.require_privileged(c, msg).await?;
+                return if self.jobs.lock().unwrap().contains_key(&job) {
+                    Err(err(E_NOT_SUPPORTED, "Running jobs cannot be cancelled"))
+                } else {
+                    Err(err(E_NO_JOB, format!("Job {job} does not exist.")))
+                };
+            }
+        }
+        Err(err(E_UNKNOWN_METHOD, format!("Unknown method {member} or interface {iface}.")))
+    }
+
+    async fn unit_method(&self, c: &Peer, msg: &Message, name: &str, member: &str) -> R<()> {
+        let jtype = match member {
+            "Start" => "start",
+            "Stop" => "stop",
+            "Reload" => "reload",
+            "Restart" => "restart",
+            "TryRestart" => "try-restart",
+            "ReloadOrRestart" => "reload-or-restart",
+            "ReloadOrTryRestart" => "reload-or-try-restart",
+            "Kill" => {
+                let (whom, sig): (String, i32) = Self::args(msg)?;
+                return self.kill_unit(c, msg, name, &whom, sig).await;
+            }
+            "ResetFailed" => {
+                self.require_privileged(c, msg).await?;
+                self.reset_failed(name);
+                return self.reply(c, msg, &()).await;
+            }
+            _ => return Err(err(E_UNKNOWN_METHOD, format!("Unknown method {member}"))),
+        };
+        let (mode,): (String,) = Self::args(msg)?;
+        self.job_method(c, msg, name, &mode, jtype).await
+    }
+
+    fn reset_failed(&self, name: &str) {
+        let (id, _) = self.load_unit(name);
+        let st = state::for_unit(&self.cfg.run_dir, &id);
+        if st.get(keys::RESULT).map(|r| r != "success").unwrap_or(false) {
+            st.set(keys::RESULT, "success");
+        }
+        st.clear(keys::RESTART_TIMES);
+    }
+
+    async fn kill_unit(&self, c: &Peer, msg: &Message, name: &str, whom: &str, sig: i32) -> R<()> {
+        self.require_privileged(c, msg).await?;
+        let (id, unit) = self.load_unit(name);
+        let main = if self.kind_of(&id) == Some(Kind::Longrun) {
+            self.svstat(&id).await.map(|s| s.pid).filter(|&p| p > 0)
+        } else {
+            None
+        };
+        match whom {
+            "main" => match main {
+                Some(p) => unsafe {
+                    libc::kill(p as i32, sig);
+                },
+                None => return Err(err(E_FAILED, format!("No main process to kill for {id}"))),
+            },
+            _ => {
+                let dir = self.cgroup_dir_of(&id, &unit);
+                if crate::cgroup::kill_all(&dir, sig, 0) == 0 {
+                    if let Some(p) = main {
+                        unsafe { libc::kill(p as i32, sig) };
+                    }
+                }
+            }
+        }
+        self.reply(c, msg, &()).await
+    }
+
+    async fn file_op_done(&self) {
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitFilesChanged", &()).await;
+    }
+
+    fn write_manager_env(&self) {
+        let env = self.manager_env.lock().unwrap().clone();
+        let mut text = String::new();
+        for e in env {
+            if let Some((k, v)) = e.split_once('=') {
+                let v = v.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$").replace('`', "\\`");
+                text.push_str(&format!("{k}=\"{v}\"\n"));
+            }
+        }
+        let _ = util::write_atomic(&self.cfg.run_dir.join("manager.env"), text.as_bytes());
+    }
+
+    async fn manager_method(&self, c: &Peer, msg: &Message, member: &str) -> R<()> {
+        match member {
+            "GetUnit" => {
+                let (name,): (String,) = Self::args(msg)?;
+                let (id, unit) = self.load_unit(&name);
+                let known = self.kind_of(&id).is_some() || self.transient.lock().unwrap().contains_key(&id);
+                if !known && unit.load_state == LoadState::NotFound {
+                    return Err(err(E_NO_UNIT, format!("Unit {name} not loaded.")));
+                }
+                self.reply(c, msg, &(op(unit_path(&id)),)).await
+            }
+            "LoadUnit" => {
+                let (name,): (String,) = Self::args(msg)?;
+                if crate::loader::parse_name(&name).is_none() {
+                    return Err(err(E_INVALID_ARGS, format!("Unit name {name} is not valid.")));
+                }
+                let (id, _) = self.load_unit(&name);
+                self.reply(c, msg, &(op(unit_path(&id)),)).await
+            }
+            "GetUnitByPID" => {
+                let (mut pid,): (u32,) = Self::args(msg)?;
+                if pid == 0 {
+                    pid = self.caller_pid(c, msg).await.unwrap_or(0);
+                }
+                let cg = util::proc_cgroup(pid).unwrap_or_default();
+                let unit = cg
+                    .rsplit('/')
+                    .find(|c| c.ends_with(".service") || c.ends_with(".scope"))
+                    .map(String::from);
+                match unit {
+                    Some(u) => self.reply(c, msg, &(op(unit_path(&u)),)).await,
+                    None => Err(err(E_NO_UNIT_FOR_PID, format!("PID {pid} does not belong to any loaded unit."))),
+                }
+            }
+            "StartUnit" | "StopUnit" | "ReloadUnit" | "RestartUnit" | "TryRestartUnit"
+            | "ReloadOrRestartUnit" | "ReloadOrTryRestartUnit" => {
+                let (name, mode): (String, String) = Self::args(msg)?;
+                let jtype = match member {
+                    "StartUnit" => "start",
+                    "StopUnit" => "stop",
+                    "ReloadUnit" => "reload",
+                    "RestartUnit" => "restart",
+                    "TryRestartUnit" => "try-restart",
+                    "ReloadOrRestartUnit" => "reload-or-restart",
+                    _ => "reload-or-try-restart",
+                };
+                self.job_method(c, msg, &name, &mode, jtype).await
+            }
+            "KillUnit" => {
+                let (name, whom, sig): (String, String, i32) = Self::args(msg)?;
+                self.kill_unit(c, msg, &name, &whom, sig).await
+            }
+            "ResetFailedUnit" => {
+                self.require_privileged(c, msg).await?;
+                let (name,): (String,) = Self::args(msg)?;
+                self.reset_failed(&name);
+                self.reply(c, msg, &()).await
+            }
+            "ResetFailed" => {
+                self.require_privileged(c, msg).await?;
+                for u in self.known_units() {
+                    self.reset_failed(&u);
+                }
+                self.reply(c, msg, &()).await
+            }
+            "GetUnitProcesses" => {
+                let (name,): (String,) = Self::args(msg)?;
+                let (id, unit) = self.load_unit(&name);
+                let dir = self.cgroup_dir_of(&id, &unit);
+                let procs: Vec<(String, u32, String)> = util::cgroup_pids(&dir)
+                    .into_iter()
+                    .map(|p| (util::proc_cgroup(p).unwrap_or_default(), p, util::proc_cmdline(p)))
+                    .collect();
+                self.reply(c, msg, &(procs,)).await
+            }
+            "StartTransientUnit" => self.start_transient(c, msg).await,
+            "GetJob" => {
+                let (id,): (u32,) = Self::args(msg)?;
+                if self.jobs.lock().unwrap().contains_key(&id) {
+                    self.reply(c, msg, &(op(job_path(id)),)).await
+                } else {
+                    Err(err(E_NO_JOB, format!("Job {id} does not exist.")))
+                }
+            }
+            "CancelJob" => Err(err(E_NOT_SUPPORTED, "Running jobs cannot be cancelled")),
+            "ClearJobs" => self.reply(c, msg, &()).await,
+            "ListJobs" => {
+                let jobs: Vec<(u32, String, String, String, ObjectPath<'static>, ObjectPath<'static>)> = self
+                    .jobs
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .map(|j| (j.id, j.unit.clone(), j.jtype.clone(), "running".to_string(), op(job_path(j.id)), op(unit_path(&j.unit))))
+                    .collect();
+                self.reply(c, msg, &(jobs,)).await
+            }
+            "ListUnits" => {
+                let v = self.list_units(&[], &[], None).await;
+                self.reply(c, msg, &(v,)).await
+            }
+            "ListUnitsFiltered" => {
+                let (states,): (Vec<String>,) = Self::args(msg)?;
+                let v = self.list_units(&states, &[], None).await;
+                self.reply(c, msg, &(v,)).await
+            }
+            "ListUnitsByPatterns" => {
+                let (states, patterns): (Vec<String>, Vec<String>) = Self::args(msg)?;
+                let v = self.list_units(&states, &patterns, None).await;
+                self.reply(c, msg, &(v,)).await
+            }
+            "ListUnitsByNames" => {
+                let (names,): (Vec<String>,) = Self::args(msg)?;
+                let v = self.list_units(&[], &[], Some(&names)).await;
+                self.reply(c, msg, &(v,)).await
+            }
+            "Subscribe" | "Unsubscribe" => self.reply(c, msg, &()).await,
+            "Reload" | "Reexecute" => {
+                self.require_privileged(c, msg).await?;
+                self.reload_db().await.map_err(|e| err(E_FAILED, e))?;
+                self.reply(c, msg, &()).await
+            }
+            "PowerOff" | "Reboot" | "Halt" => {
+                self.require_privileged(c, msg).await?;
+                let cmd = match member {
+                    "PowerOff" => self.cfg.poweroff_cmd.clone(),
+                    "Reboot" => self.cfg.reboot_cmd.clone(),
+                    _ => self.cfg.halt_cmd.clone(),
+                };
+                self.reply(c, msg, &()).await?;
+                let _ = tokio::process::Command::new("/bin/sh").arg("-c").arg(cmd).spawn();
+                Ok(())
+            }
+            "KExec" | "SoftReboot" | "SwitchRoot" | "Exit" => {
+                Err(err(E_NOT_SUPPORTED, format!("{member} is not supported by sdcompat")))
+            }
+            "SetEnvironment" | "UnsetEnvironment" | "UnsetAndSetEnvironment" => {
+                self.require_privileged(c, msg).await?;
+                let (unset, set): (Vec<String>, Vec<String>) = match member {
+                    "SetEnvironment" => (Vec::new(), Self::args::<(Vec<String>,)>(msg)?.0),
+                    "UnsetEnvironment" => (Self::args::<(Vec<String>,)>(msg)?.0, Vec::new()),
+                    _ => Self::args(msg)?,
+                };
+                {
+                    let mut env = self.manager_env.lock().unwrap();
+                    for u in &unset {
+                        env.retain(|e| e != u && e.split('=').next() != Some(u.as_str()));
+                    }
+                    for s in set {
+                        let k = s.split('=').next().unwrap_or("").to_string();
+                        env.retain(|e| e.split('=').next() != Some(k.as_str()));
+                        env.push(s);
+                    }
+                }
+                self.write_manager_env();
+                self.reply(c, msg, &()).await
+            }
+            "ListUnitFiles" => {
+                let v = install::list_unit_files(&self.cfg);
+                self.reply(c, msg, &(v,)).await
+            }
+            "ListUnitFilesByPatterns" => {
+                let (states, patterns): (Vec<String>, Vec<String>) = Self::args(msg)?;
+                let v: Vec<(String, String)> = install::list_unit_files(&self.cfg)
+                    .into_iter()
+                    .filter(|(p, s)| {
+                        let n = p.rsplit('/').next().unwrap_or(p);
+                        (states.is_empty() || states.contains(s))
+                            && (patterns.is_empty() || patterns.iter().any(|pat| util::fnmatch(pat, n)))
+                    })
+                    .collect();
+                self.reply(c, msg, &(v,)).await
+            }
+            "GetUnitFileState" => {
+                let (name,): (String,) = Self::args(msg)?;
+                let st = install::unit_file_state(&self.cfg, &name).map_err(|e| err(E_NO_UNIT, e))?;
+                self.reply(c, msg, &(st,)).await
+            }
+            "EnableUnitFiles" | "ReenableUnitFiles" | "EnableUnitFilesWithFlags" => {
+                self.require_privileged(c, msg).await?;
+                let (files, runtime, force) = if member == "EnableUnitFilesWithFlags" {
+                    let (f, flags): (Vec<String>, u64) = Self::args(msg)?;
+                    (f, flags & FLAG_RUNTIME != 0, flags & FLAG_FORCE != 0)
+                } else {
+                    Self::args::<(Vec<String>, bool, bool)>(msg)?
+                };
+                let mut all = Vec::new();
+                if member == "ReenableUnitFiles" {
+                    all.extend(install::disable(&self.cfg, &files, runtime).map_err(|e| err(E_FAILED, e))?);
+                }
+                let (info, ch) = install::enable(&self.cfg, &files, runtime, force).map_err(|e| err(E_FAILED, e))?;
+                all.extend(ch);
+                self.reply(c, msg, &(info, changes(all))).await?;
+                self.file_op_done().await;
+                Ok(())
+            }
+            "DisableUnitFiles" | "DisableUnitFilesWithFlags" | "DisableUnitFilesWithFlagsAndInstallInfo" => {
+                self.require_privileged(c, msg).await?;
+                let (files, runtime) = if member == "DisableUnitFiles" {
+                    Self::args::<(Vec<String>, bool)>(msg)?
+                } else {
+                    let (f, flags): (Vec<String>, u64) = Self::args(msg)?;
+                    (f, flags & FLAG_RUNTIME != 0)
+                };
+                let ch = changes(install::disable(&self.cfg, &files, runtime).map_err(|e| err(E_FAILED, e))?);
+                if member == "DisableUnitFilesWithFlagsAndInstallInfo" {
+                    self.reply(c, msg, &(true, ch)).await?;
+                } else {
+                    self.reply(c, msg, &(ch,)).await?;
+                }
+                self.file_op_done().await;
+                Ok(())
+            }
+            "MaskUnitFiles" => {
+                self.require_privileged(c, msg).await?;
+                let (files, runtime, force): (Vec<String>, bool, bool) = Self::args(msg)?;
+                let ch = install::mask(&self.cfg, &files, runtime, force).map_err(|e| err(E_FAILED, e))?;
+                self.reply(c, msg, &(changes(ch),)).await?;
+                self.file_op_done().await;
+                Ok(())
+            }
+            "UnmaskUnitFiles" => {
+                self.require_privileged(c, msg).await?;
+                let (files, runtime): (Vec<String>, bool) = Self::args(msg)?;
+                let ch = install::unmask(&self.cfg, &files, runtime).map_err(|e| err(E_FAILED, e))?;
+                self.reply(c, msg, &(changes(ch),)).await?;
+                self.file_op_done().await;
+                Ok(())
+            }
+            "PresetUnitFiles" | "PresetUnitFilesWithMode" => {
+                self.require_privileged(c, msg).await?;
+                let (files, mode, runtime, force) = if member == "PresetUnitFiles" {
+                    let (f, r, fo): (Vec<String>, bool, bool) = Self::args(msg)?;
+                    (f, "full".to_string(), r, fo)
+                } else {
+                    Self::args::<(Vec<String>, String, bool, bool)>(msg)?
+                };
+                let (info, ch) = install::preset(&self.cfg, &files, &mode, runtime, force).map_err(|e| err(E_FAILED, e))?;
+                self.reply(c, msg, &(info, changes(ch))).await?;
+                self.file_op_done().await;
+                Ok(())
+            }
+            "PresetAllUnitFiles" => {
+                self.require_privileged(c, msg).await?;
+                let (mode, runtime, force): (String, bool, bool) = Self::args(msg)?;
+                let names: Vec<String> = install::list_unit_files(&self.cfg)
+                    .into_iter()
+                    .filter(|(_, s)| s == "enabled" || s == "disabled")
+                    .map(|(p, _)| p.rsplit('/').next().unwrap_or(&p).to_string())
+                    .collect();
+                let (_, ch) = install::preset(&self.cfg, &names, &mode, runtime, force).map_err(|e| err(E_FAILED, e))?;
+                self.reply(c, msg, &(changes(ch),)).await?;
+                self.file_op_done().await;
+                Ok(())
+            }
+            "GetDefaultTarget" => {
+                let t = install::get_default_target(&self.cfg).ok_or_else(|| err(E_NO_UNIT, "No default target"))?;
+                self.reply(c, msg, &(t,)).await
+            }
+            "SetDefaultTarget" => {
+                self.require_privileged(c, msg).await?;
+                let (name, _force): (String, bool) = Self::args(msg)?;
+                let ch = install::set_default_target(&self.cfg, &name).map_err(|e| err(E_FAILED, e))?;
+                self.reply(c, msg, &(changes(ch),)).await?;
+                self.file_op_done().await;
+                Ok(())
+            }
+            "Dump" => self.reply(c, msg, &("sdcompat does not implement Dump\n".to_string(),)).await,
+            _ => Err(err(E_UNKNOWN_METHOD, format!("Unknown method {member} or interface {MANAGER_IFACE}."))),
+        }
+    }
+}
+
+pub enum Bus {
+    System,
+    Session,
+    Address(String),
+}
+
+pub async fn run(cfg: Config, bus: Bus) -> Result<(), String> {
+    let builder = match &bus {
+        Bus::System => zbus::connection::Builder::system(),
+        Bus::Session => zbus::connection::Builder::session(),
+        Bus::Address(a) => zbus::connection::Builder::address(a.as_str()),
+    }
+    .map_err(|e| e.to_string())?;
+    let conn = builder.build().await.map_err(|e| format!("connecting to D-Bus: {e}"))?;
+    let mut stream = MessageStream::from(&conn);
+
+    let dbus = zbus::fdo::DBusProxy::new(&conn).await.map_err(|e| e.to_string())?;
+    let rule = zbus::MatchRule::builder()
+        .msg_type(MsgType::Signal)
+        .interface("org.freedesktop.systemd1.Activator")
+        .and_then(|b| b.member("ActivationRequest"))
+        .map_err(|e| e.to_string())?
+        .build();
+    if let Err(e) = dbus.add_match_rule(rule).await {
+        eprintln!("sdcompatd: cannot watch ActivationRequest: {e}");
+    }
+    conn.request_name(BUS_NAME)
+        .await
+        .map_err(|e| format!("cannot own {BUS_NAME}: {e}"))?;
+
+    let manager_env = crate::envfile::load(&cfg.run_dir.join("manager.env"))
+        .map(|v| v.into_iter().map(|(k, v)| format!("{k}={v}")).collect())
+        .unwrap_or_default();
+    let daemon = Arc::new(Daemon {
+        index: RwLock::new(Index::load(&cfg)),
+        cfg,
+        conn,
+        jobs: Mutex::new(BTreeMap::new()),
+        next_job: AtomicU32::new(0),
+        s6_lock: tokio::sync::Mutex::new(()),
+        started_targets: Mutex::new(BTreeSet::new()),
+        transient: Mutex::new(BTreeMap::new()),
+        manager_env: Mutex::new(manager_env),
+        uid_cache: Mutex::new(HashMap::new()),
+        started: (util::now_realtime_usec(), util::now_monotonic_usec()),
+        boot_done: AtomicBool::new(true),
+        boot_finished: Mutex::new(Some((util::now_realtime_usec(), util::now_monotonic_usec()))),
+        atom_order: Mutex::new(None),
+        private: Mutex::new(Vec::new()),
+    });
+    daemon.verify_state_reader().await;
+    if let Some(def) = daemon.index.read().unwrap().default_target.clone() {
+        daemon.started_targets.lock().unwrap().insert(def);
+    }
+    if daemon.index.read().unwrap().units.is_empty() {
+        eprintln!(
+            "sdcompatd: no generated database in {} (run `sdcompat reload`)",
+            daemon.cfg.state_dir.display()
+        );
+    }
+
+    if let Some(flag) = &daemon.cfg.booted_flag {
+        if let Err(e) = std::fs::create_dir_all(flag) {
+            eprintln!("sdcompatd: cannot create {}: {e}", flag.display());
+        }
+    }
+    eprintln!("sdcompatd: ready, serving {BUS_NAME}");
+
+    if let Some(sock) = daemon.cfg.private_socket.clone() {
+        tokio::spawn(private::listen(daemon.clone(), sock));
+    }
+
+    let gc = daemon.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            gc.gc_scopes().await;
+        }
+    });
+
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|e| e.to_string())?;
+    loop {
+        tokio::select! {
+            _ = term.recv() => break,
+            m = stream.next() => {
+                let Some(m) = m else { break };
+                let Ok(msg) = m else { continue };
+                match msg.message_type() {
+                    MsgType::MethodCall => {
+                        let d = daemon.clone();
+                        let peer = Peer { conn: d.conn.clone(), uid: None, pid: None };
+                        tokio::spawn(d.handle_call(peer, msg));
+                    }
+                    MsgType::Signal => {
+                        let hdr = msg.header();
+                        let is_activation = hdr.interface().map(|i| i.as_str()) == Some("org.freedesktop.systemd1.Activator")
+                            && hdr.member().map(|m| m.as_str()) == Some("ActivationRequest");
+                        drop(hdr);
+                        if is_activation {
+                            if let Ok((name,)) = msg.body().deserialize::<(String,)>() {
+                                let d = daemon.clone();
+                                tokio::spawn(async move { d.handle_activation(name).await });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    if let Some(flag) = &daemon.cfg.booted_flag {
+        let _ = std::fs::remove_dir(flag);
+    }
+    Ok(())
+}

@@ -1,0 +1,1553 @@
+//! The service runner: what systemd's PID 1 does between fork() and exec().
+//!
+//! Called from generated s6-rc scripts:
+//!   run      longrun `run` script; ends by exec()ing the main process
+//!   finish   longrun `finish` script; cleanup and Restart= policy
+//!   up/down  oneshot scripts
+//! and by the daemon:
+//!   stop-exec / reload   ExecStop= / ExecReload= with $MAINPID
+
+use std::ffi::CString;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
+use crate::cgroup;
+use crate::conditions;
+use crate::config::Config;
+use crate::execcmd::{self, ExecCommand};
+use crate::install;
+use crate::loader::{LoadState, Loader, Unit};
+use crate::sandbox::{self, Sandbox};
+use crate::socket;
+use crate::state::{keys, UnitState};
+use crate::util::{self, UserInfo};
+
+// systemd's exit codes for setup failures (EXIT_CHDIR etc).
+const EXIT_CHDIR: i32 = 200;
+const EXIT_EXEC: i32 = 203;
+const EXIT_LIMITS: i32 = 205;
+const EXIT_STDIN: i32 = 208;
+const EXIT_STDOUT: i32 = 209;
+const EXIT_CHROOT: i32 = 210;
+const EXIT_GROUP: i32 = 216;
+const EXIT_USER: i32 = 217;
+const EXIT_CAPABILITIES: i32 = 218;
+const EXIT_NAMESPACE: i32 = 226;
+
+fn errno() -> String {
+    std::io::Error::last_os_error().to_string()
+}
+
+fn cstr(s: &str) -> CString {
+    CString::new(s.as_bytes().iter().copied().filter(|&b| b != 0).collect::<Vec<u8>>()).unwrap()
+}
+
+pub struct Runner {
+    pub cfg: Config,
+    pub unit: Unit,
+    pub st: UnitState,
+    user: Option<UserInfo>,
+    gid: Option<u32>,
+    groups: Vec<u32>,
+    pub env: Vec<(String, String)>,
+    writable_dirs: Vec<String>,
+    sandbox: Sandbox,
+    notify_fd: Option<i32>,
+    is_root: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Status {
+    Exited(i32),
+    Killed(i32),
+}
+
+impl Status {
+    fn from_wait(s: i32) -> Status {
+        if libc::WIFSIGNALED(s) {
+            Status::Killed(libc::WTERMSIG(s))
+        } else {
+            Status::Exited(libc::WEXITSTATUS(s))
+        }
+    }
+    fn ok(&self) -> bool {
+        *self == Status::Exited(0)
+    }
+}
+
+fn wait_pid(pid: i32) -> i32 {
+    let mut status = 0;
+    loop {
+        let r = unsafe { libc::waitpid(pid, &mut status, 0) };
+        if r == pid {
+            return status;
+        }
+        if r < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+            return 0;
+        }
+    }
+}
+
+fn log(unit: &str, msg: &str) {
+    eprintln!("sdcompat[{unit}]: {msg}");
+}
+
+impl Runner {
+    pub fn new(cfg: Config, name: &str) -> Result<Runner, String> {
+        let unit = Loader::new(&cfg).load(name);
+        if unit.load_state != LoadState::Loaded {
+            return Err(format!("unit {name}: {}", unit.load_state.as_str()));
+        }
+        let st = crate::state::for_unit(&cfg.run_dir, &unit.id);
+        st.ensure();
+        let is_root = unsafe { libc::geteuid() } == 0;
+
+        let mut user = None;
+        if let Some(u) = unit.get("Service", "User") {
+            user = Some(match util::lookup_user(&u) {
+                Some(info) => info,
+                None if unit.get_bool("Service", "DynamicUser", false) => ensure_system_user(&u)?,
+                None => return Err(format!("user {u} does not exist")),
+            });
+        } else if unit.get_bool("Service", "DynamicUser", false) {
+            let name = unit.id.trim_end_matches(".service").replace(['@', '.'], "-");
+            user = Some(ensure_system_user(&name)?);
+        }
+        let gid = match unit.get("Service", "Group") {
+            Some(g) => Some(util::lookup_group(&g).ok_or_else(|| format!("group {g} does not exist"))?),
+            None => user.as_ref().map(|u| u.gid),
+        };
+        let mut groups = Vec::new();
+        if let (Some(u), Some(g)) = (&user, gid) {
+            groups = group_list(&u.name, g);
+        }
+        for g in unit.get_words("Service", "SupplementaryGroups") {
+            groups.push(util::lookup_group(&g).ok_or_else(|| format!("group {g} does not exist"))?);
+        }
+
+        let mut r = Runner {
+            sandbox: Sandbox::from_unit(&unit, &st.dir, Vec::new()),
+            cfg,
+            unit,
+            st,
+            user,
+            gid,
+            groups,
+            env: Vec::new(),
+            writable_dirs: Vec::new(),
+            notify_fd: None,
+            is_root,
+        };
+        r.build_env()?;
+        Ok(r)
+    }
+
+    fn id(&self) -> &str {
+        &self.unit.id
+    }
+
+    pub fn setenv(&mut self, k: &str, v: &str) {
+        if let Some(e) = self.env.iter_mut().find(|(ek, _)| ek == k) {
+            e.1 = v.to_string();
+        } else {
+            self.env.push((k.to_string(), v.to_string()));
+        }
+    }
+
+    fn getenv(&self, k: &str) -> Option<String> {
+        self.env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.clone())
+    }
+
+    fn build_env(&mut self) -> Result<(), String> {
+        self.setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin");
+        if let Ok(vars) = crate::envfile::load(Path::new("/etc/locale.conf")) {
+            for (k, v) in vars {
+                self.setenv(&k, &v);
+            }
+        }
+        if let Ok(vars) = crate::envfile::load(&self.cfg.run_dir.join("manager.env")) {
+            for (k, v) in vars {
+                self.setenv(&k, &v);
+            }
+        }
+        if let Some(inv) = self.st.get(keys::INVOCATION) {
+            self.setenv("INVOCATION_ID", &inv);
+        }
+        if let Some(u) = &self.user {
+            let (name, home, shell) = (u.name.clone(), u.home.clone(), u.shell.clone());
+            self.setenv("USER", &name);
+            self.setenv("LOGNAME", &name);
+            self.setenv("HOME", &home);
+            self.setenv("SHELL", &shell);
+        }
+        for w in self.unit.get_words("Service", "Environment") {
+            if let Some((k, v)) = w.split_once('=') {
+                self.setenv(k, v);
+            }
+        }
+        for f in self.unit.get_all("Service", "EnvironmentFile") {
+            let (optional, path) = match f.strip_prefix('-') {
+                Some(p) => (true, p.trim().to_string()),
+                None => (false, f.clone()),
+            };
+            match crate::envfile::load(Path::new(&path)) {
+                Ok(vars) => {
+                    for (k, v) in vars {
+                        self.setenv(&k, &v);
+                    }
+                }
+                Err(_) if optional => {}
+                Err(e) => return Err(format!("EnvironmentFile {path}: {e}")),
+            }
+        }
+        for k in self.unit.get_words("Service", "PassEnvironment") {
+            if let Ok(v) = std::env::var(&k) {
+                self.setenv(&k, &v);
+            }
+        }
+        for k in self.unit.get_words("Service", "UnsetEnvironment") {
+            match k.split_once('=') {
+                Some(_) => self.env.retain(|(ek, ev)| format!("{ek}={ev}") != k),
+                None => self.env.retain(|(ek, _)| *ek != k),
+            }
+        }
+        for (key, base, var) in DIRS {
+            let dirs: Vec<String> = self
+                .unit
+                .get_words("Service", key)
+                .iter()
+                .map(|d| format!("{base}/{}", d.split(':').next().unwrap_or(d)))
+                .collect();
+            if !dirs.is_empty() {
+                self.setenv(var, &dirs.join(":"));
+            }
+        }
+        if self.uses_tty() && self.getenv("TERM").is_none() {
+            let tty = self.tty_path();
+            let term = if tty.starts_with("/dev/ttyS") || tty.starts_with("/dev/ttyAMA") { "vt220" } else { "linux" };
+            self.setenv("TERM", term);
+        }
+        Ok(())
+    }
+
+    fn uses_tty(&self) -> bool {
+        let input = self.unit.get("Service", "StandardInput").unwrap_or_default();
+        let output = self.unit.get("Service", "StandardOutput").unwrap_or_default();
+        input.starts_with("tty") || output == "tty"
+    }
+
+    fn tty_path(&self) -> String {
+        self.unit.get("Service", "TTYPath").unwrap_or_else(|| "/dev/console".into())
+    }
+
+    // ---- directories ----
+
+    fn create_directories(&mut self) -> Result<(), String> {
+        for (key, base, _) in DIRS {
+            let mode = self
+                .unit
+                .get("Service", &format!("{key}Mode"))
+                .and_then(|m| u32::from_str_radix(&m, 8).ok())
+                .unwrap_or(0o755);
+            for d in self.unit.get_words("Service", key) {
+                let d = d.split(':').next().unwrap_or(&d).to_string();
+                let path = PathBuf::from(base).join(&d);
+                fs::create_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(mode));
+                if *key != "ConfigurationDirectory" {
+                    if let Some(u) = &self.user {
+                        let c = cstr(&path.display().to_string());
+                        unsafe { libc::chown(c.as_ptr(), u.uid, self.gid.unwrap_or(u.gid)) };
+                    }
+                }
+                self.writable_dirs.push(path.display().to_string());
+            }
+        }
+        self.sandbox.writable_dirs = self.writable_dirs.clone();
+        Ok(())
+    }
+
+    fn remove_runtime_dirs(&self) {
+        let preserve = self.unit.get("Service", "RuntimeDirectoryPreserve").unwrap_or_default();
+        if preserve == "yes" || preserve == "restart" {
+            return;
+        }
+        for d in self.unit.get_words("Service", "RuntimeDirectory") {
+            let d = d.split(':').next().unwrap_or(&d).to_string();
+            if !d.is_empty() && !d.contains("..") {
+                let _ = fs::remove_dir_all(Path::new("/run").join(d));
+            }
+        }
+    }
+
+    // ---- process setup ----
+
+    /// Apply everything systemd applies to a service process, then exec().
+    /// Only returns on failure, with the exit code to use.
+    fn exec_command(&self, cmd: &ExecCommand, extra_env: &[(String, String)]) -> (i32, String) {
+        unsafe {
+            // Reset signal state inherited from the supervisor.
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigprocmask(libc::SIG_SETMASK, &set, std::ptr::null_mut());
+            for sig in 1..32 {
+                if sig != libc::SIGKILL && sig != libc::SIGSTOP {
+                    libc::signal(sig, libc::SIG_DFL);
+                }
+            }
+            if self.unit.get_bool("Service", "IgnoreSIGPIPE", true) {
+                libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+            }
+        }
+
+        if let Err(e) = self.setup_stdio() {
+            return e;
+        }
+
+        let sandboxed = !cmd.privileged && self.is_root;
+        if sandboxed {
+            if let Err(e) = self.sandbox.apply() {
+                return (EXIT_NAMESPACE, e);
+            }
+        }
+
+        if let Err(e) = self.apply_limits() {
+            return (EXIT_LIMITS, e);
+        }
+
+        if !cmd.privileged {
+            if let Some(root) = self.unit.get("Service", "RootDirectory") {
+                let c = cstr(&root);
+                if unsafe { libc::chroot(c.as_ptr()) } < 0 {
+                    return (EXIT_CHROOT, format!("chroot {root}: {}", errno()));
+                }
+            }
+        }
+
+        let wd = self.unit.get("Service", "WorkingDirectory").unwrap_or_else(|| "/".into());
+        let (wd_optional, wd) = match wd.strip_prefix('-') {
+            Some(w) => (true, w.to_string()),
+            None => (false, wd),
+        };
+        let wd = if wd == "~" {
+            self.user.as_ref().map(|u| u.home.clone()).unwrap_or_else(|| "/root".into())
+        } else {
+            wd
+        };
+        let c = cstr(&wd);
+        if unsafe { libc::chdir(c.as_ptr()) } < 0 && !wd_optional {
+            return (EXIT_CHDIR, format!("chdir {wd}: {}", errno()));
+        }
+
+        if self.unit.get_bool("Service", "NoNewPrivileges", false) {
+            unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+        }
+
+        if self.is_root {
+            if let Some(bset) = sandbox::parse_capset(&self.unit, "CapabilityBoundingSet") {
+                if let Err(e) = sandbox::drop_bounding_set(bset) {
+                    return (EXIT_CAPABILITIES, e);
+                }
+            }
+        }
+
+        let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities");
+        if let (Some(u), false, true) = (&self.user, cmd.privileged, self.is_root) {
+            if u.uid != 0 {
+                if ambient.is_some() {
+                    unsafe { libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) };
+                }
+                let gid = self.gid.unwrap_or(u.gid);
+                let groups: Vec<libc::gid_t> = self.groups.clone();
+                unsafe {
+                    if libc::setgroups(groups.len(), groups.as_ptr()) < 0 {
+                        return (EXIT_GROUP, format!("setgroups: {}", errno()));
+                    }
+                    if libc::setresgid(gid, gid, gid) < 0 {
+                        return (EXIT_GROUP, format!("setgid {gid}: {}", errno()));
+                    }
+                    if libc::setresuid(u.uid, u.uid, u.uid) < 0 {
+                        return (EXIT_USER, format!("setuid {}: {}", u.uid, errno()));
+                    }
+                }
+            } else if let Some(g) = self.gid {
+                unsafe { libc::setresgid(g, g, g) };
+            }
+        }
+        if let Some(caps) = ambient {
+            if !cmd.privileged {
+                if let Err(e) = sandbox::raise_ambient(caps) {
+                    return (EXIT_CAPABILITIES, e);
+                }
+            }
+        }
+
+        // Final environment and argv.
+        let mut env = self.env.clone();
+        for (k, v) in extra_env {
+            if let Some(e) = env.iter_mut().find(|(ek, _)| ek == k) {
+                e.1 = v.clone();
+            } else {
+                env.push((k.clone(), v.clone()));
+            }
+        }
+        let lookup = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.clone());
+        let argv = if cmd.no_env_expand {
+            cmd.argv.clone()
+        } else {
+            execcmd::expand_argv(&cmd.argv, &lookup)
+        };
+        let path = execcmd::resolve_path(&cmd.path);
+
+        let c_path = cstr(&path);
+        let c_argv: Vec<CString> = argv.iter().map(|a| cstr(a)).collect();
+        let mut p_argv: Vec<*const libc::c_char> = c_argv.iter().map(|c| c.as_ptr()).collect();
+        p_argv.push(std::ptr::null());
+        let c_env: Vec<CString> = env.iter().map(|(k, v)| cstr(&format!("{k}={v}"))).collect();
+        let mut p_env: Vec<*const libc::c_char> = c_env.iter().map(|c| c.as_ptr()).collect();
+        p_env.push(std::ptr::null());
+        unsafe { libc::execve(c_path.as_ptr(), p_argv.as_ptr(), p_env.as_ptr()) };
+        (EXIT_EXEC, format!("exec {path}: {}", errno()))
+    }
+
+    fn setup_stdio(&self) -> Result<(), (i32, String)> {
+        let input = self.unit.get("Service", "StandardInput").unwrap_or_else(|| "null".into());
+        let default_out = if input.starts_with("tty") { "inherit" } else { "journal" };
+        let output = self.unit.get("Service", "StandardOutput").unwrap_or_else(|| default_out.into());
+        let error = self.unit.get("Service", "StandardError").unwrap_or_else(|| "inherit".into());
+
+        let open = |path: &str, flags: i32| -> Result<i32, String> {
+            let c = cstr(path);
+            let fd = unsafe { libc::open(c.as_ptr(), flags | libc::O_CLOEXEC, 0o644) };
+            if fd < 0 {
+                Err(format!("open {path}: {}", errno()))
+            } else {
+                Ok(fd)
+            }
+        };
+        let place = |fd: i32, target: i32| unsafe {
+            if fd != target {
+                libc::dup2(fd, target);
+                libc::close(fd);
+            } else {
+                let fl = libc::fcntl(fd, libc::F_GETFD);
+                libc::fcntl(fd, libc::F_SETFD, fl & !libc::FD_CLOEXEC);
+            }
+        };
+
+        let mut tty_fd: Option<i32> = None;
+        if input.starts_with("tty") || output == "tty" || error == "tty" {
+            tty_fd = Some(self.open_tty(input == "tty-force").map_err(|e| (EXIT_STDIN, e))?);
+        }
+
+        match input.as_str() {
+            "null" | "" => place(open("/dev/null", libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?, 0),
+            s if s.starts_with("tty") => unsafe {
+                libc::dup2(tty_fd.unwrap(), 0);
+            },
+            s if s.starts_with("file:") => {
+                place(open(&s[5..], libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?, 0)
+            }
+            _ => place(open("/dev/null", libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?, 0),
+        }
+
+        let redirect = |spec: &str, target: i32, code: i32| -> Result<(), (i32, String)> {
+            match spec {
+                "null" => place(open("/dev/null", libc::O_WRONLY).map_err(|e| (code, e))?, target),
+                "tty" => unsafe {
+                    libc::dup2(tty_fd.unwrap(), target);
+                },
+                "inherit" if input.starts_with("tty") && target == 1 => unsafe {
+                    libc::dup2(0, 1);
+                },
+                s if s.starts_with("file:") => place(
+                    open(&s[5..], libc::O_WRONLY | libc::O_CREAT).map_err(|e| (code, e))?,
+                    target,
+                ),
+                s if s.starts_with("append:") => place(
+                    open(&s[7..], libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND).map_err(|e| (code, e))?,
+                    target,
+                ),
+                s if s.starts_with("truncate:") => place(
+                    open(&s[9..], libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC).map_err(|e| (code, e))?,
+                    target,
+                ),
+                // journal, kmsg, syslog, inherit: keep the s6 log pipe.
+                _ => {}
+            }
+            Ok(())
+        };
+        redirect(&output, 1, EXIT_STDOUT)?;
+        if error == "inherit" {
+            unsafe { libc::dup2(1, 2) };
+        } else {
+            redirect(&error, 2, EXIT_STDOUT)?;
+        }
+        if let Some(fd) = tty_fd {
+            if fd > 2 {
+                unsafe { libc::close(fd) };
+            }
+        }
+        Ok(())
+    }
+
+    fn open_tty(&self, force: bool) -> Result<i32, String> {
+        let path = self.tty_path();
+        let c = cstr(&path);
+        unsafe {
+            libc::setsid();
+            if self.unit.get_bool("Service", "TTYVHangup", false) {
+                let fd = libc::open(c.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+                if fd >= 0 {
+                    let old = libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                    libc::ioctl(fd, libc::TIOCSCTTY, 1);
+                    libc::vhangup();
+                    libc::signal(libc::SIGHUP, old);
+                    libc::close(fd);
+                }
+            }
+            let fd = libc::open(c.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            if fd < 0 {
+                return Err(format!("open {path}: {}", errno()));
+            }
+            if libc::ioctl(fd, libc::TIOCSCTTY, i32::from(force)) < 0 {
+                libc::close(fd);
+                return Err(format!("TIOCSCTTY {path}: {}", errno()));
+            }
+            Ok(fd)
+        }
+    }
+
+    fn apply_limits(&self) -> Result<(), String> {
+        if let Some(m) = self.unit.get("Service", "UMask").and_then(|m| u32::from_str_radix(&m, 8).ok()) {
+            unsafe { libc::umask(m) };
+        } else {
+            unsafe { libc::umask(0o022) };
+        }
+        if let Some(n) = self.unit.get("Service", "Nice").and_then(|n| n.parse::<i32>().ok()) {
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, n) };
+        }
+        if let Some(adj) = self.unit.get("Service", "OOMScoreAdjust") {
+            let _ = fs::write("/proc/self/oom_score_adj", adj);
+        }
+        for (key, res, bytes) in LIMITS {
+            let Some(v) = self.unit.get("Service", key) else { continue };
+            let parse = |s: &str| -> Option<u64> {
+                let s = s.trim();
+                if s == "infinity" {
+                    return Some(libc::RLIM_INFINITY);
+                }
+                if *bytes {
+                    let (n, m) = match s.chars().last()? {
+                        'K' => (&s[..s.len() - 1], 1u64 << 10),
+                        'M' => (&s[..s.len() - 1], 1 << 20),
+                        'G' => (&s[..s.len() - 1], 1 << 30),
+                        'T' => (&s[..s.len() - 1], 1 << 40),
+                        _ => (s, 1),
+                    };
+                    return n.parse::<u64>().ok().map(|n| n * m);
+                }
+                if *res == libc::RLIMIT_CPU {
+                    return crate::unit::parse_timespan_usec(s, 1_000_000).map(|u| u / 1_000_000);
+                }
+                s.parse().ok()
+            };
+            let (soft, hard) = match v.split_once(':') {
+                Some((s, h)) => (parse(s), parse(h)),
+                None => (parse(&v), parse(&v)),
+            };
+            let (Some(soft), Some(hard)) = (soft, hard) else {
+                return Err(format!("bad {key}={v}"));
+            };
+            let rl = libc::rlimit { rlim_cur: soft, rlim_max: hard };
+            if unsafe { libc::setrlimit(*res as _, &rl) } < 0 {
+                return Err(format!("setrlimit {key}: {}", errno()));
+            }
+        }
+        Ok(())
+    }
+
+    /// fork + exec a command and wait for it.
+    fn spawn_wait(&self, cmd: &ExecCommand, extra_env: &[(String, String)]) -> Status {
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let (code, msg) = self.exec_command(cmd, extra_env);
+            log(self.id(), &msg);
+            unsafe { libc::_exit(code) };
+        }
+        if pid < 0 {
+            log(self.id(), &format!("fork: {}", errno()));
+            return Status::Exited(EXIT_EXEC);
+        }
+        Status::from_wait(wait_pid(pid))
+    }
+
+    /// Run a list of Exec*= settings in order. Returns false on a non-ignored failure.
+    fn run_list(&self, key: &str, extra_env: &[(String, String)]) -> Result<(), Status> {
+        for line in self.unit.get_all("Service", key) {
+            let cmds = match execcmd::parse(&line) {
+                Ok(c) => c,
+                Err(e) => {
+                    log(self.id(), &format!("{key}: {e}"));
+                    return Err(Status::Exited(EXIT_EXEC));
+                }
+            };
+            for cmd in cmds {
+                let st = self.spawn_wait(&cmd, extra_env);
+                if !st.ok() && !cmd.ignore_failure {
+                    log(self.id(), &format!("{key}={} failed: {}", cmd.path, describe(st)));
+                    return Err(st);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn signal_ready(&mut self) {
+        if let Some(fd) = self.notify_fd.take() {
+            unsafe {
+                libc::write(fd, b"\n".as_ptr() as *const libc::c_void, 1);
+                libc::close(fd);
+            }
+        }
+    }
+
+    /// s6 hands us the notification pipe on fd 3; move it out of the way so
+    /// fds 3.. are free for LISTEN_FDS.
+    fn take_notify_fd(&mut self) {
+        unsafe {
+            if libc::fcntl(3, libc::F_GETFD) >= 0 {
+                let fd = libc::fcntl(3, libc::F_DUPFD_CLOEXEC, 64);
+                libc::close(3);
+                if fd >= 0 {
+                    self.notify_fd = Some(fd);
+                }
+            }
+        }
+    }
+
+    fn enter_cgroup(&self) {
+        let pid = std::process::id();
+        match cgroup::enter(&self.unit, pid) {
+            Ok(dir) => self.st.set(keys::CGROUP, &dir.display().to_string()),
+            Err(e) => {
+                if self.is_root {
+                    log(self.id(), &format!("cgroup: {e}"));
+                }
+            }
+        }
+    }
+
+    fn cgroup_dir(&self) -> Option<PathBuf> {
+        self.st.get(keys::CGROUP).map(PathBuf::from)
+    }
+
+    fn prepare_start(&mut self) -> Result<(), String> {
+        for k in [keys::CONDITION_FAILED, keys::ASSERT_FAILED, keys::STATUS_TEXT, keys::MAIN_PID] {
+            self.st.clear(k);
+        }
+        let inv = util::read_trimmed(Path::new("/proc/sys/kernel/random/uuid"))
+            .unwrap_or_default()
+            .replace('-', "");
+        self.st.set(keys::INVOCATION, &inv);
+        self.setenv("INVOCATION_ID", &inv);
+        self.st.stamp(keys::INACTIVE_EXIT);
+        self.create_directories()?;
+        self.sandbox.prepare()?;
+        Ok(())
+    }
+
+    /// Conditions and ExecCondition=. Ok(false) means "skip".
+    fn check_conditions(&self) -> Result<bool, String> {
+        let ev = conditions::evaluate(&self.unit);
+        if !ev.asserts_ok {
+            let why = ev.failure.unwrap_or_default();
+            self.st.set(keys::ASSERT_FAILED, &why);
+            return Err(format!("assertion failed: {why}"));
+        }
+        if !ev.conditions_ok {
+            self.st.set(keys::CONDITION_FAILED, &ev.failure.unwrap_or_default());
+            return Ok(false);
+        }
+        for line in self.unit.get_all("Service", "ExecCondition") {
+            for cmd in execcmd::parse(&line)? {
+                match self.spawn_wait(&cmd, &[]) {
+                    Status::Exited(0) => {}
+                    Status::Exited(c) if (1..255).contains(&c) => {
+                        self.st.set(keys::CONDITION_FAILED, &format!("ExecCondition={} exited {c}", cmd.path));
+                        return Ok(false);
+                    }
+                    other => return Err(format!("ExecCondition failed: {}", describe(other))),
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn service_type(&self) -> String {
+        self.unit.get("Service", "Type").unwrap_or_else(|| {
+            if self.unit.file.get("Service", "ExecStart").is_none() {
+                "oneshot".into()
+            } else if self.unit.file.get("Service", "BusName").is_some() {
+                "dbus".into()
+            } else {
+                "simple".into()
+            }
+        })
+    }
+
+    fn main_command(&self) -> Result<ExecCommand, String> {
+        let lines = self.unit.get_all("Service", "ExecStart");
+        if lines.len() != 1 {
+            return Err(format!("expected exactly one ExecStart= for a long-running service, found {}", lines.len()));
+        }
+        execcmd::parse(&lines[0])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "empty ExecStart=".into())
+    }
+
+    /// Socket units that hand fds to this service.
+    fn socket_units(&self) -> Vec<Unit> {
+        let ld = Loader::new(&self.cfg);
+        let mut names = self.unit.get_words("Service", "Sockets");
+        if names.is_empty() {
+            let stem = self.unit.id.trim_end_matches(".service");
+            let default = format!("{stem}.socket");
+            let wanted = self.unit.get_words("Unit", "Requires").contains(&default)
+                || self.unit.get_words("Unit", "Wants").contains(&default);
+            if wanted || install::is_enabled(&self.cfg, &default) {
+                names.push(default);
+            }
+        }
+        names
+            .into_iter()
+            .map(|n| ld.load(&n))
+            .filter(|u| u.is_loaded())
+            .collect()
+    }
+
+    /// Bind sockets and arrange them on fds 3.. for the final exec.
+    fn setup_listen_fds(&mut self) -> Result<(), String> {
+        let socks = self.socket_units();
+        if socks.is_empty() {
+            return Ok(());
+        }
+        let mut bound = Vec::new();
+        for s in &socks {
+            bound.extend(socket::bind_all(s)?);
+        }
+        // Move every fd above the target range first to avoid clobbering.
+        let mut high = Vec::new();
+        for b in &bound {
+            let fd = unsafe { libc::fcntl(b.fd, libc::F_DUPFD_CLOEXEC, 100) };
+            unsafe { libc::close(b.fd) };
+            high.push(fd);
+        }
+        for (i, fd) in high.iter().enumerate() {
+            let target = 3 + i as i32;
+            unsafe {
+                libc::dup2(*fd, target);
+                libc::close(*fd);
+            }
+        }
+        let names: Vec<String> = bound.iter().map(|b| b.name.clone()).collect();
+        self.setenv("LISTEN_FDS", &bound.len().to_string());
+        self.setenv("LISTEN_PID", &std::process::id().to_string());
+        self.setenv("LISTEN_FDNAMES", &names.join(":"));
+        Ok(())
+    }
+
+    // ---- subcommands ----
+
+    /// longrun `run` script.
+    pub fn cmd_run(mut self) -> i32 {
+        self.take_notify_fd();
+        self.enter_cgroup();
+        if let Err(e) = self.prepare_start() {
+            log(self.id(), &e);
+            return 1;
+        }
+        match self.check_conditions() {
+            Ok(true) => {}
+            Ok(false) => {
+                // Stay "up" for s6 but report the unit as skipped.
+                log(self.id(), "condition check failed, not starting");
+                self.signal_ready();
+                loop {
+                    unsafe { libc::pause() };
+                }
+            }
+            Err(e) => {
+                log(self.id(), &e);
+                self.st.set(keys::RESULT, "exit-code");
+                return 1;
+            }
+        }
+        if let Err(st) = self.run_list("ExecStartPre", &[]) {
+            self.st.set(keys::RESULT, result_for(st));
+            return exit_code_for(st);
+        }
+        let main = match self.main_command() {
+            Ok(c) => c,
+            Err(e) => {
+                log(self.id(), &e);
+                return EXIT_EXEC;
+            }
+        };
+        let ty = self.service_type();
+        if ty == "forking" {
+            return self.run_forking(&main);
+        }
+
+        if let Err(e) = self.setup_listen_fds() {
+            log(self.id(), &e);
+            self.st.set(keys::RESULT, "resources");
+            return 1;
+        }
+
+        let pid = std::process::id();
+        self.st.set(keys::MAIN_PID, &pid.to_string());
+        self.st.stamp(keys::EXEC_MAIN_START);
+
+        match ty.as_str() {
+            "notify" | "notify-reload" => match self.start_notify_helper(pid) {
+                Ok(sock) => self.setenv("NOTIFY_SOCKET", &sock),
+                Err(e) => {
+                    log(self.id(), &e);
+                    return 1;
+                }
+            },
+            "dbus" => self.start_dbus_helper(pid),
+            _ => {
+                if let Err(e) = self.start_exec_helper() {
+                    log(self.id(), &e);
+                    return 1;
+                }
+            }
+        }
+        // The notify fd now belongs to the helper.
+        if let Some(fd) = self.notify_fd.take() {
+            unsafe { libc::close(fd) };
+        }
+        let (code, msg) = self.exec_command(&main, &[]);
+        log(self.id(), &msg);
+        if let Some(fd) = EXEC_FAIL_PIPE.with(|c| c.get()) {
+            let b = (code as u32).to_ne_bytes();
+            unsafe { libc::write(fd, b.as_ptr() as *const libc::c_void, 4) };
+        }
+        code
+    }
+
+    fn after_ready(&self, main_pid: u32) {
+        self.st.stamp(keys::ACTIVE_ENTER);
+        if let Err(st) = self.run_list("ExecStartPost", &[("MAINPID".into(), main_pid.to_string())]) {
+            self.st.set(keys::RESULT, result_for(st));
+            unsafe { libc::kill(main_pid as i32, libc::SIGTERM) };
+        }
+    }
+
+    /// Type=simple/exec: ready once exec() succeeds (detected via a CLOEXEC pipe).
+    fn start_exec_helper(&mut self) -> Result<(), String> {
+        let mut fds = [0i32; 2];
+        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
+            return Err(format!("pipe: {}", errno()));
+        }
+        let (r, w) = (fds[0], fds[1]);
+        let main_pid = std::process::id();
+        let notify = self.notify_fd;
+        double_fork(|| {
+            unsafe { libc::close(w) };
+            let mut buf = [0u8; 4];
+            let n = unsafe { libc::read(r, buf.as_mut_ptr() as *mut libc::c_void, 4) };
+            if n == 0 {
+                if let Some(fd) = notify {
+                    unsafe { libc::write(fd, b"\n".as_ptr() as *const libc::c_void, 1) };
+                }
+                self.after_ready(main_pid);
+            }
+        })?;
+        unsafe { libc::close(r) };
+        EXEC_FAIL_PIPE.with(|c| c.set(Some(w)));
+        Ok(())
+    }
+
+    /// Type=notify: bind NOTIFY_SOCKET and relay READY=1 to s6.
+    fn start_notify_helper(&mut self, main_pid: u32) -> Result<String, String> {
+        let dir = self.cfg.run_dir.join("notify");
+        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let inv = self.st.get(keys::INVOCATION).unwrap_or_else(|| main_pid.to_string());
+        let path = dir.join(&inv[..inv.len().min(32)]);
+        let _ = fs::remove_file(&path);
+        let path_s = path.display().to_string();
+
+        // sun_path is 108 bytes; fall back to an abstract socket for long paths.
+        let path_s = if path_s.len() >= 100 { format!("@sdcompat/notify/{inv}") } else { path_s };
+        let fd = socket::bind_unix(&path_s, libc::SOCK_DGRAM, &self.unit)?;
+        if !path_s.starts_with('@') {
+            let c = cstr(&path_s);
+            unsafe {
+                if let Some(u) = &self.user {
+                    libc::chown(c.as_ptr(), u.uid, self.gid.unwrap_or(u.gid));
+                }
+                libc::chmod(c.as_ptr(), 0o600);
+            }
+        }
+        self.st.set(keys::NOTIFY_SOCKET, &path_s);
+
+        let notify = self.notify_fd;
+        let timeout_ms = self
+            .unit
+            .get("Service", "TimeoutStartSec")
+            .or_else(|| self.unit.get("Service", "TimeoutSec"))
+            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
+            .map(|u| if u == u64::MAX { -1 } else { (u / 1000) as i32 })
+            .unwrap_or(90_000);
+        let st_dir = self.st.dir.clone();
+        double_fork(|| {
+            let st = UnitState::new(st_dir);
+            let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, main_pid as i32, 0) } as i32;
+            let mut ready = false;
+            let started = util::now_monotonic_usec();
+            loop {
+                let mut pfds = [
+                    libc::pollfd { fd, events: libc::POLLIN, revents: 0 },
+                    libc::pollfd { fd: pidfd, events: libc::POLLIN, revents: 0 },
+                ];
+                let nfds = if pidfd >= 0 { 2 } else { 1 };
+                let wait = if pidfd < 0 { 1000 } else if ready || timeout_ms < 0 { -1 } else { timeout_ms };
+                let n = unsafe { libc::poll(pfds.as_mut_ptr(), nfds, wait) };
+                if pidfd < 0 && unsafe { libc::kill(main_pid as i32, 0) } < 0 {
+                    break;
+                }
+                if n == 0 && !ready && pidfd >= 0 {
+                    break; // start timeout: s6-rc gives up on its own
+                }
+                if pidfd >= 0 && pfds[1].revents != 0 {
+                    break;
+                }
+                if pfds[0].revents & libc::POLLIN != 0 {
+                    let mut buf = [0u8; 4096];
+                    let r = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+                    if r <= 0 {
+                        continue;
+                    }
+                    let msg = String::from_utf8_lossy(&buf[..r as usize]).into_owned();
+                    for line in msg.lines() {
+                        if line == "READY=1" && !ready {
+                            ready = true;
+                            if let Some(nfd) = notify {
+                                unsafe {
+                                    libc::write(nfd, b"\n".as_ptr() as *const libc::c_void, 1);
+                                    libc::close(nfd);
+                                }
+                            }
+                            self.after_ready(main_pid);
+                        } else if let Some(s) = line.strip_prefix("STATUS=") {
+                            st.set(keys::STATUS_TEXT, s);
+                        } else if let Some(p) = line.strip_prefix("MAINPID=") {
+                            st.set(keys::MAIN_PID, p);
+                        }
+                    }
+                }
+                let _ = started;
+            }
+            let _ = fs::remove_file(&path);
+        })?;
+        unsafe { libc::close(fd) };
+        Ok(path_s)
+    }
+
+    /// Type=dbus: ready once BusName= appears on the system bus.
+    fn start_dbus_helper(&mut self, main_pid: u32) {
+        let notify = self.notify_fd;
+        let Some(bus_name) = self.unit.get("Service", "BusName") else {
+            let _ = self.start_exec_helper();
+            return;
+        };
+        let _ = double_fork(|| {
+            let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(rt) => rt,
+                Err(_) => return,
+            };
+            let ok = rt.block_on(async {
+                let Ok(conn) = zbus::Connection::system().await else { return false };
+                let Ok(proxy) = zbus::fdo::DBusProxy::new(&conn).await else { return false };
+                let Ok(name) = zbus::names::BusName::try_from(bus_name.as_str()) else { return false };
+                for _ in 0..1800 {
+                    if unsafe { libc::kill(main_pid as i32, 0) } < 0 {
+                        return false;
+                    }
+                    if proxy.name_has_owner(name.clone()).await.unwrap_or(false) {
+                        return true;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                false
+            });
+            if ok {
+                if let Some(fd) = notify {
+                    unsafe { libc::write(fd, b"\n".as_ptr() as *const libc::c_void, 1) };
+                }
+                self.after_ready(main_pid);
+            }
+        });
+    }
+
+    /// Type=forking: stay around as a subreaper and supervise the daemon.
+    fn run_forking(&mut self, main: &ExecCommand) -> i32 {
+        unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
+        if let Err(e) = self.setup_listen_fds() {
+            log(self.id(), &e);
+            return 1;
+        }
+        self.st.stamp(keys::EXEC_MAIN_START);
+        let st = self.spawn_wait(main, &[]);
+        if !st.ok() {
+            log(self.id(), &format!("start command failed: {}", describe(st)));
+            self.st.set(keys::RESULT, result_for(st));
+            return exit_code_for(st);
+        }
+        let me = std::process::id() as i32;
+        let main_pid = self.find_forked_pid(me);
+        let Some(main_pid) = main_pid else {
+            log(self.id(), "could not determine main PID");
+            self.signal_ready();
+            self.after_ready(0);
+            return 0;
+        };
+        self.st.set(keys::MAIN_PID, &main_pid.to_string());
+        FORWARD_PID.store(main_pid, std::sync::atomic::Ordering::SeqCst);
+        unsafe {
+            for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP, libc::SIGQUIT, libc::SIGUSR1, libc::SIGUSR2] {
+                libc::signal(sig, forward_signal as *const () as libc::sighandler_t);
+            }
+        }
+        self.signal_ready();
+        self.after_ready(main_pid as u32);
+
+        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, main_pid, 0) } as i32;
+        let mut main_status: Option<i32> = None;
+        loop {
+            loop {
+                let mut s = 0;
+                let r = unsafe { libc::waitpid(-1, &mut s, libc::WNOHANG) };
+                if r <= 0 {
+                    break;
+                }
+                if r == main_pid {
+                    main_status = Some(s);
+                }
+            }
+            if main_status.is_some() {
+                break;
+            }
+            if pidfd >= 0 {
+                let mut p = libc::pollfd { fd: pidfd, events: libc::POLLIN, revents: 0 };
+                unsafe { libc::poll(&mut p, 1, 1000) };
+                if p.revents != 0 {
+                    // Reap it if it is our (reparented) child.
+                    let mut s = 0;
+                    if unsafe { libc::waitpid(main_pid, &mut s, libc::WNOHANG) } == main_pid {
+                        main_status = Some(s);
+                    }
+                    break;
+                }
+            } else {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if unsafe { libc::kill(main_pid, 0) } < 0 {
+                    break;
+                }
+            }
+        }
+        match main_status.map(Status::from_wait) {
+            Some(Status::Killed(sig)) => {
+                unsafe {
+                    libc::signal(sig, libc::SIG_DFL);
+                    libc::kill(me, sig);
+                }
+                128 + sig
+            }
+            Some(Status::Exited(c)) => c,
+            None => 0,
+        }
+    }
+
+    fn find_forked_pid(&self, me: i32) -> Option<i32> {
+        if let Some(pidfile) = self.unit.get("Service", "PIDFile") {
+            for _ in 0..100 {
+                if let Some(p) = util::read_trimmed(Path::new(&pidfile)).and_then(|s| s.parse::<i32>().ok()) {
+                    if p > 0 {
+                        return Some(p);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            return None;
+        }
+        // GuessMainPID: our (reparented) children.
+        let mut kids = Vec::new();
+        for e in fs::read_dir("/proc").ok()?.flatten() {
+            let Ok(pid) = e.file_name().to_string_lossy().parse::<i32>() else { continue };
+            let stat = fs::read_to_string(e.path().join("stat")).unwrap_or_default();
+            let ppid = stat
+                .rsplit_once(')')
+                .and_then(|(_, r)| r.split_whitespace().nth(1))
+                .and_then(|p| p.parse::<i32>().ok());
+            if ppid == Some(me) {
+                kids.push(pid);
+            }
+        }
+        kids.sort();
+        kids.first().copied()
+    }
+
+    /// longrun `finish` script: cleanup and Restart= policy.
+    pub fn cmd_finish(self, exit_code: i32, signum: i32) -> i32 {
+        let status = if exit_code == 256 || exit_code < 0 && signum > 0 {
+            Status::Killed(signum)
+        } else {
+            Status::Exited(exit_code)
+        };
+        self.st.stamp(keys::EXEC_MAIN_EXIT);
+        let (code, val) = match status {
+            Status::Exited(c) => (1, c),
+            Status::Killed(s) => (2, s),
+        };
+        self.st.set(keys::EXEC_MAIN_CODE, &code.to_string());
+        self.st.set(keys::EXEC_MAIN_STATUS, &val.to_string());
+        self.st.stamp(keys::ACTIVE_EXIT);
+
+        let requested_restart = self.st.has(keys::RESTART_REQUESTED);
+        self.st.clear(keys::RESTART_REQUESTED);
+        let stopping = !wanted_up() || requested_restart;
+        let kill_signal = self
+            .unit
+            .get("Service", "KillSignal")
+            .and_then(|s| util::signal_number(&s))
+            .unwrap_or(libc::SIGTERM);
+        let clean = self.is_clean(status) || (stopping && status == Status::Killed(kill_signal));
+        let mut result = if clean {
+            "success"
+        } else {
+            match status {
+                Status::Killed(_) => "signal",
+                Status::Exited(_) => "exit-code",
+            }
+        }
+        .to_string();
+        if let Some(r) = self.st.get(keys::RESULT) {
+            if r != "success" && !stopping {
+                result = r;
+            }
+        }
+
+        self.cleanup(&result, status);
+
+        if stopping {
+            self.st.set(keys::RESULT, &result);
+            if !requested_restart {
+                self.st.stamp(keys::INACTIVE_ENTER);
+            }
+            return 0;
+        }
+        if self.st.has(keys::ASSERT_FAILED) {
+            self.st.set(keys::RESULT, "exit-code");
+            return 125;
+        }
+
+        let restart_mode = self.unit.get("Service", "Restart").unwrap_or_else(|| "no".into());
+        let mut restart = match restart_mode.as_str() {
+            "always" => true,
+            "on-success" => clean,
+            "on-failure" => !clean,
+            "on-abnormal" | "on-watchdog" => matches!(status, Status::Killed(_)) && !clean,
+            "on-abort" => matches!(status, Status::Killed(_)) && !clean,
+            _ => false,
+        };
+        if status_in(&self.unit.get_words("Service", "RestartPreventExitStatus"), status) {
+            restart = false;
+        }
+        if status_in(&self.unit.get_words("Service", "RestartForceExitStatus"), status) {
+            restart = true;
+        }
+
+        if restart {
+            let interval = self
+                .unit
+                .get("Unit", "StartLimitIntervalSec")
+                .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
+                .unwrap_or(10_000_000);
+            let burst: usize = self
+                .unit
+                .get("Unit", "StartLimitBurst")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5);
+            let now = util::now_monotonic_usec();
+            let mut times: Vec<u64> = self
+                .st
+                .get(keys::RESTART_TIMES)
+                .unwrap_or_default()
+                .split_whitespace()
+                .filter_map(|t| t.parse().ok())
+                .filter(|&t: &u64| interval == 0 || now.saturating_sub(t) < interval)
+                .collect();
+            times.push(now);
+            self.st.set(
+                keys::RESTART_TIMES,
+                &times.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" "),
+            );
+            if interval > 0 && burst > 0 && times.len() > burst {
+                log(self.id(), "start request repeated too quickly, giving up");
+                self.st.set(keys::RESULT, "start-limit-hit");
+                self.st.stamp(keys::INACTIVE_ENTER);
+                return 125;
+            }
+            let n = self.st.get_u64(keys::NRESTARTS) + 1;
+            self.st.set(keys::NRESTARTS, &n.to_string());
+            self.st.set(keys::RESULT, &result);
+            let delay = self
+                .unit
+                .get("Service", "RestartSec")
+                .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
+                .unwrap_or(100_000);
+            // s6-supervise already waits ~1s between restarts.
+            if delay > 1_000_000 {
+                std::thread::sleep(std::time::Duration::from_micros(delay - 1_000_000));
+            }
+            return 0;
+        }
+        self.st.set(keys::RESULT, &result);
+        self.st.stamp(keys::INACTIVE_ENTER);
+        125
+    }
+
+    fn is_clean(&self, status: Status) -> bool {
+        if status_in(&self.unit.get_words("Service", "SuccessExitStatus"), status) {
+            return true;
+        }
+        match status {
+            Status::Exited(0) => true,
+            Status::Killed(s) => [libc::SIGHUP, libc::SIGINT, libc::SIGTERM, libc::SIGPIPE].contains(&s),
+            _ => false,
+        }
+    }
+
+    fn cleanup(&self, result: &str, status: Status) {
+        let (code, st) = match status {
+            Status::Exited(c) => ("exited", c.to_string()),
+            Status::Killed(s) => ("killed", util::signal_name(s)),
+        };
+        let env = [
+            ("SERVICE_RESULT".to_string(), result.to_string()),
+            ("EXIT_CODE".to_string(), code.to_string()),
+            ("EXIT_STATUS".to_string(), st),
+        ];
+        let _ = self.run_list("ExecStopPost", &env);
+
+        // KillMode=control-group / mixed: leftover processes go too.
+        let mode = self.unit.get("Service", "KillMode").unwrap_or_else(|| "control-group".into());
+        if mode == "control-group" || mode == "mixed" {
+            if let Some(dir) = self.cgroup_dir() {
+                let me = std::process::id();
+                if cgroup::kill_all(&dir, libc::SIGTERM, me) > 0 {
+                    for _ in 0..20 {
+                        if util::cgroup_pids(&dir).is_empty() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    if self.unit.get_bool("Service", "SendSIGKILL", true) {
+                        cgroup::kill_all(&dir, libc::SIGKILL, me);
+                    }
+                }
+            }
+        }
+        if let Some(sock) = self.st.get(keys::NOTIFY_SOCKET) {
+            let _ = fs::remove_file(sock);
+            self.st.clear(keys::NOTIFY_SOCKET);
+        }
+        for s in self.socket_units() {
+            socket::remove_paths(&s);
+        }
+        self.remove_runtime_dirs();
+        let _ = fs::remove_dir_all(self.st.dir.join("private"));
+    }
+
+    /// oneshot `up` script.
+    pub fn cmd_up(mut self) -> i32 {
+        self.enter_cgroup();
+        if let Err(e) = self.prepare_start() {
+            log(self.id(), &e);
+            return 1;
+        }
+        match self.check_conditions() {
+            Ok(true) => {}
+            Ok(false) => {
+                log(self.id(), "condition check failed, skipped");
+                self.st.set(keys::RESULT, "success");
+                return 0;
+            }
+            Err(e) => {
+                log(self.id(), &e);
+                self.st.set(keys::RESULT, "exit-code");
+                return 1;
+            }
+        }
+        self.st.set(keys::RESULT, "running");
+        self.st.stamp(keys::EXEC_MAIN_START);
+        let mut failed: Option<Status> = None;
+        for key in ["ExecStartPre", "ExecStart", "ExecStartPost"] {
+            if let Err(st) = self.run_list(key, &[]) {
+                failed = Some(st);
+                break;
+            }
+        }
+        self.st.stamp(keys::EXEC_MAIN_EXIT);
+        if let Some(st) = failed {
+            let (code, val) = match st {
+                Status::Exited(c) => (1, c),
+                Status::Killed(s) => (2, s),
+            };
+            self.st.set(keys::EXEC_MAIN_CODE, &code.to_string());
+            self.st.set(keys::EXEC_MAIN_STATUS, &val.to_string());
+            self.st.set(keys::RESULT, result_for(st));
+            self.cleanup(result_for(st), st);
+            self.st.stamp(keys::INACTIVE_ENTER);
+            return 1;
+        }
+        self.st.set(keys::EXEC_MAIN_CODE, "1");
+        self.st.set(keys::EXEC_MAIN_STATUS, "0");
+        self.st.set(keys::RESULT, "success");
+        self.st.stamp(keys::ACTIVE_ENTER);
+        if !self.unit.get_bool("Service", "RemainAfterExit", false) {
+            // systemd stops a oneshot right after it finished.
+            let _ = self.run_list("ExecStop", &[]);
+            self.cleanup("success", Status::Exited(0));
+            self.st.stamp(keys::INACTIVE_ENTER);
+        }
+        0
+    }
+
+    /// oneshot `down` script.
+    pub fn cmd_down(self) -> i32 {
+        if self.unit.get_bool("Service", "RemainAfterExit", false) {
+            let _ = self.run_list("ExecStop", &[]);
+            self.cleanup("success", Status::Exited(0));
+        }
+        self.st.stamp(keys::ACTIVE_EXIT);
+        self.st.stamp(keys::INACTIVE_ENTER);
+        0
+    }
+
+    /// ExecStop= of a longrun (called by the daemon before s6-rc -d).
+    pub fn cmd_stop_exec(self, main_pid: Option<u32>) -> i32 {
+        let env: Vec<(String, String)> = main_pid
+            .map(|p| vec![("MAINPID".to_string(), p.to_string())])
+            .unwrap_or_default();
+        match self.run_list("ExecStop", &env) {
+            Ok(()) => 0,
+            Err(st) => exit_code_for(st),
+        }
+    }
+
+    /// ExecReload=, or ReloadSignal for Type=notify-reload.
+    pub fn cmd_reload(self, main_pid: Option<u32>) -> i32 {
+        if self.unit.get_all("Service", "ExecReload").is_empty() {
+            if self.service_type() == "notify-reload" {
+                if let Some(p) = main_pid {
+                    let sig = self
+                        .unit
+                        .get("Service", "ReloadSignal")
+                        .and_then(|s| util::signal_number(&s))
+                        .unwrap_or(libc::SIGHUP);
+                    unsafe { libc::kill(p as i32, sig) };
+                    return 0;
+                }
+            }
+            log(self.id(), "no ExecReload= configured");
+            return 1;
+        }
+        let env: Vec<(String, String)> = main_pid
+            .map(|p| vec![("MAINPID".to_string(), p.to_string())])
+            .unwrap_or_default();
+        match self.run_list("ExecReload", &env) {
+            Ok(()) => 0,
+            Err(st) => exit_code_for(st),
+        }
+    }
+}
+
+const DIRS: &[(&str, &str, &str)] = &[
+    ("RuntimeDirectory", "/run", "RUNTIME_DIRECTORY"),
+    ("StateDirectory", "/var/lib", "STATE_DIRECTORY"),
+    ("CacheDirectory", "/var/cache", "CACHE_DIRECTORY"),
+    ("LogsDirectory", "/var/log", "LOGS_DIRECTORY"),
+    ("ConfigurationDirectory", "/etc", "CONFIGURATION_DIRECTORY"),
+];
+
+const LIMITS: &[(&str, libc::__rlimit_resource_t, bool)] = &[
+    ("LimitCPU", libc::RLIMIT_CPU, false),
+    ("LimitFSIZE", libc::RLIMIT_FSIZE, true),
+    ("LimitDATA", libc::RLIMIT_DATA, true),
+    ("LimitSTACK", libc::RLIMIT_STACK, true),
+    ("LimitCORE", libc::RLIMIT_CORE, true),
+    ("LimitRSS", libc::RLIMIT_RSS, true),
+    ("LimitNOFILE", libc::RLIMIT_NOFILE, false),
+    ("LimitAS", libc::RLIMIT_AS, true),
+    ("LimitNPROC", libc::RLIMIT_NPROC, false),
+    ("LimitMEMLOCK", libc::RLIMIT_MEMLOCK, true),
+    ("LimitLOCKS", libc::RLIMIT_LOCKS, false),
+    ("LimitSIGPENDING", libc::RLIMIT_SIGPENDING, false),
+    ("LimitMSGQUEUE", libc::RLIMIT_MSGQUEUE, true),
+    ("LimitNICE", libc::RLIMIT_NICE, false),
+    ("LimitRTPRIO", libc::RLIMIT_RTPRIO, false),
+    ("LimitRTTIME", libc::RLIMIT_RTTIME, false),
+];
+
+thread_local! {
+    static EXEC_FAIL_PIPE: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
+
+static FORWARD_PID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+extern "C" fn forward_signal(sig: libc::c_int) {
+    let pid = FORWARD_PID.load(std::sync::atomic::Ordering::SeqCst);
+    if pid > 0 {
+        unsafe { libc::kill(pid, sig) };
+    }
+}
+
+/// Run `f` in a grandchild that is not our child (so the service never has
+/// to reap it).
+fn double_fork<F: FnOnce()>(f: F) -> Result<(), String> {
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(format!("fork: {}", errno()));
+    }
+    if pid == 0 {
+        unsafe { libc::setsid() };
+        let pid2 = unsafe { libc::fork() };
+        if pid2 == 0 {
+            f();
+            unsafe { libc::_exit(0) };
+        }
+        unsafe { libc::_exit(0) };
+    }
+    wait_pid(pid);
+    Ok(())
+}
+
+/// s6-svstat on the current directory (finish runs in the service dir).
+fn wanted_up() -> bool {
+    std::process::Command::new("s6-svstat")
+        .args(["-o", "wantedup", "."])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() != "false")
+        .unwrap_or(true)
+}
+
+fn status_in(list: &[String], status: Status) -> bool {
+    list.iter().any(|w| match status {
+        Status::Exited(c) => w.parse::<i32>().ok() == Some(c),
+        Status::Killed(s) => util::signal_number(w) == Some(s) && w.parse::<i32>().is_err(),
+    })
+}
+
+fn describe(st: Status) -> String {
+    match st {
+        Status::Exited(c) => format!("exit status {c}"),
+        Status::Killed(s) => format!("killed by SIG{}", util::signal_name(s)),
+    }
+}
+
+fn result_for(st: Status) -> &'static str {
+    match st {
+        Status::Exited(_) => "exit-code",
+        Status::Killed(_) => "signal",
+    }
+}
+
+fn exit_code_for(st: Status) -> i32 {
+    match st {
+        Status::Exited(c) => c.max(1),
+        Status::Killed(s) => 128 + s,
+    }
+}
+
+fn group_list(user: &str, gid: u32) -> Vec<u32> {
+    let c = cstr(user);
+    let mut n: libc::c_int = 64;
+    let mut groups: Vec<libc::gid_t> = vec![0; n as usize];
+    unsafe {
+        if libc::getgrouplist(c.as_ptr(), gid, groups.as_mut_ptr(), &mut n) < 0 {
+            groups.resize(n as usize, 0);
+            libc::getgrouplist(c.as_ptr(), gid, groups.as_mut_ptr(), &mut n);
+        }
+    }
+    groups.truncate(n.max(0) as usize);
+    groups
+}
+
+/// DynamicUser= approximation: a persistent system user.
+fn ensure_system_user(name: &str) -> Result<UserInfo, String> {
+    if let Some(u) = util::lookup_user(name) {
+        return Ok(u);
+    }
+    let status = std::process::Command::new("useradd")
+        .args(["--system", "--no-create-home", "--home-dir", "/", "--shell", "/usr/sbin/nologin", name])
+        .status()
+        .map_err(|e| format!("useradd: {e}"))?;
+    if !status.success() {
+        return Err(format!("useradd {name} failed"));
+    }
+    util::lookup_user(name).ok_or_else(|| format!("user {name} still missing after useradd"))
+}
+
+/// `sdcompat notify` (systemd-notify replacement).
+pub fn cmd_notify(args: &[String]) -> i32 {
+    let Ok(sock) = std::env::var("NOTIFY_SOCKET") else {
+        eprintln!("sdcompat notify: NOTIFY_SOCKET not set");
+        return 1;
+    };
+    let mut lines = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "--ready" => lines.push("READY=1".to_string()),
+            "--stopping" => lines.push("STOPPING=1".to_string()),
+            "--reloading" => lines.push("RELOADING=1".to_string()),
+            s if s.starts_with("--status=") => lines.push(format!("STATUS={}", &s[9..])),
+            s if s.starts_with("--pid=") => lines.push(format!("MAINPID={}", &s[6..])),
+            s if s.contains('=') => lines.push(s.to_string()),
+            s => {
+                eprintln!("sdcompat notify: unknown argument {s}");
+                return 1;
+            }
+        }
+    }
+    let msg = lines.join("\n");
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+    let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    addr.sun_family = libc::AF_UNIX as u16;
+    let abstract_ns = sock.starts_with('@');
+    for (i, b) in sock.bytes().enumerate().take(addr.sun_path.len() - 1) {
+        addr.sun_path[i] = if abstract_ns && i == 0 { 0 } else { b as libc::c_char };
+    }
+    let len = (std::mem::size_of::<libc::sa_family_t>() + sock.len() + usize::from(!abstract_ns)) as u32;
+    let r = unsafe {
+        libc::sendto(
+            fd,
+            msg.as_ptr() as *const libc::c_void,
+            msg.len(),
+            0,
+            &addr as *const _ as *const libc::sockaddr,
+            len,
+        )
+    };
+    if r < 0 {
+        eprintln!("sdcompat notify: {}", errno());
+        return 1;
+    }
+    0
+}
