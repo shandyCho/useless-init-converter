@@ -1,0 +1,4 @@
+#!/bin/sh
+# earlyoom replaces systemd-oomd under s6 (same settings file as earlyoom.service).
+[ -r /etc/default/earlyoom ] && . /etc/default/earlyoom
+exec /usr/bin/earlyoom $EARLYOOM_ARGS

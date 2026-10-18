@@ -19,6 +19,7 @@ Requires:       dbus-daemon
 Requires:       util-linux
 Recommends:     s6-linux-init
 Recommends:     rsyslog
+Recommends:     earlyoom
 
 %description
 Translates systemd unit files into an s6-rc database, runs services with
@@ -44,7 +45,9 @@ install -Dm0644 dist/dbus/sdcompat.conf %{buildroot}%{_datadir}/dbus-1/system.d/
 install -Dm0644 dist/sdcompat.conf %{buildroot}%{_sysconfdir}/sdcompat/sdcompat.conf
 install -d %{buildroot}%{_sysconfdir}/sdcompat
 cp -a dist/s6 %{buildroot}%{_sysconfdir}/sdcompat/s6
-install -Dm0755 dist/s6-linux-init/rc.init %{buildroot}%{_datadir}/sdcompat/s6-linux-init/rc.init
+install -d %{buildroot}%{_datadir}/sdcompat/s6-linux-init
+cp -a dist/s6-linux-init/skel %{buildroot}%{_datadir}/sdcompat/s6-linux-init/skel
+install -Dm0644 dist/rsyslog.conf %{buildroot}%{_datadir}/sdcompat/rsyslog.conf
 install -Dm0755 dist/s6-linux-init/init-selinux %{buildroot}%{_sbindir}/init-selinux
 install -d %{buildroot}%{_sharedstatedir}/sdcompat %{buildroot}%{_localstatedir}/log/sdcompat
 

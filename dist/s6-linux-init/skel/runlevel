@@ -1,0 +1,5 @@
+#!/bin/sh -e
+# Called by rc.init and by `telinit RUNLEVEL`: bring up that s6-rc bundle
+# and stop everything not in it.
+test "$#" -gt 0 || { echo 'runlevel: fatal: too few arguments' 1>&2 ; exit 100 ; }
+exec s6-rc -v2 -up change "$1"

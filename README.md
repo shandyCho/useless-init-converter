@@ -103,29 +103,50 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 ## Deploying on Fedora (do it in a VM first)
 
-The recommended setup **keeps the `systemd` package installed**. It still
-provides `systemctl`, `systemd-udevd`, `systemd-tmpfiles`, `systemd-sysusers`,
-`kernel-install` and libsystemd. Only PID 1 changes. Because the package stays,
-dnf's dependencies and protected packages aren't affected. The systemd
-package's own RPM file triggers (`systemctl daemon-reload`, `systemctl preset`)
-reach sdcompat, so `dnf install` behaves as before.
+```sh
+dist/setup-fedora.sh --dry-run     # show every command, change nothing
+sudo dist/setup-fedora.sh          # prints the plan and asks before starting
+```
 
-1. **Install the pieces:** `s6`, `s6-rc`, `execline`, `s6-linux-init` (build from skarnet.org if your Fedora release lacks one), `dbus-daemon`, `rsyslog`, and sdcompat itself (`dist/sdcompat.spec`).
-2. **Logging:** in `/etc/rsyslog.conf`, replace `imjournal` with `imuxsock`, because there is no journald.
-3. **Early boot:** review `/etc/sdcompat/s6/` (the `sdcompat-sysinit` bundle: API mounts, udev, fstab, tmpfiles, sysusers, sysctl, modules, hostname, syslog). It replaces the systemd units that only work under systemd as PID 1, which are excluded by default (`systemd-*`).
-4. **Login:** use Fedora's own `systemd-logind` (included by default, see below). The PAM stack stays unchanged: `pam_systemd.so` talks to logind as usual. Don't install elogind.
-5. **Build the database once:** `sdcompat reload --no-update`, then read `/var/lib/sdcompat/current/report.txt`.
-6. **Set up s6-linux-init:** copy `/usr/share/sdcompat/s6-linux-init/rc.init` into your s6-linux-init skel directory and run `s6-linux-init-maker` (boot bundle `default`).
-7. **SELinux:** boot with `init=/usr/sbin/init-selinux` (it loads the policy, then execs s6-linux-init). Start in permissive mode, collect AVCs with `ausearch -m AVC -ts boot | audit2allow -M sdcompat_local`, and review them before loading.
-8. **GRUB:** add an entry with that `init=` and keep the normal systemd entry as a fallback:
-   ```sh
-   grubby --add-kernel=/boot/vmlinuz-$(uname -r) --initrd=/boot/initramfs-$(uname -r).img \
-          --copy-default --title="Fedora (s6 + sdcompat)" --args="init=/usr/sbin/init-selinux"
-   ```
+The script keeps the normal systemd boot as the default and **adds** a GRUB
+entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
+`/var/lib/sdcompat/setup-backup/`. It does the following:
 
-After boot, `systemctl status/start/stop/enable/list-units` work as usual,
-`systemctl daemon-reload` regenerates the s6 database, and logs are read with
-`sdcompat log sshd.service -f`.
+1. Installs `dbus-daemon`, `rsyslog`, `earlyoom`, `chrony`, `NetworkManager`, and the
+   skarnet tools: from Fedora if all five are packaged, otherwise built from
+   skarnet.org into `/usr` (skalibs 2.15.1.0, execline 2.9.9.2, s6 2.15.1.0,
+   s6-rc 0.7.0.0, s6-linux-init 1.2.0.2).
+2. Builds and installs sdcompat. If the sdcompat RPM from `dist/sdcompat.spec` is installed, it uses that instead.
+3. Writes `/etc/sdcompat/`: the config, the s6 services (early boot, dbus-daemon,
+   the daemon, earlyoom) and an s6-only rsyslog config. Under systemd, journald
+   keeps `/dev/log`, so the systemd boot is unaffected.
+4. Enables chronyd, NetworkManager and gdm, and sets `graphical.target` as the default.
+5. Runs `sdcompat reload --no-update` and prints the translation summary.
+6. Generates `/etc/s6-linux-init/current` with a rescue getty on tty9.
+7. Labels `bin/init` as `init_exec_t` for SELinux.
+8. Copies the default boot entry and adds `init=/usr/sbin/init-selinux`. It removes the
+   splash (`rhgb quiet`, `plymouth.enable=0`), because plymouth's quit unit is
+   systemd-only. It also adds `enforcing=0`; pass `--enforcing` to leave that out.
+
+Other options: `--yes`, `--no-grub`, `--build-s6`, `--rebuild`, and
+`--uninstall`, which removes the entry and installed files and keeps your config.
+After a kernel update, re-run the script to move the entry to the new kernel.
+
+What systemd components are replaced, and why logind and `systemd --user` stay
+(GNOME needs them; see the next section):
+
+| Role | Under s6 + sdcompat |
+|---|---|
+| PID 1 / services | s6-linux-init, s6-rc, sdcompat |
+| System bus | dbus-daemon (dbus-broker stays for the user bus) |
+| Logging | rsyslog + s6-log (`sdcompat log UNIT`) instead of journald |
+| Network / DNS / time | NetworkManager, chrony |
+| OOM handling | earlyoom instead of systemd-oomd |
+| Devices | systemd-udevd as a plain service |
+| Login, user manager | systemd-logind and `systemd --user`, as supervised services |
+
+If stage 2 fails, log in on tty9 (Ctrl+Alt+F9) and read
+`/run/uncaught-logs/current`.
 
 ### Running the tests on Fedora
 

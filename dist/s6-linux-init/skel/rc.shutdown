@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shutdown: bring every s6-rc service down (dependencies respected).
+exec s6-rc -v2 -bDa change

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs after all processes are killed, right before filesystems are
+# unmounted and the machine halts. Nothing to do by default.
+exit 0
