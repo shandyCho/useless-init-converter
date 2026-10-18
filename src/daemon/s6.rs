@@ -224,6 +224,26 @@ impl Daemon {
                     (s.active, s.sub) = ("failed", "failed");
                 }
             }
+            Some(Kind::Longrun) if id.ends_with(".timer") => {
+                if !active.contains(id) || !self.svstat(id).await.map(|s| s.up).unwrap_or(false) {
+                    return s;
+                }
+                s.active = "active";
+                s.sub = if st.has(crate::timer::ELAPSED) {
+                    "elapsed"
+                } else {
+                    let target = self.index.read().unwrap().triggers.get(id).cloned();
+                    let running = match target {
+                        Some(t) => {
+                            let (_, tu) = self.load_unit(&t);
+                            let ts = Box::pin(self.unit_status(&t, active, &tu)).await;
+                            matches!(ts.active, "active" | "activating" | "reloading")
+                        }
+                        None => false,
+                    };
+                    if running { "running" } else { "waiting" }
+                };
+            }
             Some(Kind::Longrun) => {
                 if !active.contains(id) {
                     if failed_result && st.has(keys::INACTIVE_ENTER) {

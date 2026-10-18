@@ -100,6 +100,21 @@ case "$out" in *symlink*) ok "enable created links" ;; *) bad "enable: $out" ;; 
 call Reload && ok "daemon-reload"
 expect_state hello.service active/running
 
+echo "== timers"
+expect_state tick.timer active/waiting
+sleep 6
+n=$(wc -l < "$R/tick.out" 2>/dev/null || echo 0)
+[ "$n" -ge 2 ] && ok "OnBootSec + OnUnitActiveSec fired $n times" || bad "tick.timer fired $n times"
+n=$(wc -l < "$R/cal.out" 2>/dev/null || echo 0)
+[ "$n" -ge 1 ] && ok "OnCalendar fired $n times" || bad "cal.timer fired $n times"
+[ -s "$R/persist.out" ] && ok "Persistent= caught up a missed run" || bad "persist.timer did not catch up"
+expect_eq "Triggers" "$(prop cal.timer Unit Triggers)" "1 cal.service"
+expect_eq "TriggeredBy" "$(prop cal.service Unit TriggeredBy)" "1 cal.timer"
+call StartUnit ss later.timer replace
+expect_state later.timer active/waiting
+next=$(prop later.timer Timer NextElapseUSecRealtime)
+[ "$next" -ge 4070800000000000 ] && ok "far-future NextElapseUSecRealtime=$next" || bad "later.timer next=$next"
+
 echo "== transient scope"
 sleep 1000 &
 spid=$!

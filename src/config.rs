@@ -40,10 +40,14 @@ pub struct Config {
     pub sysinit_bundle: String,
     /// Bundle generated for default.target; include it in your boot bundle.
     pub default_bundle: String,
+    /// s6 service running `sdcompat daemon`; timers depend on it.
+    pub daemon_service: String,
     /// Created once the daemon is ready, so sd_booted() returns true.
     pub booted_flag: Option<PathBuf>,
     /// Peer-to-peer socket used by systemctl when run as root.
     pub private_socket: Option<PathBuf>,
+    /// D-Bus address clients (timers) use when the private socket is unavailable.
+    pub bus_address: Option<String>,
     /// Path of the sdcompat binary as seen from generated scripts.
     pub runner: PathBuf,
     /// Shutdown commands used for PowerOff/Reboot/Halt.
@@ -120,8 +124,10 @@ impl Config {
             .collect(),
             sysinit_bundle: "sdcompat-sysinit".into(),
             default_bundle: "sdcompat-default".into(),
+            daemon_service: "sdcompatd".into(),
             booted_flag: Some(PathBuf::from("/run/systemd/system")),
             private_socket: Some(PathBuf::from("/run/systemd/private")),
+            bus_address: None,
             runner,
             poweroff_cmd: "s6-linux-init-shutdown -p now".into(),
             reboot_cmd: "s6-linux-init-shutdown -r now".into(),
@@ -175,8 +181,10 @@ impl Config {
                 }
                 "SYSINIT_BUNDLE" => cfg.sysinit_bundle = v,
                 "DEFAULT_BUNDLE" => cfg.default_bundle = v,
+                "DAEMON_SERVICE" => cfg.daemon_service = v,
                 "BOOTED_FLAG" => cfg.booted_flag = opt(&v),
                 "PRIVATE_SOCKET" => cfg.private_socket = opt(&v),
+                "BUS_ADDRESS" => cfg.bus_address = (!v.is_empty()).then(|| v.clone()),
                 "RUNNER" => cfg.runner = PathBuf::from(&v),
                 "POWEROFF_CMD" => cfg.poweroff_cmd = v,
                 "REBOOT_CMD" => cfg.reboot_cmd = v,

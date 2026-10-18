@@ -1,6 +1,8 @@
 //! sdcompat: run systemd units on s6-rc and serve systemd's D-Bus API.
 
+pub mod calendar;
 pub mod cgroup;
+pub mod client;
 pub mod conditions;
 pub mod config;
 pub mod daemon;
@@ -13,5 +15,6 @@ pub mod runner;
 pub mod sandbox;
 pub mod socket;
 pub mod state;
+pub mod timer;
 pub mod unit;
 pub mod util;

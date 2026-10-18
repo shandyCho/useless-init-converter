@@ -26,7 +26,7 @@ Tools:
   log UNIT [-f]            show (or follow) a service's s6-log output
 
 Internal (used by generated s6-rc scripts and the daemon):
-  run|finish|up|down|stop-exec|reload-exec [--mainpid N] (-- UNIT | --unit-hex HEX) [ARGS]
+  run|finish|up|down|stop-exec|reload-exec|timer-run [--mainpid N] (-- UNIT | --unit-hex HEX) [ARGS]
 ";
 
 fn die(msg: &str) -> ! {
@@ -165,6 +165,25 @@ fn main() {
             }
         }
         "notify" => runner::cmd_notify(rest),
+        "start" | "stop" | "restart" => {
+            let method = match cmd.as_str() {
+                "start" => "StartUnit",
+                "stop" => "StopUnit",
+                _ => "RestartUnit",
+            };
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let conn = sdcompat::client::connect(&cfg).await.unwrap_or_else(|e| die(&e));
+                let mut code = 0;
+                for u in rest {
+                    if let Err(e) = sdcompat::client::manager_call(&conn, method, &(u.as_str(), "replace")).await {
+                        eprintln!("sdcompat: {u}: {e}");
+                        code = 1;
+                    }
+                }
+                code
+            })
+        }
         "log" => {
             let follow = rest.iter().any(|a| a == "-f" || a == "--follow");
             let Some(unit) = rest.iter().find(|a| !a.starts_with('-')) else { die("usage: sdcompat log UNIT [-f]") };
@@ -211,6 +230,10 @@ fn main() {
                 }
             }
             code
+        }
+        "timer-run" => {
+            let a = parse_internal(rest);
+            sdcompat::timer::cmd_timer_run(cfg, &a.unit)
         }
         "run" | "finish" | "up" | "down" | "stop-exec" | "reload-exec" => {
             let a = parse_internal(rest);

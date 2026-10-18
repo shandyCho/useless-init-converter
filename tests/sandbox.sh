@@ -33,6 +33,7 @@ RUN_DIR=$R/run
 LOG_DIR=$W/logs
 BOOTED_FLAG=
 PRIVATE_SOCKET=$R/private
+BUS_ADDRESS=unix:path=$R/bus
 ALLOW_UIDS=$(id -u)
 RUNNER=$BIN
 EOF
@@ -140,13 +141,58 @@ ExecStart=/bin/sh -c 'trap "echo reloaded >> $R/reload.out" HUP; while :; do sle
 ExecReload=/bin/kill -HUP \$MAINPID
 EOF
 
+# --- timers ---
+for n in tick cal persist later; do
+cat > "$U/$n.service" <<EOF
+[Unit]
+Description=Work for $n.timer
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'date +%%s >> $R/$n.out'
+EOF
+done
+cat > "$U/tick.timer" <<EOF
+[Unit]
+Description=Monotonic timer
+[Timer]
+OnBootSec=1
+OnUnitActiveSec=2s
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > "$U/cal.timer" <<EOF
+[Unit]
+Description=Calendar timer
+[Timer]
+OnCalendar=*:*:0/3
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > "$U/persist.timer" <<EOF
+[Unit]
+Description=Persistent timer that missed a run
+[Timer]
+OnCalendar=yearly
+Persistent=true
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > "$U/later.timer" <<EOF
+[Unit]
+Description=Far-future timer
+[Timer]
+OnCalendar=2099-01-01 00:00:00
+EOF
+mkdir -p "$W/state/timers"
+echo 1000000000000000 > "$W/state/timers/persist.timer"
+
 cat > "$W/presets/90-test.preset" <<EOF
 enable notifier.service
 disable *
 EOF
 
 C="--config $W/sdcompat.conf"
-"$BIN" $C enable hello.service sock.socket >/dev/null
+"$BIN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer >/dev/null
 "$BIN" $C preset notifier.service >/dev/null
 "$BIN" $C reload --no-update
 

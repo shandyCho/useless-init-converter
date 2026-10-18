@@ -137,6 +137,9 @@ impl Daemon {
             "target" => {
                 out.insert("org.freedesktop.systemd1.Target".into(), Props::new());
             }
+            "timer" => {
+                out.insert("org.freedesktop.systemd1.Timer".into(), self.timer_iface(id, unit));
+            }
             "scope" => {
                 out.insert("org.freedesktop.systemd1.Scope".into(), self.scope_iface(id));
             }
@@ -165,10 +168,18 @@ impl Daemon {
         }
         for k in [
             "RequiredBy", "RequisiteOf", "WantedBy", "BoundBy", "UpheldBy", "ConsistsOf",
-            "ConflictedBy", "OnSuccessOf", "OnFailureOf", "Triggers", "TriggeredBy",
+            "ConflictedBy", "OnSuccessOf", "OnFailureOf",
         ] {
             p.insert(k.into(), strv(Vec::new()));
         }
+        let (triggers, triggered_by) = {
+            let idx = self.index.read().unwrap();
+            let t: Vec<String> = idx.triggers.get(id).cloned().into_iter().collect();
+            let by: Vec<String> = idx.triggers.iter().filter(|(_, u)| *u == id).map(|(t, _)| t.clone()).collect();
+            (t, by)
+        };
+        p.insert("Triggers".into(), strv(triggers));
+        p.insert("TriggeredBy".into(), strv(triggered_by));
         p.insert("Documentation".into(), words("Documentation"));
         p.insert("Description".into(), s(unit.description()));
         p.insert("AccessSELinuxContext".into(), s(""));
@@ -500,6 +511,48 @@ impl Daemon {
         p.insert("ProtectHome".into(), s(unit.get("Service", "ProtectHome").unwrap_or_else(|| "no".into())));
         p.insert("NoNewPrivileges".into(), Value::from(unit.get_bool("Service", "NoNewPrivileges", false)));
         self.cgroup_props(&mut p, id, unit);
+        p
+    }
+
+    fn timer_iface(&self, id: &str, unit: &Unit) -> Props {
+        use crate::timer;
+        let st = state::for_unit(&self.cfg.run_dir, id);
+        let mut p = Props::new();
+        let next_rt = st.get_u64(timer::NEXT_REALTIME);
+        let next_mono = st.get_u64(timer::NEXT_MONOTONIC);
+        let now = (util::now_realtime_usec() / 1_000_000) as i64;
+        let cals: Vec<(String, String, u64)> = timer::calendars(unit)
+            .into_iter()
+            .map(|(raw, spec)| match spec {
+                Some(sp) => {
+                    let n = sp.next_after(now).map(|t| t as u64 * 1_000_000).unwrap_or(0);
+                    ("OnCalendar".to_string(), sp.render(), n)
+                }
+                None => ("OnCalendar".to_string(), raw, 0),
+            })
+            .collect();
+        let monos: Vec<(String, u64, u64)> = timer::monotonic(unit)
+            .into_iter()
+            .map(|(_, prop, us)| (prop.to_string(), us, next_mono))
+            .collect();
+        p.insert("Unit".into(), s(timer::trigger_unit(unit)));
+        p.insert("TimersMonotonic".into(), Value::from(monos));
+        p.insert("TimersCalendar".into(), Value::from(cals));
+        p.insert("OnClockChange".into(), Value::from(unit.get_bool("Timer", "OnClockChange", false)));
+        p.insert("OnTimezoneChange".into(), Value::from(unit.get_bool("Timer", "OnTimezoneChange", false)));
+        p.insert("NextElapseUSecRealtime".into(), Value::from(next_rt));
+        p.insert("NextElapseUSecMonotonic".into(), Value::from(next_mono));
+        p.insert("LastTriggerUSec".into(), Value::from(st.get_u64(timer::LAST_TRIGGER)));
+        p.insert("LastTriggerUSecMonotonic".into(), Value::from(st.get_u64(timer::LAST_TRIGGER_MONO)));
+        p.insert("Result".into(), s("success"));
+        p.insert("AccuracyUSec".into(), Value::from(timespan(unit, "Timer", &["AccuracySec"], 60_000_000)));
+        p.insert("RandomizedDelayUSec".into(), Value::from(timespan(unit, "Timer", &["RandomizedDelaySec"], 0)));
+        p.insert("RandomizedOffsetUSec".into(), Value::from(0u64));
+        p.insert("FixedRandomDelay".into(), Value::from(unit.get_bool("Timer", "FixedRandomDelay", false)));
+        p.insert("Persistent".into(), Value::from(unit.get_bool("Timer", "Persistent", false)));
+        p.insert("WakeSystem".into(), Value::from(unit.get_bool("Timer", "WakeSystem", false)));
+        p.insert("RemainAfterElapse".into(), Value::from(unit.get_bool("Timer", "RemainAfterElapse", true)));
+        p.insert("DeferReactivation".into(), Value::from(false));
         p
     }
 

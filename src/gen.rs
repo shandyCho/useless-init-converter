@@ -70,6 +70,8 @@ pub struct Plan {
     /// Names provided by hand-written extra sources.
     pub extra_names: BTreeSet<String>,
     pub broken_cycles: Vec<String>,
+    /// timer -> unit it triggers
+    pub triggers: BTreeMap<String, String>,
 }
 
 const UNIT_KEYS: &[&str] = &[
@@ -77,6 +79,12 @@ const UNIT_KEYS: &[&str] = &[
     "Upholds", "Before", "After", "DefaultDependencies", "RefuseManualStart",
     "RefuseManualStop", "AllowIsolate", "IgnoreOnIsolate", "StopWhenUnneeded",
     "StartLimitIntervalSec", "StartLimitBurst", "SourcePath", "Conflicts",
+];
+
+const TIMER_KEYS: &[&str] = &[
+    "OnCalendar", "OnActiveSec", "OnBootSec", "OnStartupSec", "OnUnitActiveSec",
+    "OnUnitInactiveSec", "Unit", "Persistent", "RandomizedDelaySec", "FixedRandomDelay",
+    "AccuracySec", "RemainAfterElapse", "WakeSystem", "OnClockChange", "OnTimezoneChange",
 ];
 
 const SERVICE_KEYS: &[&str] = &[
@@ -147,7 +155,7 @@ pub fn plan(cfg: &Config) -> Plan {
         .into_iter()
         .filter(|n| {
             let ty = loader::unit_type(n);
-            (ty == "service" || ty == "target") && !n.contains("@.")
+            (ty == "service" || ty == "target" || ty == "timer") && !n.contains("@.")
         })
         .collect();
     let def = ld.load("default.target");
@@ -203,6 +211,11 @@ pub fn plan(cfg: &Config) -> Plan {
 
         match unit.utype() {
             "service" | "target" => {}
+            "timer" => {
+                let t = crate::timer::trigger_unit(&unit);
+                plan.triggers.insert(unit.id.clone(), t.clone());
+                queue.push(t);
+            }
             "socket" => {
                 let svc = unit.get("Socket", "Service").unwrap_or_else(|| {
                     let stem = unit.id.trim_end_matches(".socket");
@@ -238,7 +251,7 @@ pub fn plan(cfg: &Config) -> Plan {
         wants.extend(ld.dir_deps(&unit, "upholds"));
         let mut after = unit.get_words("Unit", "After");
         let before = unit.get_words("Unit", "Before");
-        if unit.utype() == "service" && unit.get_bool("Unit", "DefaultDependencies", true) {
+        if matches!(unit.utype(), "service" | "timer") && unit.get_bool("Unit", "DefaultDependencies", true) {
             requires.push("sysinit.target".into());
             after.push("basic.target".into());
         }
@@ -304,13 +317,17 @@ pub fn plan(cfg: &Config) -> Plan {
             }
         }
         deps.remove(id);
+        // Timers start their unit through the daemon.
+        if unit.utype() == "timer" && plan.extra_names.contains(&cfg.daemon_service) {
+            deps.insert(cfg.daemon_service.clone());
+        }
 
         let kind = if is_target {
             if *id == "sysinit.target" && plan.extra_names.contains(&cfg.sysinit_bundle) {
                 deps.insert(cfg.sysinit_bundle.clone());
             }
             Kind::Bundle
-        } else if longrun_type(unit) {
+        } else if unit.utype() == "timer" || longrun_type(unit) {
             Kind::Longrun
         } else {
             Kind::Oneshot
@@ -327,8 +344,18 @@ pub fn plan(cfg: &Config) -> Plan {
                     warnings.push(format!("[Service] {key}= is ignored"));
                 }
             }
+            for key in unit.file.keys_in("Timer") {
+                if !TIMER_KEYS.contains(&key) {
+                    warnings.push(format!("[Timer] {key}= is ignored"));
+                }
+            }
+            for (raw, spec) in crate::timer::calendars(unit) {
+                if spec.is_none() {
+                    warnings.push(format!("OnCalendar={raw} cannot be parsed"));
+                }
+            }
             for sec in unit.file.sections() {
-                if !["Unit", "Service", "Install"].contains(&sec) && !sec.starts_with("X-") {
+                if !["Unit", "Service", "Timer", "Install"].contains(&sec) && !sec.starts_with("X-") {
                     warnings.push(format!("[{sec}] section is ignored"));
                 }
             }
@@ -362,7 +389,10 @@ pub fn plan(cfg: &Config) -> Plan {
             .map(|s| format!("SIG{}", util::signal_name(s)))
             .filter(|s| !s[3..].chars().all(|c| c.is_ascii_digit()));
 
-        let log_atom = (kind == Kind::Longrun && cfg.log_dir.is_some() && !uses_tty_or_file(unit))
+        let log_atom = (kind == Kind::Longrun
+            && unit.utype() == "service"
+            && cfg.log_dir.is_some()
+            && !uses_tty_or_file(unit))
             .then(|| format!("{id}.log"));
 
         plan.units.insert(
@@ -490,6 +520,15 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
                 write_file(&sdir.join("timeout-up"), &format!("{}\n", p.timeout_up_ms), false)?;
                 write_file(&sdir.join("timeout-down"), &format!("{}\n", p.timeout_down_ms), false)?;
             }
+            Kind::Longrun if p.id.ends_with(".timer") => {
+                let arg = unit_arg(&p.id);
+                write_file(
+                    &sdir.join("run"),
+                    &format!("#!/bin/sh\nexec {runner} timer-run{args} {arg}\n"),
+                    true,
+                )?;
+                write_file(&sdir.join("notification-fd"), "3\n", false)?;
+            }
             Kind::Longrun => {
                 let arg = unit_arg(&p.id);
                 write_file(
@@ -558,6 +597,9 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
     for (a, id) in &plan.aliases {
         let _ = writeln!(idx, "alias\t{a}\t{id}");
     }
+    for (t, u) in &plan.triggers {
+        let _ = writeln!(idx, "trigger\t{t}\t{u}");
+    }
     if let Some(def) = &plan.default_target {
         let _ = writeln!(idx, "default\t{def}");
     }
@@ -612,6 +654,8 @@ pub struct Index {
     pub units: BTreeMap<String, (Kind, Option<String>)>,
     pub aliases: BTreeMap<String, String>,
     pub default_target: Option<String>,
+    /// timer -> triggered unit
+    pub triggers: BTreeMap<String, String>,
 }
 
 impl Index {
@@ -633,6 +677,9 @@ impl Index {
                     idx.aliases.insert(a.to_string(), id.to_string());
                 }
                 ["default", d] => idx.default_target = Some(d.to_string()),
+                ["trigger", t, u] => {
+                    idx.triggers.insert(t.to_string(), u.to_string());
+                }
                 _ => {}
             }
         }
