@@ -103,7 +103,24 @@ impl Config {
             .iter()
             .map(|s| s.to_string())
             .collect(),
-            include: Vec::new(),
+            // systemd's own services that run fine under sdcompat. logind and
+            // the user manager (user@.service) make GNOME and other desktops work.
+            include: [
+                "systemd-logind.service",
+                "systemd-user-sessions.service",
+                "systemd-hostnamed.service",
+                "systemd-localed.service",
+                "systemd-timedated.service",
+                "systemd-suspend.service",
+                "systemd-hibernate.service",
+                "systemd-hybrid-sleep.service",
+                "systemd-suspend-then-hibernate.service",
+                "systemd-logind-varlink.socket",
+                "systemd-hostnamed.socket",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
             dep_map: [
                 ("dbus.service", "dbus"),
                 ("dbus.socket", "dbus"),

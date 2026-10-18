@@ -32,6 +32,15 @@ pub fn slice_path(slice: &str) -> PathBuf {
     p
 }
 
+/// Parent slice of a slice: "user-1000.slice" -> "user.slice", "user.slice" -> "-.slice".
+pub fn parent_slice(slice: &str) -> String {
+    let stem = slice.trim_end_matches(".slice");
+    match stem.rsplit_once('-') {
+        Some((p, _)) if !p.is_empty() => format!("{p}.slice"),
+        _ => "-.slice".into(),
+    }
+}
+
 pub fn slice_of(unit: &Unit) -> String {
     unit.get("Service", "Slice")
         .or_else(|| unit.get("Scope", "Slice"))
@@ -89,8 +98,19 @@ fn parse_bytes(v: &str) -> Option<String> {
     Some(((n * mult as f64) as u64).to_string())
 }
 
+fn chown_delegated(dir: &Path, uid: u32, gid: u32) {
+    // cgroup v2 delegation: the directory and these three files.
+    for p in [dir.to_path_buf(), dir.join("cgroup.procs"), dir.join("cgroup.threads"), dir.join("cgroup.subtree_control")] {
+        if let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) {
+            unsafe { libc::chown(c.as_ptr(), uid, gid) };
+        }
+    }
+}
+
 /// Create the unit's cgroup, apply resource settings and move `pid` into it.
-pub fn enter(unit: &Unit, pid: u32) -> Result<PathBuf, String> {
+/// With Delegate=, the cgroup (and DelegateSubgroup=, which receives the
+/// process) is handed to `owner`.
+pub fn enter(unit: &Unit, pid: u32, owner: Option<(u32, u32)>) -> Result<PathBuf, String> {
     if !available() {
         return Err("cgroup2 not mounted".into());
     }
@@ -139,8 +159,25 @@ pub fn enter(unit: &Unit, pid: u32) -> Result<PathBuf, String> {
         set("pids.max", val);
     }
 
-    fs::write(dir.join("cgroup.procs"), pid.to_string())
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let delegate = unit
+        .get(&sec, "Delegate")
+        .map(|v| crate::unit::parse_bool(&v) != Some(false))
+        .unwrap_or(false);
+    let mut target = dir.clone();
+    if delegate {
+        if let Some(sub) = unit.get(&sec, "DelegateSubgroup") {
+            target = dir.join(sub);
+            fs::create_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+        }
+        if let Some((uid, gid)) = owner {
+            chown_delegated(&dir, uid, gid);
+            if target != dir {
+                chown_delegated(&target, uid, gid);
+            }
+        }
+    }
+    fs::write(target.join("cgroup.procs"), pid.to_string())
+        .map_err(|e| format!("{}: {e}", target.display()))?;
     Ok(dir)
 }
 

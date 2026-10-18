@@ -104,7 +104,7 @@ const SERVICE_KEYS: &[&str] = &[
     "CapabilityBoundingSet", "AmbientCapabilities", "Slice", "MemoryMax", "MemoryHigh",
     "MemoryLimit", "CPUQuota", "CPUWeight", "TasksMax", "IOWeight", "IgnoreSIGPIPE",
     "StartLimitIntervalSec", "StartLimitBurst", "UtmpIdentifier", "UtmpMode", "Delegate",
-    "RestartMode", "LimitCPU", "LimitFSIZE", "LimitDATA", "LimitSTACK", "LimitCORE", "LimitRSS",
+    "RestartMode", "PAMName", "DelegateSubgroup", "LimitCPU", "LimitFSIZE", "LimitDATA", "LimitSTACK", "LimitCORE", "LimitRSS",
     "LimitNOFILE", "LimitAS", "LimitNPROC", "LimitMEMLOCK", "LimitLOCKS", "LimitSIGPENDING",
     "LimitMSGQUEUE", "LimitNICE", "LimitRTPRIO", "LimitRTTIME", "SendSIGHUP", "TimeoutAbortSec",
 ];
@@ -412,7 +412,48 @@ pub fn plan(cfg: &Config) -> Plan {
     }
 
     break_cycles(&mut plan);
+    let aliases = plan.aliases.clone();
+    resolve_conflicts(&mut plan, &loaded, &aliases);
     plan
+}
+
+/// Conflicts=: if both units would start at boot, keep the one declaring the
+/// conflict (e.g. gdm.service over getty@tty1.service) and drop the other
+/// from every target, like systemd's transaction would.
+fn resolve_conflicts(plan: &mut Plan, loaded: &BTreeMap<String, Unit>, aliases: &BTreeMap<String, String>) {
+    let Some(def) = plan.default_target.clone() else { return };
+    let mut boot: BTreeSet<String> = BTreeSet::new();
+    let mut stack = vec![def];
+    while let Some(n) = stack.pop() {
+        if !boot.insert(n.clone()) {
+            continue;
+        }
+        if let Some(p) = plan.units.get(&n) {
+            stack.extend(p.deps.iter().cloned());
+        }
+    }
+    let mut drops: Vec<(String, String)> = Vec::new();
+    for (id, unit) in loaded {
+        if !boot.contains(id) {
+            continue;
+        }
+        for c in unit.get_words("Unit", "Conflicts") {
+            let c = aliases.get(&c).cloned().unwrap_or(c);
+            if boot.contains(&c) && plan.units.contains_key(&c) {
+                drops.push((id.clone(), c));
+            }
+        }
+    }
+    for (keeper, dropped) in drops {
+        for p in plan.units.values_mut() {
+            if p.kind == Kind::Bundle {
+                p.deps.remove(&dropped);
+            }
+        }
+        if let Some(p) = plan.units.get_mut(&dropped) {
+            p.warnings.push(format!("not started at boot: conflicts with {keeper}"));
+        }
+    }
 }
 
 fn uses_tty_or_file(unit: &Unit) -> bool {
@@ -487,7 +528,7 @@ fn write_file(path: &Path, content: &str, exec: bool) -> std::io::Result<()> {
 }
 
 /// Argument form of a unit name that is safe for both sh and execline.
-fn unit_arg(name: &str) -> String {
+pub fn unit_arg(name: &str) -> String {
     if name.bytes().all(|b| b.is_ascii_alphanumeric() || b"@:._-".contains(&b)) {
         format!("-- {name}")
     } else {

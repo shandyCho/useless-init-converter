@@ -18,7 +18,6 @@ Requires:       execline
 Requires:       dbus-daemon
 Requires:       util-linux
 Recommends:     s6-linux-init
-Recommends:     elogind
 Recommends:     rsyslog
 
 %description

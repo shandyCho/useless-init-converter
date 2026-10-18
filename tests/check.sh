@@ -115,6 +115,35 @@ expect_state later.timer active/waiting
 next=$(prop later.timer Timer NextElapseUSecRealtime)
 [ "$next" -ge 4070800000000000 ] && ok "far-future NextElapseUSecRealtime=$next" || bad "later.timer next=$next"
 
+echo "== on-demand instances"
+call StartUnit ss inst@a.service replace
+expect_state inst@a.service active/running
+expect_state prep@a.service active/exited
+expect_eq "BindsTo dependency ran first" "$(head -1 "$R/prep.out" 2>/dev/null)" "up a"
+$B call $MGR ListUnits | grep -q '"inst@a.service"' && ok "instance listed" || bad "instance not in ListUnits"
+call StopUnit ss prep@a.service replace
+expect_state inst@a.service inactive/dead
+expect_state prep@a.service inactive/dead
+expect_eq "ExecStop of the instance ran" "$(tail -1 "$R/prep.out")" "down a"
+
+echo "== conflicts"
+expect_state winner.service active/running
+expect_state loser.service inactive/dead
+call StartUnit ss loser.service replace
+expect_state loser.service active/running
+call RestartUnit ss winner.service replace
+expect_state loser.service inactive/dead
+
+echo "== Service= sockets"
+call StartUnit ss vl.service replace
+expect_state vl.service active/running
+expect_eq "socket found via Service=" "$(cat "$R/vl.out" 2>/dev/null)" "fds=1 names=varlink"
+
+echo "== logind shutdown request"
+call StartUnit ss poweroff.target replace-irreversibly
+sleep 0.5
+[ -e "$R/poweroff-requested" ] && ok "poweroff.target ran POWEROFF_CMD" || bad "poweroff.target did nothing"
+
 echo "== transient scope"
 sleep 1000 &
 spid=$!

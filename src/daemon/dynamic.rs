@@ -1,0 +1,285 @@
+//! On-demand template instances (user@1000.service, user-runtime-dir@1000.service,
+//! getty@tty3.service, ...) that are not in the compiled s6-rc database.
+//!
+//! Longruns get a service directory under RUN_DIR/dyn linked into the s6
+//! scan directory (s6-svlink), with a log/ subdirectory for s6-log. Oneshots
+//! are run directly. Their dependencies are started first, and units that
+//! require a stopped unit are stopped with it.
+
+use std::collections::BTreeSet;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use tokio::process::Command;
+
+use super::Daemon;
+use crate::gen::Kind;
+use crate::loader::{self, Unit};
+use crate::state::{self, keys};
+use crate::util;
+
+pub struct Dynamic {
+    pub kind: Kind,
+    /// Oneshot with RemainAfterExit=yes that is currently up.
+    pub active: bool,
+}
+
+fn write(path: PathBuf, content: &str, exec: bool) -> std::io::Result<()> {
+    fs::write(&path, content)?;
+    if exec {
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
+impl Daemon {
+    /// Only instances of templates are created on demand; other units come
+    /// from the compiled database.
+    pub(super) fn can_be_dynamic(&self, id: &str, unit: &Unit) -> bool {
+        unit.is_loaded()
+            && unit.utype() == "service"
+            && loader::parse_name(id).map(|n| n.instance.is_some()).unwrap_or(false)
+            && !self.cfg.is_excluded(id)
+            && self.kind_of(id).is_none()
+    }
+
+    pub(super) fn dynamic_kind(&self, id: &str) -> Option<Kind> {
+        self.dynamic.lock().unwrap().get(id).map(|d| d.kind)
+    }
+
+    fn dyn_dir(&self, id: &str) -> PathBuf {
+        self.cfg.run_dir.join("dyn").join(id)
+    }
+
+    fn write_servicedir(&self, id: &str, unit: &Unit) -> Result<PathBuf, String> {
+        let dir = self.dyn_dir(id);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let runner = self.cfg.runner.display().to_string();
+        let args = self.cfg.runner_args();
+        let arg = crate::gen::unit_arg(id);
+        let e = |e: std::io::Error| e.to_string();
+        write(dir.join("run"), &format!("#!/bin/sh\nexec {runner} run{args} {arg}\n"), true).map_err(e)?;
+        write(dir.join("finish"), &format!("#!/bin/sh\nexec {runner} finish{args} {arg} \"$@\"\n"), true).map_err(e)?;
+        write(dir.join("notification-fd"), "3\n", false).map_err(e)?;
+        write(dir.join("down"), "", false).map_err(e)?;
+        let restart_sec = unit
+            .get("Service", "RestartSec")
+            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
+            .unwrap_or(100_000);
+        write(dir.join("timeout-finish"), &format!("{}\n", restart_sec / 1000 + 5000), false).map_err(e)?;
+        let stop = unit
+            .get("Service", "TimeoutStopSec")
+            .or_else(|| unit.get("Service", "TimeoutSec"))
+            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
+            .unwrap_or(90_000_000);
+        if stop != u64::MAX {
+            write(dir.join("timeout-kill"), &format!("{}\n", stop / 1000), false).map_err(e)?;
+        }
+        if let Some(sig) = unit.get("Service", "KillSignal").and_then(|s| util::signal_number(&s)) {
+            if sig != libc::SIGTERM {
+                write(dir.join("down-signal"), &format!("SIG{}\n", util::signal_name(sig)), false).map_err(e)?;
+            }
+        }
+        if let Some(log_dir) = &self.cfg.log_dir {
+            let ldir = dir.join("log");
+            fs::create_dir_all(&ldir).map_err(e)?;
+            let logdir = util::sh_quote(&log_dir.join(id).display().to_string());
+            write(
+                ldir.join("run"),
+                &format!("#!/bin/sh\nmkdir -p {logdir} || exit 1\nexec s6-log n10 s1000000 T {logdir}\n"),
+                true,
+            )
+            .map_err(e)?;
+        }
+        Ok(dir)
+    }
+
+    /// Dependencies to start before a unit: (name, required).
+    fn start_deps(unit: &Unit) -> Vec<(String, bool)> {
+        let after: BTreeSet<String> = unit.get_words("Unit", "After").into_iter().collect();
+        let mut out = Vec::new();
+        for key in ["Requires", "Requisite", "BindsTo"] {
+            for d in unit.get_words("Unit", key) {
+                out.push((d, true));
+            }
+        }
+        for d in unit.get_words("Unit", "Wants") {
+            if after.contains(&d) {
+                out.push((d, false));
+            }
+        }
+        out
+    }
+
+    /// Start any unit: database, dynamic instance, or transient.
+    pub(super) async fn start_any(&self, name: &str) -> &'static str {
+        let (id, unit) = self.load_unit(name);
+        if self.transient.lock().unwrap().contains_key(&id) {
+            return "done";
+        }
+        if self.kind_of(&id).is_some() {
+            let active = self.active_atoms().await;
+            if self.unit_status(&id, &active, &unit).await.active == "active" {
+                return "done";
+            }
+            return self.do_start(&id, &unit, false).await;
+        }
+        if self.can_be_dynamic(&id, &unit) {
+            return Box::pin(self.dyn_start(&id, &unit)).await;
+        }
+        // Not loadable, excluded, or a type we do not run: treat as satisfied,
+        // as the generator does for dropped dependencies.
+        "done"
+    }
+
+    pub(super) async fn dyn_start(&self, id: &str, unit: &Unit) -> &'static str {
+        for (dep, required) in Self::start_deps(unit) {
+            if dep == id {
+                continue;
+            }
+            let r = Box::pin(self.start_any(&dep)).await;
+            if required && r != "done" {
+                eprintln!("sdcompatd: {id}: dependency {dep} failed ({r})");
+                return "dependency";
+            }
+        }
+        self.stop_conflicts(id, unit).await;
+
+        let oneshot = unit.get("Service", "Type").as_deref() == Some("oneshot")
+            || unit.file.get("Service", "ExecStart").is_none();
+        if oneshot {
+            if self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false) {
+                return "done";
+            }
+            let ok = self.run_runner("up", id, None).await;
+            let remain = unit.get_bool("Service", "RemainAfterExit", false);
+            self.dynamic
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), Dynamic { kind: Kind::Oneshot, active: ok && remain });
+            return if ok { "done" } else { "failed" };
+        }
+
+        let already = self.dynamic.lock().unwrap().contains_key(id);
+        if !already {
+            let dir = match self.write_servicedir(id, unit) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("sdcompatd: {id}: {e}");
+                    return "failed";
+                }
+            };
+            let Ok(scan) = fs::canonicalize(self.cfg.live_dir.join("scandir")) else {
+                eprintln!("sdcompatd: {id}: no s6 scan directory");
+                return "failed";
+            };
+            let st = Command::new("s6-svlink")
+                .args(["-d", "-t", "5000"])
+                .arg(&scan)
+                .arg(&dir)
+                .arg(id)
+                .status()
+                .await;
+            if !st.map(|s| s.success()).unwrap_or(false) {
+                eprintln!("sdcompatd: {id}: s6-svlink failed");
+                return "failed";
+            }
+            self.dynamic
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), Dynamic { kind: Kind::Longrun, active: false });
+        }
+        let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(id)).status().await;
+        self.wait_ready(id, unit, None).await
+    }
+
+    /// Dynamic units that require (Requires/BindsTo) `id`.
+    fn dyn_dependents(&self, id: &str) -> Vec<String> {
+        let names: Vec<String> = self.dynamic.lock().unwrap().keys().cloned().collect();
+        names
+            .into_iter()
+            .filter(|n| n != id)
+            .filter(|n| {
+                let (_, u) = self.load_unit(n);
+                ["Requires", "BindsTo", "Requisite"]
+                    .iter()
+                    .any(|k| u.get_words("Unit", k).iter().any(|d| d == id))
+            })
+            .collect()
+    }
+
+    pub(super) async fn dyn_stop(&self, id: &str, unit: &Unit) -> &'static str {
+        for dep in self.dyn_dependents(id) {
+            let (_, du) = self.load_unit(&dep);
+            Box::pin(self.dyn_stop(&dep, &du)).await;
+        }
+        let Some(kind) = self.dynamic_kind(id) else { return "done" };
+        if kind == Kind::Oneshot {
+            let active = self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false);
+            if active {
+                self.run_runner("down", id, None).await;
+            }
+            self.dynamic.lock().unwrap().remove(id);
+            return "done";
+        }
+        let sv = self.svstat(id).await.unwrap_or_default();
+        if sv.up && !unit.get_all("Service", "ExecStop").is_empty() {
+            self.run_runner("stop-exec", id, Some(sv.pid)).await;
+        }
+        let _ = Command::new("s6-svc").args(["-wD", "-d", "-T", "120000"]).arg(self.scandir(id)).status().await;
+        if let Ok(scan) = fs::canonicalize(self.cfg.live_dir.join("scandir")) {
+            let _ = Command::new("s6-svunlink").arg(&scan).arg(id).status().await;
+        }
+        // Give s6-supervise a moment to exit before removing its directory.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = fs::remove_dir_all(self.dyn_dir(id));
+        self.dynamic.lock().unwrap().remove(id);
+        "done"
+    }
+
+    pub(super) async fn dyn_restart(&self, id: &str, unit: &Unit) -> &'static str {
+        self.stop_conflicts(id, unit).await;
+        match self.dynamic_kind(id) {
+            Some(Kind::Longrun) => {
+                let sv = self.svstat(id).await.unwrap_or_default();
+                if !sv.up {
+                    return self.dyn_start(id, unit).await;
+                }
+                if !unit.get_all("Service", "ExecStop").is_empty() {
+                    self.run_runner("stop-exec", id, Some(sv.pid)).await;
+                }
+                state::for_unit(&self.cfg.run_dir, id).set(keys::RESTART_REQUESTED, "1");
+                let _ = Command::new("s6-svc").arg("-r").arg(self.scandir(id)).status().await;
+                self.wait_ready(id, unit, Some(sv.pid)).await
+            }
+            Some(_) => {
+                self.dyn_stop(id, unit).await;
+                self.dyn_start(id, unit).await
+            }
+            None => self.dyn_start(id, unit).await,
+        }
+    }
+
+    /// Stop units listed in Conflicts= before starting `id`.
+    pub(super) async fn stop_conflicts(&self, id: &str, unit: &Unit) {
+        for c in unit.get_words("Unit", "Conflicts") {
+            let (cid, cu) = self.load_unit(&c);
+            if cid == id {
+                continue;
+            }
+            let active = self.active_atoms().await;
+            let st = self.unit_status(&cid, &active, &cu).await;
+            if matches!(st.active, "active" | "activating" | "reloading") {
+                eprintln!("sdcompatd: stopping {cid} (conflicts with {id})");
+                if self.dynamic_kind(&cid).is_some() {
+                    Box::pin(self.dyn_stop(&cid, &cu)).await;
+                } else {
+                    Box::pin(self.do_stop(&cid, &cu)).await;
+                }
+            }
+        }
+    }
+}

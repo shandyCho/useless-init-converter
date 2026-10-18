@@ -36,6 +36,7 @@ PRIVATE_SOCKET=$R/private
 BUS_ADDRESS=unix:path=$R/bus
 ALLOW_UIDS=$(id -u)
 RUNNER=$BIN
+POWEROFF_CMD=touch $R/poweroff-requested
 EOF
 
 cat > "$U/multi-user.target" <<EOF
@@ -183,6 +184,59 @@ Description=Far-future timer
 [Timer]
 OnCalendar=2099-01-01 00:00:00
 EOF
+# --- on-demand template instances (like user@UID.service) ---
+cat > "$U/prep@.service" <<EOF
+[Unit]
+Description=Prepare %i (like user-runtime-dir@)
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo up %i >> $R/prep.out'
+ExecStop=/bin/sh -c 'echo down %i >> $R/prep.out'
+EOF
+cat > "$U/inst@.service" <<EOF
+[Unit]
+Description=Instance %i (like user@)
+BindsTo=prep@%i.service
+After=prep@%i.service
+[Service]
+Type=notify
+ExecStart=/bin/sh -c '$BIN notify --ready; exec sleep 1000'
+EOF
+
+# --- Conflicts= (like gdm.service vs getty@tty1.service) ---
+cat > "$U/winner.service" <<EOF
+[Unit]
+Description=Declares the conflict
+Conflicts=loser.service
+[Service]
+ExecStart=/bin/sleep 1000
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > "$U/loser.service" <<EOF
+[Unit]
+Description=Conflicted unit
+[Service]
+ExecStart=/bin/sleep 1000
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# --- socket matched by Service= (like systemd-logind-varlink.socket) ---
+cat > "$U/vl.service" <<EOF
+[Service]
+ExecStart=/bin/sh -c 'echo "fds=\$LISTEN_FDS names=\$LISTEN_FDNAMES" > $R/vl.out; exec sleep 1000'
+EOF
+cat > "$U/vl-varlink.socket" <<EOF
+[Socket]
+ListenStream=$R/vl.sock
+FileDescriptorName=varlink
+Service=vl.service
+[Install]
+WantedBy=sockets.target
+EOF
+
 mkdir -p "$W/state/timers"
 echo 1000000000000000 > "$W/state/timers/persist.timer"
 
@@ -192,7 +246,7 @@ disable *
 EOF
 
 C="--config $W/sdcompat.conf"
-"$BIN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer >/dev/null
+"$BIN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket >/dev/null
 "$BIN" $C preset notifier.service >/dev/null
 "$BIN" $C reload --no-update
 

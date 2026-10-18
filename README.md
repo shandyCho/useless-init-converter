@@ -26,24 +26,35 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 | `sdcompat reload` | Translates every unit into an s6-rc source tree, compiles it together with your hand-written s6 services (`EXTRA_SOURCE`) and switches the live state (`s6-rc-update`). Writes a coverage report. |
 | `sdcompat daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
 | `sdcompat run/finish/up/down` | Called by the generated s6 scripts; does what systemd does between `fork()` and `exec()`. |
+| `sdcompat timer-run` | Runs one `.timer` as an s6 longrun: computes elapses and asks the daemon to start the unit. |
+| `sdcompat start/stop/restart UNIT` | Minimal client for the daemon (private socket or bus). |
 | `sdcompat notify` | `systemd-notify` replacement. |
 | `sdcompat log UNIT [-f]` | Shows a service's s6-log output (there is no journal). |
 | `sdcompat enable/disable/mask/preset/is-enabled` | Offline unit file management. |
 
 ## What is implemented
 
-**Translation** (`.service` → longrun/oneshot, `.target` → bundle)
+**Translation** (`.service` → longrun/oneshot, `.target` → bundle, `.timer` → longrun)
 - `Requires=`, `Requisite=`, `BindsTo=`, and `Wants=` combined with `After=`/`Before=`, become s6-rc dependencies. Targets pull in all of their `Wants=`.
 - `.wants/`, `.requires/` and `.upholds/` directories, aliases, templates/instances, masking, drop-ins, specifiers.
 - Implicit dependencies: `DefaultDependencies=` → `sysinit.target`; `Type=dbus` → `dbus.socket`.
 - Dependency cycles are broken (and reported) instead of failing the compile.
 - `DEP_MAP` maps systemd units to hand-written s6 services. For example, `dbus.service` → `dbus`.
-- An enabled `.socket` pulls in its service. The runner binds the sockets.
+- An enabled `.socket` pulls in its service. The runner binds the sockets, matched by name or by `Service=`.
+- `Conflicts=`: if both units would start at boot, the conflicted one is dropped from the targets (for example `gdm.service` over `getty@tty1.service`). At runtime, starting or restarting a unit stops the units it conflicts with.
+
+**Timers**
+- `OnCalendar=` with the full `systemd.time(7)` syntax: weekdays, lists, ranges, `/step` repetitions, `~` (days from the end of the month), the shorthands, and `UTC` or IANA time zones.
+- `OnBootSec=`, `OnStartupSec=`, `OnActiveSec=`, `OnUnitActiveSec=`, `OnUnitInactiveSec=`.
+- `Persistent=` (catches up a missed run), `RandomizedDelaySec=`, `FixedRandomDelay=`, `Unit=`.
+- `systemctl list-timers` and `systemctl status x.timer` show next and last elapse.
 
 **Execution** (runner)
 - `Type=simple|exec|notify|notify-reload|dbus|forking|oneshot|idle`. Readiness for each type is mapped onto s6's notification fd.
 - `ExecStartPre/Post`, `ExecCondition`, `ExecStop`, `ExecStopPost`, `ExecReload`, with the `-@+!:` prefixes and `$VAR`/`${VAR}` expansion.
 - `User=`, `Group=`, `SupplementaryGroups=`. `DynamicUser=` is approximated by a persistent system user.
+- `PAMName=`: opens a PAM session, runs the service in a child process, and closes the session when it exits, like systemd. libpam is loaded at runtime.
+- `Delegate=` and `DelegateSubgroup=`: the unit's cgroup is handed to the service user (needed by `systemd --user`).
 - `Environment=`, `EnvironmentFile=`, `PassEnvironment=`, `UnsetEnvironment=`, `WorkingDirectory=`, `RootDirectory=`, `UMask=`, `Nice=`, `OOMScoreAdjust=`, `Limit*=`.
 - `Runtime/State/Cache/Logs/ConfigurationDirectory=`.
 - `StandardInput/Output/Error=` (null, tty, file:, append:, truncate:), `TTYPath=` and `TTYVHangup=`, which are enough for `getty@.service`.
@@ -58,15 +69,18 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 - Queries: `GetUnit`, `LoadUnit`, `GetUnitByPID`, `ListUnits*`, `ListJobs`, `GetUnitProcesses`. Unit, Service, Target, Scope and Job properties are available, including `GetAll("")`.
 - Unit files: `Enable/Disable/Reenable/Mask/Unmask/Preset*UnitFiles`, `GetUnitFileState`, `ListUnitFiles*`, `Get/SetDefaultTarget`.
 - Manager: `Reload`/`Reexecute` (regenerate and update the s6 database), `KillUnit`, `ResetFailed*`, `Set/UnsetEnvironment`, `PowerOff/Reboot/Halt`.
-- Transient units: `StartTransientUnit` for `.scope` units only (used by podman, flatpak and KDE).
+- Transient units: `StartTransientUnit` for `.scope` and `.slice` units, with `PIDs` or `PIDFDs` (used by logind, podman and flatpak). Also `AttachProcessesToUnit`, `Scope.Abandon`, and the reference-counting calls (accepted).
+- Template instances are created on demand without recompiling the database, for example `user@1000.service` and `user-runtime-dir@1000.service`. Their dependencies start first, and units that require a stopped unit are stopped with it.
+- Starting `poweroff.target`, `reboot.target` or `halt.target` (which is how logind powers off) runs the configured shutdown command.
 - D-Bus activation: answers dbus-daemon's `ActivationRequest` and replies with `ActivationFailure` when a start fails.
 - Authorization: mutating calls require root, or a uid listed in `ALLOW_UIDS`.
 
 ## Not implemented (yet)
 
-- `.timer`, `.path`, `.mount`, `.automount`, `.swap` units. They are skipped and listed in the report. Mounts come from `/etc/fstab` (see `dist/early`).
+- `.path`, `.mount`, `.automount`, `.swap` units. They are skipped and listed in the report. Mounts come from `/etc/fstab` (see `dist/early`).
 - `Accept=yes` sockets, and on-demand socket activation: services are started eagerly, with their sockets.
-- Transient `.service` units (`systemd-run`) and the per-user manager (`systemd --user`). GNOME needs the user manager; KDE, Xfce and Sway don't.
+- Transient `.service` units (`systemd-run` on the system manager). Inside a user session `systemd-run --user` works, because the user manager is the real one.
+- `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`.
 - The journal. Logs are in `/var/log/sdcompat/<unit>/current` (s6-log), so `journalctl` shows nothing.
 - `dnf system-upgrade` and offline updates, because they depend on systemd's offline update target.
 - Watchdog, file descriptor store, credentials (`LoadCredential=`), `PrivateDevices/Network/Users`, seccomp, `ProtectKernel*`.
@@ -77,7 +91,7 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 ```sh
 cargo build
 tests/sandbox.sh ~/sdc-sandbox        # private s6-svscan, s6-rc and D-Bus bus
-tests/check.sh ~/sdc-sandbox          # 37 scenario checks over D-Bus
+tests/check.sh ~/sdc-sandbox          # 59 scenario checks over D-Bus
 tests/systemctl.sh status hello.service   # the real systemctl, in a namespace
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop
@@ -96,10 +110,10 @@ dnf's dependencies and protected packages aren't affected. The systemd
 package's own RPM file triggers (`systemctl daemon-reload`, `systemctl preset`)
 reach sdcompat, so `dnf install` behaves as before.
 
-1. **Install the pieces:** `s6`, `s6-rc`, `execline`, `s6-linux-init` (build from skarnet.org if your Fedora release lacks one), `dbus-daemon`, `elogind`, `rsyslog`, and sdcompat itself (`dist/sdcompat.spec`).
+1. **Install the pieces:** `s6`, `s6-rc`, `execline`, `s6-linux-init` (build from skarnet.org if your Fedora release lacks one), `dbus-daemon`, `rsyslog`, and sdcompat itself (`dist/sdcompat.spec`).
 2. **Logging:** in `/etc/rsyslog.conf`, replace `imjournal` with `imuxsock`, because there is no journald.
 3. **Early boot:** review `/etc/sdcompat/s6/` (the `sdcompat-sysinit` bundle: API mounts, udev, fstab, tmpfiles, sysusers, sysctl, modules, hostname, syslog). It replaces the systemd units that only work under systemd as PID 1, which are excluded by default (`systemd-*`).
-4. **Login:** elogind provides `org.freedesktop.login1`. Add it as an s6 service in `/etc/sdcompat/s6`, and switch `pam_systemd.so` to `pam_elogind.so` with a custom authselect profile.
+4. **Login:** use Fedora's own `systemd-logind` (included by default, see below). The PAM stack stays unchanged: `pam_systemd.so` talks to logind as usual. Don't install elogind.
 5. **Build the database once:** `sdcompat reload --no-update`, then read `/var/lib/sdcompat/current/report.txt`.
 6. **Set up s6-linux-init:** copy `/usr/share/sdcompat/s6-linux-init/rc.init` into your s6-linux-init skel directory and run `s6-linux-init-maker` (boot bundle `default`).
 7. **SELinux:** boot with `init=/usr/sbin/init-selinux` (it loads the policy, then execs s6-linux-init). Start in permissive mode, collect AVCs with `ausearch -m AVC -ts boot | audit2allow -M sdcompat_local`, and review them before loading.
@@ -133,6 +147,36 @@ translated without starting anything:
 sudo sdcompat --config /etc/sdcompat/sdcompat.conf plan | less
 ```
 
+## GNOME and the user manager
+
+GNOME 49 starts the whole session through a user service manager, and gnome-shell
+places applications in transient scopes there. sdcompat therefore doesn't
+reimplement `systemd --user`: it runs the **real user manager as an ordinary
+supervised service**, and provides the PID 1 API that logind and the user
+manager use. systemd is still not PID 1. What happens at login:
+
+1. GDM (or `login`) runs the PAM stack. `pam_systemd` asks **systemd-logind** (generated from Fedora's unit) to create a session.
+2. logind asks PID 1, which is sdcompat, to create `user-1000.slice` and `session-N.scope` (`StartTransientUnit` with `PIDFDs`), then to start `user@1000.service`.
+3. sdcompat creates `user@1000.service` on demand. Its `BindsTo=user-runtime-dir@1000.service` dependency runs first. The runner opens the `systemd-user` PAM session (`PAMName=`), delegates `user.slice/user-1000.slice/user@1000.service` to UID 1000 with the process in `init.scope` (`Delegate=`, `DelegateSubgroup=`), and execs `/usr/lib/systemd/systemd --user`. Readiness comes from `Type=notify-reload`.
+4. The user manager starts the session bus (dbus-broker user units) and GNOME's user targets. `systemctl --user`, `systemd-run --user` and app scopes all work inside the session, because that part is real systemd.
+5. On logout, logind stops the scope and later `user@1000.service`. Power off and reboot from the GNOME menu go through logind, which starts `poweroff.target` or `reboot.target`; sdcompat runs the shutdown command for those.
+
+Setup on top of the steps above:
+
+```sh
+dnf install gdm gnome-shell gnome-session   # Workstation already has these; keep dbus-broker installed for the user bus
+systemctl enable gdm.service                 # display-manager.service alias
+systemctl set-default graphical.target
+```
+
+**Status:** the D-Bus side of this flow (on-demand instances with `BindsTo=`,
+conflicts, `Service=` sockets, shutdown targets) is covered by the sandbox
+tests. The parts that need root (cgroup delegation, PAM sessions,
+`StartTransientUnit` creating cgroups, the real logind and `systemd --user`)
+are implemented but **untested**. Try them on Fedora in a VM, and check
+`/var/log/sdcompat/systemd-logind.service/current` and
+`sdcompat log user@1000.service` if login fails.
+
 ## Configuration
 
 `/etc/sdcompat/sdcompat.conf` (`KEY=VALUE`; see `dist/sdcompat.conf` for all keys
@@ -143,6 +187,7 @@ and defaults). The most important keys:
 - `EXTRA_SOURCE`: hand-written s6-rc sources compiled into the same database.
 - `LOG_DIR`: one s6-log pipeline per service (empty disables).
 - `ALLOW_UIDS`: non-root users allowed to manage units.
+- `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated and the sleep services.
 
 ## Source layout
 
@@ -156,7 +201,12 @@ src/socket.rs      socket units (sd_listen_fds)
 src/sandbox.rs     namespaces and capabilities subset
 src/cgroup.rs      systemd-compatible cgroup layout and resource control
 src/conditions.rs  Condition*/Assert*
-src/daemon/        D-Bus API: dispatch, properties, s6 backend, private socket
+src/calendar.rs    OnCalendar= parser and next-elapse search
+src/timer.rs       timer runner (one s6 longrun per .timer)
+src/pam.rs         PAMName= via dlopen(libpam)
+src/client.rs      small client for the daemon
+src/daemon/        D-Bus API: dispatch, properties, s6 backend, private socket,
+                   on-demand instances (dynamic.rs)
 dist/              D-Bus policy, config, s6 services, s6-linux-init, RPM spec
 tests/             unprivileged sandbox, scenario checks, systemctl wrapper
 ```

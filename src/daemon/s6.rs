@@ -182,7 +182,7 @@ impl Daemon {
         let mut s = Status { active: "inactive", sub: "dead", main_pid: 0, result: result.clone(), condition_ok };
 
         if let Some(scope) = self.transient.lock().unwrap().get(id) {
-            let populated = !util::cgroup_pids(&scope.cgroup).is_empty();
+            let populated = scope.kind == "slice" || !util::cgroup_pids(&scope.cgroup).is_empty();
             s.active = if populated { "active" } else { "inactive" };
             s.sub = if populated { "running" } else { "dead" };
             return s;
@@ -197,6 +197,28 @@ impl Daemon {
             if job.jtype != "reload" {
                 return s;
             }
+        }
+
+        if let Some(kind) = self.dynamic_kind(id) {
+            if kind == Kind::Oneshot {
+                let up = self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false);
+                if up {
+                    (s.active, s.sub) = ("active", "exited");
+                } else if failed_result {
+                    (s.active, s.sub) = ("failed", "failed");
+                }
+                return s;
+            }
+            let Some(sv) = self.svstat(id).await else { return s };
+            if sv.up {
+                s.main_pid = st.get(keys::MAIN_PID).and_then(|p| p.parse().ok()).unwrap_or(sv.pid);
+                (s.active, s.sub) = if sv.ready { ("active", "running") } else { ("activating", "start") };
+            } else if sv.wanted_up {
+                (s.active, s.sub) = ("activating", "auto-restart");
+            } else if failed_result {
+                (s.active, s.sub) = ("failed", "failed");
+            }
+            return s;
         }
 
         match self.kind_of(id) {
@@ -295,7 +317,7 @@ impl Daemon {
         }
     }
 
-    async fn run_runner(&self, sub: &str, id: &str, main_pid: Option<u32>) -> bool {
+    pub(super) async fn run_runner(&self, sub: &str, id: &str, main_pid: Option<u32>) -> bool {
         let mut c = self.runner_cmd(sub);
         if let Some(p) = main_pid {
             c.arg("--mainpid").arg(p.to_string());
@@ -324,7 +346,7 @@ impl Daemon {
     }
 
     /// Wait until a longrun is up and ready (and, if `old_pid` is given, has a new PID).
-    async fn wait_ready(&self, id: &str, unit: &Unit, old_pid: Option<u32>) -> &'static str {
+    pub(super) async fn wait_ready(&self, id: &str, unit: &Unit, old_pid: Option<u32>) -> &'static str {
         let started_at = util::now_realtime_usec();
         let deadline = Instant::now() + Self::start_timeout(unit);
         let st = state::for_unit(&self.cfg.run_dir, id);
@@ -350,6 +372,7 @@ impl Daemon {
     }
 
     pub(super) async fn do_start(&self, id: &str, unit: &Unit, isolate: bool) -> &'static str {
+        self.stop_conflicts(id, unit).await;
         let started_at = util::now_realtime_usec();
         let kind = self.kind_of(id);
         let active = self.active_atoms().await;
@@ -460,6 +483,9 @@ impl Daemon {
 
     pub(super) async fn do_restart(&self, id: &str, unit: &Unit, only_if_active: bool) -> &'static str {
         let active = self.active_atoms().await;
+        if !only_if_active || active.contains(id) {
+            self.stop_conflicts(id, unit).await;
+        }
         match self.kind_of(id) {
             Some(Kind::Longrun) if active.contains(id) => {
                 let sv = self.svstat(id).await.unwrap_or_default();

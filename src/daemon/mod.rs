@@ -5,6 +5,7 @@
 //! Dispatch is done by hand (no zbus ObjectServer) because systemd clients
 //! rely on details such as Properties.GetAll("") returning every interface.
 
+mod dynamic;
 mod introspect;
 mod private;
 mod props;
@@ -71,7 +72,10 @@ pub struct Peer {
 }
 
 pub struct Transient {
+    /// "scope" or "slice"
+    pub kind: &'static str,
     pub cgroup: PathBuf,
+    pub send_sighup: bool,
     pub slice: String,
     pub description: String,
 }
@@ -94,6 +98,8 @@ pub struct Daemon {
     pub atom_order: Mutex<Option<(PathBuf, Vec<String>)>>,
     /// Peer-to-peer connections on the private socket (signals go to these too).
     pub private: Mutex<Vec<(u64, Connection)>>,
+    /// Template instances started on demand (see dynamic.rs).
+    pub dynamic: Mutex<BTreeMap<String, dynamic::Dynamic>>,
 }
 
 struct DErr {
@@ -117,6 +123,39 @@ pub fn unit_path(name: &str) -> String {
 
 pub fn job_path(id: u32) -> String {
     format!("{JOB_PREFIX}{id}")
+}
+
+/// Targets/services that mean "shut the machine down" (logind starts these).
+fn shutdown_action(id: &str) -> Option<&'static str> {
+    match id {
+        "poweroff.target" | "systemd-poweroff.service" => Some("poweroff"),
+        "reboot.target" | "systemd-reboot.service" | "ctrl-alt-del.target" | "kexec.target"
+        | "systemd-kexec.service" | "soft-reboot.target" | "systemd-soft-reboot.service" => Some("reboot"),
+        "halt.target" | "systemd-halt.service" => Some("halt"),
+        _ => None,
+    }
+}
+
+/// PIDs behind the pidfds of a PIDFDs (ah) property.
+fn pids_from_pidfds(v: &OwnedValue) -> Vec<u32> {
+    use std::os::fd::AsRawFd;
+    let mut out = Vec::new();
+    if let Value::Array(a) = &**v {
+        for item in a.iter() {
+            if let Value::Fd(fd) = item {
+                let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd())).unwrap_or_default();
+                if let Some(pid) = info
+                    .lines()
+                    .find_map(|l| l.strip_prefix("Pid:"))
+                    .and_then(|p| p.trim().parse::<i64>().ok())
+                    .filter(|&p| p > 0)
+                {
+                    out.push(pid as u32);
+                }
+            }
+        }
+    }
+    out
 }
 
 fn op(p: String) -> ObjectPath<'static> {
@@ -271,6 +310,9 @@ impl Daemon {
     /// Validate a job request; returns the canonical unit id.
     async fn check_job(&self, name: &str, jtype: &str) -> R<(String, Unit)> {
         let (id, unit) = self.load_unit(name);
+        if jtype == "start" && shutdown_action(&id).is_some() {
+            return Ok((id, unit));
+        }
         match unit.load_state {
             LoadState::NotFound => return Err(err(E_NO_UNIT, format!("Unit {name} not found."))),
             LoadState::Masked => return Err(err(E_MASKED, format!("Unit {name} is masked."))),
@@ -299,7 +341,8 @@ impl Daemon {
             }
         }
         let transient = self.transient.lock().unwrap().contains_key(&id);
-        if !transient && self.kind_of(&id).is_none() && jtype != "stop" {
+        let dynamic = self.dynamic_kind(&id).is_some() || self.can_be_dynamic(&id, &unit);
+        if !transient && !dynamic && self.kind_of(&id).is_none() && jtype != "stop" {
             // New unit file since the last reload: translate it now.
             if !self.cfg.is_excluded(&id) {
                 let _ = self.reload_db().await;
@@ -324,9 +367,53 @@ impl Daemon {
         let transient = self.transient.lock().unwrap().contains_key(id);
         if transient {
             if jtype == "stop" {
-                self.stop_scope(id);
+                self.stop_transient(id).await;
             }
             return "done";
+        }
+        if jtype == "start" {
+            if let Some(action) = shutdown_action(id) {
+                let cmd = match action {
+                    "poweroff" => self.cfg.poweroff_cmd.clone(),
+                    "reboot" => self.cfg.reboot_cmd.clone(),
+                    _ => self.cfg.halt_cmd.clone(),
+                };
+                eprintln!("sdcompatd: {id} requested, running: {cmd}");
+                let _ = tokio::process::Command::new("/bin/sh").arg("-c").arg(cmd).spawn();
+                return "done";
+            }
+        }
+        if self.dynamic_kind(id).is_some() || self.can_be_dynamic(id, unit) {
+            let active = || async {
+                let a = self.active_atoms().await;
+                matches!(self.unit_status(id, &a, unit).await.active, "active" | "activating" | "reloading")
+            };
+            return match jtype {
+                "start" => self.dyn_start(id, unit).await,
+                "stop" => {
+                    let r = self.dyn_stop(id, unit).await;
+                    self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitRemoved", &(id.to_string(), op(unit_path(id)))).await;
+                    r
+                }
+                "restart" => self.dyn_restart(id, unit).await,
+                "try-restart" => {
+                    if active().await {
+                        self.dyn_restart(id, unit).await
+                    } else {
+                        "done"
+                    }
+                }
+                "reload" => self.do_reload(id).await,
+                _ => {
+                    if Self::can_reload(unit) && active().await {
+                        self.do_reload(id).await
+                    } else if jtype == "reload-or-restart" || active().await {
+                        self.dyn_restart(id, unit).await
+                    } else {
+                        "done"
+                    }
+                }
+            };
         }
         match jtype {
             "start" => self.do_start(id, unit, mode == "isolate").await,
@@ -411,56 +498,129 @@ impl Daemon {
         }
     }
 
-    // ---- transient scopes ----
+    // ---- transient scopes and slices ----
 
-    fn stop_scope(&self, id: &str) {
-        if let Some(t) = self.transient.lock().unwrap().get(id) {
-            crate::cgroup::kill_all(&t.cgroup, libc::SIGTERM, 0);
+    /// Stop a transient unit. Scopes: SIGTERM (+SIGHUP), SIGKILL after a grace
+    /// period. Slices: stop everything inside, then remove the cgroup.
+    async fn stop_transient(&self, id: &str) {
+        let Some((kind, dir, hup)) = self
+            .transient
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|t| (t.kind, t.cgroup.clone(), t.send_sighup))
+        else {
+            return;
+        };
+        if kind == "slice" {
+            let inside: Vec<String> = self
+                .dynamic
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|n| {
+                    let (_, u) = self.load_unit(n);
+                    self.cgroup_dir_of(n, &u).starts_with(&dir)
+                })
+                .cloned()
+                .collect();
+            for n in inside {
+                let (_, u) = self.load_unit(&n);
+                self.dyn_stop(&n, &u).await;
+                self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitRemoved", &(n.clone(), op(unit_path(&n)))).await;
+            }
+            let scopes: Vec<String> = self
+                .transient
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(n, t)| t.kind == "scope" && t.cgroup.starts_with(&dir) && n.as_str() != id)
+                .map(|(n, _)| n.clone())
+                .collect();
+            for sc in scopes {
+                Box::pin(self.stop_transient(&sc)).await;
+            }
+            crate::cgroup::kill_all(&dir, libc::SIGTERM, 0);
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            crate::cgroup::kill_all(&dir, libc::SIGKILL, 0);
+            crate::cgroup::remove(&dir);
+            self.transient.lock().unwrap().remove(id);
+            self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitRemoved", &(id.to_string(), op(unit_path(id)))).await;
+            return;
         }
+        crate::cgroup::kill_all(&dir, libc::SIGTERM, 0);
+        if hup {
+            crate::cgroup::kill_all(&dir, libc::SIGHUP, 0);
+        }
+        let d = dir.clone();
+        tokio::spawn(async move {
+            for _ in 0..100 {
+                if util::cgroup_pids(&d).is_empty() {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            crate::cgroup::kill_all(&d, libc::SIGKILL, 0);
+        });
     }
 
     async fn start_transient(&self, c: &Peer, msg: &Message) -> R<()> {
         self.require_privileged(c, msg).await?;
         type Aux = Vec<(String, Vec<(String, OwnedValue)>)>;
         let (name, _mode, props, _aux): (String, String, Vec<(String, OwnedValue)>, Aux) = Self::args(msg)?;
-        if !name.ends_with(".scope") {
+        let kind: &'static str = if name.ends_with(".scope") {
+            "scope"
+        } else if name.ends_with(".slice") {
+            "slice"
+        } else {
             return Err(err(
                 E_NOT_SUPPORTED,
                 format!("Transient units of this type are not supported by sdcompat: {name}"),
             ));
-        }
+        };
         if self.transient.lock().unwrap().contains_key(&name) {
             return Err(err("org.freedesktop.systemd1.UnitExists", format!("Unit {name} already exists.")));
         }
         let mut pids: Vec<u32> = Vec::new();
-        let mut slice = "system.slice".to_string();
+        let mut slice = if kind == "scope" { "system.slice".to_string() } else { String::new() };
         let mut description = name.clone();
-        for (k, v) in props {
+        let mut send_sighup = false;
+        for (k, v) in &props {
             match k.as_str() {
                 "PIDs" => {
-                    if let Ok(list) = <Vec<u32>>::try_from(v) {
+                    if let Ok(list) = <Vec<u32>>::try_from(v.try_clone().map_err(|e| err(E_INVALID_ARGS, e.to_string()))?) {
                         pids.extend(list);
                     }
                 }
+                "PIDFDs" => pids.extend(pids_from_pidfds(v)),
                 "Slice" => {
-                    if let Ok(s) = <String>::try_from(v) {
-                        slice = s;
+                    if let Ok(s) = <&str>::try_from(&**v) {
+                        slice = s.to_string();
                     }
                 }
                 "Description" => {
-                    if let Ok(s) = <String>::try_from(v) {
-                        description = s;
+                    if let Ok(s) = <&str>::try_from(&**v) {
+                        description = s.to_string();
+                    }
+                }
+                "SendSIGHUP" => {
+                    if let Ok(b) = <bool>::try_from(&**v) {
+                        send_sighup = b;
                     }
                 }
                 _ => {}
             }
         }
-        if pids.is_empty() {
-            if let Some(p) = self.caller_pid(c, msg).await {
-                pids.push(p);
+        let dir = if kind == "slice" {
+            std::path::Path::new(crate::cgroup::CGROUP_ROOT).join(crate::cgroup::slice_path(&name))
+        } else {
+            if pids.is_empty() {
+                if let Some(p) = self.caller_pid(c, msg).await {
+                    pids.push(p);
+                }
             }
-        }
-        let dir = crate::cgroup::unit_cgroup_dir(&name, &slice);
+            crate::cgroup::unit_cgroup_dir(&name, &slice)
+        };
         std::fs::create_dir_all(&dir).map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
         for p in &pids {
             if let Err(e) = std::fs::write(dir.join("cgroup.procs"), p.to_string()) {
@@ -469,10 +629,13 @@ impl Daemon {
         }
         let st = state::for_unit(&self.cfg.run_dir, &name);
         st.stamp(keys::ACTIVE_ENTER);
+        if kind == "slice" {
+            slice = crate::cgroup::parent_slice(&name);
+        }
         self.transient
             .lock()
             .unwrap()
-            .insert(name.clone(), Transient { cgroup: dir, slice, description });
+            .insert(name.clone(), Transient { kind, cgroup: dir, send_sighup, slice, description });
         let job = self.new_job(&name, "start");
         self.reply(c, msg, &(op(job_path(job)),)).await?;
         self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitNew", &(name.clone(), op(unit_path(&name)))).await;
@@ -481,13 +644,30 @@ impl Daemon {
         Ok(())
     }
 
+    /// AttachProcessesToUnit(unit, subcgroup, pids)
+    async fn attach_processes(&self, c: &Peer, msg: &Message) -> R<()> {
+        self.require_privileged(c, msg).await?;
+        let (name, sub, pids): (String, String, Vec<u32>) = Self::args(msg)?;
+        let (id, unit) = self.load_unit(&name);
+        let mut dir = self.cgroup_dir_of(&id, &unit);
+        if !sub.is_empty() {
+            dir = dir.join(sub.trim_start_matches('/'));
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
+        for p in pids {
+            std::fs::write(dir.join("cgroup.procs"), p.to_string())
+                .map_err(|e| err(E_FAILED, format!("cannot move PID {p}: {e}")))?;
+        }
+        self.reply(c, msg, &()).await
+    }
+
     async fn gc_scopes(&self) {
         let empty: Vec<(String, PathBuf)> = self
             .transient
             .lock()
             .unwrap()
             .iter()
-            .filter(|(_, t)| util::cgroup_pids(&t.cgroup).is_empty())
+            .filter(|(_, t)| t.kind == "scope" && util::cgroup_pids(&t.cgroup).is_empty())
             .map(|(n, t)| (n.clone(), t.cgroup.clone()))
             .collect();
         for (name, dir) in empty {
@@ -675,8 +855,16 @@ impl Daemon {
             return self.manager_method(c, msg, member).await;
         }
         if let Some(name) = self.unit_from_path(path) {
+            if iface == "org.freedesktop.systemd1.Scope" && member == "Abandon" {
+                self.require_privileged(c, msg).await?;
+                return self.reply(c, msg, &()).await;
+            }
             if iface.is_empty() || iface == UNIT_IFACE {
                 return self.unit_method(c, msg, &name, member).await;
+            }
+            if member == "SetProperties" || member == "Ref" || member == "Unref" {
+                self.require_privileged(c, msg).await?;
+                return self.reply(c, msg, &()).await;
             }
         }
         if let Some(job) = path.strip_prefix(JOB_PREFIX).and_then(|j| j.parse::<u32>().ok()) {
@@ -844,6 +1032,12 @@ impl Daemon {
                 self.reply(c, msg, &(procs,)).await
             }
             "StartTransientUnit" => self.start_transient(c, msg).await,
+            "AttachProcessesToUnit" => self.attach_processes(c, msg).await,
+            // Reference counting and runtime property changes are accepted and ignored.
+            "RefUnit" | "UnrefUnit" | "AbandonScope" | "SetUnitProperties" => {
+                self.require_privileged(c, msg).await?;
+                self.reply(c, msg, &()).await
+            }
             "GetJob" => {
                 let (id,): (u32,) = Self::args(msg)?;
                 if self.jobs.lock().unwrap().contains_key(&id) {
@@ -1089,6 +1283,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         boot_finished: Mutex::new(Some((util::now_realtime_usec(), util::now_monotonic_usec()))),
         atom_order: Mutex::new(None),
         private: Mutex::new(Vec::new()),
+        dynamic: Mutex::new(BTreeMap::new()),
     });
     daemon.verify_state_reader().await;
     if let Some(def) = daemon.index.read().unwrap().default_target.clone() {

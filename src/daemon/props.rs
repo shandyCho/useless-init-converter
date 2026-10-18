@@ -143,6 +143,11 @@ impl Daemon {
             "scope" => {
                 out.insert("org.freedesktop.systemd1.Scope".into(), self.scope_iface(id));
             }
+            "slice" => {
+                let mut p = Props::new();
+                self.cgroup_props(&mut p, id, unit);
+                out.insert("org.freedesktop.systemd1.Slice".into(), p);
+            }
             _ => {}
         }
         out
@@ -587,6 +592,7 @@ impl Daemon {
         let idx = self.index.read().unwrap();
         let mut v: Vec<String> = idx.units.keys().cloned().collect();
         v.extend(self.transient.lock().unwrap().keys().cloned());
+        v.extend(self.dynamic.lock().unwrap().keys().cloned());
         v
     }
 }

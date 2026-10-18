@@ -11,6 +11,7 @@ pub mod execcmd;
 pub mod gen;
 pub mod install;
 pub mod loader;
+pub mod pam;
 pub mod runner;
 pub mod sandbox;
 pub mod socket;

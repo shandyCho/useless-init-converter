@@ -629,7 +629,8 @@ impl Runner {
 
     fn enter_cgroup(&self) {
         let pid = std::process::id();
-        match cgroup::enter(&self.unit, pid) {
+        let owner = self.user.as_ref().map(|u| (u.uid, self.gid.unwrap_or(u.gid)));
+        match cgroup::enter(&self.unit, pid, owner) {
             Ok(dir) => self.st.set(keys::CGROUP, &dir.display().to_string()),
             Err(e) => {
                 if self.is_root {
@@ -719,6 +720,26 @@ impl Runner {
                 || self.unit.get_words("Unit", "Wants").contains(&default);
             if wanted || install::is_enabled(&self.cfg, &default) {
                 names.push(default);
+            }
+            // Sockets that name this service with Service= (e.g. systemd-logind-varlink.socket).
+            for dir in &self.cfg.unit_path {
+                let Ok(rd) = fs::read_dir(dir) else { continue };
+                for e in rd.flatten() {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    if !n.ends_with(".socket") || names.contains(&n) {
+                        continue;
+                    }
+                    let Ok(text) = fs::read_to_string(e.path()) else { continue };
+                    if !text.contains("Service=") {
+                        continue;
+                    }
+                    let s = ld.load(&n);
+                    if s.get("Socket", "Service").map(|v| self.unit.names.contains(&v)).unwrap_or(false)
+                        && install::is_enabled(&self.cfg, &n)
+                    {
+                        names.push(n);
+                    }
+                }
             }
         }
         names
@@ -831,6 +852,9 @@ impl Runner {
         if let Some(fd) = self.notify_fd.take() {
             unsafe { libc::close(fd) };
         }
+        if let (Some(service), true) = (self.unit.get("Service", "PAMName"), self.is_root) {
+            return self.exec_with_pam(&service, &main);
+        }
         let (code, msg) = self.exec_command(&main, &[]);
         log(self.id(), &msg);
         if let Some(fd) = EXEC_FAIL_PIPE.with(|c| c.get()) {
@@ -838,6 +862,69 @@ impl Runner {
             unsafe { libc::write(fd, b.as_ptr() as *const libc::c_void, 4) };
         }
         code
+    }
+
+    /// PAMName=: open a PAM session here, run the service in a child, and
+    /// stay around (forwarding signals) to close the session afterwards.
+    fn exec_with_pam(&self, service: &str, main: &ExecCommand) -> i32 {
+        const EXIT_PAM: i32 = 224;
+        let user = self.user.as_ref().map(|u| u.name.clone()).unwrap_or_else(|| "root".into());
+        let tty = self.uses_tty().then(|| self.tty_path());
+        let (session, env) = match crate::pam::Session::open(service, &user, tty.as_deref()) {
+            Ok(x) => x,
+            Err(e) => {
+                log(self.id(), &format!("PAM: {e}"));
+                if let Some(fd) = EXEC_FAIL_PIPE.with(|c| c.get()) {
+                    let b = (EXIT_PAM as u32).to_ne_bytes();
+                    unsafe { libc::write(fd, b.as_ptr() as *const libc::c_void, 4) };
+                }
+                return EXIT_PAM;
+            }
+        };
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            let (code, msg) = self.exec_command(main, &env);
+            log(self.id(), &msg);
+            if let Some(fd) = EXEC_FAIL_PIPE.with(|c| c.get()) {
+                let b = (code as u32).to_ne_bytes();
+                unsafe { libc::write(fd, b.as_ptr() as *const libc::c_void, 4) };
+            }
+            unsafe { libc::_exit(code) };
+        }
+        if child < 0 {
+            log(self.id(), &format!("fork: {}", errno()));
+            session.close();
+            return EXIT_EXEC;
+        }
+        // Our copy of the exec-status pipe must go, or the readiness helper
+        // never sees the child's exec.
+        if let Some(fd) = EXEC_FAIL_PIPE.with(|c| c.take()) {
+            unsafe { libc::close(fd) };
+        }
+        self.st.set(keys::MAIN_PID, &child.to_string());
+        FORWARD_PID.store(child, std::sync::atomic::Ordering::SeqCst);
+        unsafe {
+            let max = libc::SIGRTMAX();
+            for sig in 1..=max {
+                if ![libc::SIGKILL, libc::SIGSTOP, libc::SIGCHLD, libc::SIGSEGV, libc::SIGBUS, libc::SIGFPE, libc::SIGILL]
+                    .contains(&sig)
+                {
+                    libc::signal(sig, forward_signal as *const () as libc::sighandler_t);
+                }
+            }
+        }
+        let status = Status::from_wait(wait_pid(child));
+        session.close();
+        match status {
+            Status::Exited(c) => c,
+            Status::Killed(sig) => {
+                unsafe {
+                    libc::signal(sig, libc::SIG_DFL);
+                    libc::kill(libc::getpid(), sig);
+                }
+                128 + sig
+            }
+        }
     }
 
     fn after_ready(&self, main_pid: u32) {
