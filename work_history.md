@@ -214,6 +214,27 @@ rerun. Commits `f14df0e` (fix), and the tests/docs commit after it.
   `sandbox.sh stop` leaves no sdcompat/dbus-daemon/s6-svscan behind.
   shellcheck not installed here, not run.
 
+Owner ran TESTING step 4 (`sdcompat plan`) on this Fedora 45 machine:
+83 longrun, 69 oneshot, 70 bundle; 165 skipped; one cycle broken.
+
+- Reviewed: gdm, NetworkManager, accounts-daemon, journald, logind all
+  translated. Skipped: 151 by the default EXCLUDE (systemd-*, dbus-broker,
+  ...), 7 sockets bound by their service's runner, slices/devices not
+  translated, `smb.service` referenced but samba not installed. chronyd is
+  absent because chrony is not installed here.
+- Cycle `dracut-shutdown.service -> sysinit.target`: dracut enables it in
+  sysinit.target.wants while DefaultDependencies order it after sysinit.target.
+  systemd resolves it by not ordering the target after the unit; sdcompat
+  keeps it in the sysinit bundle and drops the unit's dependency. Harmless
+  here (ExecStart=/bin/true; the work is in ExecStop). Not changed.
+- **Bug fixed:** `FileDescriptorStoreMax=` was warned as ignored although the
+  fd store implements it (missing from `gen::SERVICE_KEYS`), on journald and
+  logind. Of the 38 distinct warned keys, it was the only one the code reads.
+  Also, the D-Bus property `FileDescriptorStoreMax` always reported 0; it now
+  reports the unit's value. Verified: unprivileged `sdcompat plan` differs from
+  the owner's only by the two removed warnings; sandbox 105/105; property
+  reads 4 for fdkeep.service.
+
 ### Current state
 
 As in session 1, except: this machine is now Fedora 45 (not Artix). skalibs,

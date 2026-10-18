@@ -475,7 +475,7 @@ impl Daemon {
         p.insert("MainPID".into(), Value::from(status.main_pid));
         p.insert("ControlPID".into(), Value::from(0u32));
         p.insert("BusName".into(), s(get("BusName")));
-        p.insert("FileDescriptorStoreMax".into(), Value::from(0u32));
+        p.insert("FileDescriptorStoreMax".into(), Value::from(get("FileDescriptorStoreMax").parse::<u32>().unwrap_or(0)));
         p.insert("NFileDescriptorStore".into(), Value::from(0u32));
         p.insert("FileDescriptorStorePreserve".into(), s("restart"));
         p.insert("StatusText".into(), s(st.get(keys::STATUS_TEXT).unwrap_or_default()));
