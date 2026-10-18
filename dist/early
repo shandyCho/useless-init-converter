@@ -1,0 +1,72 @@
+#!/bin/sh
+# Early-boot helpers for the example s6 services in /etc/sdcompat/s6.
+# They replace the systemd units that only make sense with systemd as PID 1
+# (systemd-remount-fs, systemd-modules-load, the API filesystem mounts, ...).
+# Review them for your machine before booting with them.
+set -u
+
+mnt() { # mnt FSTYPE TARGET OPTIONS
+    mountpoint -q "$2" && return 0
+    mkdir -p "$2"
+    mount -t "$1" -o "$3" "$1" "$2"
+}
+
+case "${1:-}" in
+mount-api)
+    # Usually already mounted by the initramfs; harmless otherwise.
+    mnt proc /proc nosuid,nodev,noexec
+    mnt sysfs /sys nosuid,nodev,noexec
+    mnt devtmpfs /dev nosuid,mode=0755
+    mnt tmpfs /run nosuid,nodev,mode=0755
+    mnt cgroup2 /sys/fs/cgroup nosuid,nodev,noexec,nsdelegate
+    mnt devpts /dev/pts nosuid,noexec,gid=5,mode=0620,ptmxmode=000
+    mnt tmpfs /dev/shm nosuid,nodev,mode=1777
+    mnt securityfs /sys/kernel/security nosuid,nodev,noexec 2>/dev/null
+    mnt bpf /sys/fs/bpf nosuid,nodev,noexec,mode=0700 2>/dev/null
+    mnt pstore /sys/fs/pstore nosuid,nodev,noexec 2>/dev/null
+    if [ -e /sys/fs/selinux/enforce ] && command -v restorecon >/dev/null; then
+        restorecon -R /dev /run 2>/dev/null
+    fi
+    [ -s /etc/machine-id ] || systemd-machine-id-setup 2>/dev/null || true
+    ;;
+mount-fs)
+    # fsck of the root filesystem is not done here; the initramfs normally
+    # handles it (rd.fsck / fsck.mode kernel options).
+    mount -o remount,rw / 2>/dev/null
+    mount -a -O no_netdev
+    swapon -a 2>/dev/null
+    ;;
+umount-fs)
+    swapoff -a 2>/dev/null
+    sync
+    ;;
+udev-trigger)
+    udevadm trigger --type=subsystems --action=add
+    udevadm trigger --type=devices --action=add
+    udevadm settle --timeout=60
+    ;;
+modules-load)
+    # /etc overrides /run overrides /usr/lib by file name, like systemd.
+    seen=" "
+    for d in /etc/modules-load.d /run/modules-load.d /usr/lib/modules-load.d; do
+        for f in "$d"/*.conf; do
+            [ -e "$f" ] || continue
+            b=${f##*/}
+            case "$seen" in *" $b "*) continue ;; esac
+            seen="$seen$b "
+            sed -e 's/[#;].*//' "$f" | while read -r m; do
+                [ -n "$m" ] && modprobe -b "$m"
+            done
+        done
+    done
+    ;;
+hostname)
+    h=$(sed -n '/^[^#]/{p;q}' /etc/hostname 2>/dev/null)
+    hostname "${h:-localhost}"
+    ;;
+*)
+    echo "usage: $0 mount-api|mount-fs|umount-fs|udev-trigger|modules-load|hostname" >&2
+    exit 2
+    ;;
+esac
+exit 0

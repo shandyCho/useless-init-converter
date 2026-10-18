@@ -1,0 +1,9 @@
+#!/bin/sh
+# systemd-udevd runs fine without systemd as PID 1. It does not speak the
+# s6 readiness protocol, so signal readiness once its control socket exists.
+/usr/lib/systemd/systemd-udevd &
+pid=$!
+for i in $(seq 100); do [ -S /run/udev/control ] && break; sleep 0.05; done
+echo >&3
+exec 3>&-
+wait $pid

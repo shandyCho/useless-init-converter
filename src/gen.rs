@@ -242,6 +242,12 @@ pub fn plan(cfg: &Config) -> Plan {
             requires.push("sysinit.target".into());
             after.push("basic.target".into());
         }
+        // Type=dbus implies Requires=/After=dbus.socket.
+        if unit.utype() == "service" && (unit.get("Service", "Type").as_deref() == Some("dbus")
+            || (unit.get("Service", "Type").is_none() && unit.get("Service", "BusName").is_some()))
+        {
+            requires.push("dbus.socket".into());
+        }
         for n in requires.iter().chain(wants.iter()) {
             queue.push(n.clone());
         }
@@ -250,6 +256,11 @@ pub fn plan(cfg: &Config) -> Plan {
     }
 
     let resolve = |n: &str, plan: &Plan| -> Option<String> {
+        if let Some(m) = cfg.mapped_dep(n) {
+            if plan.extra_names.contains(m) {
+                return Some(m.to_string());
+            }
+        }
         let n = plan.aliases.get(n).map(String::as_str).unwrap_or(n);
         let n = socket_service.get(n).map(String::as_str).unwrap_or(n);
         let n = plan.aliases.get(n).map(String::as_str).unwrap_or(n);

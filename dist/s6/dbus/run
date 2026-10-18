@@ -1,0 +1,5 @@
+#!/bin/sh
+# The reference dbus-daemon (dnf install dbus-daemon); --systemd-activation
+# makes it ask sdcompat to start services with SystemdService=.
+mkdir -p /run/dbus
+exec dbus-daemon --system --nofork --nopidfile --systemd-activation --print-address=3

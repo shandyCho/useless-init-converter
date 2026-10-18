@@ -1,0 +1,12 @@
+#!/bin/sh
+# Boot with init=/usr/sbin/init-selinux. Loads the SELinux policy (systemd
+# normally does this as PID 1), then execs s6-linux-init so it starts in
+# init_t. Label s6-linux-init's init as init_exec_t:
+#   semanage fcontext -a -t init_exec_t '/etc/s6-linux-init/current/bin/init'
+mountpoint -q /proc || mount -t proc proc /proc
+mountpoint -q /sys || mount -t sysfs sysfs /sys
+if ! /usr/sbin/load_policy -i; then
+    echo "init-selinux: policy load failed" >&2
+    grep -q '^SELINUX=enforcing' /etc/selinux/config && exec /bin/sh
+fi
+exec /etc/s6-linux-init/current/bin/init "$@"

@@ -13,8 +13,9 @@ Database:
   plan                     print the translation report without writing anything
 
 Daemon:
-  daemon [--system | --session | --address ADDR]
-                           serve org.freedesktop.systemd1 (default: system bus)
+  daemon [--system | --session | --address ADDR] [--ready-fd N]
+                           serve org.freedesktop.systemd1 (default: system bus);
+                           with --ready-fd, write a newline to fd N when ready
 
 Offline unit file management:
   enable|disable|mask|unmask|preset UNIT...
@@ -22,6 +23,7 @@ Offline unit file management:
 
 Tools:
   notify [--ready] [--status=TEXT] [VAR=VALUE...]   systemd-notify replacement
+  log UNIT [-f]            show (or follow) a service's s6-log output
 
 Internal (used by generated s6-rc scripts and the daemon):
   run|finish|up|down|stop-exec|reload-exec [--mainpid N] (-- UNIT | --unit-hex HEX) [ARGS]
@@ -137,24 +139,45 @@ fn main() {
             }
         }
         "daemon" => {
-            let bus = match rest.first().map(String::as_str) {
-                None | Some("--system") => daemon::Bus::System,
-                Some("--session") => daemon::Bus::Session,
-                Some("--address") => daemon::Bus::Address(
-                    rest.get(1).cloned().unwrap_or_else(|| die("--address needs a value")),
-                ),
-                Some(o) => die(&format!("unknown daemon option {o}")),
-            };
+            let mut bus = daemon::Bus::System;
+            let mut ready_fd = None;
+            let mut it = rest.iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--system" => bus = daemon::Bus::System,
+                    "--session" => bus = daemon::Bus::Session,
+                    "--address" => {
+                        bus = daemon::Bus::Address(it.next().cloned().unwrap_or_else(|| die("--address needs a value")))
+                    }
+                    "--ready-fd" => {
+                        ready_fd = Some(it.next().and_then(|f| f.parse().ok()).unwrap_or_else(|| die("--ready-fd needs a number")))
+                    }
+                    o => die(&format!("unknown daemon option {o}")),
+                }
+            }
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .unwrap_or_else(|e| die(&e.to_string()));
-            match rt.block_on(daemon::run(cfg, bus)) {
+            match rt.block_on(daemon::run(cfg, bus, ready_fd)) {
                 Ok(()) => 0,
                 Err(e) => die(&e),
             }
         }
         "notify" => runner::cmd_notify(rest),
+        "log" => {
+            let follow = rest.iter().any(|a| a == "-f" || a == "--follow");
+            let Some(unit) = rest.iter().find(|a| !a.starts_with('-')) else { die("usage: sdcompat log UNIT [-f]") };
+            let Some(dir) = &cfg.log_dir else { die("LOG_DIR is not configured") };
+            let file = dir.join(unit).join("current");
+            let mut tail = std::process::Command::new("tail");
+            tail.arg(if follow { "-F" } else { "-n" });
+            if !follow {
+                tail.arg("200");
+            }
+            let err = std::os::unix::process::CommandExt::exec(tail.arg(&file));
+            die(&format!("tail {}: {err}", file.display()))
+        }
         "enable" | "disable" | "mask" | "unmask" | "preset" => {
             let names: Vec<String> = rest.iter().filter(|a| !a.starts_with("--")).cloned().collect();
             let runtime = rest.iter().any(|a| a == "--runtime");

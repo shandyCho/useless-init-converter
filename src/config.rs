@@ -31,6 +31,11 @@ pub struct Config {
     pub log_dir: Option<PathBuf>,
     /// Unit name globs that are never translated.
     pub exclude: Vec<String>,
+    /// Globs that are translated even if they match EXCLUDE.
+    pub include: Vec<String>,
+    /// systemd unit name -> s6-rc service from EXTRA_SOURCE that replaces it
+    /// as a dependency (e.g. dbus.service -> dbus).
+    pub dep_map: Vec<(String, String)>,
     /// Extra s6-rc service/bundle added to sysinit.target (udev, mounts, ...).
     pub sysinit_bundle: String,
     /// Bundle generated for default.target; include it in your boot bundle.
@@ -94,6 +99,25 @@ impl Config {
             .iter()
             .map(|s| s.to_string())
             .collect(),
+            include: Vec::new(),
+            dep_map: [
+                ("dbus.service", "dbus"),
+                ("dbus.socket", "dbus"),
+                ("dbus-broker.service", "dbus"),
+                ("messagebus.service", "dbus"),
+                ("systemd-udevd.service", "udevd"),
+                ("systemd-udev-trigger.service", "udev-trigger"),
+                ("systemd-udev-settle.service", "udev-trigger"),
+                ("systemd-journald.socket", "syslog"),
+                ("syslog.socket", "syslog"),
+                ("systemd-tmpfiles-setup.service", "tmpfiles-setup"),
+                ("systemd-sysusers.service", "sysusers"),
+                ("systemd-remount-fs.service", "mount-fs"),
+                ("local-fs.target", "mount-fs"),
+            ]
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect(),
             sysinit_bundle: "sdcompat-sysinit".into(),
             default_bundle: "sdcompat-default".into(),
             booted_flag: Some(PathBuf::from("/run/systemd/system")),
@@ -137,6 +161,18 @@ impl Config {
                 "LOG_DIR" => cfg.log_dir = opt(&v),
                 "EXCLUDE" => cfg.exclude = v.split_whitespace().map(String::from).collect(),
                 "EXCLUDE_ADD" => cfg.exclude.extend(v.split_whitespace().map(String::from)),
+                "INCLUDE" => cfg.include = v.split_whitespace().map(String::from).collect(),
+                "DEP_MAP" | "DEP_MAP_ADD" => {
+                    if k == "DEP_MAP" {
+                        cfg.dep_map.clear();
+                    }
+                    for pair in v.split_whitespace() {
+                        if let Some((a, b)) = pair.split_once('=') {
+                            cfg.dep_map.retain(|(x, _)| x != a);
+                            cfg.dep_map.push((a.to_string(), b.to_string()));
+                        }
+                    }
+                }
                 "SYSINIT_BUNDLE" => cfg.sysinit_bundle = v,
                 "DEFAULT_BUNDLE" => cfg.default_bundle = v,
                 "BOOTED_FLAG" => cfg.booted_flag = opt(&v),
@@ -174,5 +210,10 @@ impl Config {
 
     pub fn is_excluded(&self, unit: &str) -> bool {
         self.exclude.iter().any(|g| crate::util::fnmatch(g, unit))
+            && !self.include.iter().any(|g| crate::util::fnmatch(g, unit))
+    }
+
+    pub fn mapped_dep(&self, unit: &str) -> Option<&str> {
+        self.dep_map.iter().find(|(a, _)| a == unit).map(|(_, b)| b.as_str())
     }
 }

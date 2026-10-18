@@ -1046,7 +1046,7 @@ pub enum Bus {
     Address(String),
 }
 
-pub async fn run(cfg: Config, bus: Bus) -> Result<(), String> {
+pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), String> {
     let builder = match &bus {
         Bus::System => zbus::connection::Builder::system(),
         Bus::Session => zbus::connection::Builder::session(),
@@ -1107,6 +1107,13 @@ pub async fn run(cfg: Config, bus: Bus) -> Result<(), String> {
         }
     }
     eprintln!("sdcompatd: ready, serving {BUS_NAME}");
+    if let Some(fd) = ready_fd {
+        // s6 readiness notification (notification-fd).
+        unsafe {
+            libc::write(fd, b"\n".as_ptr() as *const libc::c_void, 1);
+            libc::close(fd);
+        }
+    }
 
     if let Some(sock) = daemon.cfg.private_socket.clone() {
         tokio::spawn(private::listen(daemon.clone(), sock));

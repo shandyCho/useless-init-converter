@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/libexec/sdcompat/sdcompat daemon --ready-fd 3

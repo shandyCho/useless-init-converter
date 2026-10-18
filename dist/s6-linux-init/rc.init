@@ -1,0 +1,16 @@
+#!/bin/sh -e
+# s6-linux-init stage 2 for sdcompat (install into your s6-linux-init skel
+# directory, then run s6-linux-init-maker).
+rl="$1"
+shift
+
+# The initramfs mounts / read-only; the database lives in /var/lib/sdcompat.
+mount -o remount,rw / || true
+
+# Pick up unit files installed or enabled while the system was down.
+if ! /usr/libexec/sdcompat/sdcompat reload --no-update; then
+    echo "rc.init: sdcompat reload failed, booting the previous database" >&2
+fi
+
+s6-rc-init -c /var/lib/sdcompat/compiled -l /run/s6-rc /run/service
+exec /etc/s6-linux-init/current/scripts/runlevel "$rl"

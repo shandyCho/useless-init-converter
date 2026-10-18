@@ -1,0 +1,3 @@
+#!/bin/sh
+# rsyslog stands in for journald's syslog socket (/dev/log).
+exec rsyslogd -n -iNONE
