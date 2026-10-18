@@ -329,7 +329,9 @@ so this is again from the journal only.
   messages are accepted only from root, the unit's User=, the main PID, or a
   process in the main PID's cgroup (`notify_sender_ok`). Before, the abstract
   socket fallback accepted anyone; now it is filtered too.
-- **Probable effect of the chronyd failure, inferred, not verified:** every
+- **Probable effect of the chronyd failure, inferred, not verified**
+  (*corrected in session 5: wrong; the 105 s stall was a deadlock between
+  the boot's s6-rc change and polkit's activation, see there*): every
   D-Bus activation was stuck until 131.9 s. polkit was requested at 26.92 s,
   polkitd started at 131.92 s = 105 s later, which is chronyd's (and polkit's)
   `timeout-up` (90 s + 15 s). Meanwhile accounts-daemon, upower (aborted 4×),
@@ -368,3 +370,98 @@ On real hardware the s6 boot reaches a working system with console logins
    polkit starts within seconds.
 2. Find why user@.service does not start `systemd --user`.
 3. Session 3's next steps 2 (rejected reply to logind, tty1 getty) still apply.
+
+## Session 5: 2026-10-19
+
+Owner reported "booting failed" a third time: s6 boot
+`2c47f9e49b0d446f914c4ae9cbb22902` (02:20:04–02:49:12), first boot with the
+`223d51f` build (installed 02:17). Owner logged in on tty9 at ~28 min and
+ran `sudo reboot`. `/run/uncaught-logs` was again not saved; journal only.
+
+- chronyd no longer fails ("Could not send notification" is gone), so the
+  `223d51f` fix works for it. **polkit still started only after 105 s**, so
+  session 4's explanation (chronyd's readiness timeout) was wrong.
+- **Bug found and fixed (`57777ef`): deadlock between the boot's
+  `s6-rc change` and D-Bus activation.** upower.service and
+  accounts-daemon.service are Type=dbus and in the default bundle; both
+  need polkit before they take their bus names (upowerd aborts, accounts-
+  daemon exits after dbus-daemon's 25 s activation timeout, s6 restarts
+  them, again and again). polkit is only D-Bus activated, and its start ran
+  `s6-rc -b -u change polkit.service`, which waits for the s6-rc lock. s6-rc
+  holds that lock for a whole change, including every readiness wait
+  (checked in the s6-rc 0.7.0.0 source: `s6rc_lock` exclusive for changes,
+  skalibs `fd_lock` = fcntl). So the boot's change waited for upower, upower
+  for polkit, polkit for the boot's change, until upower's 105 s
+  `timeout-up`. polkitd started at exactly +105 s; gdm's "Failed to contact
+  accountsservice" loop is the same stall.
+- **Fix:** when another change holds the lock (F_GETLK on `LIVE_DIR/lock`,
+  or our own `s6_lock` is taken) and all of a longrun's `s6-rc-db
+  all-dependencies` are up, the daemon starts it with `s6-svc -u`
+  (`start_beside`), keeps it in `Daemon::beside` (counted as active), and a
+  1 s task records it with `s6-rc -u change` once the lock is free (also
+  before a reload, so s6-rc-update does not keep it down). Stopping it
+  before then uses `s6-svc -wD -d`, since s6-rc thinks it is down.
+  `rc.shutdown` touches `/run/sdcompat/shutting-down`, which disables this
+  during shutdown. Oneshots and bundles still wait for the lock.
+  Decision: not "report Type=dbus ready early to s6-rc", which would break
+  After= ordering on Type=dbus units, and the same deadlock can happen with
+  Type=notify services.
+- **Second blocker, still not understood: user@UID.service never runs
+  `systemd --user`.** Same as session 4: the runner gets through
+  pam_systemd_home, then no output at all, from the greeter UIDs or from the
+  owner's tty9 login (user@1000 runner at 02:48:51, no systemd --user log in
+  the 20 s before reboot). Not even an exec error reached the journal.
+  The runner's own messages go to the s6 catch-all log, lost at reboot.
+- **Diagnostics fix (`f98c376`):** as root, the daemon copies its stderr
+  (and its children's, e.g. s6-rc errors) to syslog as `sdcompatd`, and the
+  runner's `log()` also goes to syslog as `sdcompat`. Next time:
+  `journalctl -b -1 -t sdcompatd -t sdcompat`. Checked under `unshare -r`
+  (euid 0 in a user namespace) with a scratch program: its line and a
+  child's stderr line reached the host journal, and the original stderr still
+  got both. Unprivileged it does nothing, so the sandbox does not write into
+  the host's journal. TESTING docs mention it.
+- **Flaky test fixed (`f182a43`):** notifier.service failed in about half
+  the sandbox runs since `223d51f`: `sdcompat notify` (a child of the
+  unit's sh) exits right after sending, and the sender filter's
+  `/proc/PID/cgroup` read can then fail. The unit's uid is now User= or the
+  runner's own euid, so the sandbox's sender matches by uid. No change as
+  root.
+- One sandbox run (out of ~12) failed 14 checks with the whole boot down;
+  most likely caused by my first version of the new check, which left a
+  `( sleep 10; kill $hold )` watchdog running into the next sandbox (PID
+  reuse). Replaced by a bounded wait; not seen in the 7 runs since. Not proven.
+- Other observations from the journal, not acted on: gdm greeter sessions
+  close ~0.2 s after the user@ runner starts ("Session never registered",
+  gnome-session aborts on "org.freedesktop.systemd1 does not exist" on the
+  greeter's own dbus-daemon); it looks like logind's CreateSession reply
+  does not wait for user@ to be up. dbus-org.freedesktop.home1.service is
+  excluded, so accounts-daemon and pam_systemd_home log "excluded by sdcompat
+  configuration" (harmless). wpa_supplicant activation also waited for the
+  lock (it is Type=dbus, activated by NetworkManager); should be fixed by
+  `57777ef`.
+- git has no user identity on this machine; commits use the identity of the
+  earlier commits through GIT_AUTHOR_*/GIT_COMMITTER_* (config untouched).
+- **Verified:** `cargo build` (no warnings), `cargo test` ok; sandbox suite
+  113/113 in 7 consecutive runs (1 SKIP: transient scope, needs root); the
+  new "start beside a busy s6-rc change" checks fail 6 times on the old
+  daemon. `bash -n` on the changed scripts; shellcheck still not installed.
+  Not verified on a real boot.
+
+### Current state
+
+As in session 4, plus `57777ef` (no polkit/accountsservice stall expected),
+`f182a43`, `f98c376`. Expected on the next s6 boot: polkit and
+accounts-daemon up within seconds, gdm reaching its greeter attempts
+quickly, which still fail without `systemd --user`.
+
+### Next steps
+
+1. Owner installs the new build (and reruns setup, so the new
+   `rc.shutdown` reaches s6-linux-init), boots the s6 entry, logs in on tty9,
+   and before rebooting saves `cp -r /run/uncaught-logs /var/tmp/`. Then,
+   from the normal boot: `journalctl -b -1 -t sdcompatd -t sdcompat`.
+   Check: polkitd started within seconds; whatever user@.service printed.
+2. Find why user@.service does not run `systemd --user` (now with logs).
+3. Check whether logind's CreateSession waits for user@UID's start job
+   (JobRemoved timing from sdcompat's dynamic units).
+4. Session 3's leftovers: rejected method_return to logind, tty1 getty.
