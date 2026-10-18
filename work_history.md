@@ -248,3 +248,123 @@ Sandbox suite: 105/105 on Fedora 45 (102/102 before the transient-reload check).
 2. Look at the s6-rc-update retry in `gen::regenerate`: find out why units
    were down after it, and whether a failed update should roll back instead.
 3. The session 1 next steps still apply.
+
+## Session 3: 2026-10-19
+
+Owner reported: no "Fedora (s6 + sdcompat)" entry in the GRUB menu, and
+`/proc/1/comm` is `systemd`.
+
+- **Diagnosis, no code change:** setup (TESTING step 5) has not run on this
+  machine. The five skarnet RPMs are installed, but there is no
+  `/etc/sdcompat/boot-options`, no `/usr/sbin/init-selinux`, no
+  `/var/lib/sdcompat`, no sdcompat binary, and no kernel-install plugin; the
+  current boot's `/proc/cmdline` has no `init=`. So the entry was never
+  written, and the systemd boot was the expected result.
+- `/boot/loader/entries` is root-only on Fedora 45; an unprivileged check
+  cannot see the entries.
+- Fedora hides the GRUB menu by default (`menu_auto_hide`); even with the entry
+  in place, the owner must hold Shift / press Esc at boot, or run
+  `sudo grub2-editenv - unset menu_auto_hide`.
+- This machine is real hardware with LUKS (`rd.luks.uuid=` on the command
+  line), not the VM that TESTING assumes for step 5.
+
+### Next steps
+
+1. Owner runs step 5 (`--dry-run`, then `sudo dist/setup-fedora.sh
+   --rpms=…`), then `sudo ls /boot/loader/entries | grep sdcompat`.
+2. Earlier next steps still apply.
+
+Later the same day the owner ran setup and booted the s6 entry (boot
+`12aecceab466450a8417a30a2f7c6cd6`, 01:50:59–01:51:58), reported "booting
+failed", and came back on the systemd entry. Diagnosis from the journal only,
+no code change:
+
+- Stage 2 worked: rc.init's reload made the current db, journald, dbus,
+  sdcompatd, logind, NetworkManager, sshd and others started.
+- No login appeared. gdm gave up ("Failed to contact accountsservice"):
+  polkit was D-Bus-activated at boot but never logged "Started polkitd" in
+  the first cycle, so accounts-daemon and tuned timed out on it. The default
+  bundle has no getty on tty1; the only console login is the early getty on
+  tty9.
+- From 38.8 s on, the whole tree restarted 9 times at irregular 1–10 s
+  intervals until the owner pressed the power key: every service's
+  s6-supervise got SIGINT (s6 ≥2.10 forwards it to the service's process
+  group and exits), and s6-svscan respawned them with new PIDs. **What sent
+  SIGINT is not known.** The intervals look like keypresses (logind started
+  kmscon on tty2 at 45.8 s and tty3 at 51.1 s, i.e. the owner was switching
+  VTs). The s6 catch-all log in `/run/uncaught-logs` was lost at power-off.
+- Other errors in that boot, not yet investigated: chronyd "Could not send
+  notification to $NOTIFY_SOCKET" (twice, fatal); dbus-daemon rejected a
+  method_return from sdcompat to logind with `requested_reply="0"` (once per
+  cycle); wpa_supplicant D-Bus activation failed (no Wi-Fi); `dbus-daemon.service`
+  (Fedora's real name for dbus.service) is translated because EXCLUDE only
+  lists `dbus.service` (not in the default bundle, so harmless at boot).
+
+### Next steps
+
+1. Owner boots the s6 entry again, does not press keys on tty1, switches to
+   tty9 (Ctrl+Alt+F9, root login), and saves `cp -r /run/uncaught-logs
+   /var/tmp/` plus `s6-rc -a list` and `ps -eo pid,pgid,sid,tty,comm` before
+   shutting down. Then find the SIGINT source.
+2. polkit activation under sdcompat; chronyd notify; the rejected reply to
+   logind; add a tty1 getty to the default bundle so a failed gdm is not a
+   blank screen.
+
+## Session 4: 2026-10-19
+
+Owner reported "booting failed" again: second s6 boot
+`594a5c4db8034ffea89672705e1c8367` (02:01:54–02:06:08). The owner logged in
+on tty9 and rebooted with `sudo reboot`. `/run/uncaught-logs` was not saved,
+so this is again from the journal only.
+
+- **The SIGINT restart storm did not happen this time** (sshd started once,
+  no restarts). That supports the keypress theory from session 3; still not
+  confirmed.
+- **Bug fixed (`223d51f`): Type=notify daemons that drop privileges
+  could not send READY=1.** The runner made each unit's notify socket mode
+  0600, owned by root or User=. chronyd starts as root, switches to `chrony`
+  itself, then notifies → EACCES → "Fatal error : Could not send notification
+  to $NOTIFY_SOCKET" and exit. Fix in `runner.rs`/`fdstore.rs`: socket mode
+  0666 (as systemd's `/run/systemd/notify`), `SO_PASSCRED` on it, and
+  messages are accepted only from root, the unit's User=, the main PID, or a
+  process in the main PID's cgroup (`notify_sender_ok`). Before, the abstract
+  socket fallback accepted anyone; now it is filtered too.
+- **Probable effect of the chronyd failure, inferred, not verified:** every
+  D-Bus activation was stuck until 131.9 s. polkit was requested at 26.92 s,
+  polkitd started at 131.92 s = 105 s later, which is chronyd's (and polkit's)
+  `timeout-up` (90 s + 15 s). Meanwhile accounts-daemon, upower (aborted 4×),
+  wpa_supplicant and nm-dispatcher activations hit dbus-daemon's 25 s limit,
+  and gdm gave up repeatedly. The likely mechanism: the boot's `s6-rc change`
+  held the s6-rc lock while waiting for chronyd's readiness until its
+  timeout. Not checked: whether s6-svwait should have returned early when
+  finish exited 125. Session 3's "polkit never started in the first cycle"
+  is probably the same stall.
+- **Second blocker, not fixed: the user manager never ran.** After polkit and
+  accounts-daemon came up, gdm started greeter sessions; the runner for
+  `user@60578.service` got through `pam_systemd_home` (harmless: "sufficient",
+  falls through to pam_unix), but no `systemd --user` ever logged anything,
+  for any UID including the owner's tty login. gdm-wayland-session found no
+  `/run/user/UID/bus`, started its own dbus-daemon, and gnome-session aborted
+  on "Name org.freedesktop.systemd1 does not exist". After 6 failures gdm
+  gave up ("maximum number of display failures"). Why user@.service fails
+  is unknown: its output is in the lost s6 catch-all log.
+- `/etc/pam.d/systemd-user` does not exist on Fedora 45; the stack is in
+  `/usr/lib/pam.d/systemd-user`.
+- **Verified:** `cargo build`, `cargo test` ok; sandbox suite 105/105 (1 SKIP,
+  transient scope). The new sender filter cannot be exercised unprivileged
+  (one UID, one cgroup); the chronyd case needs a real boot.
+
+### Current state
+
+As in session 3, plus the notify-socket fix (`223d51f`).
+On real hardware the s6 boot reaches a working system with console logins
+(tty9), but no graphical login: user@.service does not run systemd --user.
+
+### Next steps
+
+1. Install the new build, boot the s6 entry, log in on tty9 and save:
+   `cp -r /run/uncaught-logs /var/tmp/`, `systemctl status user@1000.service
+   chronyd.service polkit.service`, `s6-rc -a list`. Check chronyd is up and
+   polkit starts within seconds.
+2. Find why user@.service does not start `systemd --user`.
+3. Session 3's next steps 2 (rejected reply to logind, tty1 getty) still apply.
