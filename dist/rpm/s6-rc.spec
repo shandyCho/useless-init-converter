@@ -58,7 +58,8 @@ Headers, shared library links and pkg-config files for s6-rc.
 %files devel
 %{_includedir}/*/
 %{_libdir}/lib*.so
-%{_libdir}/pkgconfig/libs6rc libs6rcrepo.pc
+%{_libdir}/pkgconfig/libs6rc.pc
+%{_libdir}/pkgconfig/libs6rcrepo.pc
 
 %changelog
 * Sun Oct 18 2026 sdcompat - 0.7.0.0-1

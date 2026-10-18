@@ -156,14 +156,28 @@ scripts around its builtins).
   files belongs to an installed package. `bash -n` passes on the script;
   shellcheck is not installed on this machine, not run.
 
+Fix commit: `ff4553f`.
+
+Third report: s6 failed in `%files devel` with `File must begin with "/":
+libs6auto.pc`.
+
+- **Bug:** s6.spec listed `%{_libdir}/pkgconfig/libs6 libs6auto.pc` (two
+  names fused on one line; rpm read the second as a relative path). s6-rc.spec
+  had the same mistake with `libs6rc libs6rcrepo.pc`. Both now list each `.pc`
+  file on its own line. No release bump: neither package was ever built.
+- **Verified:** s6 builds with rpmbuild on fc45. s6-rc and s6-linux-init were
+  built against the unpacked s6/s6-devel RPMs (same configure options as the
+  specs, plus `--with-include/--with-lib/--with-dynlib`, since installing
+  s6-devel needs sudo); their `make install` output matches the `%files`
+  lists. No file of s6, s6-rc or s6-linux-init belongs to an installed package.
+
 ### Current state
 
-As in session 1, except: skalibs and execline specs build with rpmbuild on
-Fedora 45 (this machine is now Fedora 45, not Artix). s6, s6-rc and
-s6-linux-init are still verified only by staged build.
+As in session 1, except: this machine is now Fedora 45 (not Artix). skalibs,
+execline and s6 build with rpmbuild on it; s6-rc and s6-linux-init pass the
+staged build against the real s6 RPMs but have not gone through rpmbuild.
 
 ### Next steps
 
-1. Owner reruns `build-skarnet-rpms.sh`; the next likely failures are in the
-   `%files` lists or file conflicts of s6/s6-rc/s6-linux-init.
+1. Owner reruns `build-skarnet-rpms.sh` to finish s6, s6-rc, s6-linux-init.
 2. The session 1 next steps still apply.
