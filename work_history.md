@@ -1647,3 +1647,77 @@ changed yet. Evidence came from /var/log/sdcompat/*/current and
    still fail, that file has `systemd --user`'s own error.
 2. Workaround if it still fails: setup with `--journal`.
 3. Open: user-runtime-dir@UID ExecStop exits 1 at greeter logout.
+
+## Session: 2026-10-20 night, black screen with JOURNAL=no, part 2
+
+Owner reported the display still black. Evidence from the s6 boot of
+~20:23–21:47 (`d2bd0f9` installed, `--no-journal --no-resolved`), read
+from /var/log/sdcompat on the following systemd boot (no root here, so
+/var/log/messages was not read).
+
+- **`b37629e` confirmed on a real boot:** /var/log/sdcompat/user@605xx
+  now exists, so the dynamic units' loggers run, and the greeters'
+  `systemd --user` started ("Startup finished in 674ms"). The bolt/polkit
+  deadlock was not checked (needs /var/log/messages).
+- **Cause found: the user bus.** In each greeter's user manager,
+  `dbus-broker.service` exited 1 five times within 30 ms, then
+  `dbus.socket` hit its start limit, so gdm-wayland-session found no
+  /run/user/UID/bus, started its own dbus-daemon, and gnome-session died on
+  "org.freedesktop.systemd1 does not exist". Reproduced here
+  (`unshare -rm`, tmpfs over /run/systemd/journal, dbus-broker-launch
+  under systemd-socket-activate): `ERROR launcher_open_journal ...
+  No such file or directory`, fatal. dbus-broker-launch (37) connects to
+  /run/systemd/journal/socket at startup and exits if that fails. The
+  system bus is dbus-daemon, so only user buses were hit. Explains the
+  earlier "not explained: greeter user managers" too.
+- **Fix (`98ebe70`): `sdcompat journal-relay`** (src/journal.rs), an s6
+  longrun `journal-relay` (dist/s6, depends on mount-api, notification-fd
+  3), put into sdcompat-sysinit by setup together with `syslog` when
+  JOURNAL=no (s6_dir_sum skips its contents.d entry). It binds
+  /run/systemd/journal/socket (native protocol, incl. binary fields and
+  memfd entries; SO_PASSCRED for the pid) and .../stdout (stream protocol,
+  `<N>` prefixes), mode 0666, and sends `<PRI>IDENT[PID]: MESSAGE` to
+  /dev/log, non-blocking (dropped if rsyslog is not up or full). Other
+  journal fields are dropped. Decisions: a relay, not dbus-daemon for user
+  buses (that would change /etc and the systemd boot), and the stream
+  socket too, so user units' output reaches rsyslog instead of /dev/null.
+  It refuses to unlink a socket that still accepts connections (journald
+  running after all). The runner still decides by `cfg.journal`, so system
+  services keep their s6-log directories.
+- Tests: unit tests (native parser, stream header/prefix, format; 34 + 1
+  ignored). dbus-broker-launch with journal hidden and the relay running:
+  gets past the journal (fails later on a missing XDG_RUNTIME_DIR in the
+  test namespace, as it does with the real journal there); its own
+  messages, `logger --journald` and `systemd-cat -p err` arrived formatted
+  at a stand-in /dev/log. Sandbox: SANDBOX_JOURNAL=no starts the relay with
+  `--dir $R/jrelay --syslog $R/devlog` and check.sh checks native, stream
+  and prefix forwarding: 169/169 in 4 of 5 runs; 1 run failed "beside3 not
+  in s6-rc -a list" (old code passed 2 of 2; the relay is a separate
+  process, looks like a timing flake, not investigated). JOURNAL=yes
+  164/164. s6-rc-compile of dist/s6 (with stub sdcompat-default and
+  sdcompat-system-update bundles), setup `--dry-run --no-journal`,
+  shellcheck/bash -n, release build. Docs: README/README-us,
+  TESTING/TESTING-us.
+- Not tested: a real boot. SELinux: the relay runs in the s6 tree's
+  domain and creates its sockets with whatever label that gives; fine in
+  permissive, unknown in enforcing.
+- Still open: user-runtime-dir@UID ExecStop exit 1.
+
+### Current state
+
+JOURNAL=no boots: loggers for on-demand and dynamic units run (`b37629e`,
+confirmed), and user buses should now start with journal-relay. JOURNAL=yes
+unchanged.
+
+### Next steps
+
+1. Owner: push, rerun setup (`--no-journal` kept, so `journal-relay` is
+   installed and added to sdcompat-sysinit), reboot into s6. Check: login
+   screen; `ls -l /run/systemd/journal` (socket, stdout);
+   /var/log/sdcompat/user@60578.service/current without dbus-broker
+   failures; dbus-broker/gnome lines in /var/log/messages; no
+   `s6-svlisten: fatal: timed out` for bolt.
+2. If still black: /var/log/sdcompat/user@605*/current and `sudo grep
+   -i dbus-broker /var/log/messages`. Workaround: setup with `--journal`.
+3. The beside3 sandbox flake, if it shows up again.
+4. user-runtime-dir@UID ExecStop exit 1 at greeter logout.
