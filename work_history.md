@@ -1721,3 +1721,55 @@ unchanged.
    -i dbus-broker /var/log/messages`. Workaround: setup with `--journal`.
 3. The beside3 sandbox flake, if it shows up again.
 4. user-runtime-dir@UID ExecStop exit 1 at greeter logout.
+
+## Session: 2026-10-20 late night, login works; user units fail 226/NAMESPACE
+
+Owner: login succeeded on the s6 boot (22:23, `e554402`, `--no-journal
+--no-resolved`), and they installed the `@gnome-desktop` group with dnf
+(22:22, just before that boot).
+
+- **`98ebe70` confirmed on a real boot:** /run/systemd/journal/{socket,
+  stdout} are journal-relay's (mode 0666), the user bus (dbus-broker)
+  runs, and gnome-session/gnome-shell are up on tty2 under user@1000.
+- **Bug found: user units with mount sandboxing fail.** oo7-daemon (the
+  secret service) hit its start limit with status=226/NAMESPACE; on the
+  systemd boot before it ran fine. Bisected with `systemd-run --user
+  --wait -p X /bin/true`: PrivateUsers, ProtectClock, ImportCredential
+  pass; PrivateTmp, ProtectSystem, PrivateDevices, PrivateNetwork,
+  ProtectKernelTunables, ProtectControlGroups (everything needing a mount
+  namespace) fail. Cause: systemd-executor (262) bind-mounts the new root
+  on /run/systemd/mount-rootfs, which systemd PID 1 creates at boot; the
+  executor's own mkdir fails as uid 1000 in the user namespace and is
+  ignored, then the mount fails. Our mount-api step didn't create it.
+  (The child's own error message went nowhere readable: its log target is
+  the journal, i.e. root-only /var/log/messages; no strace or sudo here,
+  so this rests on the bisect, the missing directory and systemd's
+  namespace.c, not on the error text.)
+- **Fix (`f7b1bfa`): dist/early mount-api** creates /run/systemd/mount-rootfs
+  (0555) and /run/systemd/inaccessible/{reg,dir,fifo,chr,blk} (0000, as
+  PID 1's make_inaccessible_nodes; sock skipped, the executor only falls
+  back to chr/blk there), before the restorecon (label init_var_run_t,
+  same as on systemd). Tested: the snippet against a scratch dir under
+  `unshare -r` (all but blk, which needs real root), bash -n, shellcheck.
+  Not tested: a real boot. The sandbox suite doesn't run `early`.
+- Also seen: mount propagation is private everywhere (systemd makes /
+  shared); /run is mounted twice (initramfs tmpfs + s6-linux-init's). Not
+  a cause here; may matter for units that expect propagation.
+
+### Current state
+
+JOURNAL=no s6 boots reach a GNOME login and session. User units with mount
+namespacing should work once mount-api creates mount-rootfs.
+
+### Next steps
+
+1. Owner: push, rerun setup (installs the new /usr/libexec/sdcompat/early),
+   reboot into s6. Check: `ls -ld /run/systemd/mount-rootfs`; `systemctl
+   --user status oo7-daemon` running; `systemd-run --user --wait -p
+   PrivateTmp=yes -p ProtectSystem=full /bin/true` exits 0.
+   Without rebooting, `sudo mkdir -m 0555 /run/systemd/mount-rootfs &&
+   systemctl --user restart oo7-daemon` tests the cause right away.
+2. Then: mount propagation (make / rshared like systemd?), cgroup-BPF
+   settings, SELinux enforcing.
+3. Still open: the beside3 sandbox flake; user-runtime-dir@UID ExecStop
+   exit 1 at greeter logout.
