@@ -2304,3 +2304,73 @@ boot).
 1. Then: cgroup-BPF settings, SELinux enforcing.
 2. Maybe: make the fd store not need a reboot for limit changes.
 3. Still open: beside3 sandbox flake.
+
+## Session: 2026-10-21: cgroup BPF settings
+
+- Scope, from this machine's units (/usr/lib/systemd/{system,user}):
+  IPAddressDeny= 31 (all `any`), IPAddressAllow= 1 (`localhost`),
+  DeviceAllow= 25, DevicePolicy= 16 (15 closed, 1 strict: polkit.service).
+  RestrictFileSystems=, SocketBind*=, RestrictNetworkInterfaces=,
+  IP*FilterPath=, BPFProgram= are used by none, so left out.
+  RestrictFileSystems= would need a BPF LSM program anyway.
+- **New `src/bpf.rs` (`aefbccb`):** hand-assembled programs, no libbpf, as
+  systemd's bpf-devices.c/bpf-firewall.c. Names as systemd's: sd_devices,
+  sd_fw_ingress, sd_fw_egress.
+  - Devices: allow list, everything else denied. closed (and auto with a
+    DeviceAllow= list) adds systemd's auto list (/dev/null, zero, full,
+    random, urandom, tty, ptmx, /run/systemd/inaccessible/{chr,blk}, rwm)
+    plus char-pts rw; strict adds nothing. PrivateDevices= turns auto into
+    closed. `char-`/`block-NAME` globs over /proc/devices (fnmatch, so
+    `char-/dev/console` and `char-cpu/*` work as in systemd); `*` is the
+    whole type. Missing /dev nodes are skipped silently (units list
+    /dev/kvm, /dev/cros_fp...).
+  - IP: allow list passes, else deny list drops, else pass; source address
+    on ingress, destination on egress. **Decision:** prefixes compiled into
+    the program (masked 32-bit word compares after bpf_skb_load_bytes)
+    instead of LPM-trie maps: units list one or two prefixes, and no maps
+    means no map fds to manage. No deny list → no program (nothing to drop).
+  - Runner: `enter_cgroup` calls `bpf::apply` right after moving itself into
+    the unit's cgroup (root only), so ExecStartPre= is covered too. Each
+    start first detaches programs with our names from that cgroup (query +
+    get-fd-by-id + name from prog info), then attaches the new ones with
+    BPF_F_ALLOW_MULTI. Detaching by name leaves programs other tools attached.
+    A refused program is logged ("DevicePolicy= not enforced: ...", with the
+    verifier's last lines) and the start goes on, as systemd does.
+  - Checked: the runner itself only opens /dev/null and the TTY after
+    entering the cgroup; PrivateDevices= builds /dev with bind mounts, not
+    mknod, so polkit's strict `/dev/null rw` does not block it.
+- Not done: lists on slices; IPAddress* on .socket units (systemd filters
+  the socket; nothing here uses it); transient units' D-Bus properties for
+  these; IPAccounting=; D-Bus properties (`systemctl show -p DevicePolicy`).
+- Tests: cargo test 42 + 2 ignored. The programs are checked without root by
+  a small eBPF interpreter in the tests (device allow/deny incl. access
+  subsets; firewall v4/v6 ingress/egress, prefixes, non-IP, short packet);
+  plus parsing and polkit/PrivateDevices/reset cases. **Not run: the kernel
+  test** (`tests/bpf-root.sh`, needs sudo; the verifier has not seen these
+  programs yet). Release build; sandbox SANDBOX_JOURNAL=yes 184/184,
+  SANDBOX_JOURNAL=no 189/189 (runner is unprivileged there, so bpf is not
+  exercised). bash -n, shellcheck -S warning. clippy not installed here.
+- Docs: README/README-us (supported, not-implemented, file list),
+  TESTING/TESTING-us (bpf-root.sh in section 3; real-boot rows: bpftool on
+  polkit/logind, no "not enforced" messages, pkaction answers).
+- On the s6 boot these units get programs: chronyd, firewalld, fwupd,
+  malcontent-timerd, polkit, systemd-journald, systemd-logind,
+  systemd-hostnamed, systemd-localed, upower.
+- Note for SELinux enforcing: the runner's domain will need bpf
+  { prog_load prog_run } and the cgroup attach permissions.
+
+### Current state
+
+DevicePolicy=/DeviceAllow= and IPAddressDeny=/IPAddressAllow= are
+implemented and unit-tested; not yet loaded into a real kernel.
+
+### Next steps
+
+1. Owner: `tests/bpf-root.sh` (sudo). If it passes: push, rerun setup,
+   reboot into s6 and go through the three new TESTING rows; also that
+   GNOME login, journald, logind and polkit come up as before. If a unit
+   breaks, the runner's "not enforced" or the unit's own errors show which
+   program; send them.
+2. Then: SELinux enforcing.
+3. Maybe: make the fd store not need a reboot for limit changes.
+4. Still open: beside3 sandbox flake.
