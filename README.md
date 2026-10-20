@@ -176,7 +176,9 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 7. SELinux: `bin/init`에 `init_exec_t` 레이블을 붙이고 정책 모듈
    `dist/selinux/sdcompat.cil`을 불러옵니다. 이 모듈은 s6, s6-rc, s6-linux-init,
    execline 프로그램과 sdcompat 바이너리를 `init_exec_t`로 표시해서, systemd처럼
-   s6 트리 전체가 `init_t`에 머물게 합니다. `--uninstall`이 모듈을 제거합니다.
+   s6 트리 전체가 `init_t`에 머물게 합니다. 또 systemd에는 없고 s6만 하는 몇 가지
+   동작(catch-all 로거의 fifo, `/run/service`의 링크, /run/sdcompat에 있는
+   `user@UID.service`의 run 스크립트)을 허용합니다. `--uninstall`이 모듈을 제거합니다.
 8. kernel-install 플러그인을 설치하고, 이를 이용해 기본 부팅 항목을 복사하면서
    `init=/usr/sbin/init-selinux`를 추가합니다. plymouth의 종료 유닛은 systemd 전용이라
    스플래시를 제거합니다(`rhgb quiet`, `plymouth.enable=0`). `enforcing=0`도 추가하며,

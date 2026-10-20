@@ -188,7 +188,10 @@ entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
 7. SELinux: labels `bin/init` as `init_exec_t` and loads the policy module
    `dist/selinux/sdcompat.cil`, which labels the s6, s6-rc, s6-linux-init and
    execline programs and sdcompat's binaries `init_exec_t`, so that the whole
-   s6 tree stays in `init_t` as systemd does. `--uninstall` removes the module.
+   s6 tree stays in `init_t` as systemd does. It also allows the few things
+   s6 does that systemd does not (the catch-all logger's fifo, links in
+   `/run/service`, the run scripts of `user@UID.service` in /run/sdcompat).
+   `--uninstall` removes the module.
 8. Installs the kernel-install plugin and uses it to copy the default boot entry with `init=/usr/sbin/init-selinux` added. It removes the
    splash (`rhgb quiet`, `plymouth.enable=0`), because plymouth's quit unit is
    systemd-only. It also adds `enforcing=0`; pass `--enforcing` to leave that out.

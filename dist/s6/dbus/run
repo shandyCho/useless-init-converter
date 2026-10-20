@@ -2,4 +2,8 @@
 # The reference dbus-daemon (dnf install dbus-daemon); --systemd-activation
 # makes it ask sdcompat to start services with SystemdService=.
 mkdir -p /run/dbus
+# systemd creates it for dbus.socket with its file_contexts label
+# (system_dbusd_var_run_t); the socket inherits it, and confined services
+# may only connect to a socket with that label.
+command -v restorecon >/dev/null && restorecon /run/dbus 2>/dev/null
 exec dbus-daemon --system --nofork --nopidfile --systemd-activation --print-address=3

@@ -1,4 +1,7 @@
 #!/bin/sh
 # earlyoom replaces systemd-oomd under s6 (same settings file as earlyoom.service).
 [ -r /etc/default/earlyoom ] && . /etc/default/earlyoom
-exec /usr/bin/earlyoom $EARLYOOM_ARGS
+# Split with quote removal, as systemd does for $EARLYOOM_ARGS: Fedora's
+# default has quoted regexes with spaces ('^(Web Content|Isolated Web Co)$').
+eval "set -- ${EARLYOOM_ARGS:-}"
+exec /usr/bin/earlyoom "$@"

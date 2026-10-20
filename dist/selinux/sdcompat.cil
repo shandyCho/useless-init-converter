@@ -25,3 +25,15 @@
 
 (filecon "/run/sdcompat(/.*)?" any (system_u object_r init_var_run_t ((s0) (s0))))
 (typetransition init_t var_run_t dir "sdcompat" init_var_run_t)
+
+; What the s6 tree does that systemd does not, so the policy has no rule for
+; it: s6-linux-init's catch-all logger reads a fifo in /run/service, and the
+; s6 services log to it (dbus-daemon and hostname enter their own domains);
+; s6-svlink links dynamic service directories into /run/service; the run
+; and finish scripts of dynamic services (user@UID.service) live in
+; /run/sdcompat/dyn.
+(allow init_t var_run_t (fifo_file (read write ioctl)))
+(allow system_dbusd_t var_run_t (fifo_file (write ioctl getattr)))
+(allow hostname_t var_run_t (fifo_file (write ioctl getattr)))
+(allow init_t var_run_t (lnk_file (create)))
+(allow init_t init_var_run_t (file (execute execute_no_trans)))

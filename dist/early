@@ -30,6 +30,10 @@ mount-api)
     mnt securityfs /sys/kernel/security nosuid,nodev,noexec 2>/dev/null
     mnt bpf /sys/fs/bpf nosuid,nodev,noexec,mode=0700 2>/dev/null
     mnt pstore /sys/fs/pstore nosuid,nodev,noexec 2>/dev/null
+    # systemd (PID 1) creates userdb for the services that serve user records
+    # there (gdm's org.gnome.DisplayManager); it needs its own label, not
+    # /run/systemd's.
+    mkdir -p /run/systemd/userdb
     if [ -e /sys/fs/selinux/enforce ] && command -v restorecon >/dev/null; then
         restorecon -R /dev /run 2>/dev/null
     fi
