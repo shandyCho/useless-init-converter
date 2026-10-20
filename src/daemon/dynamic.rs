@@ -259,6 +259,24 @@ impl Daemon {
         "done"
     }
 
+    /// Shutdown: s6-rc doesn't know the on-demand oneshots, so run their
+    /// ExecStop= here, as systemd stops every unit (systemd-backlight@ saves
+    /// the brightness then). sdcompatd goes down before the filesystems.
+    pub(super) async fn stop_dynamic_oneshots(&self) {
+        let ids: Vec<String> = self
+            .dynamic
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, d)| d.kind == Kind::Oneshot && d.active)
+            .map(|(n, _)| n.clone())
+            .collect();
+        for id in ids {
+            let (_, unit) = self.load_unit(&id);
+            self.dyn_stop(&id, &unit).await;
+        }
+    }
+
     pub(super) async fn dyn_restart(&self, id: &str, unit: &Unit) -> &'static str {
         self.stop_conflicts(id, unit).await;
         match self.dynamic_kind(id) {

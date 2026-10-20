@@ -238,6 +238,17 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
         }
         out.push(BoundSocket { fd, name: name.clone(), path: Some(spec.clone()) });
     }
+    // Character devices and files, e.g. /dev/rfkill for systemd-rfkill.
+    for spec in sock.get_all("Socket", "ListenSpecial") {
+        let c = CString::new(spec.as_str()).map_err(|e| e.to_string())?;
+        let rw = if sock.get_bool("Socket", "Writable", false) { libc::O_RDWR } else { libc::O_RDONLY };
+        let flags = rw | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+        let fd = unsafe { libc::open(c.as_ptr(), flags) };
+        if fd < 0 {
+            return Err(format!("open {spec}: {}", errno()));
+        }
+        out.push(BoundSocket { fd, name: name.clone(), path: None });
+    }
     // Symlinks= (e.g. /dev/log -> /run/systemd/journal/dev-log)
     let first_path = out.iter().find_map(|b| b.path.clone());
     if let Some(target) = first_path {
@@ -248,12 +259,31 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
             }
         }
     }
-    for key in ["ListenNetlink", "ListenSpecial", "ListenMessageQueue", "ListenUSBFunction"] {
+    for key in ["ListenNetlink", "ListenMessageQueue", "ListenUSBFunction"] {
         if sock.get("Socket", key).is_some() {
             eprintln!("sdcompat: {}: {key}= is not supported, skipped", sock.id);
         }
     }
     Ok(out)
+}
+
+/// Sockets started on their own (udev's SYSTEMD_WANTS, `systemctl start
+/// x.socket`) are recorded here, so their service's runner binds them like
+/// enabled ones. RUN_DIR is fresh at boot.
+fn requested_marker(run_dir: &Path, name: &str) -> std::path::PathBuf {
+    run_dir.join("sockets").join(name)
+}
+
+pub fn mark_requested(run_dir: &Path, name: &str) -> std::io::Result<()> {
+    let p = requested_marker(run_dir, name);
+    if let Some(d) = p.parent() {
+        fs::create_dir_all(d)?;
+    }
+    fs::write(p, "")
+}
+
+pub fn is_requested(run_dir: &Path, name: &str) -> bool {
+    requested_marker(run_dir, name).exists()
 }
 
 pub fn remove_paths(sock: &Unit) {

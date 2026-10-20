@@ -288,7 +288,7 @@ impl Daemon {
                 return s;
             }
             let Some(sv) = self.svstat_cached(id).await else { return s };
-            if dep_failed {
+            if dep_failed || st.has(keys::SOCKET_WAIT) {
                 return s;
             }
             if start_failed {
@@ -378,7 +378,8 @@ impl Daemon {
                     return s;
                 }
                 let Some(sv) = self.svstat_cached(id).await else { return s };
-                if !condition_ok || dep_failed {
+                // Waiting for socket activity: the service itself is not running.
+                if !condition_ok || dep_failed || st.has(keys::SOCKET_WAIT) {
                     return s;
                 }
                 if start_failed {
@@ -597,12 +598,38 @@ impl Daemon {
         }
     }
 
+    /// Start a service whose runner waits for socket activity, now: the caller
+    /// removed SOCKET_WAIT, and SIGUSR1 ends the runner's wait. s6 signals
+    /// whatever process runs, so not one that started under a second ago
+    /// (it may not block SIGUSR1 yet). Down (s6 restarting it): the next run
+    /// sees no SOCKET_WAIT and starts the service.
+    async fn wake_socket_wait(&self, id: &str) {
+        for _ in 0..20 {
+            let out = Command::new("s6-svstat").args(["-o", "up,updownfor"]).arg(self.scandir(id)).output().await;
+            let Ok(out) = out else { return };
+            let text = String::from_utf8_lossy(&out.stdout).into_owned();
+            let f: Vec<&str> = text.split_whitespace().collect();
+            match f.as_slice() {
+                ["true", secs] if secs.parse::<u64>().unwrap_or(0) >= 1 => {
+                    let _ = Command::new("s6-svc").arg("-1").arg(self.scandir(id)).status().await;
+                    return;
+                }
+                ["true", _] => tokio::time::sleep(Duration::from_millis(200)).await,
+                _ => return,
+            }
+        }
+    }
+
     /// Wait until a longrun is up and ready (and, if `old_pid` is given, has a new PID).
     pub(super) async fn wait_ready(&self, id: &str, unit: &Unit, old_pid: Option<u32>) -> &'static str {
         let started_at = util::now_realtime_usec();
         let deadline = Instant::now() + Self::start_timeout(unit);
         let st = state::for_unit(&self.cfg.run_dir, id);
         loop {
+            // Ran and exited already, now waiting for socket activity again.
+            if st.has(keys::SOCKET_WAIT) && st.get_u64(keys::ACTIVE_ENTER) >= started_at {
+                return "done";
+            }
             if let Some(sv) = self.svstat(id).await {
                 if sv.up && sv.ready && old_pid.map(|o| o != sv.pid).unwrap_or(true) {
                     return "done";
@@ -691,6 +718,10 @@ impl Daemon {
                 if active.contains(id) {
                     let sv = self.svstat(id).await.unwrap_or_default();
                     let st = state::for_unit(&self.cfg.run_dir, id);
+                    if st.take(keys::SOCKET_WAIT) {
+                        self.wake_socket_wait(id).await;
+                        return self.wait_ready(id, unit, None).await;
+                    }
                     let parked = st.has(keys::CONDITION_FAILED) || st.has(keys::DEPENDENCY_FAILED) || st.has(keys::START_FAILED);
                     if sv.up && parked {
                         // Skipped or failed earlier but still "up" for s6:
@@ -799,7 +830,8 @@ impl Daemon {
                     }
                     return "done";
                 }
-                if kind == Kind::Longrun && !unit.get_all("Service", "ExecStop").is_empty() {
+                let waiting = state::for_unit(&self.cfg.run_dir, id).has(keys::SOCKET_WAIT);
+                if kind == Kind::Longrun && !waiting && !unit.get_all("Service", "ExecStop").is_empty() {
                     let pid = self.svstat(id).await.map(|s| s.pid).filter(|&p| p > 0);
                     self.run_runner("stop-exec", id, pid).await;
                 }
@@ -832,7 +864,9 @@ impl Daemon {
         match self.kind_of(id) {
             Some(Kind::Longrun) if active.contains(id) => {
                 let sv = self.svstat(id).await.unwrap_or_default();
-                if !sv.up {
+                // Waiting for socket activity: inactive, so nothing to stop.
+                let waiting = state::for_unit(&self.cfg.run_dir, id).has(keys::SOCKET_WAIT);
+                if !sv.up || waiting {
                     if only_if_active {
                         return "done";
                     }

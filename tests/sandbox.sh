@@ -428,6 +428,30 @@ cat > "$U/beside.target" <<EOF
 Wants=beside3.service
 EOF
 
+# --- socket started on its own, re-activated after its service exits ---
+# Like systemd-rfkill.socket: a static socket with ListenSpecial= (here a
+# FIFO), whose service handles what is queued and exits when idle.
+mkfifo "$R/react.fifo"
+cat > "$W/react.py" <<'PYT'
+import os, sys
+assert os.environ.get("LISTEN_FDS") == "1", os.environ.get("LISTEN_FDS")
+try:
+    data = os.read(3, 100).decode().strip()
+except BlockingIOError:
+    data = "-"
+with open(sys.argv[1], "a") as f:
+    f.write(data + "\n")
+PYT
+cat > "$U/react.socket" <<EOF
+[Socket]
+ListenSpecial=$R/react.fifo
+Writable=yes
+EOF
+cat > "$U/react.service" <<EOF
+[Service]
+ExecStart=/usr/bin/python3 $W/react.py $R/react.out
+EOF
+
 # --- path units ---
 cat > "$U/watch.service" <<EOF
 [Service]

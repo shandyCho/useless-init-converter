@@ -329,7 +329,36 @@ wait $hold
 tries=30
 while [ $tries -gt 0 ] && ! in_s6rc beside3.service; do tries=$((tries - 1)); sleep 0.2; done
 in_s6rc beside3.service && ok "beside3 recorded in s6-rc afterwards" || bad "beside3 not in s6-rc -a list"
-$L -d change hold1.service hold2.service hold3.service beside3.service
+# -b: the daemon may be recording beside3 in s6-rc right now.
+$L -b -d change hold1.service hold2.service hold3.service beside3.service
+
+echo "== socket started on its own, re-activated on activity"
+call StartUnit ss react.socket replace
+tries=30
+while [ $tries -gt 0 ] && [ ! -s "$R/react.out" ]; do tries=$((tries - 1)); sleep 0.2; done
+expect_eq "starting react.socket ran react.service with the FIFO" "$(cat "$R/react.out" 2>/dev/null)" "-"
+expect_state react.service inactive/dead
+echo a > "$R/react.fifo"
+tries=30
+while [ $tries -gt 0 ] && [ "$(wc -l < "$R/react.out")" -lt 2 ]; do tries=$((tries - 1)); sleep 0.2; done
+expect_eq "activity on the FIFO started it again" "$(sed -n 2p "$R/react.out")" "a"
+expect_state react.service inactive/dead
+echo b > "$R/react.fifo"
+tries=30
+while [ $tries -gt 0 ] && [ "$(wc -l < "$R/react.out")" -lt 3 ]; do tries=$((tries - 1)); sleep 0.2; done
+expect_eq "and again" "$(sed -n 3p "$R/react.out")" "b"
+# An explicit start while it waits runs it now, without activity.
+expect_state react.service inactive/dead
+call StartUnit ss react.service replace
+tries=30
+while [ $tries -gt 0 ] && [ "$(wc -l < "$R/react.out")" -lt 4 ]; do tries=$((tries - 1)); sleep 0.2; done
+expect_eq "StartUnit while waiting runs it at once" "$(sed -n 4p "$R/react.out")" "-"
+call StopUnit ss react.service replace
+expect_state react.service inactive/dead
+# The stop closed the held FIFO: without a reader, opening it would block.
+timeout 2 sh -c 'echo c > "$1"' sh "$R/react.fifo" 2>/dev/null
+sleep 2
+expect_eq "stopped: no re-activation" "$(wc -l < "$R/react.out")" "4"
 
 echo "== transient scope"
 sleep 1000 &

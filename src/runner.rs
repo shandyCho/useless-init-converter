@@ -901,7 +901,7 @@ impl Runner {
             let default = format!("{stem}.socket");
             let wanted = self.unit.get_words("Unit", "Requires").contains(&default)
                 || self.unit.get_words("Unit", "Wants").contains(&default);
-            if wanted || install::is_enabled(&self.cfg, &default) {
+            if wanted || install::is_enabled(&self.cfg, &default) || socket::is_requested(&self.cfg.run_dir, &default) {
                 names.push(default);
             }
             // Sockets that name this service with Service= (e.g. systemd-logind-varlink.socket).
@@ -918,7 +918,7 @@ impl Runner {
                     }
                     let s = ld.load(&n);
                     if s.get("Socket", "Service").map(|v| self.unit.names.contains(&v)).unwrap_or(false)
-                        && install::is_enabled(&self.cfg, &n)
+                        && (install::is_enabled(&self.cfg, &n) || socket::is_requested(&self.cfg.run_dir, &n))
                     {
                         names.push(n);
                     }
@@ -994,11 +994,57 @@ impl Runner {
         Ok(())
     }
 
+    /// The service exited on its own (systemd-rfkill after a few idle
+    /// seconds): like systemd's socket unit, wait for activity on the sockets
+    /// the daemon holds, then start it again. Not ready meanwhile, and the
+    /// daemon reports the unit inactive. SIGTERM (stop) ends the wait; the
+    /// daemon starts it at once by removing SOCKET_WAIT and sending SIGUSR1
+    /// (`s6-svc -1`). SIGUSR1 is blocked except inside ppoll(), so a wakeup
+    /// between the check and the wait is not lost.
+    fn wait_for_sockets(&self) {
+        use std::os::fd::AsRawFd;
+        unsafe {
+            let mut usr1: libc::sigset_t = std::mem::zeroed();
+            let mut old: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut usr1);
+            libc::sigaddset(&mut usr1, libc::SIGUSR1);
+            libc::sigprocmask(libc::SIG_BLOCK, &usr1, &mut old);
+            libc::signal(libc::SIGUSR1, wake_signal as *const () as libc::sighandler_t);
+            let mut during = old;
+            libc::sigdelset(&mut during, libc::SIGUSR1);
+
+            let store = self.cfg.run_dir.join("fdstore");
+            let held = crate::fdstore::get(&store, &format!("{}#sockets", self.unit.id));
+            let mut fds: Vec<libc::pollfd> = held
+                .iter()
+                .map(|(_, f)| libc::pollfd { fd: f.as_raw_fd(), events: libc::POLLIN, revents: 0 })
+                .collect();
+            // Nothing held (the daemon is not reachable): start it now.
+            while !fds.is_empty() && self.st.has(keys::SOCKET_WAIT) {
+                let r = libc::ppoll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, std::ptr::null(), &during);
+                if r > 0 || (r < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR)) {
+                    break;
+                }
+            }
+            // The daemon removed the key first: its SIGUSR1 may still be on
+            // the way, and must not reach the service after exec.
+            if !self.st.take(keys::SOCKET_WAIT) && !WOKEN.load(std::sync::atomic::Ordering::SeqCst) {
+                let ts = libc::timespec { tv_sec: 2, tv_nsec: 0 };
+                libc::sigtimedwait(&usr1, std::ptr::null_mut(), &ts);
+            }
+            libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
+            libc::signal(libc::SIGUSR1, libc::SIG_DFL);
+        }
+    }
+
     // ---- subcommands ----
 
     /// longrun `run` script.
     pub fn cmd_run(mut self) -> i32 {
         self.take_notify_fd();
+        if self.st.has(keys::SOCKET_WAIT) {
+            self.wait_for_sockets();
+        }
         self.enter_cgroup();
         if let Err(e) = self.prepare_start() {
             self.soft_fail(&e);
@@ -1533,6 +1579,21 @@ impl Runner {
 
     /// longrun `finish` script: cleanup and Restart= policy.
     pub fn cmd_finish(self, exit_code: i32, signum: i32) -> i32 {
+        if self.st.has(keys::SOCKET_WAIT) {
+            // Ended while waiting for its sockets: the service wasn't running.
+            let requested_restart = self.st.has(keys::RESTART_REQUESTED);
+            self.st.clear(keys::RESTART_REQUESTED);
+            let stopped = !wanted_up();
+            if stopped || requested_restart {
+                self.st.clear(keys::SOCKET_WAIT);
+            }
+            if stopped {
+                for s in self.socket_units() {
+                    socket::remove_paths(&s);
+                }
+            }
+            return 0;
+        }
         let status = if exit_code == 256 || exit_code < 0 && signum > 0 {
             Status::Killed(signum)
         } else {
@@ -1650,7 +1711,20 @@ impl Runner {
         self.st.set(keys::RESULT, &result);
         self.st.stamp(keys::INACTIVE_ENTER);
         self.on_result(result == "success");
+        if result == "success" && self.has_held_sockets() {
+            // Stay up for s6: the next run waits for socket activity.
+            self.st.set(keys::SOCKET_WAIT, "1");
+            return 0;
+        }
         125
+    }
+
+    fn has_held_sockets(&self) -> bool {
+        if self.socket_units().is_empty() {
+            return false;
+        }
+        let store = self.cfg.run_dir.join("fdstore");
+        !crate::fdstore::get(&store, &format!("{}#sockets", self.unit.id)).is_empty()
     }
 
     fn is_clean(&self, status: Status) -> bool {
@@ -1905,6 +1979,12 @@ thread_local! {
 }
 
 static FORWARD_PID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+static WOKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn wake_signal(_: libc::c_int) {
+    WOKEN.store(true, std::sync::atomic::Ordering::SeqCst);
+}
 
 extern "C" fn forward_signal(sig: libc::c_int) {
     let pid = FORWARD_PID.load(std::sync::atomic::Ordering::SeqCst);

@@ -74,7 +74,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 - `Environment=`, `EnvironmentFile=`, `PassEnvironment=`, `UnsetEnvironment=`, `WorkingDirectory=`, `RootDirectory=`, `UMask=`, `Nice=`, `OOMScoreAdjust=`, `Limit*=`.
 - `Runtime/State/Cache/Logs/ConfigurationDirectory=`.
 - `StandardInput/Output/Error=`(null, tty, file:, append:, truncate:), `TTYPath=`, `TTYVHangup=`. `getty@.service`에 필요한 만큼 지원합니다.
-- `Accept=no` 소켓 활성화: `ListenStream/Datagram/SequentialPacket/FIFO`와 `LISTEN_FDS`, `LISTEN_PID`, `LISTEN_FDNAMES`.
+- `Accept=no` 소켓 활성화: `ListenStream/Datagram/SequentialPacket/FIFO/Special`와 `LISTEN_FDS`, `LISTEN_PID`, `LISTEN_FDNAMES`. 소켓이 있는 서비스가 정상 종료하면 systemd처럼 소켓에 다음 활동이 있을 때 다시 시작됩니다(systemd-rfkill은 할 일이 없으면 종료합니다). `.socket`을 시작하면(`systemctl start`, udev의 `SYSTEMD_WANTS`) 그 서비스가 소켓과 함께 시작됩니다.
 - `Restart=`(모든 모드), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=`(reboot/poweroff/halt).
 - `FDSTORE=1` / `FileDescriptorStoreMax=`: 데몬이 저장된 fd를 보관했다가 재시작 후 돌려줍니다(journald와 logind가 사용). 리스닝 소켓도 같은 방식으로 보관하므로 서비스를 재시작해도 열린 채로 유지됩니다.
@@ -93,7 +93,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 - 매니저: `Reload`/`Reexecute`(s6 데이터베이스 재생성 및 갱신), `KillUnit`, `ResetFailed*`, `Set/UnsetEnvironment`, `PowerOff/Reboot/Halt`.
 - 임시(transient) 유닛: `.scope`와 `.slice` 유닛에 대한 `StartTransientUnit`(`PIDs` 또는 `PIDFDs`; logind, podman, flatpak이 사용). `AttachProcessesToUnit`, `Scope.Abandon`, 참조 카운트 호출(수락만 함)도 지원합니다.
 - **`systemd-run`**: 보조 유닛을 포함한 임시 `.service`, `.timer`, `.path` 유닛(`--on-calendar`/`--on-active`는 타이머와 서비스를 함께 보냅니다). 속성은 `/run/systemd/transient/`의 유닛 파일이 됩니다. `systemd-run --wait`는 `PropertiesChanged`와 종료 상태를 받습니다. 끝난 임시 유닛은 언로드됩니다.
-- 템플릿 인스턴스는 데이터베이스를 다시 컴파일하지 않고 필요할 때 만들어집니다(예: `user@1000.service`, `user-runtime-dir@1000.service`). 의존성이 먼저 시작되고, 멈춘 유닛을 필요로 하는 유닛은 함께 멈춥니다.
+- 템플릿 인스턴스는 데이터베이스를 다시 컴파일하지 않고 필요할 때 만들어집니다(예: `user@1000.service`, `user-runtime-dir@1000.service`). 의존성이 먼저 시작되고, 멈춘 유닛을 필요로 하는 유닛은 함께 멈춥니다. 종료할 때 활성 상태인 oneshot 인스턴스를 멈춰 `ExecStop=`이 실행됩니다(systemd-backlight@가 밝기를 저장합니다).
 - `poweroff.target`, `reboot.target`, `halt.target`을 시작하면(logind가 전원을 끄는 방식) 설정된 종료 명령을 실행합니다.
 - D-Bus 활성화: dbus-daemon의 `ActivationRequest`에 응답하고, 시작이 실패하면 `ActivationFailure`로 답합니다.
 - 권한: 상태를 바꾸는 호출에는 root, `ALLOW_UIDS`에 있는 uid, 또는 systemd의 action ID(`manage-units`, `manage-unit-files`, `reload-daemon`, `set-environment`; 정책 파일은 systemd에 포함)에 대한 polkit 허가가 필요합니다. polkit이 없으면 root가 아닌 호출자는 거부됩니다. `ALLOW_UIDS`는 root와 같은 권한입니다.
@@ -107,7 +107,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 ## 아직 구현되지 않은 것
 
 - initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `setup-fedora.sh`가 경고합니다.
-- `Accept=yes` 소켓과 요청 시(on-demand) 소켓 활성화. 서비스는 소켓과 함께 미리 시작됩니다.
+- `Accept=yes` 소켓과 첫 시작의 요청 시(on-demand) 활성화. 서비스는 소켓과 함께 미리 시작됩니다(그 뒤의 재시작만 소켓 활동을 기다립니다).
 - 시스템 매니저에서의 `systemd-run --pipe`/`--stdio`(파일 디스크립터 전달). `--pty`, `--wait`, `--scope`, `--on-*`, `--user`는 동작합니다.
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
 - `AccuracySec=`(타이머는 묶지 않고 제시간에 실행), `WakeSystem=`, `OnClockChange=`.
@@ -346,7 +346,7 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 - `LOG_DIR`: `JOURNAL=no`일 때 s6-log 디렉터리가 들어갈 위치.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 원하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
-- `INCLUDE`: 기본값으로 sdcompat에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), 절전 서비스)를 통과시킵니다.
+- `INCLUDE`: 기본값으로 sdcompat에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight와 rfkill(화면·키보드 밝기와 무선 상태를 부팅 사이에 유지), 절전 서비스)를 통과시킵니다.
 
 ## 소스 구조
 

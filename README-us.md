@@ -77,7 +77,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 - `Environment=`, `EnvironmentFile=`, `PassEnvironment=`, `UnsetEnvironment=`, `WorkingDirectory=`, `RootDirectory=`, `UMask=`, `Nice=`, `OOMScoreAdjust=`, `Limit*=`.
 - `Runtime/State/Cache/Logs/ConfigurationDirectory=`.
 - `StandardInput/Output/Error=` (null, tty, file:, append:, truncate:), `TTYPath=` and `TTYVHangup=`, which are enough for `getty@.service`.
-- Socket activation for `Accept=no`: `ListenStream/Datagram/SequentialPacket/FIFO`, with `LISTEN_FDS`, `LISTEN_PID` and `LISTEN_FDNAMES` set.
+- Socket activation for `Accept=no`: `ListenStream/Datagram/SequentialPacket/FIFO/Special`, with `LISTEN_FDS`, `LISTEN_PID` and `LISTEN_FDNAMES` set. A service that exits cleanly while it has sockets is started again on the next activity on them, as with systemd (systemd-rfkill exits when idle). Starting a `.socket` (`systemctl start`, udev's `SYSTEMD_WANTS`) starts its service with the socket.
 - `Restart=` (all modes), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=` (reboot/poweroff/halt).
 - `FDSTORE=1` / `FileDescriptorStoreMax=`: the daemon holds stored fds and hands
@@ -98,7 +98,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 - Manager: `Reload`/`Reexecute` (regenerate and update the s6 database), `KillUnit`, `ResetFailed*`, `Set/UnsetEnvironment`, `PowerOff/Reboot/Halt`.
 - Transient units: `StartTransientUnit` for `.scope` and `.slice` units, with `PIDs` or `PIDFDs` (used by logind, podman and flatpak). Also `AttachProcessesToUnit`, `Scope.Abandon`, and the reference-counting calls (accepted).
 - **`systemd-run`**: transient `.service`, `.timer` and `.path` units, including auxiliary units (`--on-calendar`/`--on-active` send a timer and its service). Properties become a unit file in `/run/systemd/transient/`. `systemd-run --wait` gets `PropertiesChanged` and the exit status. Finished transient units are unloaded.
-- Template instances are created on demand without recompiling the database, for example `user@1000.service` and `user-runtime-dir@1000.service`. Their dependencies start first, and units that require a stopped unit are stopped with it.
+- Template instances are created on demand without recompiling the database, for example `user@1000.service` and `user-runtime-dir@1000.service`. Their dependencies start first, and units that require a stopped unit are stopped with it. At shutdown, the active oneshot instances are stopped, so their `ExecStop=` runs (systemd-backlight@ saves the brightness).
 - Starting `poweroff.target`, `reboot.target` or `halt.target` (which is how logind powers off) runs the configured shutdown command.
 - D-Bus activation: answers dbus-daemon's `ActivationRequest` and replies with `ActivationFailure` when a start fails.
 - Authorization: mutating calls need root, a uid in `ALLOW_UIDS`, or a polkit
@@ -116,7 +116,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 ## Not implemented (yet)
 
 - Encrypted volumes in `/etc/crypttab` that the initramfs does not unlock (systemd opens them with `systemd-cryptsetup@` units). The LUKS root disk is unlocked by the initramfs and works; `setup-fedora.sh` warns about the others.
-- `Accept=yes` sockets, and on-demand socket activation: services are started eagerly, with their sockets.
+- `Accept=yes` sockets, and on-demand activation at first start: services are started eagerly, with their sockets (only a later restart waits for activity).
 - `systemd-run --pipe`/`--stdio` (passing file descriptors) on the system manager. `--pty`, `--wait`, `--scope`, `--on-*` and `--user` work.
 - autofs: `.automount` units mount eagerly.
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`.
@@ -364,7 +364,7 @@ and defaults). The most important keys:
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
-- `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font) and the sleep services.
+- `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight and rfkill (screen/keyboard brightness and radio state kept across boots) and the sleep services.
 
 ## Source layout
 

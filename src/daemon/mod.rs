@@ -147,6 +147,14 @@ pub fn job_path(id: u32) -> String {
 }
 
 /// Targets/services that mean "shut the machine down" (logind starts these).
+/// The service an Accept=no socket unit activates.
+fn socket_service(id: &str, unit: &Unit) -> Option<String> {
+    if !id.ends_with(".socket") || unit.get_bool("Socket", "Accept", false) {
+        return None;
+    }
+    Some(unit.get("Socket", "Service").unwrap_or_else(|| format!("{}.service", id.trim_end_matches(".socket"))))
+}
+
 fn shutdown_action(id: &str) -> Option<&'static str> {
     match id {
         "poweroff.target" | "systemd-poweroff.service" => Some("poweroff"),
@@ -420,6 +428,16 @@ impl Daemon {
             LoadState::Loaded => {}
         }
         let starts = matches!(jtype, "start" | "restart" | "reload-or-restart");
+        if starts && self.kind_of(&id).is_none() && !self.cfg.is_excluded(&id) {
+            if let Some(svc) = socket_service(&id, &unit) {
+                // Sockets are bound by their service's runner: record this
+                // one so the runner binds it too, then start the service.
+                if let Err(e) = crate::socket::mark_requested(&self.cfg.run_dir, &id) {
+                    eprintln!("sdcompatd: {id}: {e}");
+                }
+                return Box::pin(self.check_job(&svc, jtype, allow_reload, manual)).await;
+            }
+        }
         if manual && starts && unit.get_bool("Unit", "RefuseManualStart", false) {
             return Err(err(
                 E_ONLY_BY_DEP,
@@ -1597,6 +1615,9 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
                 }
             }
         }
+    }
+    if daemon.cfg.run_dir.join("shutting-down").exists() {
+        daemon.stop_dynamic_oneshots().await;
     }
     if let Some(flag) = &daemon.cfg.booted_flag {
         let _ = std::fs::remove_dir(flag);

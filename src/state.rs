@@ -44,6 +44,11 @@ impl UnitState {
         let _ = fs::remove_file(self.path(key));
     }
 
+    /// Remove `key`; true if this call removed it (the other side did not).
+    pub fn take(&self, key: &str) -> bool {
+        fs::remove_file(self.path(key)).is_ok()
+    }
+
     pub fn has(&self, key: &str) -> bool {
         self.path(key).exists()
     }
@@ -83,6 +88,9 @@ pub mod keys {
     pub const DEPENDENCY_FAILED: &str = "dependency-failed";
     /// Set by the daemon before `s6-svc -r`, so finish restarts regardless of Restart=.
     pub const RESTART_REQUESTED: &str = "restart-requested";
+    /// The service exited and its runner waits for activity on its sockets
+    /// before starting it again (systemd's socket activation, Accept=no).
+    pub const SOCKET_WAIT: &str = "socket-wait";
 }
 
 pub fn for_unit(run_dir: &Path, unit: &str) -> UnitState {
