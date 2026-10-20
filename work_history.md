@@ -2374,3 +2374,35 @@ implemented and unit-tested; not yet loaded into a real kernel.
 2. Then: SELinux enforcing.
 3. Maybe: make the fd store not need a reboot for limit changes.
 4. Still open: beside3 sandbox flake.
+
+## Session: 2026-10-21: first kernel run of the BPF programs
+
+- Owner ran `tests/bpf-root.sh`: sd_devices loaded and attached (no
+  message); sd_fw_ingress/egress refused: "unreachable insn 17". Cause:
+  `any` is a /0 prefix, compiled to an unconditional `ja drop`, and the
+  family's trailing `ja accept` after it was dead code, which the verifier
+  rejects. The test interpreter only follows taken paths, so it missed it.
+- **Fix (`c9c2b7b`):** a /0 prefix ends its family's code; the drop block is
+  emitted only when referenced (allow any + deny any would leave it dead).
+  New test `programs_have_no_dead_code`: walks every branch of programs
+  for 36 allow/deny combinations and the device program; it fails on the
+  old code (unreachable insns [13, 22]).
+- Tests: cargo test 43 + 2 ignored; sandbox SANDBOX_JOURNAL=yes 184/184,
+  SANDBOX_JOURNAL=no 189/189. Kernel test not rerun yet (needs sudo).
+- The earlier entry's "the verifier has not seen these programs" now
+  holds only for the firewall programs; the device program passed.
+
+### Current state
+
+DevicePolicy=/DeviceAllow= loads and attaches in a real kernel (enforcement
+not yet confirmed: the test stopped at the firewall's load error).
+IPAddressDeny=/IPAddressAllow= fixed for the verifier, not yet rerun.
+
+### Next steps
+
+1. Owner: `tests/bpf-root.sh` again. If it passes: push, rerun setup,
+   reboot into s6, the three TESTING rows, and GNOME/journald/logind/polkit
+   come up as before.
+2. Then: SELinux enforcing (the runner will need bpf permissions).
+3. Maybe: make the fd store not need a reboot for limit changes.
+4. Still open: beside3 sandbox flake.
