@@ -2191,7 +2191,45 @@ login, and its ExecStop no longer fails (all confirmed on a real boot).
 
 ### Next steps
 
-1. Maybe: why logind keeps stopped users in `closing`.
+1. Maybe: why logind keeps stopped users in `closing` (done below).
+2. Maybe: the double /run (s6-linux-init over the initramfs's).
+3. Then: cgroup-BPF settings, SELinux enforcing.
+4. Maybe: make the fd store not need a reboot for limit changes.
+5. Still open: beside3 sandbox flake.
+
+## Session: 2026-10-21: logind keeps stopped users "closing"
+
+- Cause (read in systemd v262 src/login): user_may_gc() asks
+  manager_job_is_active() for runtime_dir_job/service_manager_job, which
+  does Properties.Get Job.State on the job's path and treats only
+  `org.freedesktop.DBus.Error.UnknownObject` as finished (systemd's
+  answer: the object is gone). sdcompat answered
+  `org.freedesktop.systemd1.NoSuchJob` there, so r < 0, "still pending",
+  and the user was never finalized (root, gdm-greeter seen `closing` for
+  8+ minutes with their units inactive and no jobs). The earlier check
+  last session used GetJob, where NoSuchJob is right.
+- **Fix** (`bb74578`): Properties on a missing job path, and Job.Cancel
+  on one, answer UnknownObject. Manager.GetJob/CancelJob keep NoSuchJob.
+- Tests: cargo test 36 + 1 ignored; release build; sandbox
+  SANDBOX_JOURNAL=yes 184/184, SANDBOX_JOURNAL=no 189/189. New check:
+  Job.State on the cancelled job's path → UnknownObject (via dbus-send,
+  SKIP if missing). bash -n, shellcheck -S warning. TESTING/TESTING-us:
+  real-boot row (no root/gdm-greeter left `closing`).
+- Note: the sandbox mode variable is `SANDBOX_JOURNAL`; a plain
+  `JOURNAL=no` runs the yes mode (caught here; earlier entries' counts
+  show the right mode was used then).
+- Not tested: a real boot with the fix.
+
+### Current state
+
+Under s6, / is shared, user-runtime-dir runs once per login and its
+ExecStop succeeds (confirmed on a real boot). logind should now drop
+users once their units stop (unverified on a real boot).
+
+### Next steps
+
+1. Owner: push, rerun setup, reboot into s6. After login and a `sudo`,
+   wait a minute: `loginctl list-users` shows only the logged-in user.
 2. Maybe: the double /run (s6-linux-init over the initramfs's).
 3. Then: cgroup-BPF settings, SELinux enforcing.
 4. Maybe: make the fd store not need a reboot for limit changes.
