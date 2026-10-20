@@ -4,6 +4,7 @@
 #
 #   tests/sandbox.sh [WORKDIR]      set up and start everything
 #   tests/sandbox.sh WORKDIR stop   tear it down
+# SANDBOX_JOURNAL=no sets it up as a JOURNAL=no install (per-service s6-log).
 set -eu
 
 BIN=$(cd "$(dirname "$0")/.." && pwd)/target/debug/sdcompat
@@ -40,7 +41,7 @@ ALLOW_UIDS=$(id -u)
 RUNNER=$BIN
 POWEROFF_CMD=touch $R/poweroff-requested
 REBOOT_CMD=touch $R/reboot-requested
-JOURNAL=yes
+JOURNAL=${SANDBOX_JOURNAL:-yes}
 JOURNAL_STDOUT=$R/jstdout
 TRANSIENT_DIR=$R/transient
 UDEV_DIR=$W/udev
@@ -275,7 +276,7 @@ BindsTo=prep@%i.service
 After=prep@%i.service
 [Service]
 Type=notify
-ExecStart=/bin/sh -c '$BIN notify --ready; exec sleep 1000'
+ExecStart=/bin/sh -c 'echo instance %i up; $BIN notify --ready; exec sleep 1000'
 EOF
 
 # --- Conflicts= (like gdm.service vs getty@tty1.service) ---
@@ -457,7 +458,7 @@ done
 # Makes hold1 ready, like polkit made upowerd ready at boot.
 cat > "$U/beside1.service" <<EOF
 [Service]
-ExecStart=/bin/sh -c 'touch $R/hold1-ready; exec sleep 1000'
+ExecStart=/bin/sh -c 'echo beside1 up; touch $R/hold1-ready; exec sleep 1000'
 EOF
 cat > "$U/beside2.service" <<EOF
 [Service]

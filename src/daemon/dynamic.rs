@@ -255,6 +255,13 @@ impl Daemon {
                 .unwrap()
                 .insert(id.to_string(), Dynamic { kind: Kind::Longrun, active: false });
         }
+        // `s6-svlink -d` also writes log/down: the s6-log of a JOURNAL=no
+        // install would never run, and the service would write into a pipe
+        // nobody reads.
+        let log = self.scandir(id).join("log");
+        if log.is_dir() {
+            let _ = Command::new("s6-svc").arg("-u").arg(&log).status().await;
+        }
         let started_at = crate::util::now_realtime_usec();
         let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(id)).status().await;
         let r = self.wait_ready(id, unit, None).await;

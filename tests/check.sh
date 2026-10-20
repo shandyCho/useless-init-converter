@@ -43,6 +43,17 @@ expect_eq() {
     [ "$2" = "$3" ] && ok "$1" || bad "$1: expected '$3', got '$2'"
 }
 
+# SANDBOX_JOURNAL=no: output goes to per-service s6-log directories.
+grep -qx 'JOURNAL=no' "$W/sdcompat.conf" && journal=no || journal=yes
+expect_log() {
+    unit=$1 text=$2 tries=25
+    while [ $tries -gt 0 ] && ! grep -q "$text" "$W/logs/$unit/current" 2>/dev/null; do
+        tries=$((tries - 1))
+        sleep 0.2
+    done
+    grep -q "$text" "$W/logs/$unit/current" 2>/dev/null && ok "$unit output in its s6-log" || bad "no '$text' in $W/logs/$unit/current"
+}
+
 echo "== boot state"
 expect_state hello.service active/running
 expect_state notifier.service active/running
@@ -170,6 +181,8 @@ expect_state inst@a.service active/running
 expect_state prep@a.service active/exited
 expect_eq "BindsTo dependency ran first" "$(head -1 "$R/prep.out" 2>/dev/null)" "up a"
 $B call $MGR ListUnits | grep -q '"inst@a.service"' && ok "instance listed" || bad "instance not in ListUnits"
+# s6-svlink -d leaves the instance's logger down unless started too.
+[ $journal = no ] && expect_log inst@a.service "instance a up"
 call StopUnit ss prep@a.service replace
 expect_state inst@a.service inactive/dead
 expect_state prep@a.service inactive/dead
@@ -199,12 +212,17 @@ sleep 2
 expect_eq "OnFailure= unit ran" "$(cat "$R/cleanup.out" 2>/dev/null)" "cleaned"
 [ -e "$R/reboot-requested" ] && ok "FailureAction=reboot ran REBOOT_CMD" || bad "FailureAction did nothing"
 
+if [ $journal = no ]; then
+echo "== s6-log"
+expect_log hello.service "hello from"
+else
 echo "== journal stream"
 f=$(grep -l "^sh\$" "$R"/journal/*.log 2>/dev/null | xargs grep -l "hello.service" 2>/dev/null | head -1)
 if [ -n "$f" ] && head -7 "$f" | tr '\n' ' ' | grep -q "^sh hello.service 6 1 0 0 0 " && grep -q "hello from" "$f"; then
     ok "service output arrives on the journal stream with the stdout header"
 else
     bad "no journal stream for hello.service: $(ls "$R/journal" | wc -l) streams"
+fi
 fi
 
 echo "== path units"
@@ -304,6 +322,9 @@ hold=$!
 sleep 0.5
 call StartUnit ss beside1.service replace
 expect_state beside1.service active/running
+# JOURNAL=no: beside1.service.log is a dependency that is down, as polkit's
+# logger was at boot; it has to start beside the change too.
+[ $journal = no ] && expect_log beside1.service "beside1 up"
 tries=50
 while [ $tries -gt 0 ] && kill -0 $hold 2>/dev/null; do tries=$((tries - 1)); sleep 0.2; done
 if kill -0 $hold 2>/dev/null; then

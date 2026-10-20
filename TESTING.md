@@ -115,6 +115,10 @@ tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 `check.sh`는 샌드박스를 띄운 직후의 상태를 기대하므로 샌드박스마다 한 번만 실행됩니다. 다시
 실행하려면 샌드박스를 새로 만드세요: `tests/sandbox.sh ~/sdc stop && tests/sandbox.sh ~/sdc`.
 
+`JOURNAL=no` 설치(journald 대신 서비스별 s6-log)를 시험하려면 샌드박스를
+`SANDBOX_JOURNAL=no tests/sandbox.sh ~/sdc`로 띄우세요. 그러면 `check.sh`는 서비스 출력을
+journal 스트림 대신 `~/sdc/logs/` 아래에서 확인합니다.
+
 이어서 Fedora의 진짜 `systemctl`로 샌드박스를 조작해 보세요.
 
 ```sh

@@ -120,6 +120,10 @@ time.
 sandbox. To run it again, recreate the sandbox:
 `tests/sandbox.sh ~/sdc stop && tests/sandbox.sh ~/sdc`.
 
+To test a `JOURNAL=no` install (per-service s6-log instead of journald), set up
+the sandbox with `SANDBOX_JOURNAL=no tests/sandbox.sh ~/sdc`. `check.sh` then
+looks for service output under `~/sdc/logs/` instead of the journal stream.
+
 Then try Fedora's real `systemctl` against the sandbox:
 
 ```sh

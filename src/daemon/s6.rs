@@ -484,13 +484,47 @@ impl Daemon {
         }
         let deps = self.all_dependencies(id).await?;
         let active = self.active_atoms().await;
-        if !deps.iter().all(|d| active.contains(d)) {
-            return None;
+        // With JOURNAL=no the service's s6-log is one of its dependencies,
+        // and it is down for an on-demand unit. s6-rc would only `s6-svc -u`
+        // it too, once its own dependencies (the fd holder) are up.
+        let logger = format!("{id}.log");
+        let missing: Vec<&String> = deps.iter().filter(|d| !active.contains(*d)).collect();
+        let start_logger = match missing.as_slice() {
+            [] => false,
+            [l] if **l == logger => {
+                let ldeps = self.all_dependencies(&logger).await?;
+                if !ldeps.iter().all(|d| active.contains(d)) {
+                    return None;
+                }
+                true
+            }
+            _ => return None,
+        };
+        eprintln!("sdcompatd: start {id}: s6-rc is busy with another change, starting it beside");
+        if start_logger {
+            self.beside.lock().unwrap().insert(logger.clone());
+            let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(&logger)).status().await;
+            if !self.wait_up(&logger, Duration::from_secs(10)).await {
+                eprintln!("sdcompatd: start {id}: logger {logger} did not come up");
+                return Some("failed");
+            }
         }
         self.beside.lock().unwrap().insert(id.to_string());
-        eprintln!("sdcompatd: start {id}: s6-rc is busy with another change, starting it beside");
         let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(id)).status().await;
         Some(self.wait_ready(id, unit, None).await)
+    }
+
+    /// Wait until a longrun without a unit (a logger) is up and ready.
+    async fn wait_up(&self, atom: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.svstat(atom).await {
+                Some(sv) if sv.up && sv.ready => return true,
+                Some(_) if Instant::now() < deadline => {}
+                _ => return false,
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// start_beside() for each longrun of a bundle. At boot, udev wants
