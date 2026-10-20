@@ -3,8 +3,11 @@
 #   Cargo.toml Cargo.lock crates dist vendor .cargo  under sdcompat-VERSION/
 # with .cargo/config.toml pointing [source.crates-io] at vendor/.
 Name:           sdcompat-gen
-Version:        0.1.0
-Release:        1%{?dist}
+# Version comes from Cargo.toml and release from the build time and git
+# commit (build-rpms.sh defines them); build with that script, not with
+# rpmbuild directly.
+Version:        %{sdcompat_version}
+Release:        %{sdcompat_release}%{?dist}
 Summary:        Translates systemd unit files into an s6-rc database
 # Choose a license before distributing.
 License:        TBD

@@ -36,8 +36,22 @@ then runs `rpmbuild -bb` for each spec. rpmbuild builds without network
 (`--offline`). Nothing is installed and no sudo is used. Needs `rpm-build`,
 `cargo` and `rust`.
 
-The five specs must have the same `Version:` (they share one tarball); the
-script stops if they don't.
+## Versions
+
+The specs carry no version. The script sets it, so build the specs with
+this script (plain `rpmbuild` fails for lack of a version).
+
+- **Version** is read from one place, `[workspace.package] version` in
+  `Cargo.toml`. The crates use it too, so a version bump is that one line.
+- **Release** is new for every build: `1.YYYYMMDDHHMMSS.gCOMMIT`, with
+  `.dirty` appended when there are uncommitted changes. Example:
+  `sdcompat-gen-0.1.0-1.20261021071849.g0023111.fc45`. The build time comes
+  first, so when only the Rust code changed and the version did not, dnf
+  still sees the new build as an upgrade.
+- The five packages are tied to one version-release, and the script always
+  builds all five together. `rpms/` holds only the last build's five.
+- To set the release yourself, e.g. for a published release:
+  `SDCOMPAT_RELEASE=1 packages/build-rpms.sh`.
 
 ## Installing
 
@@ -46,6 +60,19 @@ sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm      # skarnet tools (dist/rpm/bu
 sudo dnf install ~/rpmbuild-sdcompat/rpms/*.rpm
 sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 ```
+
+After the Rust code changed, rebuild and upgrade:
+
+```sh
+git pull                                            # or make your change and commit it
+packages/build-rpms.sh
+sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm
+rpm -q sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd   # which build is installed
+```
+
+On a running s6 boot, the new sdcompatd is used once the daemon restarts
+(`s6-svc -r /run/service/sdcompatd`). The runner and timers are used the next
+time a service starts, and sdcompat-gen at the next `sdcompat reload` or boot.
 
 When the `sdcompat` RPM is installed, `setup-fedora.sh` uses it instead of
 building the core. When only some tool RPMs are installed, it leaves those

@@ -2868,3 +2868,41 @@ projects, and now one RPM per core tool. main is unchanged.
    resolves the Requires, that `/usr/libexec/sdcompat/*` is init_exec_t
    after install, then `setup-fedora.sh` and an s6 boot.
 3. Still open: the items in the previous session's next steps.
+
+## Session: 2026-10-21: RPM versions and releases (branch `split-projects`)
+
+The owner asked for build version management, so that changed Rust code is
+easy to roll out. Before this the specs had a fixed `0.1.0-1`, so a rebuild
+of changed code had the same NEVRA and dnf would not install it.
+
+### Changes
+
+- Specs: `Version: %{sdcompat_version}`, `Release: %{sdcompat_release}%{?dist}`,
+  as the skarnet specs do; they are built only through build-rpms.sh.
+- `packages/build-rpms.sh`:
+  - version from Cargo.toml `[workspace.package] version` (the one source;
+    the crates use it too);
+  - release `1.YYYYMMDDHHMMSS.gCOMMIT[.dirty]` per build (`.dirty` when
+    Cargo.toml, Cargo.lock, crates, dist or packages have uncommitted
+    changes), or `SDCOMPAT_RELEASE=N`;
+  - writes the spec copies with the two `%global`s in front;
+  - `rpms/` is emptied first and gets only this build's five RPMs, so
+    `dnf upgrade rpms/*.rpm` takes one matching set;
+  - writes `.cargo/config.toml` itself (`cargo vendor --quiet` does not
+    print it).
+- packages README pair: a "Versions" section and the rebuild/upgrade steps
+  (`dnf upgrade`, and when each tool takes effect on a running boot).
+  CLAUDE.md: packaging rule updated.
+
+### Tests
+
+- Built all five RPMs twice; names carry the generated release, %check passed
+  in each, `rpms/` held only the newest five.
+- `rpm.vercmp`: the generated release sorts above the old `1`, a later build
+  above an earlier one, and a version bump above any release.
+- bash -n and shellcheck -S warning clean.
+
+### Next steps
+
+As in the previous entry; on Fedora also try `dnf upgrade` with a second
+build.

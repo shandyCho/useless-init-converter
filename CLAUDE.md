@@ -25,7 +25,9 @@ if they turned out to be wrong.
   built from one workspace tarball by `packages/build-rpms.sh`), and they
   depend on each other with `Requires`; the library crates are not packaged.
   The `sdcompat` package holds the boot setup (`dist/`) and requires the tools.
-  Keep the five specs at the same Version.
+  The version is `[workspace.package] version` in Cargo.toml and the release
+  is generated per build; the specs carry neither, so build them only with
+  that script.
 - Build and test: `cargo build`, `cargo test`; for each standalone project
   `cargo test --manifest-path standalone/NAME/Cargo.toml`; then the sandbox
   suite: `tests/sandbox.sh DIR && tests/check.sh DIR; tests/sandbox.sh DIR stop`

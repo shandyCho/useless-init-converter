@@ -34,8 +34,20 @@ packages/build-rpms.sh DIR        # 다른 위치
 실행합니다. rpmbuild는 네트워크 없이(`--offline`) 빌드합니다. 아무것도 설치하지 않고
 sudo도 쓰지 않습니다. 필요한 것: `rpm-build`, `cargo`, `rust`.
 
-spec 다섯 개의 `Version:`은 같아야 합니다(타르볼 하나를 함께 씀). 다르면 스크립트가
-멈춥니다.
+## 버전
+
+spec에는 버전을 적지 않습니다. 스크립트가 정해서 넘겨 주므로 spec은 이 스크립트로
+빌드하세요(`rpmbuild`를 직접 실행하면 버전이 없어 실패합니다).
+
+- **버전**은 `Cargo.toml`의 `[workspace.package] version` 하나에서 읽습니다. 크레이트들도
+  이 값을 쓰므로, 버전을 올릴 때는 이 줄만 고치면 됩니다.
+- **릴리스**는 빌드할 때마다 새로 정합니다: `1.YYYYMMDDHHMMSS.g커밋`. 커밋하지 않은
+  변경이 있으면 끝에 `.dirty`가 붙습니다. 예: `sdcompat-gen-0.1.0-1.20261021071849.g0023111.fc45`.
+  빌드 시각이 앞에 오므로, 버전을 그대로 두고 Rust 코드만 고쳐서 다시 빌드해도 dnf는
+  새 빌드를 업그레이드로 봅니다.
+- 다섯 패키지는 같은 버전-릴리스끼리만 맞도록 묶여 있고, 스크립트는 언제나 다섯 개를
+  함께 빌드합니다. `rpms/`에는 마지막 빌드의 다섯 개만 남습니다.
+- 공개 릴리스처럼 릴리스 번호를 직접 정하려면 `SDCOMPAT_RELEASE=1 packages/build-rpms.sh`.
 
 ## 설치
 
@@ -44,6 +56,19 @@ sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm      # skarnet 도구 (dist/rpm/b
 sudo dnf install ~/rpmbuild-sdcompat/rpms/*.rpm
 sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 ```
+
+Rust 코드를 고친 뒤에는 다시 빌드하고 업그레이드합니다.
+
+```sh
+git pull                                            # 또는 직접 고치고 커밋
+packages/build-rpms.sh
+sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm
+rpm -q sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd   # 설치된 빌드 확인
+```
+
+s6로 부팅한 상태라면, 새 sdcompatd는 데몬을 다시 시작하면 쓰입니다(`s6-svc -r
+/run/service/sdcompatd`). runner와 timers는 서비스가 다음에 시작될 때 쓰이고,
+sdcompat-gen은 다음 `sdcompat reload`나 부팅 때 쓰입니다.
 
 `setup-fedora.sh`는 `sdcompat` RPM이 설치되어 있으면 본체를 빌드하지 않고 그것을
 씁니다. 도구 RPM 일부만 설치되어 있으면 그 도구는 건드리지 않고 나머지만 소스에서

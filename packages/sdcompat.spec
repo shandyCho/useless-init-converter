@@ -5,8 +5,11 @@
 # This one holds the sdcompat command and the boot setup, and pulls in the
 # tools as their own packages.
 Name:           sdcompat
-Version:        0.1.0
-Release:        1%{?dist}
+# Version comes from Cargo.toml and release from the build time and git
+# commit (build-rpms.sh defines them); build with that script, not with
+# rpmbuild directly.
+Version:        %{sdcompat_version}
+Release:        %{sdcompat_release}%{?dist}
 Summary:        systemd compatibility layer for s6-rc
 # Choose a license before distributing.
 License:        TBD
