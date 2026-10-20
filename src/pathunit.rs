@@ -210,8 +210,12 @@ pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
             let level = specs.iter().any(|(k, p)| level_holds(k, p));
             let mut fire = level && !unit_active(&c, &target).await;
             if !fire {
-                // Single-threaded runtime: blocking here is fine, nothing else runs.
-                let (_, changed, modified) = ino.wait(2000);
+                // On the blocking pool, so the connection keeps reading what
+                // the daemon sends (its signals) meanwhile; unread, they fill
+                // the socket and the daemon drops us.
+                let Ok((_, changed, modified)) = tokio::task::spawn_blocking(move || ino.wait(2000)).await else {
+                    return 1;
+                };
                 let edge = specs.iter().any(|(k, _)| {
                     (k == "PathChanged" && changed) || (k == "PathModified" && (changed || modified))
                 });

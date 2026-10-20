@@ -351,10 +351,20 @@ impl Daemon {
         if let Err(e) = self.conn.emit_signal(None::<&str>, path, iface, member, body).await {
             eprintln!("sdcompatd: emit {member}: {e}");
         }
-        let peers: Vec<Connection> = self.private.lock().unwrap().iter().map(|(_, c)| c.clone()).collect();
-        for p in peers {
-            // A peer that went away is dropped by its own reader task.
-            let _ = p.emit_signal(None::<&str>, path, iface, member, body).await;
+        let peers: Vec<(u64, Connection)> = self.private.lock().unwrap().clone();
+        for (id, p) in peers {
+            // A peer that went away is dropped by its own reader task. One
+            // that stopped reading (its socket buffer is full) would block
+            // every later signal and so every job: drop it, as systemd drops
+            // a client whose queue overflows. It reconnects when it needs to.
+            let send = p.emit_signal(None::<&str>, path, iface, member, body);
+            if tokio::time::timeout(std::time::Duration::from_millis(500), send).await.is_err() {
+                eprintln!("sdcompatd: a private-socket client is not reading its messages; disconnecting it");
+                self.private.lock().unwrap().retain(|(i, _)| *i != id);
+                tokio::spawn(async move {
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), p.close()).await;
+                });
+            }
         }
     }
 
