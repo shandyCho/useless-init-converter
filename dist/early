@@ -34,6 +34,20 @@ mount-api)
     # there (gdm's org.gnome.DisplayManager); it needs its own label, not
     # /run/systemd's.
     mkdir -p /run/systemd/userdb
+    # Also PID 1's: systemd-executor bind-mounts a unit's new root on
+    # mount-rootfs and can't create it itself in a user manager's user
+    # namespace, so every PrivateTmp/ProtectSystem/... user unit fails with
+    # 226/NAMESPACE without it (oo7-daemon). inaccessible/chr and blk are
+    # its fallback for nodes it can't mknod there.
+    [ -d /run/systemd/mount-rootfs ] || mkdir -m 0555 /run/systemd/mount-rootfs
+    if [ ! -d /run/systemd/inaccessible ]; then
+        mkdir -m 0755 /run/systemd/inaccessible
+        install -m 0000 /dev/null /run/systemd/inaccessible/reg
+        mkdir -m 0000 /run/systemd/inaccessible/dir
+        mkfifo -m 0000 /run/systemd/inaccessible/fifo
+        mknod -m 0000 /run/systemd/inaccessible/chr c 0 0
+        mknod -m 0000 /run/systemd/inaccessible/blk b 0 0
+    fi
     if [ -e /sys/fs/selinux/enforce ] && command -v restorecon >/dev/null; then
         restorecon -R /dev /run 2>/dev/null
     fi
