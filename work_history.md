@@ -1582,3 +1582,68 @@ saved by the last systemd boot and never save later toggles.
    DNS still goes through resolved there (`resolvectl status`). Plus the
    sandboxing checks from the entry above.
 2. Then: cgroup-BPF settings, SELinux enforcing.
+
+## Session: 2026-10-20 evening, black screen with JOURNAL=no (diagnosis only)
+
+Owner reported a black screen on the s6 boot after installing `063cf34`
+with `--no-journal --no-resolved` (two s6 boots, 19:41 and 19:53). No code
+changed yet. Evidence came from /var/log/sdcompat/*/current and
+/var/log/messages (rsyslog), since journald was not running.
+
+- **Confirmed: D-Bus activation deadlock.** At boot, upowerd,
+  accounts-daemon, firewalld, NetworkManager (nm-dispatcher,
+  wpa_supplicant) and boltd asked for D-Bus activation. None of them got
+  "starting it beside": start_beside() requires every s6-rc dependency of
+  the unit to be up, and with JOURNAL=no each longrun depends on its own
+  logger `<unit>.log` (producer-for/consumer-for), which is down for an
+  on-demand unit. So their `s6-rc change` waited for the lock. The lock
+  holder was the change for bolt.service (wanted by device
+  +thunderbolt:0-0): bolt has After=polkit.service, and boltd waits for
+  polkit before it takes its bus name. The deadlock lasted until
+  s6-svlisten timed out, 210 s later (19:53:59 to 19:57:29). Then polkit,
+  accounts-daemon and wpa_supplicant all started at once. The 19:41 boot
+  was the same (until 19:44:56).
+- **Confirmed: dynamic units' loggers never run.** `s6-svlink -d` also
+  writes `log/down`, and dyn_start only does `s6-svc -u` on the service, so
+  with JOURNAL=no the s6-log of user@UID etc. stays down (reproduced in a
+  scratch s6-svscan). No /var/log/sdcompat/user@* directory exists.
+  Output goes into an unread pipe, which blocks once 64 KiB fill it.
+- **Not explained: greeter user managers.** After 19:57:29, gdm's six
+  greeters each failed within ~0.3 s. gdm-wayland-session started its own
+  dbus-daemon (so /run/user/UID/bus did not exist), and gnome-session found
+  no org.freedesktop.systemd1. logind did create the `manager-early`
+  sessions, so user@UID.service got as far as PAM. systemd --user left no
+  output anywhere (see the logger bug above). The owner's tty login at
+  19:46 got a working user@1000. The sandboxing commit doesn't touch user@
+  (it has none of those settings).
+- Also seen: user-runtime-dir@UID ExecStop exits 1 on each greeter logout.
+
+### Fixes (same evening, `b37629e`)
+
+- start_beside() (daemon/s6.rs): when the only dependency that is down is
+  the unit's own `<id>.log`, and the logger's own dependencies (the
+  s6rc-fdholder) are up, start the logger with `s6-svc -u`, wait up to
+  10 s for it to be up and ready (s6-log -d3), then the unit. The logger
+  goes into `beside` too, so reconcile_beside() records it in s6-rc.
+- dyn_start() (daemon/dynamic.rs): `s6-svc -u` the service's `log`
+  subdirectory before the service, if there is one.
+- Tests: `SANDBOX_JOURNAL=no tests/sandbox.sh DIR` writes JOURNAL=no;
+  check.sh then checks hello.service's output in `logs/` instead of the
+  journal stream, plus inst@a's log and beside1's log (beside1 starts while
+  hold1's change holds the lock). The old code (HEAD in a scratch worktree
+  with the new tests) fails 9 checks in this mode: beside1/2/3 and react2
+  stuck behind the holding change (the boot deadlock), and both log
+  checks. With the fix: JOURNAL=no 166/166 twice, JOURNAL=yes 164/164
+  twice, `cargo test` 32 + 1 ignored, release build, shellcheck/bash -n.
+  Docs: TESTING/TESTING-us (SANDBOX_JOURNAL=no).
+- Not tested: a real boot with JOURNAL=no.
+
+### Next steps
+
+1. Owner: push, reinstall (`--no-journal` kept), reboot into s6. Check:
+   no `s6-svlisten: fatal: timed out` for bolt in /var/log/messages,
+   `Started polkitd` within seconds of boot, the login screen appears, and
+   /var/log/sdcompat/user@60578.service/current exists. If the greeters
+   still fail, that file has `systemd --user`'s own error.
+2. Workaround if it still fails: setup with `--journal`.
+3. Open: user-runtime-dir@UID ExecStop exits 1 at greeter logout.
