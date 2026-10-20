@@ -2462,3 +2462,52 @@ under strict. Not yet seen with JOURNAL=yes.
    the cgroup attach permissions).
 3. Maybe: make the fd store not need a reboot for limit changes.
 4. Still open: beside3 sandbox flake.
+
+## Session: 2026-10-21: SELinux enforcing, first pass
+
+Owner asked to start on SELinux enforcing. Worked on the s6 boot (PID 1
+s6-svscan, Permissive via `enforcing=0`, JOURNAL=no) without root, so
+checks are against the loaded policy with sesearch, not AVCs.
+
+- **BPF needs no policy change:** the runner is init_t, which has
+  `bpf { map_create map_read map_write prog_load prog_run }`,
+  `capability2 bpf`, and cgroup dir/file write. The note from the BPF
+  entry is settled.
+- **Bug, fixed (`6b2ffe3`):** PrivateDevices= built /dev in a fresh tmpfs;
+  its root and the fd/stdin/stdout/stderr/ptmx links were tmpfs_t (init_t
+  has no named type transition for them, only `log` -> devlog_t).
+  policykit_t, chronyd_t and the other service domains have no
+  `tmpfs_t:lnk_file read`, so under enforcing /dev/fd, /dev/stdout & co.
+  would be denied for the ~36 PrivateDevices= units. Now labelled from
+  file_contexts as their /dev paths (`selinux::label_as`, selabel_lookup +
+  lsetfilecon), as systemd's label_fix_full/symlink_label. Policy allows
+  it: init_t relabelfrom/relabelto on file_type dir/lnk_file, device_t
+  may associate with tmpfs. Bind-mounted nodes keep their own labels.
+  New test `label_as_on_this_host` (unprivileged, relabels a scratch dir
+  and link as /dev and /dev/fd; asserts device_t, it did not skip here).
+- Checked, fine: JOURNAL=no relay sockets (syslogd_var_run_t, devlog_t,
+  listener init_t): daemon domains have connectto/sendto on init_t
+  sockets and write on those sock_files.
+- Left as is: early oneshots' output to the s6-svscan-log fifo
+  (var_run_t). No fifo type is writable by every domain; under enforcing
+  the kernel replaces the fd with /dev/null at exec, so loadkeys and
+  restorecon still run, their messages are lost.
+- Tests: cargo test 44 + 2 ignored; release build; sandbox 184/184.
+
+### Current state
+
+Policy-side checks done for BPF, the private /dev and the journal relay.
+This boot's real AVC list has not been read (root only).
+
+### Next steps
+
+1. Owner, on this permissive s6 boot: `sudo ausearch -m
+   avc,user_avc,selinux_err -ts boot -i > ~/avc.txt` (or `sudo
+   tests/collect-diagnostics.sh`) and send it; triage by cause as in
+   session 9.
+2. After fixes: push, reinstall (rebuild binary), reboot s6, recollect.
+   When the list is down to policy-side leftovers, one enforcing boot by
+   removing `enforcing=0` at the GRUB prompt (the systemd entry is
+   unaffected); then `setup-fedora.sh --enforcing`.
+3. Maybe: make the fd store not need a reboot for limit changes.
+4. Still open: beside3 sandbox flake.
