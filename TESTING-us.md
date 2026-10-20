@@ -11,7 +11,7 @@ Stop at the first stage that fails and report it (see
 | Stage | Needs root | Changes the system | Time |
 |---|---|---|---|
 | 1. Get the code and tools | yes (dnf) | installs build tools | 10 min |
-| 2. Build the s6 RPMs | yes (dnf) | installs 5 packages | 10 min |
+| 2. Build the s6 RPMs | yes (dnf) | installs 6 packages | 10 min |
 | 3. Sandbox tests | no | no | 5 min |
 | 4. Translation preview | yes (read-only) | no | 2 min |
 | 5. Install | yes | adds a boot entry, `/etc/sdcompat` | 10 min |
@@ -67,7 +67,7 @@ rpm -q pam libselinux libseccomp policycoreutils
 
 ## 2. Build and install the s6 packages
 
-Fedora does not package skalibs, execline, s6, s6-rc or s6-linux-init. The
+Fedora does not package skalibs, execline, s6, s6-rc, s6-linux-init or s6-frontend. The
 build script downloads them, checks them against pinned SHA-256 sums and builds
 RPMs in dependency order:
 
@@ -84,7 +84,7 @@ The RPMs end up in `~/rpmbuild-skarnet/rpms`. Install all of them:
 
 ```sh
 sudo dnf install -y ~/rpmbuild-skarnet/rpms/*.rpm
-rpm -q skalibs execline s6 s6-rc s6-linux-init     # all five must be listed
+rpm -q skalibs execline s6 s6-rc s6-linux-init s6-frontend     # all six must be listed
 ```
 
 **If a package fails to build**, the log is in `~/rpmbuild-skarnet/<name>.build.log`.
@@ -200,6 +200,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | fwupd | `fwupdmgr get-devices` | a device list (fwupd starts with its syscall filter) |
 | No busy runner | `top -b -n1 -o %CPU \| head -15` | no `sdcompat` process near 100 % CPU |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (twice, a few seconds apart) | `up (pid …) N seconds`, with N growing (not restarting) |
+| The `s6` command | `s6 live status \| head` | services with `up`, e.g. `NetworkManager.service/longrun//up/explicit` |
 | Bus and userdb labels | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t` and `systemd_userdbd_runtime_t` |
 | Overall state | `systemctl is-system-running` | `running` (`degraded` is OK; see next line) |
 | Failed units | `systemctl --failed` | ideally none; note any that are listed |
@@ -271,7 +272,7 @@ Boot the normal Fedora entry, then:
 
 ```sh
 sudo dist/setup-fedora.sh --uninstall
-sudo dnf remove skalibs execline s6 s6-rc s6-linux-init \
+sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend \
     skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel
 ```
 

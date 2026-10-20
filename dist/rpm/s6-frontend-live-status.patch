@@ -1,0 +1,30 @@
+s6 live status SERVICES... failed with "s6-rc: fatal: unable to take locks:
+No such file or directory": the livedir argument of the second s6-rc call had
+one leading space too many for its execline block depth, and "-cbe" none.
+Fixed upstream in s6-frontend 0.2.0.0 (which needs s6-rc 0.8); backported.
+
+diff -ru s6-frontend-0.1.0.0/src/s6-frontend/live_status.c s6-frontend-0.1.0.0/src/s6-frontend/live_status.c
+--- s6-frontend-0.1.0.0/src/s6-frontend/live_status.c
++++ s6-frontend-0.1.0.0/src/s6-frontend/live_status.c
+@@ -110,9 +110,9 @@
+   unsigned int m = 0 ;
+   int e ;
+   size_t llen = strlen(g->dirs.live) ;
+-  char llivedir[llen + 3] ;
+-  llivedir[0] = ' ' ; llivedir[1] = ' ' ;
+-  memcpy(llivedir + 2, g->dirs.live, llen + 1) ;
++  char llivedir[llen + 2] ;
++  llivedir[0] = ' ' ;
++  memcpy(llivedir + 1, g->dirs.live, llen + 1) ;
+   char const *argv[26] ;
+   if (!stralloc_catb(&sa, " ", 1)) dienomem() ;
+   e = get_atomics(services, env_len(services), &sa, withe) ;
+@@ -137,7 +137,7 @@
+   argv[m++] = " " S6RC_EXTBINPREFIX "s6-rc" ;
+   argv[m++] = " -l" ;
+   argv[m++] = llivedir ;
+-  argv[m++] = withe ? " -cbE" : "-cbe" ;
++  argv[m++] = withe ? " -cbE" : " -cbe" ;
+   argv[m++] = " --" ;
+   argv[m++] = " list" ;
+   argv[m++] = "" ;

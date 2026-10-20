@@ -140,6 +140,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 | Package | Used for |
 |---|---|
 | skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, supervision, the service database. Fedora doesn't package them: `--rpms=DIR` or `--build-s6` |
+| s6-frontend (optional) | The `s6` command (see [The `s6` command](#the-s6-command-s6-frontend)); built with the others |
 | systemd | Stays installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | The system bus (`--systemd-activation`); dbus-broker stays for the user bus |
 | util-linux | `mount`, `swapon`, `mountpoint` for mount units and early boot |
@@ -186,7 +187,7 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 ## Deploying on Fedora (do it in a VM first)
 
-Fedora doesn't package skalibs, execline, s6, s6-rc or s6-linux-init, so build
+Fedora doesn't package skalibs, execline, s6, s6-rc, s6-linux-init or s6-frontend, so build
 RPMs for them first (specs in `dist/rpm/`, sources checked against pinned SHA-256 sums):
 
 ```sh
@@ -203,10 +204,11 @@ entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
 
 1. Installs `dbus-daemon`, `earlyoom`, `chrony`, `NetworkManager`, and the
    skarnet tools (skalibs 2.15.1.0, execline 2.9.9.2, s6 2.15.1.0, s6-rc 0.7.0.0,
-   s6-linux-init 1.2.0.2) from your RPMs (`--rpms=DIR`) or from source (`--build-s6`).
+   s6-linux-init 1.2.0.2, s6-frontend 0.1.0.0) from your RPMs (`--rpms=DIR`) or from
+   source (`--build-s6`).
 2. Builds and installs sdcompat. If the sdcompat RPM from `dist/sdcompat.spec` is installed, it uses that instead.
 3. Writes `/etc/sdcompat/`: the config, the s6 services (early boot, dbus-daemon,
-   the daemon, earlyoom) and the boot options. systemd-journald runs as an s6
+   the daemon, earlyoom) and the boot options, and `/etc/s6.conf` for the `s6` command. systemd-journald runs as an s6
    service. With `--no-journal`, an s6-only rsyslog config is used instead, so the
    systemd boot, where journald owns `/dev/log`, is unaffected.
 4. Enables chronyd, NetworkManager and gdm, and sets `graphical.target` as the default.
@@ -315,6 +317,36 @@ are implemented but **untested**. Try them on Fedora in a VM. If login fails,
 check `journalctl -u systemd-logind` and `journalctl -u user@1000.service`
 (or `sdcompat log UNIT`, which also works with `JOURNAL=no`).
 
+## The `s6` command (s6-frontend)
+
+The setup script installs [s6-frontend](https://skarnet.org/software/s6-frontend/)
+0.1.0.0, which provides the `s6` command, and writes `/etc/s6.conf`
+(`dist/s6.conf`) so that it uses sdcompat's database
+(`bootdb = /var/lib/sdcompat/compiled`). 0.1.0.0 is the release built for the
+pinned s6 2.15.1.0 / s6-rc 0.7.0.0; 0.2.0.0 needs s6-rc 0.8. Service names
+are the s6-rc names: `sshd.service`, `gdm.service`, … and sdcompat's own s6
+services (`dbus`, `sdcompatd`, `earlyoom`, `udevd`, …).
+
+| Command | What it does |
+|---|---|
+| `s6 live status` | every service with its type and state (no root needed) |
+| `s6 live status sshd.service` | the state of the listed services (a backported fix in `dist/rpm/s6-frontend-live-status.patch`) |
+| `sudo s6 process status sshd.service` | the supervised process (`s6-svstat`) |
+| `sudo s6 process restart sshd.service` | restart the process only, not what depends on it (`s6-svc -r`) |
+| `sudo s6 process kill -s HUP sshd.service` | send a signal to the process |
+| `sudo s6 live start\|stop X` | `s6-rc -u\|-d change X`; for units, prefer `systemctl` (see below) |
+| `sudo s6 system reboot\|poweroff` | the same s6-linux-init shutdown as `systemctl reboot\|poweroff` |
+
+`s6 live start/stop` and `s6 process restart` act below sdcompat: there is no
+systemd job, and `ExecStop=` does not run (as with `s6-rc` itself), so use
+`systemctl` to start, stop and restart units.
+
+**Do not use** `s6 repository …`, `s6 set …`, `s6 live install`,
+`s6 live start-everything`/`stop-everything` or `s6 system boot`. They manage
+s6-rc repositories and replace or restart the live database, while sdcompat
+compiles that database from unit files itself (`systemctl daemon-reload`,
+`sdcompat reload`).
+
 ## Configuration
 
 `/etc/sdcompat/sdcompat.conf` (`KEY=VALUE`; see `dist/sdcompat.conf` for all keys
@@ -353,6 +385,6 @@ src/daemon/        D-Bus API: dispatch, properties, s6 backend, private socket,
                    on-demand instances (dynamic.rs), systemd-run (transient.rs)
 dist/              setup-fedora.sh, config, D-Bus policy, s6 services, early-boot helper,
                    s6-linux-init skeleton, kernel-install plugin, sdcompat.spec
-dist/rpm/          specs and build script for skalibs, execline, s6, s6-rc, s6-linux-init
+dist/rpm/          specs and build script for skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend
 tests/             unprivileged sandbox, scenario checks, systemctl wrapper
 ```

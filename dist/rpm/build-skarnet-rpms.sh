@@ -1,6 +1,6 @@
 #!/bin/bash
-# Build RPMs for skalibs, execline, s6, s6-rc and s6-linux-init (Fedora does
-# not package them), in dependency order.
+# Build RPMs for skalibs, execline, s6, s6-rc, s6-linux-init and s6-frontend
+# (Fedora does not package them), in dependency order.
 #
 #   dist/rpm/build-skarnet-rpms.sh [OUTDIR]        # default: ~/rpmbuild-skarnet
 #
@@ -14,13 +14,14 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 OUT=${1:-$HOME/rpmbuild-skarnet}
-ORDER=(skalibs execline s6 s6-rc s6-linux-init)
+ORDER=(skalibs execline s6 s6-rc s6-linux-init s6-frontend)
 declare -A SHA256=(
     [skalibs-2.15.1.0]=f9c905e74935c6fe911c7e344e3e89d5fbd2014c1a04650b524b15ce9b5635d1
     [execline-2.9.9.2]=908ed4db3a6b3a23a205d8fd4cf2a71089156f2aeae0f54656045aafad2dee32
     [s6-2.15.1.0]=eab9c46e22b66b16135f9a05ec68a0ea287d9060b84d10defaaa2caad158ab52
     [s6-rc-0.7.0.0]=bf5b8ce0da5a4ee70d642b818b61d9916a7a9b64a457595f388113e54a188688
     [s6-linux-init-1.2.0.2]=6fad014da162c0c81924197c57d16e1a75c133b34a20e423431a1b741e907b1d
+    [s6-frontend-0.1.0.0]=ed7bba6f2c13dd16ebf17fda0d482f4ba4848d80f5b4d7edd22d8b60a869f994
 )
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -39,6 +40,9 @@ for name in "${ORDER[@]}"; do
     [ -s "$tarball" ] || curl -fsSL -o "$tarball" "https://skarnet.org/software/$name/$name-$ver.tar.gz"
     echo "$want  $tarball" | sha256sum -c --quiet - || die "checksum mismatch for $tarball"
     cp "$HERE/$name.spec" "$OUT/SPECS/"
+    for p in "$HERE/$name"-*.patch; do
+        if [ -e "$p" ]; then cp "$p" "$OUT/SOURCES/"; fi
+    done
     echo "  $name-$ver ok"
 done
 
@@ -62,7 +66,7 @@ else
             || die "$name failed, see $OUT/$name.build.log"
         mapfile -t built < <(find "$OUT/RPMS" -name "$name-[0-9]*.rpm" -o -name "$name-devel-[0-9]*.rpm" | grep -v debug)
         cp "${built[@]}" "$OUT/rpms/"
-        [ "$name" = s6-linux-init ] || sudo dnf install -y "${built[@]}"
+        [ "$name" = s6-frontend ] || sudo dnf install -y "${built[@]}"
     done
 fi
 

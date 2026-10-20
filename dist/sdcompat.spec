@@ -23,6 +23,8 @@ Requires(postun): policycoreutils
 Recommends:     s6-linux-init
 Recommends:     rsyslog
 Recommends:     earlyoom
+# The s6 command; setup-fedora.sh writes /etc/s6.conf for it.
+Recommends:     s6-frontend
 
 %description
 Translates systemd unit files into an s6-rc database, runs services with

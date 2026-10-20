@@ -10,7 +10,7 @@ PID 1로 두고 Fedora의 GNOME 세션을 띄우는 것까지 다룹니다. 단�
 | 단계 | root 필요 | 시스템 변경 | 소요 시간 |
 |---|---|---|---|
 | 1. 코드와 도구 받기 | 예 (dnf) | 빌드 도구 설치 | 10분 |
-| 2. s6 RPM 빌드 | 예 (dnf) | 패키지 5개 설치 | 10분 |
+| 2. s6 RPM 빌드 | 예 (dnf) | 패키지 6개 설치 | 10분 |
 | 3. 샌드박스 테스트 | 아니요 | 없음 | 5분 |
 | 4. 변환 미리보기 | 예 (읽기 전용) | 없음 | 2분 |
 | 5. 설치 | 예 | 부팅 항목, `/etc/sdcompat` 추가 | 10분 |
@@ -64,7 +64,7 @@ rpm -q pam libselinux libseccomp policycoreutils
 
 ## 2. s6 패키지 빌드와 설치
 
-Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init를 패키지로 제공하지 않습니다.
+Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend를 패키지로 제공하지 않습니다.
 빌드 스크립트가 소스를 내려받아 고정된 SHA-256 값으로 검증하고, 의존성 순서대로
 RPM을 빌드합니다.
 
@@ -81,7 +81,7 @@ RPM은 `~/rpmbuild-skarnet/rpms`에 생깁니다. 전부 설치하세요.
 
 ```sh
 sudo dnf install -y ~/rpmbuild-skarnet/rpms/*.rpm
-rpm -q skalibs execline s6 s6-rc s6-linux-init     # 다섯 개가 모두 나와야 합니다
+rpm -q skalibs execline s6 s6-rc s6-linux-init s6-frontend     # 여섯 개가 모두 나와야 합니다
 ```
 
 **패키지 빌드가 실패하면** 로그가 `~/rpmbuild-skarnet/<이름>.build.log`에 있습니다.
@@ -191,6 +191,7 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | fwupd | `fwupdmgr get-devices` | 장치 목록(fwupd가 시스템 콜 필터를 켠 채 시작됩니다) |
 | 바쁜 러너 없음 | `top -b -n1 -o %CPU \| head -15` | CPU를 100 % 가까이 쓰는 `sdcompat` 프로세스가 없습니다 |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (몇 초 간격으로 두 번) | `up (pid …) N seconds`, N이 늘어납니다(재시작하지 않음) |
+| `s6` 명령 | `s6 live status \| head` | `up`인 서비스들, 예: `NetworkManager.service/longrun//up/explicit` |
 | 버스와 userdb 레이블 | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t`와 `systemd_userdbd_runtime_t` |
 | 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |
 | 실패한 유닛 | `systemctl --failed` | 없는 것이 좋습니다. 있으면 적어 두세요 |
@@ -258,7 +259,7 @@ sudo semodule -l | grep -x sdcompat
 
 ```sh
 sudo dist/setup-fedora.sh --uninstall
-sudo dnf remove skalibs execline s6 s6-rc s6-linux-init \
+sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend \
     skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel
 ```
 

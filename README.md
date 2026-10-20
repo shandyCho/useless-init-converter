@@ -129,6 +129,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 | 패키지 | 용도 |
 |---|---|
 | skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, 서비스 감독, 서비스 데이터베이스. Fedora에 패키지가 없으므로 `--rpms=DIR` 또는 `--build-s6` |
+| s6-frontend (선택) | `s6` 명령([`s6` 명령](#s6-명령-s6-frontend) 참고). 나머지와 함께 빌드됩니다 |
 | systemd | 설치된 채로 둡니다: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | 시스템 버스(`--systemd-activation`). 사용자 버스는 dbus-broker가 계속 맡습니다 |
 | util-linux | 마운트 유닛과 초기 부팅의 `mount`, `swapon`, `mountpoint` |
@@ -175,7 +176,7 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 ## Fedora에 배포하기 (먼저 VM에서 해 보세요)
 
-Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init를 패키지로 제공하지 않으므로 먼저
+Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend를 패키지로 제공하지 않으므로 먼저
 RPM을 빌드합니다(spec은 `dist/rpm/`에 있으며, 소스는 고정된 SHA-256 값으로 검증합니다).
 
 ```sh
@@ -191,11 +192,12 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 하는 일은 다음과 같습니다.
 
 1. `dbus-daemon`, `earlyoom`, `chrony`, `NetworkManager`와 skarnet 도구(skalibs 2.15.1.0,
-   execline 2.9.9.2, s6 2.15.1.0, s6-rc 0.7.0.0, s6-linux-init 1.2.0.2)를 직접 빌드한
+   execline 2.9.9.2, s6 2.15.1.0, s6-rc 0.7.0.0, s6-linux-init 1.2.0.2, s6-frontend 0.1.0.0)를
+   직접 빌드한
    RPM(`--rpms=DIR`) 또는 소스(`--build-s6`)에서 설치합니다.
 2. sdcompat을 빌드하고 설치합니다. `dist/sdcompat.spec`으로 만든 sdcompat RPM이 설치되어 있으면 그것을 씁니다.
 3. `/etc/sdcompat/`에 설정, s6 서비스(초기 부팅, dbus-daemon, 데몬, earlyoom), 부팅 옵션을
-   씁니다. systemd-journald는 s6 서비스로 실행됩니다. `--no-journal`을 주면 s6 전용 rsyslog
+   쓰고, `s6` 명령용 `/etc/s6.conf`를 씁니다. systemd-journald는 s6 서비스로 실행됩니다. `--no-journal`을 주면 s6 전용 rsyslog
    설정을 쓰므로, journald가 `/dev/log`를 쓰는 systemd 부팅에는 영향이 없습니다.
 4. chronyd, NetworkManager, gdm을 활성화하고 `graphical.target`을 기본값으로 설정합니다.
 5. `sdcompat reload --no-update`를 실행하고 변환 요약을 출력합니다.
@@ -299,6 +301,34 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 `journalctl -u systemd-logind`와 `journalctl -u user@1000.service`(또는 `JOURNAL=no`에서도
 동작하는 `sdcompat log UNIT`)를 확인하세요.
 
+## `s6` 명령 (s6-frontend)
+
+설정 스크립트는 `s6` 명령을 제공하는 [s6-frontend](https://skarnet.org/software/s6-frontend/)
+0.1.0.0을 설치하고, sdcompat의 데이터베이스(`bootdb = /var/lib/sdcompat/compiled`)를 쓰도록
+`/etc/s6.conf`(`dist/s6.conf`)를 씁니다. 0.1.0.0은 고정된 s6 2.15.1.0 / s6-rc 0.7.0.0에 맞춰
+나온 릴리스이며, 0.2.0.0은 s6-rc 0.8이 필요합니다. 서비스 이름은 s6-rc의 이름입니다:
+`sshd.service`, `gdm.service` 등과 sdcompat 자체의 s6 서비스(`dbus`, `sdcompatd`, `earlyoom`,
+`udevd` 등).
+
+| 명령 | 하는 일 |
+|---|---|
+| `s6 live status` | 모든 서비스와 종류, 상태 (root 불필요) |
+| `s6 live status sshd.service` | 지정한 서비스의 상태 (`dist/rpm/s6-frontend-live-status.patch`의 백포트 수정) |
+| `sudo s6 process status sshd.service` | 감독 중인 프로세스 (`s6-svstat`) |
+| `sudo s6 process restart sshd.service` | 프로세스만 재시작하고, 그것에 의존하는 것은 그대로 둠 (`s6-svc -r`) |
+| `sudo s6 process kill -s HUP sshd.service` | 프로세스에 시그널 보내기 |
+| `sudo s6 live start\|stop X` | `s6-rc -u\|-d change X`. 유닛은 `systemctl`을 쓰세요(아래 참고) |
+| `sudo s6 system reboot\|poweroff` | `systemctl reboot\|poweroff`와 같은 s6-linux-init 종료 |
+
+`s6 live start/stop`과 `s6 process restart`는 sdcompat 아래에서 동작합니다. systemd 작업(job)이
+없고 `ExecStop=`도 실행되지 않으므로(`s6-rc`를 직접 쓸 때와 같음), 유닛의 시작, 중지, 재시작에는
+`systemctl`을 쓰세요.
+
+`s6 repository …`, `s6 set …`, `s6 live install`, `s6 live start-everything`/`stop-everything`,
+`s6 system boot`는 **쓰지 마세요**. 이 명령들은 s6-rc 저장소를 관리하고 live 데이터베이스를
+바꾸거나 다시 시작하지만, sdcompat은 그 데이터베이스를 유닛 파일에서 직접 컴파일합니다
+(`systemctl daemon-reload`, `sdcompat reload`).
+
 ## 설정
 
 `/etc/sdcompat/sdcompat.conf`(`KEY=VALUE` 형식, 모든 키와 기본값은 `dist/sdcompat.conf` 참고).
@@ -337,6 +367,6 @@ src/daemon/        D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓
                    요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs)
 dist/              setup-fedora.sh, 설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
                    s6-linux-init 골격, kernel-install 플러그인, sdcompat.spec
-dist/rpm/          skalibs, execline, s6, s6-rc, s6-linux-init의 spec과 빌드 스크립트
+dist/rpm/          skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend의 spec과 빌드 스크립트
 tests/             비특권 샌드박스, 시나리오 검사, systemctl 래퍼
 ```
