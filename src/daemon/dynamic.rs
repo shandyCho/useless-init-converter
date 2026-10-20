@@ -77,13 +77,27 @@ impl Daemon {
         }
     }
 
-    /// Startup: take over the active oneshot instances of a previous daemon.
-    pub(super) fn load_dynamic_oneshots(&self) {
-        let Ok(rd) = fs::read_dir(self.cfg.run_dir.join("dyn-oneshot")) else { return };
+    /// Startup: take over the on-demand units of a previous daemon. Active
+    /// oneshots come from their markers. Longruns (user@UID, systemd-run
+    /// services, timers, paths) kept running under s6: their service
+    /// directory in RUN_DIR/dyn is linked into the scan directory from
+    /// dyn_start until dyn_stop removes both.
+    pub(super) fn load_dynamic(&self) {
         let mut dynamic = self.dynamic.lock().unwrap();
-        for e in rd.flatten() {
-            let id = e.file_name().to_string_lossy().into_owned();
-            dynamic.insert(id, Dynamic { kind: Kind::Oneshot, active: true });
+        if let Ok(rd) = fs::read_dir(self.cfg.run_dir.join("dyn-oneshot")) {
+            for e in rd.flatten() {
+                let id = e.file_name().to_string_lossy().into_owned();
+                dynamic.insert(id, Dynamic { kind: Kind::Oneshot, active: true });
+            }
+        }
+        if let Ok(rd) = fs::read_dir(self.cfg.run_dir.join("dyn")) {
+            for e in rd.flatten() {
+                let id = e.file_name().to_string_lossy().into_owned();
+                // Not linked: a start that failed half-way; dyn_start redoes it.
+                if fs::symlink_metadata(self.scandir(&id)).is_ok() {
+                    dynamic.entry(id).or_insert(Dynamic { kind: Kind::Longrun, active: false });
+                }
+            }
         }
     }
 
@@ -297,7 +311,7 @@ impl Daemon {
     /// Shutdown: s6-rc doesn't know the on-demand oneshots, so run their
     /// ExecStop= here, as systemd stops every unit (systemd-backlight@ saves
     /// the brightness then). sdcompatd goes down before the filesystems.
-    /// Instances started by an earlier daemon come from load_dynamic_oneshots().
+    /// Instances started by an earlier daemon come from load_dynamic().
     pub(super) async fn stop_dynamic_oneshots(&self) {
         let ids: Vec<String> = self
             .dynamic

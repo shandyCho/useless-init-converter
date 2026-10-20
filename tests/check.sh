@@ -393,11 +393,17 @@ restart_daemon() {
 }
 grep -v '^ALLOW_UIDS=' "$W/sdcompat.conf" > "$W/unpriv.conf"
 BIN=$(sed -n 's/^RUNNER=//p' "$W/sdcompat.conf")
-# An on-demand oneshot instance (like systemd-backlight@) outlives the daemon.
-call StartUnit ss prep@b.service replace
-expect_state prep@b.service active/exited
+# On-demand instances outlive the daemon: a longrun (like user@UID) with the
+# oneshot it is bound to, and a oneshot alone (like systemd-backlight@).
+call StartUnit ss inst@b.service replace
+call StartUnit ss prep@c.service replace
+expect_state inst@b.service active/running
+expect_state prep@c.service active/exited
 restart_daemon "$W/unpriv.conf"
+expect_state inst@b.service active/running
 expect_state prep@b.service active/exited
+expect_state prep@c.service active/exited
+$B call $MGR ListUnits | grep -q '"inst@b.service"' && ok "inst@b listed by the new daemon" || bad "inst@b not in ListUnits"
 denied() { $B call $MGR "$@" 2>&1 | grep -q "Access denied"; }
 expect_state devlater.service active/running
 expect_state devwant.service inactive/dead 1
@@ -423,18 +429,23 @@ if [ -n "$SR" ]; then
 fi
 # Back to the normal daemon, so the sandbox stays usable.
 restart_daemon "$W/sdcompat.conf"
+# Stopping the oneshot stops the longrun bound to it: the daemon knows both.
+call StopUnit ss prep@b.service replace
+expect_state inst@b.service inactive/dead
+expect_state prep@b.service inactive/dead
+[ ! -e "$R/run/dyn/inst@b.service" ] && ok "inst@b's service directory removed" || bad "inst@b's service directory left"
 
 echo "== shutdown stops on-demand oneshots"
 # As rc.shutdown: the marker, then s6-rc takes sdcompatd down (SIGTERM).
 : > "$R/run/shutting-down"
 kill "$(cat "$W/daemon.pid")"
 tries=30
-while [ $tries -gt 0 ] && ! grep -qx "down b" "$R/prep.out"; do tries=$((tries - 1)); sleep 0.2; done
-grep -qx "down b" "$R/prep.out" && ok "prep@b's ExecStop= ran, started by an earlier daemon" || bad "prep@b not stopped at shutdown"
-[ ! -e "$R/run/dyn-oneshot/prep@b.service" ] && ok "its marker is gone" || bad "prep@b marker left"
+while [ $tries -gt 0 ] && ! grep -qx "down c" "$R/prep.out"; do tries=$((tries - 1)); sleep 0.2; done
+grep -qx "down c" "$R/prep.out" && ok "prep@c's ExecStop= ran, started by an earlier daemon" || bad "prep@c not stopped at shutdown"
+[ ! -e "$R/run/dyn-oneshot/prep@c.service" ] && ok "its marker is gone" || bad "prep@c marker left"
 rm -f "$R/run/shutting-down"
 restart_daemon "$W/sdcompat.conf"
-expect_state prep@b.service inactive/dead
+expect_state prep@c.service inactive/dead
 
 echo
 echo "passed: $pass  failed: $fail"

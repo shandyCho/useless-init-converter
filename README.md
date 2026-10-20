@@ -93,7 +93,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 - 매니저: `Reload`/`Reexecute`(s6 데이터베이스 재생성 및 갱신), `KillUnit`, `ResetFailed*`, `Set/UnsetEnvironment`, `PowerOff/Reboot/Halt`.
 - 임시(transient) 유닛: `.scope`와 `.slice` 유닛에 대한 `StartTransientUnit`(`PIDs` 또는 `PIDFDs`; logind, podman, flatpak이 사용). `AttachProcessesToUnit`, `Scope.Abandon`, 참조 카운트 호출(수락만 함)도 지원합니다.
 - **`systemd-run`**: 보조 유닛을 포함한 임시 `.service`, `.timer`, `.path` 유닛(`--on-calendar`/`--on-active`는 타이머와 서비스를 함께 보냅니다). 속성은 `/run/systemd/transient/`의 유닛 파일이 됩니다. `systemd-run --wait`는 `PropertiesChanged`와 종료 상태를 받습니다. 끝난 임시 유닛은 언로드됩니다.
-- 템플릿 인스턴스는 데이터베이스를 다시 컴파일하지 않고 필요할 때 만들어집니다(예: `user@1000.service`, `user-runtime-dir@1000.service`). 의존성이 먼저 시작되고, 멈춘 유닛을 필요로 하는 유닛은 함께 멈춥니다. 종료할 때 활성 상태인 oneshot 인스턴스를 멈춰 `ExecStop=`이 실행됩니다(systemd-backlight@가 밝기를 저장합니다). 이 인스턴스는 `/run/sdcompat/dyn-oneshot`에 기록되므로 데몬을 다시 시작한 뒤에도 마찬가지입니다.
+- 템플릿 인스턴스는 데이터베이스를 다시 컴파일하지 않고 필요할 때 만들어집니다(예: `user@1000.service`, `user-runtime-dir@1000.service`). 의존성이 먼저 시작되고, 멈춘 유닛을 필요로 하는 유닛은 함께 멈춥니다. 종료할 때 활성 상태인 oneshot 인스턴스를 멈춰 `ExecStop=`이 실행됩니다(systemd-backlight@가 밝기를 저장합니다). 이 인스턴스는 `/run/sdcompat/dyn-oneshot`에 기록되므로 데몬을 다시 시작한 뒤에도 마찬가지입니다. 다시 시작한 데몬은 실행 중인 인스턴스(`/run/sdcompat/dyn`의 서비스 디렉터리)도 넘겨받아 이전처럼 상태를 보고하고 멈춥니다.
 - `poweroff.target`, `reboot.target`, `halt.target`을 시작하면(logind가 전원을 끄는 방식) 설정된 종료 명령을 실행합니다.
 - D-Bus 활성화: dbus-daemon의 `ActivationRequest`에 응답하고, 시작이 실패하면 `ActivationFailure`로 답합니다.
 - 권한: 상태를 바꾸는 호출에는 root, `ALLOW_UIDS`에 있는 uid, 또는 systemd의 action ID(`manage-units`, `manage-unit-files`, `reload-daemon`, `set-environment`; 정책 파일은 systemd에 포함)에 대한 polkit 허가가 필요합니다. polkit이 없으면 root가 아닌 호출자는 거부됩니다. `ALLOW_UIDS`는 root와 같은 권한입니다.
