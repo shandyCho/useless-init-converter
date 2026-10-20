@@ -996,7 +996,7 @@ impl Runner {
 
     /// The service exited on its own (systemd-rfkill after a few idle
     /// seconds): like systemd's socket unit, wait for activity on the sockets
-    /// the daemon holds, then start it again. Not ready meanwhile, and the
+    /// the daemon holds, then start it again. Ready for s6 meanwhile, and the
     /// daemon reports the unit inactive. SIGTERM (stop) ends the wait; the
     /// daemon starts it at once by removing SOCKET_WAIT and sending SIGUSR1
     /// (`s6-svc -1`). SIGUSR1 is blocked except inside ppoll(), so a wakeup
@@ -1043,6 +1043,11 @@ impl Runner {
     pub fn cmd_run(mut self) -> i32 {
         self.take_notify_fd();
         if self.st.has(keys::SOCKET_WAIT) {
+            // Ready for s6 while waiting, like a listening socket unit: an
+            // `s6-rc -u change` recording a unit started beside the boot's
+            // change would otherwise wait for readiness until its timeout,
+            // then bring it down. The daemon's start waits on the unit state.
+            self.signal_ready();
             self.wait_for_sockets();
         }
         self.enter_cgroup();

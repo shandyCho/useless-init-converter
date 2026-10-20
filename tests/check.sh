@@ -359,6 +359,30 @@ expect_state react.service inactive/dead
 timeout 2 sh -c 'echo c > "$1"' sh "$R/react.fifo" 2>/dev/null
 sleep 2
 expect_eq "stopped: no re-activation" "$(wc -l < "$R/react.out")" "4"
+# Started beside a change, it exits and waits for its socket before s6-rc
+# is told: recording it must not wait for readiness (systemd-rfkill was
+# brought down at boot after s6-rc's timeout).
+$L -u change hold4.service &
+hold=$!
+sleep 0.5
+call StartUnit ss react2.socket replace
+tries=30
+while [ $tries -gt 0 ] && [ ! -s "$R/react2.out" ]; do tries=$((tries - 1)); sleep 0.2; done
+expect_eq "react2.service ran beside the change" "$(cat "$R/react2.out" 2>/dev/null)" "-"
+expect_state react2.service inactive/dead
+touch "$R/hold4-ready"
+wait $hold
+tries=30
+while [ $tries -gt 0 ] && ! in_s6rc react2.service; do tries=$((tries - 1)); sleep 0.2; done
+in_s6rc react2.service && ok "react2 recorded in s6-rc while waiting for its socket" || bad "react2 not in s6-rc -a list"
+echo a > "$R/react2.fifo"
+tries=30
+while [ $tries -gt 0 ] && [ "$(wc -l < "$R/react2.out")" -lt 2 ]; do tries=$((tries - 1)); sleep 0.2; done
+expect_eq "and still re-activated on activity" "$(sed -n 2p "$R/react2.out")" "a"
+call StopUnit ss react2.service replace
+expect_state react2.service inactive/dead
+in_s6rc react2.service && bad "react2 still up in s6-rc after stop" || ok "react2 down in s6-rc after stop"
+$L -b -d change hold4.service
 
 echo "== transient scope"
 sleep 1000 &

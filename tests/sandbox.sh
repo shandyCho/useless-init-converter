@@ -401,7 +401,7 @@ if addr.startswith("@"):
 socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM).sendto(b"READY=1", addr)
 os.execv("/bin/sleep", ["sleep", "1000"])
 PYT
-for n in 1 2 3; do
+for n in 1 2 3 4; do
 cat > "$U/hold$n.service" <<EOF
 [Service]
 Type=notify
@@ -450,6 +450,17 @@ EOF
 cat > "$U/react.service" <<EOF
 [Service]
 ExecStart=/usr/bin/python3 $W/react.py $R/react.out
+EOF
+# The same, started beside hold4's change (systemd-rfkill at boot).
+mkfifo "$R/react2.fifo"
+cat > "$U/react2.socket" <<EOF
+[Socket]
+ListenSpecial=$R/react2.fifo
+Writable=yes
+EOF
+cat > "$U/react2.service" <<EOF
+[Service]
+ExecStart=/usr/bin/python3 $W/react.py $R/react2.out
 EOF
 
 # --- path units ---

@@ -627,6 +627,33 @@ impl Daemon {
         }
     }
 
+    /// wait_ready() for a service woken from its socket wait: its run process
+    /// told s6 it was ready when the wait began, so go by the unit state.
+    async fn wait_woken(&self, id: &str, unit: &Unit, started_at: u64) -> &'static str {
+        let deadline = Instant::now() + Self::start_timeout(unit);
+        let st = state::for_unit(&self.cfg.run_dir, id);
+        loop {
+            // Started (and maybe exited and waiting again), or skipped or
+            // failed to start (job_outcome() tells these apart).
+            if st.get_u64(keys::ACTIVE_ENTER) >= started_at
+                || st.has(keys::CONDITION_FAILED)
+                || st.has(keys::DEPENDENCY_FAILED)
+                || st.has(keys::START_FAILED)
+            {
+                return "done";
+            }
+            match self.svstat(id).await {
+                Some(sv) if !sv.up && !sv.wanted_up => return "failed",
+                Some(_) => {}
+                None => return "failed",
+            }
+            if Instant::now() > deadline {
+                return "timeout";
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     /// Wait until a longrun is up and ready (and, if `old_pid` is given, has a new PID).
     pub(super) async fn wait_ready(&self, id: &str, unit: &Unit, old_pid: Option<u32>) -> &'static str {
         let started_at = util::now_realtime_usec();
@@ -722,13 +749,15 @@ impl Daemon {
                 }
             }
             Some(Kind::Longrun) => {
+                // Waiting for socket activity, also when started beside a
+                // change and not yet recorded in s6-rc.
+                if state::for_unit(&self.cfg.run_dir, id).take(keys::SOCKET_WAIT) {
+                    self.wake_socket_wait(id).await;
+                    return self.wait_woken(id, unit, started_at).await;
+                }
                 if active.contains(id) {
                     let sv = self.svstat(id).await.unwrap_or_default();
                     let st = state::for_unit(&self.cfg.run_dir, id);
-                    if st.take(keys::SOCKET_WAIT) {
-                        self.wake_socket_wait(id).await;
-                        return self.wait_ready(id, unit, None).await;
-                    }
                     let parked = st.has(keys::CONDITION_FAILED) || st.has(keys::DEPENDENCY_FAILED) || st.has(keys::START_FAILED);
                     if sv.up && parked {
                         // Skipped or failed earlier but still "up" for s6:
