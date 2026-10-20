@@ -206,6 +206,15 @@ call StopUnit ss prep@a.service replace
 expect_state inst@a.service inactive/dead
 expect_state prep@a.service inactive/dead
 expect_eq "ExecStop of the instance ran" "$(tail -1 "$R/prep.out")" "down a"
+# logind starts user-runtime-dir@UID, then user@UID (BindsTo= it), without
+# waiting: the dependency start must wait for the running job, not run
+# ExecStart= a second time (/run/user/UID was mounted twice).
+call StartUnit ss prep@d.service replace
+call StartUnit ss inst@d.service replace
+expect_state inst@d.service active/running
+expect_eq "concurrent starts ran prep@d once" "$(grep -cx "up d" "$R/prep.out")" "1"
+call StopUnit ss prep@d.service replace
+expect_state inst@d.service inactive/dead
 
 echo "== conflicts"
 expect_state winner.service active/running

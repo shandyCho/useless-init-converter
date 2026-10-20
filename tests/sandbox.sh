@@ -276,7 +276,7 @@ Description=Prepare %i (like user-runtime-dir@)
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'echo up %i >> $R/prep.out'
+ExecStart=/bin/sh -c 'echo up %i >> $R/prep.out; [ %i != d ] || sleep 1'
 ExecStop=/bin/sh -c 'echo down %i >> $R/prep.out'
 EOF
 cat > "$U/inst@.service" <<EOF

@@ -174,11 +174,18 @@ impl Daemon {
     }
 
     /// Start any unit: database, dynamic instance, or transient.
+    ///
+    /// Takes the unit's job lock: a dependency start must not run beside a
+    /// D-Bus job on the same unit. logind starts user-runtime-dir@UID and
+    /// user@UID (BindsTo= it) back to back, and without the lock both ran
+    /// `systemd-user-runtime-dir start`, mounting /run/user/UID twice.
     pub(super) async fn start_any(&self, name: &str) -> &'static str {
         let (id, unit) = self.load_unit(name);
         if self.transient.lock().unwrap().contains_key(&id) {
             return "done";
         }
+        let lock = self.unit_lock(&id);
+        let _guard = lock.lock().await;
         if self.kind_of(&id).is_some() {
             let active = self.active_atoms().await;
             if self.unit_status(&id, &active, &unit).await.active == "active" {

@@ -602,7 +602,7 @@ impl Daemon {
             .await;
     }
 
-    fn unit_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    pub(super) fn unit_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.unit_locks.lock().unwrap().entry(id.to_string()).or_default().clone()
     }
 

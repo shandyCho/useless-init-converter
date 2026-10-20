@@ -30,6 +30,11 @@ mount-api)
     mnt securityfs /sys/kernel/security nosuid,nodev,noexec 2>/dev/null
     mnt bpf /sys/fs/bpf nosuid,nodev,noexec,mode=0700 2>/dev/null
     mnt pstore /sys/fs/pstore nosuid,nodev,noexec 2>/dev/null
+    # PID 1's too: the kernel default is private, and units, flatpak and
+    # containers make / a slave in their own namespaces, so a slave of a
+    # private tree never sees later mounts (a USB stick under /run/media).
+    # Filesystems mounted later (mount-fs) are shared as their parent is.
+    mount --make-rshared / || warn "mount --make-rshared / failed"
     # systemd (PID 1) creates userdb for the services that serve user records
     # there (gdm's org.gnome.DisplayManager); it needs its own label, not
     # /run/systemd's.

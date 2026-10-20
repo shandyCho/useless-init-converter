@@ -200,6 +200,8 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (몇 초 간격으로 두 번) | `up (pid …) N seconds`, N이 늘어납니다(재시작하지 않음) |
 | 패키지 업데이트 시 재시작 | `systemctl show -p MainPID chronyd`, 이어서 `sudo dnf reinstall -y chrony`, 그다음 첫 명령을 다시 | MainPID가 바뀝니다(업데이트가 chronyd에 needs-restart를 표시하고 `systemctl enqueue-marked`가 재시작합니다) |
 | 패키지 업데이트 시 사용자 매니저 | `sudo systemctl --user -M $USER@ is-system-running`, 이어서 `sudo /usr/lib/systemd/systemd-update-helper user-reload-restart; echo $?` | `running` 또는 `degraded`(`systemd-run --pipe`를 거쳐 도달), 그다음 `0` |
+| 공유 마운트 전파 | `findmnt -no PROPAGATION /` | `shared`(systemd와 같습니다. `private`이면 나중에 한 마운트, 예를 들어 USB 메모리가 유닛·flatpak 앱·컨테이너에 보이지 않습니다) |
+| 런타임 디렉터리 한 번만 마운트 | `findmnt -n /run/user/$UID \| wc -l` | `1`(`2`이면 user-runtime-dir@UID가 두 번 실행된 것입니다) |
 | `s6` 명령 | `s6 live status \| head` | `up`인 서비스들, 예: `NetworkManager.service/longrun//up/explicit` |
 | 버스와 userdb 레이블 | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t`와 `systemd_userdbd_runtime_t` |
 | 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |
