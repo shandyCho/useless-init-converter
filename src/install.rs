@@ -332,6 +332,11 @@ pub fn preset_for(cfg: &Config, name: &str) -> PresetAction {
 }
 
 /// mode: "full", "enable-only" or "disable-only"
+///
+/// Like systemd, all disables run before all enables: disabling a unit also
+/// disables its Also= units, so `preset cups.path cups.socket cups.service`
+/// (cups.service is preset-disabled with Also=cups.socket cups.path) must not
+/// undo the enables of the other two.
 pub fn preset(
     cfg: &Config,
     names: &[String],
@@ -339,21 +344,24 @@ pub fn preset(
     runtime: bool,
     force: bool,
 ) -> Result<(bool, Vec<Change>), String> {
-    let mut changes = Vec::new();
-    let mut info = false;
+    let (mut plus, mut minus) = (Vec::new(), Vec::new());
     for n in names {
         let n = basename(n);
         match preset_for(cfg, &n) {
-            PresetAction::Enable if mode != "disable-only" => {
-                let (i, c) = enable(cfg, &[n], runtime, force)?;
-                info |= i;
-                changes.extend(c);
-            }
-            PresetAction::Disable if mode != "enable-only" => {
-                changes.extend(disable(cfg, &[n], runtime)?);
-            }
+            PresetAction::Enable if mode != "disable-only" => plus.push(n),
+            PresetAction::Disable if mode != "enable-only" => minus.push(n),
             _ => {}
         }
+    }
+    let mut changes = Vec::new();
+    if !minus.is_empty() {
+        changes.extend(disable(cfg, &minus, runtime)?);
+    }
+    let mut info = false;
+    for n in plus {
+        let (i, c) = enable(cfg, &[n], runtime, force)?;
+        info |= i;
+        changes.extend(c);
     }
     Ok((info, changes))
 }
@@ -404,4 +412,36 @@ pub fn set_default_target(cfg: &Config, name: &str) -> Result<Vec<Change>, Strin
         &mut changes,
     )?;
     Ok(changes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preset_disable_before_enable() {
+        let tmp = std::env::temp_dir().join(format!("sdcompat-preset-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let (etc, lib, presets) = (tmp.join("etc"), tmp.join("lib"), tmp.join("preset"));
+        for d in [&etc, &lib, &presets] {
+            fs::create_dir_all(d).unwrap();
+        }
+        let write = |p: PathBuf, s: &str| fs::write(p, s).unwrap();
+        write(lib.join("cups.service"), "[Service]\nExecStart=/bin/true\n[Install]\nAlso=cups.socket cups.path\nWantedBy=multi-user.target\n");
+        write(lib.join("cups.socket"), "[Socket]\nListenStream=/run/cups.sock\n[Install]\nWantedBy=sockets.target\n");
+        write(lib.join("cups.path"), "[Path]\nPathExists=/tmp\n[Install]\nWantedBy=multi-user.target\n");
+        write(presets.join("90-default.preset"), "enable cups.socket\nenable cups.path\ndisable *\n");
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![etc.clone(), lib];
+        cfg.runtime_unit_dir = tmp.join("run");
+        cfg.preset_path = vec![presets];
+
+        let names: Vec<String> = ["cups.path", "cups.socket", "cups.service"].iter().map(|s| s.to_string()).collect();
+        preset(&cfg, &names, "full", false, false).unwrap();
+        assert!(etc.join("sockets.target.wants/cups.socket").is_symlink());
+        assert!(etc.join("multi-user.target.wants/cups.path").is_symlink());
+        assert!(!etc.join("multi-user.target.wants/cups.service").exists());
+        assert_eq!(unit_file_state(&cfg, "cups.service").as_deref(), Ok("disabled"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }
