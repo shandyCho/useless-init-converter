@@ -257,8 +257,11 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms --yes
 
 Running the setup script again is safe. It keeps your `/etc/sdcompat`
 configuration, installs the new binary, regenerates the database and the
-boot entry, and backs up what it replaces. It also reloads the SELinux policy
-module; check that it is loaded:
+boot entry, and backs up what it replaces. The s6 services in
+`/etc/sdcompat/s6` are updated to the new version unless you edited them;
+for an edited one it prints "keeping your modified …" and you merge the new
+version from `dist/s6` yourself. It also reloads the SELinux policy module;
+check that it is loaded:
 
 ```sh
 sudo semodule -l | grep -x sdcompat

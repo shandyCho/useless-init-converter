@@ -46,6 +46,8 @@ while read -r name ver sum _; do
 done <"$DIST/skarnet.versions"
 SKARNET_OPTIONAL=" s6-frontend "
 SKARNET_MANIFEST=/var/lib/sdcompat/skarnet-files.txt
+# Checksums of the hand-written s6 services as this script last installed them.
+S6_SUMS=/var/lib/sdcompat/s6-dist-sums.txt
 
 RPM_DIR=""
 DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0 JOURNAL=1 REMOVE_S6=0
@@ -92,6 +94,12 @@ put() {
     mkdir -p "$(dirname "$dest")"
     cat >"$dest"
     chmod "$mode" "$dest"
+}
+
+# Copy a directory tree from the source checkout: root-owned (not cp -a, which
+# keeps the checkout owner's uid on files root runs, and its home labels).
+copy_tree() {
+    run cp -dR --preserve=mode,timestamps,links "$1" "$2"
 }
 
 backup() {
@@ -335,7 +343,7 @@ install_sdcompat() {
     run install -Dm0755 "$DIST/s6-linux-init/init-selinux" /usr/sbin/init-selinux
     run mkdir -p "$SHARE/s6-linux-init"
     run rm -rf "$SHARE/s6-linux-init/skel"
-    run cp -a "$DIST/s6-linux-init/skel" "$SHARE/s6-linux-init/skel"
+    copy_tree "$DIST/s6-linux-init/skel" "$SHARE/s6-linux-init/skel"
     run install -Dm0644 "$DIST/rsyslog.conf" "$SHARE/rsyslog.conf"
     run install -Dm0644 "$DIST/selinux/sdcompat.cil" "$SHARE/selinux/sdcompat.cil"
 }
@@ -358,19 +366,7 @@ configure_sdcompat() {
         put /etc/s6.conf <"$DIST/s6.conf"
     fi
 
-    # Hand-written s6 services: add missing ones, never overwrite your edits.
-    run mkdir -p /etc/sdcompat/s6
-    local d name
-    for d in "$DIST"/s6/*/; do
-        name=$(basename "$d")
-        if [ -e "/etc/sdcompat/s6/$name" ]; then
-            if ! diff -rq "$d" "/etc/sdcompat/s6/$name" >/dev/null 2>&1; then
-                echo "  keeping your modified /etc/sdcompat/s6/$name (new version: $d)"
-            fi
-        else
-            run cp -a "$d" "/etc/sdcompat/s6/$name"
-        fi
-    done
+    install_s6_services
     # With journald, it owns /dev/log; the s6-only rsyslog is not started.
     if [ "$JOURNAL" = 1 ]; then
         run rm -f /etc/sdcompat/s6/sdcompat-sysinit/contents.d/syslog
@@ -378,6 +374,82 @@ configure_sdcompat() {
         run touch /etc/sdcompat/s6/sdcompat-sysinit/contents.d/syslog
     fi
     run mkdir -p /var/lib/sdcompat /var/log/sdcompat /var/lib/rsyslog
+}
+
+# Checksum of a hand-written s6 service directory: names, types, link targets,
+# the executable bit and file contents (not other mode bits, which depend on
+# the umask of the checkout). contents.d/syslog is left out: this script adds
+# or removes it itself.
+s6_dir_sum() {
+    (cd "$1" && {
+        find . -mindepth 1 ! -path ./contents.d/syslog -printf '%y %p %l\n'
+        find . -type f -perm -u+x ! -path ./contents.d/syslog -printf 'x %p\n'
+        find . -type f ! -path ./contents.d/syslog -print0 | xargs -0r sha256sum
+    } | LC_ALL=C sort) | sha256sum | cut -d' ' -f1
+}
+
+# Whether checksum $2 is a version of dist/s6/$1 from this repo's git history.
+# Installs made before $S6_SUMS existed have no record, and this tells an old
+# shipped version from the owner's edits.
+s6_past_version() {
+    local name=$1 sum=$2 c tmp found=1
+    [ -d "$REPO/.git" ] && command -v git >/dev/null || return 1
+    tmp=$(mktemp -d)
+    for c in $(git -c safe.directory="$REPO" -C "$REPO" rev-list HEAD -- "dist/s6/$name"); do
+        rm -rf "${tmp:?}"/*
+        git -c safe.directory="$REPO" -C "$REPO" archive "$c" "dist/s6/$name" | tar -x -C "$tmp" || continue
+        if [ "$(s6_dir_sum "$tmp/dist/s6/$name")" = "$sum" ]; then
+            found=0
+            break
+        fi
+    done
+    rm -rf "$tmp"
+    return $found
+}
+
+# Hand-written s6 services: add missing ones and update the ones still as an
+# earlier setup installed them; keep the ones you edited.
+install_s6_services() {
+    run mkdir -p /etc/sdcompat/s6
+    if rpm -q sdcompat >/dev/null 2>&1; then
+        echo "  sdcompat RPM is installed, it owns /etc/sdcompat/s6"
+        return
+    fi
+    local -A recorded=()
+    local d name dest new cur sums=""
+    if [ -r "$S6_SUMS" ]; then
+        while read -r name cur; do recorded[$name]=$cur; done <"$S6_SUMS"
+    fi
+    for d in "$DIST"/s6/*/; do
+        name=$(basename "$d")
+        dest=/etc/sdcompat/s6/$name
+        new=$(s6_dir_sum "$d")
+        if [ ! -e "$dest" ]; then
+            copy_tree "$d" "$dest"
+        else
+            cur=$(s6_dir_sum "$dest")
+            if [ "$cur" = "$new" ]; then
+                :
+            elif [ "$cur" = "${recorded[$name]:-}" ] || s6_past_version "$name" "$cur"; then
+                echo "  updating $dest (not edited since an earlier setup)"
+                backup "$dest"
+                run rm -rf "$dest"
+                copy_tree "$d" "$dest"
+            else
+                echo "  keeping your modified $dest (new version: $d)"
+                new=${recorded[$name]:-}
+            fi
+        fi
+        [ -n "$new" ] && sums+="$name $new"$'\n'
+    done
+    # Earlier versions copied with cp -a and left them owned by the checkout's owner.
+    run chown -R root:root /etc/sdcompat/s6
+    if [ "$DRY" = 1 ]; then
+        printf '  + write %s\n' "$S6_SUMS"
+    else
+        mkdir -p "$(dirname "$S6_SUMS")"
+        printf '%s' "$sums" >"$S6_SUMS"
+    fi
 }
 
 enable_units() {
@@ -443,7 +515,7 @@ setup_selinux() {
     run semodule -i "$SHARE/selinux/sdcompat.cil"
     local files
     mapfile -t files < <(skarnet_files)
-    run restorecon -R "$S6LI_BASE" "$LIBEXEC" /usr/sbin/init-selinux /etc/sdcompat \
+    run restorecon -R "$S6LI_BASE" "$LIBEXEC" /usr/sbin/init-selinux /etc/sdcompat "$SHARE" \
         /var/lib/sdcompat /var/log/sdcompat /usr/share/dbus-1/system.d/sdcompat.conf "${files[@]}"
     [ -d /run/sdcompat ] && run restorecon -R /run/sdcompat
     return 0

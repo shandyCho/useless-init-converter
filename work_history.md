@@ -889,3 +889,67 @@ As in session 9. The new skarnet RPMs are built in
 1. From the systemd boot: `sudo dist/setup-fedora.sh
    --rpms=$HOME/rpmbuild-skarnet/rpms --yes`, then session 9's step 6 checks.
 2. Session 9's other next steps still apply.
+
+## Session 11: 2026-10-20
+
+- Read the owner's `sudo tests/collect-diagnostics.sh` from the s6 boot
+  (repo at `26020f2`, new skarnet set 2.16.0.0 installed, Permissive).
+  `systemctl --failed` is empty and GNOME is up. No code changes.
+- **Bluetooth can't be turned on:** bluetooth.service is translated and
+  supervised but never started. On systemd it is started by udev:
+  99-systemd.rules sets `SYSTEMD_WANTS=bluetooth.target` on the hci device,
+  and nothing else (default.target, D-Bus activation) pulls it in;
+  wireplumber and GNOME only watch for org.bluez, they don't activate it.
+  sdcompat doesn't implement udev `SYSTEMD_WANTS`, so this affects every
+  device-triggered unit, not only Bluetooth.
+- **earlyoom restarts every second** ("fatal: extra argument not understood:
+  'Content|Isolated'"): /etc/sdcompat/s6/{earlyoom,dbus} are the versions
+  from before `91b9336`. setup-fedora.sh treats any difference from dist/ as
+  the owner's edit and keeps the old copy, so fixes to the hand-written s6
+  services never reach an existing install. The old dbus/run also explains
+  why /run/dbus/system_bus_socket is still var_run_t and most of the 45
+  AVCs (connectto/write on system_bus_socket by every confined service).
+- Other AVCs: s6-log on /run/uncaught-logs files (init_t -> var_run_t),
+  hostnamed reading /proc/pressure (proc_psi_t), firewalld on a tmpfs
+  `.cache`, setfiles/restorecon on initctl and a device_t chr_file.
+
+- Fix (owner chose this one first): setup-fedora.sh records a checksum of
+  each /etc/sdcompat/s6 dir it installs in
+  /var/lib/sdcompat/s6-dist-sums.txt. On a rerun a dir is replaced (with a
+  backup) if it matches the recorded checksum, or, for installs made before
+  the record existed, any past version of dist/s6/NAME in the repo's git
+  history (`git archive` of each commit that touched it; `safe.directory`
+  because the script runs as root on the owner's checkout). Anything else is
+  kept with the old "keeping your modified" message, and its recorded
+  checksum stays the one setup installed, so reverting an edit makes the dir
+  updatable again. The checksum covers names, types, link targets, the
+  executable bit and contents, not other mode bits (git archive's umask),
+  and leaves out contents.d/syslog, which the script itself adds/removes.
+  With the sdcompat RPM installed the step is skipped (rpm owns the dir).
+- Found while testing: the s6 dirs and /usr/share/sdcompat/s6-linux-init/skel
+  were copied with `cp -a` as root, so the files root runs were owned by
+  uid 1000 (the checkout's owner), and skel kept user_home_t. They are now
+  copied with `cp -dR --preserve=mode,timestamps,links` (`copy_tree`),
+  /etc/sdcompat/s6 is chowned to root on every run (repairs old installs),
+  and $SHARE is in the restorecon list.
+- Tested with the functions extracted into a harness over a scratch copy of
+  the live /etc/sdcompat/s6 (rpm/chown stubbed): the stale dbus and earlyoom
+  are recognized from git history and replaced, rerun is quiet, an edited
+  dir is kept, the recorded-checksum path updates a dir not in git history,
+  without .git the old dir is kept, a missing dir is added, the syslog file
+  doesn't count as an edit, the RPM case skips. `--dry-run` on this machine
+  shows the dbus/earlyoom updates. `bash -n` and `shellcheck -S warning`
+  pass. Not run: a real `sudo dist/setup-fedora.sh`. TESTING/TESTING-us
+  "Updating" explain the behaviour.
+
+### Next steps
+
+1. Owner: `sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms --yes`
+   (should print "updating /etc/sdcompat/s6/dbus" and ".../earlyoom"),
+   reboot into s6, check `ls -ln /etc/sdcompat/s6/earlyoom` (root),
+   `ls -Z /run/dbus/system_bus_socket` (system_dbusd_var_run_t), no earlyoom
+   loop in /run/uncaught-logs/current, then recollect diagnostics.
+2. Bluetooth until step 3: `sudo systemctl start bluetooth.service`.
+3. Implement udev `SYSTEMD_WANTS` (watch udev for tagged devices, start
+   the wanted units), or at least start bluetooth.target when
+   /sys/class/bluetooth has a device.

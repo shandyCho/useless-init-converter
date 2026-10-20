@@ -246,7 +246,9 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms --yes
 
 설정 스크립트를 다시 실행해도 안전합니다. `/etc/sdcompat` 설정은 그대로 두고, 새
 바이너리를 설치하고, 데이터베이스와 부팅 항목을 다시 만들며, 바꾸는 파일은 백업합니다.
-SELinux 정책 모듈도 다시 불러옵니다. 불러와졌는지 확인하세요.
+`/etc/sdcompat/s6`의 s6 서비스는 직접 고치지 않았다면 새 버전으로 바뀝니다. 고친
+서비스는 "keeping your modified …"를 출력하고 그대로 두니, `dist/s6`의 새 버전을 직접
+합치세요. SELinux 정책 모듈도 다시 불러옵니다. 불러와졌는지 확인하세요.
 
 ```sh
 sudo semodule -l | grep -x sdcompat
