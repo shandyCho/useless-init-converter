@@ -2156,3 +2156,29 @@ runs once per login (both unverified on a real boot).
 3. Then: cgroup-BPF settings, SELinux enforcing.
 4. Maybe: make the fd store not need a reboot for limit changes.
 5. Still open: beside3 sandbox flake.
+
+## Session: 2026-10-21: propagation and single /run/user/UID confirmed on the s6 boot
+
+- s6 boot of 2026-10-21 00:06 (PID 1 `s6-svscan`, after `6efd974`).
+  Owner ran `findmnt -no PROPAGATION` (all mounts, not just /): every
+  line `shared`; `findmnt -no PROPAGATION /` → `shared`. `findmnt -n
+  /run/user/$UID | wc -l` → `1` (one tmpfs, uid=1000, mode=700). Both new
+  TESTING rows pass. No code changed.
+- Still seen: /run mounted twice (initramfs tmpfs with size=, then
+  s6-linux-init's on top).
+- Not checked yet: user-runtime-dir@UID's ExecStop exit status on
+  logout/shutdown (needs a logout or shutdown, then the log).
+
+### Current state
+
+Under s6, / and all mounts are shared, and user-runtime-dir runs once per
+login (both confirmed on a real boot).
+
+### Next steps
+
+1. Owner: after the next logout or shutdown, check whether
+   user-runtime-dir@UID's ExecStop still exits 1.
+2. Maybe: the double /run (s6-linux-init over the initramfs's).
+3. Then: cgroup-BPF settings, SELinux enforcing.
+4. Maybe: make the fd store not need a reboot for limit changes.
+5. Still open: beside3 sandbox flake.
