@@ -168,6 +168,15 @@ Description=Exits with status 3
 ExecStart=/bin/sh -c 'exit 3'
 EOF
 
+# Fails on its first run, exits 0 on the second (Result= must not stay
+# exit-code from the first run).
+cat > "$U/second.service" <<EOF
+[Unit]
+Description=Fails once, then exits 0
+[Service]
+ExecStart=/bin/sh -c '[ -e $R/second.ran ] && exit 0; touch $R/second.ran; exit 4'
+EOF
+
 cat > "$U/flappy.service" <<EOF
 [Unit]
 Description=Restart=on-failure with a start limit

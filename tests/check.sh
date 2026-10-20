@@ -86,6 +86,11 @@ expect_state failing.service failed/failed
 expect_eq "failing Result" "$(prop failing.service Service Result)" "exit-code"
 expect_eq "failing ExecMainStatus" "$(prop failing.service Service ExecMainStatus)" "3"
 expect_state flappy.service failed/failed 60
+call StartUnit ss second.service replace >/dev/null
+expect_state second.service failed/failed
+call StartUnit ss second.service replace >/dev/null
+expect_state second.service inactive/dead
+expect_eq "second run's Result" "$(prop second.service Service Result)" "success"
 expect_eq "flappy hit start limit" "$(prop flappy.service Service Result)" "start-limit-hit"
 expect_state cond.service inactive/dead
 expect_eq "condition result" "$(prop cond.service Unit ConditionResult)" "false"

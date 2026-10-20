@@ -586,6 +586,8 @@ setup_selinux() {
     run restorecon -R "$S6LI_BASE" "$LIBEXEC" /usr/sbin/init-selinux /etc/sdcompat "$SHARE" \
         /var/lib/sdcompat /var/log/sdcompat /usr/share/dbus-1/system.d/sdcompat.conf "${files[@]}"
     [ -d /run/sdcompat ] && run restorecon -R /run/sdcompat
+    # On a running s6 boot this lets a stuck catch-all logger rotate again.
+    [ -d /run/uncaught-logs ] && run restorecon -R /run/uncaught-logs
     return 0
 }
 

@@ -861,6 +861,10 @@ impl Runner {
         for k in [
             keys::CONDITION_FAILED, keys::ASSERT_FAILED, keys::STATUS_TEXT, keys::MAIN_PID,
             keys::START_FAILED, keys::DEPENDENCY_FAILED,
+            // A new run starts with a clean result, as systemd's
+            // service_start() does; otherwise the exit handler keeps a
+            // previous run's failure.
+            keys::RESULT,
         ] {
             self.st.clear(k);
         }

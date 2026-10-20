@@ -27,6 +27,13 @@
 
 (filecon "/run/sdcompat(/.*)?" any (system_u object_r init_var_run_t ((s0) (s0))))
 (typetransition init_t var_run_t dir "sdcompat" init_var_run_t)
+;
+; s6-linux-init's catch-all logger (s6-log, init_t) keeps its log in
+; /run/uncaught-logs and rotates it by renaming "current". init_t may not
+; rename var_run_t files; label it like /run/systemd. Without this the
+; logger retries forever under enforcing and stops reading its fifo.
+(filecon "/run/uncaught-logs(/.*)?" any (system_u object_r init_var_run_t ((s0) (s0))))
+(typetransition init_t var_run_t dir "uncaught-logs" init_var_run_t)
 
 ; What the s6 tree does that systemd does not, so the policy has no rule for
 ; it: s6-linux-init's catch-all logger reads a fifo in /run/service, and the

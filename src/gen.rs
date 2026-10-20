@@ -301,6 +301,15 @@ pub fn plan(cfg: &Config) -> Plan {
             || (unit.get("Service", "Type").is_none() && unit.get("Service", "BusName").is_some()))
         {
             requires.push("dbus.socket".into());
+        } else if unit.utype() == "service" && unit.get("Service", "BusName").is_some() {
+            // systemd starts BusName= services (hostnamed, logind, polkit) by
+            // bus activation, so the bus is up first. Here a socket unit or
+            // WantedBy= may start them at boot before dbus-daemon has made
+            // its socket; sd-bus then waits with an inotify watch on
+            // /run/dbus, which their SELinux domains may not have, and the
+            // daemon runs without a bus. Wants= + After= dbus.socket.
+            wants.push("dbus.socket".into());
+            after.push("dbus.socket".into());
         }
         for n in requires.iter().chain(wants.iter()) {
             queue.push(n.clone());
@@ -925,4 +934,31 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
     }
 
     Ok(GenResult { db_dir, plan, updated_live })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bus_name_orders_after_dbus() {
+        let tmp = std::env::temp_dir().join(format!("sdcompat-gen-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let (units, extra) = (tmp.join("units"), tmp.join("extra"));
+        fs::create_dir_all(&units).unwrap();
+        fs::create_dir_all(extra.join("dbus")).unwrap();
+        fs::write(extra.join("dbus/type"), "longrun\n").unwrap();
+        let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
+        // hostnamed: Type=notify, BusName=, started by its socket at boot.
+        write("named.service", "[Unit]\nDefaultDependencies=no\n[Service]\nType=notify\nBusName=org.example.N\nExecStart=/bin/true\n");
+        write("plain.service", "[Unit]\nDefaultDependencies=no\n[Service]\nType=notify\nExecStart=/bin/true\n");
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![units];
+        cfg.extra_source = vec![extra];
+
+        let plan = plan(&cfg);
+        assert!(plan.units["named.service"].deps.contains("dbus"));
+        assert!(!plan.units["plain.service"].deps.contains("dbus"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }
