@@ -251,6 +251,27 @@ Then collect the results (do this even if everything works):
 sudo tests/collect-diagnostics.sh
 ```
 
+**Optional: compare memory use with the systemd boot.** Run this once on the
+s6 boot and once on the normal systemd boot, logged in to GNOME with the same
+apps open each time:
+
+```sh
+sudo tests/memcompare.sh snap        # waits until 5 minutes after boot
+```
+
+Each run writes `~/sdcompat-mem/mem-<s6|systemd>-<date>.tsv`. Then, on either
+boot:
+
+```sh
+tests/memcompare.sh compare ~/sdcompat-mem/mem-systemd-*.tsv ~/sdcompat-mem/mem-s6-*.tsv
+```
+
+It prints the system totals (as `free`), memory per group (init and
+supervision, logging, user manager, everything else) and the commands whose
+memory differs most. With root it compares PSS (shared pages split between
+the processes that use them); without root it falls back to private
+anonymous memory.
+
 ## If the s6 boot fails
 
 1. Press **Ctrl+Alt+F9**. A rescue login prompt runs there even when the rest

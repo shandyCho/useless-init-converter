@@ -2512,6 +2512,40 @@ This boot's real AVC list has not been read (root only).
 3. Maybe: make the fd store not need a reboot for limit changes.
 4. Still open: beside3 sandbox flake.
 
+## Session: 2026-10-21: why the s6 boot uses more RAM
+
+Owner asked why RAM use is higher on the s6 boot than on the systemd boot.
+Measured on the s6 boot only (PID 1 s6-svscan, JOURNAL=no, ~17 min up,
+GNOME session), unprivileged, so from /proc/*/status (RssAnon), not PSS.
+No systemd-boot numbers to compare yet. No code changed.
+
+- `free`: 2200 MiB used, 4306 buff/cache, no swap (no /dev/zram*).
+- Supervision tree: 256 s6-supervise (255 service dirs, 52 of them s6-log
+  loggers). Summed RSS 516 MiB is misleading (shared libc/file pages
+  counted 256 times); private anon is ~124 kB each, 31 MiB total, plus
+  kernel stack/page tables per process.
+- 36 `sdcompat` processes (runners for forking/notify services, timer-run,
+  path-run, daemon, fdstore, journal-relay): ~35 MiB anon total.
+- 52 s6-log: ~6 MiB anon. rsyslogd 17 MiB RSS (JOURNAL=no).
+- Under systemd all of that is one PID 1 (~15-30 MiB) plus journald.
+  So the s6 stack's own cost is roughly 60-80 MiB more.
+- Second cause: socket-activated daemons are started at boot, because
+  on-demand socket activation is not implemented (only re-activation for
+  rfkill-like cases). Running here that systemd would leave to their
+  sockets: iscsid, virtlockd, virtlogd, virtnetworkd, cupsd (~90 MiB RSS).
+  The virtqemud/virtproxyd/... set started at 14:38 and exited on their
+  --timeout, as under systemd.
+- Not explained yet: SUnreclaim 227 MiB (no systemd-boot number to compare).
+
+### Next steps
+
+1. Owner, on both boots after the same idle time: `free -m`,
+   `grep -E 'AnonPages|Shmem:|SUnreclaim|KernelStack|PageTables' /proc/meminfo`,
+   `ps -eo rss=,comm= | sort -rn | head -30`; compare.
+2. If the gap matters: EXCLUDE unused units (iscsid/iscsiuio, sssd, virt*),
+   or implement on-demand socket activation (Accept=no) so socket units
+   start their service on first connection.
+
 ## Session: 2026-10-21: SELinux, the permissive boot's AVCs
 
 Owner ran `sudo ausearch -m avc,user_avc,selinux_err -ts boot -i >
@@ -2572,3 +2606,33 @@ JOURNAL=no and policy-side denials, none of which stop a service.
 3. Maybe: JOURNAL=no output loss (relay service stdout through the
    journal relay's stream socket instead of an s6-log pipe).
 4. Still open: beside3 sandbox flake; fd store limit changes.
+
+## Session: 2026-10-21: memory comparison script
+
+Owner asked for a script to compare memory between the s6 and systemd
+boots; they will run it on each boot.
+
+- New `tests/memcompare.sh` (uncommitted when written):
+  - `sudo tests/memcompare.sh snap [--wait SECS] [DIR]`: waits until
+    uptime >= SECS (default 300) so both boots settle equally, then writes
+    `~/sdcompat-mem/mem-<s6|systemd>-<date>.tsv` (home of SUDO_USER,
+    chowned to them): meta (init, uptime, kernel, root, journald, swap
+    devices, running services, kernel threads, cmdline), all of
+    /proc/meminfo, and one row per user process (pid, comm, group, VmRSS,
+    RssAnon, RssShmem, Pss from smaps_rollup or `-`).
+  - `compare A B`: meta side by side; used (as free) and total-available;
+    selected meminfo fields; groups init (PID 1, s6-*, sdcompat) /
+    logging (s6-log, journald, rsyslogd) / user-manager (systemd --user,
+    sd-pam) / other; then commands differing by >= 0.5 MiB, largest first.
+  - Metric is PSS when both snapshots were taken as root, else RssAnon
+    (summed VmRSS double counts shared pages, as seen with s6-supervise).
+- Tested here, unprivileged, on the s6 boot: snap (1.7 s, 473 processes),
+  and compare against a doctored copy without s6-supervise rows (shows
+  -31.1 MiB for that command). Not yet run as root or on a systemd boot.
+- Docs: TESTING.md / TESTING-us.md stage 6, optional paragraph.
+- bash -n and shellcheck -S warning clean.
+
+### Next steps
+
+1. Owner: `sudo tests/memcompare.sh snap` on both boots (same apps open),
+   then `compare` and send the output.

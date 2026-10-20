@@ -240,6 +240,26 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 sudo tests/collect-diagnostics.sh
 ```
 
+**선택: systemd 부팅과 메모리 사용량 비교.** s6 부팅에서 한 번, 일반 systemd
+부팅에서 한 번 실행하세요. 두 번 모두 GNOME에 로그인하고 같은 앱을 열어 둔
+상태로 하세요.
+
+```sh
+sudo tests/memcompare.sh snap        # 부팅 후 5분이 될 때까지 기다립니다
+```
+
+실행할 때마다 `~/sdcompat-mem/mem-<s6|systemd>-<날짜>.tsv`가 생깁니다. 그다음
+어느 부팅에서든:
+
+```sh
+tests/memcompare.sh compare ~/sdcompat-mem/mem-systemd-*.tsv ~/sdcompat-mem/mem-s6-*.tsv
+```
+
+시스템 전체 수치(`free`와 같은 방식), 그룹별 메모리(init과 감독, 로그, 사용자
+매니저, 나머지), 메모리 차이가 가장 큰 명령들을 보여 줍니다. root로 실행하면
+PSS(공유 페이지를 쓰는 프로세스들에 나눠 계산한 값)를 비교하고, root가 아니면
+개인 익명 메모리로 비교합니다.
+
 ## s6 부팅이 실패할 때
 
 1. **Ctrl+Alt+F9**를 누르세요. 나머지 부팅이 실패해도 그곳에서는 복구용 로그인
