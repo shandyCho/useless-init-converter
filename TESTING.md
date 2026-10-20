@@ -136,6 +136,16 @@ tests/sandbox.sh ~/sdc stop
 tests/collect-diagnostics.sh ~/sdc
 ```
 
+cgroup BPF 프로그램(`DevicePolicy=`, `IPAddressDeny=`)은 root 권한으로만 커널에서
+확인할 수 있습니다. 이 테스트 하나는 sudo 암호를 묻고, 임시 cgroup
+`/sys/fs/cgroup/sdcompat-bpf-test-PID`를 쓴 뒤 지우며, 어떤 유닛도 건드리지 않습니다:
+
+```sh
+tests/bpf-root.sh
+```
+
+**기대 결과:** `test result: ok. 1 passed`.
+
 ## 4. 변환 미리보기 (읽기 전용)
 
 아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 sdcompat이 어떻게 변환할지 보여줍니다.
@@ -204,6 +214,9 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | 런타임 디렉터리 한 번만 마운트 | `findmnt -n /run/user/$UID \| wc -l` | `1`(`2`이면 user-runtime-dir@UID가 두 번 실행된 것입니다) |
 | 멈춘 사용자 정리 | 로그인 후(그리고 `sudo` 후) 1분쯤 지나 `loginctl list-users` | `closing` 상태의 `root`·`gdm-greeter`가 남아 있지 않습니다(계속 `closing`이면 logind가 멈춤 작업이 아직 도는 줄 아는 것입니다) |
 | /run 한 번만 마운트 | `findmnt -n /run \| wc -l` | `1`(systemd처럼 initramfs의 /run을 그대로 씁니다. `2`이면 s6-linux-init이 그 위에 tmpfs를 하나 더 올린 것입니다) |
+| cgroup BPF 프로그램 | `sudo dnf install -y bpftool` 후 `sudo bpftool cgroup show /sys/fs/cgroup/system.slice/polkit.service; sudo bpftool cgroup show /sys/fs/cgroup/system.slice/systemd-logind.service` | polkit: `cgroup_device` 줄 하나(`sd_devices`). logind: `sd_devices`, `sd_fw_ingress`, `sd_fw_egress` 각각 하나 |
+| 거부된 BPF 프로그램 | `journalctl -b -g 'not enforced'`(`JOURNAL=no`이면 `sudo grep 'not enforced' /var/log/messages`) | 아무것도 없음 |
+| `DevicePolicy=strict`인 polkit | `pkaction \| head -3` | 액션 ID 세 개(polkitd가 응답함) |
 | `s6` 명령 | `s6 live status \| head` | `up`인 서비스들, 예: `NetworkManager.service/longrun//up/explicit` |
 | 버스와 userdb 레이블 | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t`와 `systemd_userdbd_runtime_t` |
 | 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |

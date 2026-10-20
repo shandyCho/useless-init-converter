@@ -142,6 +142,17 @@ tests/sandbox.sh ~/sdc stop
 tests/collect-diagnostics.sh ~/sdc
 ```
 
+The cgroup BPF programs (`DevicePolicy=`, `IPAddressDeny=`) can only be checked
+in the kernel as root. This one test asks for your sudo password, uses a
+scratch cgroup `/sys/fs/cgroup/sdcompat-bpf-test-PID` that it removes again,
+and touches no unit:
+
+```sh
+tests/bpf-root.sh
+```
+
+**Expected:** `test result: ok. 1 passed`.
+
 ## 4. Translation preview (read-only)
 
 This shows how sdcompat would translate this machine's own units, without
@@ -214,6 +225,9 @@ After logging in to GNOME, open a terminal and go through this list:
 | Runtime directory mounted once | `findmnt -n /run/user/$UID \| wc -l` | `1` (`2` means user-runtime-dir@UID ran twice) |
 | Stopped users are dropped | `loginctl list-users` a minute after logging in (and after a `sudo`) | no `root` or `gdm-greeter` left in `closing` (`closing` that stays means logind still thinks the stop job runs) |
 | /run mounted once | `findmnt -n /run \| wc -l` | `1` (the initramfs's /run, kept as systemd does; `2` means s6-linux-init stacked a second tmpfs on it) |
+| cgroup BPF programs | `sudo dnf install -y bpftool`, then `sudo bpftool cgroup show /sys/fs/cgroup/system.slice/polkit.service; sudo bpftool cgroup show /sys/fs/cgroup/system.slice/systemd-logind.service` | polkit: one `cgroup_device` line `sd_devices`; logind: `sd_devices`, `sd_fw_ingress` and `sd_fw_egress`, one each |
+| BPF programs refused | `journalctl -b -g 'not enforced'` (with `JOURNAL=no`: `sudo grep 'not enforced' /var/log/messages`) | nothing |
+| polkit under `DevicePolicy=strict` | `pkaction \| head -3` | three action IDs (polkitd answers) |
 | The `s6` command | `s6 live status \| head` | services with `up`, e.g. `NetworkManager.service/longrun//up/explicit` |
 | Bus and userdb labels | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t` and `systemd_userdbd_runtime_t` |
 | Overall state | `systemctl is-system-running` | `running` (`degraded` is OK; see next line) |

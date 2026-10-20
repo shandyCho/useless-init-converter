@@ -836,7 +836,15 @@ impl Runner {
         let pid = std::process::id();
         let owner = self.user.as_ref().map(|u| (u.uid, self.gid.unwrap_or(u.gid)));
         match cgroup::enter(&self.unit, pid, owner) {
-            Ok(dir) => self.st.set(keys::CGROUP, &dir.display().to_string()),
+            Ok(dir) => {
+                self.st.set(keys::CGROUP, &dir.display().to_string());
+                // Before anything else runs in the cgroup, ExecStartPre= included.
+                if self.is_root {
+                    for m in crate::bpf::apply(&self.unit, &dir) {
+                        log(self.id(), &m);
+                    }
+                }
+            }
             Err(e) => {
                 if self.is_root {
                     log(self.id(), &format!("cgroup: {e}"));

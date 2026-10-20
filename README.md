@@ -85,6 +85,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 - systemd와 같은 경로(`system.slice/<unit>`)의 cgroup v2, `KillMode=`, `MemoryMax/High`, `CPUQuota/Weight`, `TasksMax`, `IOWeight`.
 - 샌드박스: `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `Read{Write,Only}Paths`, `InaccessiblePaths`, `NoNewPrivileges`, `CapabilityBoundingSet`, `AmbientCapabilities`, `PrivateDevices`, `PrivateNetwork`, `PrivateIPC`, `PrivateMounts`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `ProtectProc`, `ProcSubset`. 마운트, capability 제거, 시스템 콜 필터, 암묵적인 `NoNewPrivileges=`는 systemd와 같습니다. 차이점: 유닛의 각 프로세스(`ExecStartPre=`, 주 프로세스, `ExecStop=`)가 네트워크/IPC/UTS 네임스페이스를 따로 받습니다(systemd는 유닛마다 하나를 공유). `ProtectControlGroups=private|strict`는 cgroup 트리를 읽기 전용으로만 만듭니다(cgroup 네임스페이스 없음). 나머지 지시어는 보고서에 "ignored"로 표시됩니다.
 - seccomp: `SystemCallFilter=`, `SystemCallErrorNumber=`, `SystemCallArchitectures=`. systemd의 시스템 콜 그룹(`@system-service` 등, `systemd-analyze syscall-filter`에서 만든 `src/syscall-groups.txt`)을 씁니다. 또한 `RestrictAddressFamilies=`, `RestrictNamespaces=`, `MemoryDenyWriteExecute=`(커널에 `PR_SET_MDWE`가 있으면 systemd처럼 그것을 사용), `LockPersonality=`, `RestrictRealtime=`, `RestrictSUIDSGID=`를 systemd와 같은 규칙과 errno로 적용합니다. systemd와 마찬가지로 `RestrictAddressFamilies=`는 i386 ABI에는 적용되지 않습니다(`socket()`이 `socketcall()`을 거침). libseccomp는 실행 중에 불러옵니다.
+- cgroup BPF: `DevicePolicy=`, `DeviceAllow=`(`/dev/` 노드, 그리고 /proc/devices의 `char-`/`block-` 분류, 글롭 포함. `PrivateDevices=`는 `DevicePolicy=closed`를 뜻함), `IPAddressDeny=`, `IPAddressAllow=`(주소, 프리픽스, `any`, `localhost`, `link-local`, `multicast`). systemd처럼 러너가 손으로 조립한 eBPF 프로그램(`sd_devices`, `sd_fw_ingress`, `sd_fw_egress`)을 유닛의 cgroup에서 아무것도 실행되기 전에 붙입니다. 커널이 거부한 프로그램은 시작을 실패시키지 않고 로그만 남깁니다(`... not enforced: ...`). 차이점: 주소 목록을 BPF 맵 대신 프로그램 안에 넣어 컴파일하고, 슬라이스에 설정한 목록은 적용하지 않습니다.
 - SELinux는 systemd에서와 같습니다. s6 트리 전체가 `init_t`로 실행되므로(정책 모듈 `dist/selinux/sdcompat.cil`) 서비스는 각자의 도메인(`chronyd_t`, `xdm_t` 등)으로 들어가고, `user@.service`는 `systemd --user`를 사용자 도메인에서 시작할 수 있습니다. `RuntimeDirectory=` 등의 디렉터리와 소켓 파일은 file_contexts의 레이블을 받고, 소켓 유닛의 소켓은 그것을 쓰는 서비스의 레이블을 가집니다.
 
 **D-Bus API** (`systemctl`과 라이브러리가 호출하는 것)
@@ -112,7 +113,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 - `Accept=yes` 소켓과 첫 시작의 요청 시(on-demand) 활성화. 서비스는 소켓과 함께 미리 시작됩니다(그 뒤의 재시작만 소켓 활동을 기다립니다).
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
 - `AccuracySec=`(타이머는 묶지 않고 제시간에 실행), `WakeSystem=`, `OnClockChange=`.
-- 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivateUsers=`, `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, 그리고 BPF 기반 설정: `IPAddressDeny=`/`IPAddressAllow=`, `DeviceAllow=`/`DevicePolicy=`, `RestrictFileSystems=`(systemd는 이들을 위해 유닛의 cgroup에 eBPF 프로그램을 붙입니다).
+- 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivateUsers=`, `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=`(systemd에서는 BPF LSM 프로그램), IP 사용량 집계(`IPAccounting=`).
 - 이미 실행 중인 작업의 취소.
 - `ExecStop=`은 데몬을 통해 유닛을 멈출 때(`systemctl stop`)만 실행되고, s6-rc가 직접 서비스를 멈출 때(예: 종료 시)는 실행되지 않습니다.
 
@@ -365,6 +366,7 @@ src/install.rs     enable/disable/mask/preset, 유닛 파일 상태
 src/socket.rs      소켓 유닛(sd_listen_fds)
 src/sandbox.rs     네임스페이스, 마운트, capability
 src/seccomp.rs     SystemCallFilter=와 나머지 seccomp 기반 설정(libseccomp)
+src/bpf.rs         DevicePolicy=/DeviceAllow=, IPAddressDeny=/IPAddressAllow=(cgroup eBPF)
 src/selinux.rs     파일과 소켓 레이블(libselinux)
 src/cgroup.rs      systemd 호환 cgroup 구조와 자원 제어
 src/conditions.rs  Condition*/Assert*
