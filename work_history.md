@@ -2166,18 +2166,32 @@ runs once per login (both unverified on a real boot).
   TESTING rows pass. No code changed.
 - Still seen: /run mounted twice (initramfs tmpfs with size=, then
   s6-linux-init's on top).
-- Not checked yet: user-runtime-dir@UID's ExecStop exit status on
-  logout/shutdown (needs a logout or shutdown, then the log).
+- **user-runtime-dir@UID ExecStop exit 1: gone.** Owner grepped
+  /var/log/messages: on Oct 20 it failed ~50 times, for greeter (60578-
+  60583), root (@0, sudo) and 1000 alike; the last at 00:05:45, the
+  shutdown of the old boot (new binary installed 00:03:41, but
+  /run/user/1000 had been mounted twice at the 23:48 login by the old
+  code). After the 00:06 reboot: none up to 00:13:55, though the greeter
+  stopped at login (00:06) and root's after a sudo at 00:10:30; both
+  /run/user dirs are gone and their units inactive. Explains the old
+  failure: with two tmpfs, ExecStop unmounted only the top one and could
+  not remove the directory. (Only failures are logged; success is
+  inferred from no line plus the dirs being gone.)
+- **New, not looked at:** `loginctl list-users` keeps root and
+  gdm-greeter in `closing` (greeter since 00:06, still at 00:14), with
+  user@/user-runtime-dir@ inactive and ListJobs empty. Under systemd
+  logind drops them once the stop jobs end. GetJob on a missing job
+  answers `org.freedesktop.systemd1.NoSuchJob` (checked), so a lost or
+  early JobRemoved is a guess. No harm seen.
 
 ### Current state
 
-Under s6, / and all mounts are shared, and user-runtime-dir runs once per
-login (both confirmed on a real boot).
+Under s6, / and all mounts are shared, user-runtime-dir runs once per
+login, and its ExecStop no longer fails (all confirmed on a real boot).
 
 ### Next steps
 
-1. Owner: after the next logout or shutdown, check whether
-   user-runtime-dir@UID's ExecStop still exits 1.
+1. Maybe: why logind keeps stopped users in `closing`.
 2. Maybe: the double /run (s6-linux-init over the initramfs's).
 3. Then: cgroup-BPF settings, SELinux enforcing.
 4. Maybe: make the fd store not need a reboot for limit changes.
