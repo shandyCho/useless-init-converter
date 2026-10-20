@@ -1450,3 +1450,79 @@ saved by the last systemd boot and never save later toggles.
    mode later than 2 min after boot, reboot, and the state comes back.
 2. Older items: rejected reply to logind; loadkeys/restorecon fifo AVCs;
    maybe rmdir the sandbox cgroups after root runs.
+
+### Sandboxing settings (same day, `9d52451`)
+
+- Owner asked for the sandboxing options first, after a discussion of
+  sdcompat's downsides (the boot report listed ProtectKernelModules=,
+  RestrictAddressFamilies=, MemoryDenyWriteExecute=, PrivateDevices= etc.
+  as ignored for 18-34 services each, so services ran less confined than
+  under systemd).
+- Scope chosen from what this machine's units use (counted in
+  /usr/lib/systemd/system): everything systemd does with seccomp,
+  namespaces, mounts and capabilities. Left out: the cgroup-BPF ones
+  (IPAddressDeny= 27 units, DeviceAllow=/DevicePolicy=, RestrictFileSystems=),
+  PrivateUsers= (6), PrivatePIDs= (4), RemoveIPC= (7), credentials,
+  KeyringMode=.
+- seccomp.rs: `restrictions()` builds one allow-by-default filter per
+  setting, loaded per ABI with BADARCH=allow (as systemd's
+  seccomp_init_for_arch), before SystemCallFilter= (its allow list may not
+  allow seccomp()). Rules follow systemd's seccomp-util.c:
+  RestrictAddressFamilies (socket() arg0, EAFNOSUPPORT; native + x32 only,
+  systemd skips i386 too), RestrictNamespaces (unshare/clone masked flags,
+  setns, clone3 ENOSYS), MemoryDenyWriteExecute (PR_SET_MDWE first, which
+  gives EACCES; seccomp fallback EPERM), LockPersonality (personality !=
+  current), RestrictRealtime (sched_setscheduler 1,2,4 and >5),
+  RestrictSUIDSGID (chmod family, open/openat with O_CREAT/O_TMPFILE,
+  creat, openat2 ENOSYS), @clock / @module / syslog / sethostname+
+  setdomainname / @raw-io for ProtectClock / ProtectKernelModules /
+  ProtectKernelLogs / ProtectHostname / PrivateDevices.
+- sandbox.rs: unshare NET (lo brought up) / IPC / UTS before the mount
+  namespace; then, after ProtectSystem/Home, rw binds and PrivateTmp: new
+  procfs for ProtectProc=/ProcSubset= (skipped with a message if the kernel
+  refuses), PrivateDevices /dev (tmpfs in the unit state dir, bound nodes
+  null zero full random urandom tty, devpts newinstance (retried without
+  gid= in a user namespace), shm/mqueue/hugepages, fd/std* symlinks,
+  /dev/log, MS_MOVE onto /dev), new mqueue for PrivateIPC, systemd's
+  ProtectKernelTunables table (/sys and /proc parts ro, kallsyms/kcore
+  hidden, /sys/fs/cgroup and /sys/fs/selinux rw again), ProtectControlGroups
+  ro, modules and kmsg hidden, then ReadWritePaths= under /sys and /proc
+  bound rw again (efivars in fwupd-style units). `bounding_set()` drops the
+  implied caps (MKNOD, SYS_RAWIO, SYS_MODULE, SYSLOG, SYS_TIME,
+  WAKE_ALARM); `no_new_privileges()` follows systemd's doc: implied by
+  these settings for a service without CAP_SYS_ADMIN (non-root User=, or
+  dropped from its bounding set).
+- Also changed: '+' commands no longer get CapabilityBoundingSet= (as
+  systemd: full privileges).
+- Deviations, documented: network/IPC/UTS namespaces are per process, not
+  per unit (ExecStartPre= and the main process don't share them);
+  ProtectControlGroups=private|strict only make the tree read-only; /sys
+  is not remounted for PrivateNetwork (so /sys/class/net shows the host's
+  interfaces; /proc/net shows only lo).
+- Checked: the translated units using these settings (logind, hostnamed,
+  timedated, journald, polkit, chronyd, NM, ...) — hostnamed doesn't set
+  ProtectHostname, timedated doesn't set ProtectClock, so their own jobs
+  aren't blocked.
+- Tests: unit tests for the parsers and a forked child loading
+  RestrictAddressFamilies/RestrictNamespaces/RestrictRealtime (31 + 1
+  ignored). Mount/namespace parts by hand in a user namespace (`unshare -r
+  -p -f --mount-proc sdcompat up -- unit` with two scratch units): minimal
+  /dev, /proc/sys and /sys ro, cgroup ro, modules hidden, only lo in
+  /proc/net/dev, sethostname refused, kallsyms empty, ProtectSystem=strict
+  with ReadWritePaths, ProcSubset=pid, MDWE, SUID chmod, AF_INET. New
+  sandbox unit harden.service: the seccomp checks run unprivileged; the
+  /proc/sys, /dev and lo checks only as root (SKIP otherwise). Sandbox
+  164/164 twice, shellcheck/bash -n, release build. Docs: README/README-us.
+- Not tested: a real boot with these on, SELinux enforcing (devpts
+  newinstance and the tmpfs /dev get default labels).
+
+### Next steps
+
+1. Owner: push, reinstall, reboot into s6. Watch for services that now
+   fail: `systemctl --failed`, exit statuses 226 (namespace) and 231
+   (seccomp) in `/run/uncaught-logs/current`, and `sudo tests/sandbox.sh
+   DIR && sudo tests/check.sh DIR` for the root-only checks (then rmdir the
+   leftover sandbox cgroups). If the s6 boot breaks, the default systemd
+   entry is unaffected. Also the checks from the rfkill/journald entry.
+2. Then: cgroup-BPF settings (IPAddressDeny=, DeviceAllow=) if wanted;
+   SELinux enforcing.
