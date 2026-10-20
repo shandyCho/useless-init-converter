@@ -1350,11 +1350,16 @@ saved by the last systemd boot and never save later toggles.
   afterwards: 152/152.
 - Leftover: 49 empty cgroup directories in the host's system.slice, all
   sandbox units (list in /tmp/sdc-root.cgroups, made by comparing with a
-  listing taken before the run; nothing disappeared). To be removed by the
-  owner with rmdir (empty directories only); not confirmed at the time of
-  writing.
+  listing taken before the run; nothing disappeared). The owner removed
+  them with rmdir (empty directories only).
+- Second root run with the skip: rc=0, 146 passed, 0 failed, one SKIP
+  (denied calls). It left 49 empty directories again (test-scope.scope
+  instead of x.service, which only the first run's allowed "denied" call
+  created): every root run leaves them, so remove them after each
+  (/tmp/sdc-root.cgroups was rewritten for this run).
 
 ### Next steps
 
-1. Owner: rerun as root to confirm 0 failures with the skip (optional).
-2. Real boot check from the fd store entry still applies.
+1. Real boot check from the fd store entry still applies.
+2. Maybe: tests/sandbox.sh stop could rmdir the sandbox units' empty
+   cgroups when run as root, so root runs leave nothing behind.
