@@ -1323,3 +1323,38 @@ saved by the last systemd boot and never save later toggles.
   cgroup delegation. `cargo test` 28 passed + 1 ignored, sandbox 152/152
   twice (scope parts skipped), shellcheck/bash -n pass. Docs:
   README/README-us.
+
+### Sandbox suite as root (same day, `cb39a24`)
+
+- Owner ran `tests/sandbox.sh /tmp/sdc-root && tests/check.sh /tmp/sdc-root`
+  under sudo on the Fedora laptop (booted into s6, SELinux permissive),
+  from a separate terminal (`!` commands here have no tty for sudo's
+  password, and Fedora's sudo timestamps are per tty).
+- Checked before: systemctl.sh keeps real systemctl in a namespace bound to
+  the sandbox socket; no sandbox unit mounts, uses PAMName=/User=/Slice=/
+  Delegate=; the one pgrep in check.sh only reads CPU ticks. The risk is
+  that as root services go into the real /sys/fs/cgroup/system.slice/<unit>
+  (cgroup root is a constant) and KillMode=control-group kills that whole
+  cgroup: none of the 47 sandbox unit names matched the 119 entries in the
+  host's system.slice at the time. Keep it that way when adding units (no
+  real service names in tests/sandbox.sh).
+- Result: 146 passed, 9 failed. Passed for the first time: the transient
+  scope test (test-scope.scope active/running) and the restart ones from
+  9df4162 (keep-scope.scope active after the daemon swap, StopUnit from the
+  restarted daemon kills its process). All 9 failures were in "unprivileged
+  caller": as root the caller is root, which authorize() always allows (as
+  systemd), so the "denied" calls succeeded, the StopUnit really stopped
+  hello.service, and the private socket accepted root. Test assumption,
+  not a daemon bug: check.sh now skips those checks (SKIP line) when run as
+  root; the other checks in that section still run. Unprivileged run
+  afterwards: 152/152.
+- Leftover: 49 empty cgroup directories in the host's system.slice, all
+  sandbox units (list in /tmp/sdc-root.cgroups, made by comparing with a
+  listing taken before the run; nothing disappeared). To be removed by the
+  owner with rmdir (empty directories only); not confirmed at the time of
+  writing.
+
+### Next steps
+
+1. Owner: rerun as root to confirm 0 failures with the skip (optional).
+2. Real boot check from the fd store entry still applies.
