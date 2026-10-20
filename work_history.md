@@ -780,6 +780,49 @@ What the diagnostics showed:
   and writes /etc/s6.conf. Not run: build-skarnet-rpms.sh end to end
   (sudo), the `--build-s6` path, anything as root.
 
+- **Owner asked for s6-frontend 0.2.0.0, and for versions not to be
+  hardcoded (`b35097c`).** This supersedes the 0.1.0.0 decision above.
+  - New set: skalibs 2.16.0.0, execline 2.10.0.0, s6 2.15.1.1, s6-rc
+    0.8.0.2, s6-linux-init 1.2.0.2 (rebuilt), s6-frontend 0.2.0.0; all
+    checksums match skarnet's `.sha256` files. Upgrade notes read: s6-rc
+    0.8 and s6 2.15.1.1 only bump dependencies; skalibs 2.16 changes C
+    APIs only; execline 2.10 renames execline-cd/posix-cd -> cd,
+    posix-umask -> umask, drops `loopwhilex -n`, changes `wait` options.
+    sdcompat's generated scripts use none of these (grep). The 0.1.0.0
+    backport patch is gone (0.2.0.0 has the fix).
+  - Decision: `dist/skarnet.versions` (name, version, sha256, build order)
+    is the only place versions live. build-skarnet-rpms.sh prepends
+    `%global skarnet_version/skarnet_release` to the spec copies (so the
+    SRPMs for mock carry them) and adds `PatchN:` lines for
+    `NAME-VERSION-*.patch`. Release = `1.YYYYMMDDHHMM` per build:
+    rpm.vercmp checked that 1.2.0.2-1.<stamp> > the installed 1.2.0.2-1
+    and later stamps are newer; needed because s6-linux-init must be
+    rebuilt against skalibs 2.16 without a version change. Specs glob
+    `lib*.so*` and `pkgconfig/*.pc` instead of naming libraries.
+  - Decision: execline `--enable-multicall`, so the .cil labels
+    `/usr/bin/execline` alone instead of a list of command names (which
+    2.10 had just broken). exec through a symlink is checked against the
+    target's label. cd/umask/wait become symlinks in /usr/libexec/execline.
+  - Bug fixed on the way: `--build-s6` ran `make install` into /usr, which
+    put execline's cd/umask/wait over bash's /usr/bin files. Now each
+    package is staged, fixed up, recorded and copied with `cp -dR
+    --preserve=mode,timestamps,links` (not -a: /tmp SELinux labels).
+  - Verified: build-skarnet-rpms.sh up to the first `sudo dnf install`
+    (downloads, checksums, all six specs parse with the version from the
+    file, skalibs 2.16.0.0 RPM built); execline's %build/%install emulated
+    with the spec's flags against a scratch shared skalibs (one regular
+    file, 47 symlinks, libexecline.so.2.10 + .pc, cd/umask/wait only in
+    libexec; blocks, importas, fdmove, cd work); the whole new set built
+    from source into the scratchpad; sandbox with it in PATH: with
+    non-multicall execline 7/8 runs 119/119, with multicall 2/4 (all the
+    other runs are the session-7 flake, the same 14 checks). setup
+    `--dry-run --build-s6` (rpm/dnf stubbed) reads every version from the
+    file. CIL parses. Not run: the other five RPM builds (need the new
+    -devel packages installed, sudo), a real `--build-s6`, a boot.
+  - Upgrading the skarnet set should be done from the systemd boot
+    (TESTING "Updating"), so the new s6-rc never works on a live dir
+    made by the old one; the next s6 boot recompiles the database.
+
 ### Current state
 
 The s6 boot reaches GNOME with services in their own SELinux domains,
@@ -799,6 +842,8 @@ userdb should carry their policy labels.
 3. Session 7's reload flake (s6-rc-update "Broken pipe") is still open.
 4. FDSTORE before sdcompatd is up: queue or retry in the runner.
 5. Session 8's step 4 (other seccomp-based keys, FreezeUnit/ThawUnit).
-6. Rebuild the RPMs (`dist/rpm/build-skarnet-rpms.sh`, now six) so
-   s6-frontend is installed; check `s6 live status` and `sudo s6 process
-   status sshd.service` on the s6 boot.
+6. From the systemd boot: `dist/rpm/build-skarnet-rpms.sh`, then
+   `sudo dist/setup-fedora.sh --rpms=... --yes` (installs the new skarnet
+   set, reloads the module); `ls -Z /usr/bin/execline` should show
+   init_exec_t. Then boot s6 and check `ps -eZ` (domains as before),
+   `s6 live status`, `sudo s6 process status sshd.service`.
