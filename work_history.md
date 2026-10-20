@@ -1995,3 +1995,18 @@ user managers under s6, as with systemd (not verified on a real boot).
    mount-rootfs/oo7-daemon.
 3. Then: mount propagation, cgroup-BPF settings, SELinux enforcing.
 4. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
+
+## Session: 2026-10-21, part 2: user-reload-restart first try ran the old binary
+
+- Owner ran the TESTING row on the s6 boot (booted 23:37) without
+  rerunning setup: both commands printed "passing file descriptors
+  (systemd-run --pipe/--stdio) is not supported by sdcompat", then
+  "Transport endpoint is not connected"; the helper exited 0 (its `|| :`).
+- Cause: /usr/libexec/sdcompat/sdcompat is from the 23:13 setup run, before
+  `efec5bc` (built 23:31); that message no longer exists in the source.
+  Not a code bug; no changes.
+
+### Next steps
+
+1. Owner: rerun setup on the s6 boot, then repeat part 1's next step 1.
+2. Earlier next steps unchanged.
