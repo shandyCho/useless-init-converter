@@ -952,7 +952,7 @@ As in session 9. The new skarnet RPMs are built in
 2. Bluetooth until step 3: `sudo systemctl start bluetooth.service`.
 3. Done below (udev `SYSTEMD_WANTS`).
 
-### Device-wanted units (fix #2, same day)
+### Device-wanted units (fix #2, same day, `a736b31`)
 
 - New `src/daemon/devices.rs`: the daemon listens on udevd's netlink group
   (NETLINK_KOBJECT_UEVENT group 2; messages with the "libudev" header, only
