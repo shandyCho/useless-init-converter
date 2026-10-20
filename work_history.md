@@ -1905,3 +1905,25 @@ Also=.
    cups.path cups.socket cups.service && systemctl is-enabled cups.socket
    cups.path` → enabled, enabled.
 2. Earlier next steps unchanged.
+
+## Session: 2026-10-20 late night, part 5: setup restart and preset confirmed
+
+- Owner reran setup on the s6 boot with `852b02d` and ran the checks from
+  part 4's next step 1; reported "It works fine". So the setup
+  `restart_daemon` step works in a real root run, and the preset fix
+  (`36e443d`) works in the running daemon (cups.socket/cups.path enabled
+  by `systemctl preset`).
+- No code changes this session.
+
+### Current state
+
+As in part 4; restart on setup and preset ordering are verified on the
+real machine.
+
+### Next steps
+
+1. Still to check on the s6 boot: chrony MainPID change on `dnf reinstall
+   chrony`, mount-rootfs/oo7-daemon.
+2. Then: user-reload-restart, mount propagation, cgroup-BPF settings,
+   SELinux enforcing.
+3. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
