@@ -863,11 +863,18 @@ userdb should carry their policy labels.
   `--with-include/--with-dynlib/--with-lib`. Without the macro they build as
   before (mock path unchanged). The script no longer uses sudo; it checks
   for rpm2cpio and cpio. TESTING/TESTING-us updated.
+- shellcheck 0.11.0 is now installed. `shellcheck -S warning` over every
+  tracked `*.sh` passes after `48cfe81`: in setup-fedora.sh `--build-s6` the
+  checksum variable `want` was renamed `sum` (shellcheck confused it with
+  the RPM function's `want` array, a false positive); sandbox.sh's
+  `kill $(cat pids)` splits on purpose (SC2046 disabled there). Checked:
+  `--dry-run --build-s6` with rpm stubbed prints all six checksums;
+  sandbox start/stop works.
 - Verified: full `dist/rpm/build-skarnet-rpms.sh` run, all six built in
   ~30 s; every package requires libskarnet.so.2.16 / libexecline.so.2.10
   (nothing linked against the host's 2.15); `rpm -Uvh --test --nosignature`
-  of all eleven RPMs over the installed old set passes. `bash -n` ok;
-  shellcheck still not installed. Not run: the real install
+  of all eleven RPMs over the installed old set passes. `bash -n` ok.
+  Not run: the real install
   (setup-fedora.sh --rpms), a boot.
 - Note: this machine has no git user.name/email; the commit used the
   repo's existing author via `git -c` and the config was left unchanged.
