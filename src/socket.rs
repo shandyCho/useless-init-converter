@@ -253,6 +253,11 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
     let first_path = out.iter().find_map(|b| b.path.clone());
     if let Some(target) = first_path {
         for link in sock.get_words("Socket", "Symlinks") {
+            // Left alone when already right, as systemd's symlink_idempotent:
+            // init_t may create /run/varlink/registry links but not unlink them.
+            if fs::read_link(&link).is_ok_and(|t| t == target) {
+                continue;
+            }
             let _ = fs::remove_file(&link);
             if let Err(e) = std::os::unix::fs::symlink(&target, &link) {
                 eprintln!("sdcompat: {}: symlink {link}: {e}", sock.id);

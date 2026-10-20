@@ -281,6 +281,9 @@ impl Sandbox {
                     } else {
                         let opts = if mode == "yes" { "mode=0000" } else { "mode=0755" };
                         mount("tmpfs", d, Some("tmpfs"), libc::MS_NOSUID | libc::MS_NODEV, Some(opts))?;
+                        // As systemd's mount_tmpfs: the label of the path it covers
+                        // (admin_home_t for /root), not tmpfs_t.
+                        crate::selinux::label_as(&[(d.to_string(), d.to_string())]);
                     }
                 }
             }
@@ -581,14 +584,19 @@ pub fn bounding_set(unit: &Unit) -> Option<u64> {
 }
 
 /// NoNewPrivileges= as systemd's context_has_no_new_privileges(): set, or
-/// implied by a sandboxing setting for a service without CAP_SYS_ADMIN (not
-/// root, or dropped from its bounding set).
+/// implied by a sandboxing setting for a service without CAP_SYS_ADMIN.
+/// systemd asks the effective set of the child, which the bounding set does
+/// not change before exec: a root service keeps it even when its
+/// CapabilityBoundingSet= leaves it out (chronyd, NetworkManager), and a
+/// User= service has it only as an ambient capability. Setting no_new_privs
+/// for those would also block their SELinux domain transition.
 pub fn no_new_privileges(unit: &Unit, runs_as_root: bool) -> bool {
     if unit.get_bool("Service", "NoNewPrivileges", false) {
         return true;
     }
     let sys_admin = 1u64 << cap_number("SYS_ADMIN").unwrap_or(21);
-    let has_sys_admin = runs_as_root && bounding_set(unit).map(|b| b & sys_admin != 0).unwrap_or(true);
+    let ambient = parse_capset(unit, "AmbientCapabilities").unwrap_or(0) & bounding_set(unit).unwrap_or(u64::MAX);
+    let has_sys_admin = runs_as_root || ambient & sys_admin != 0;
     if has_sys_admin {
         return false;
     }
@@ -634,4 +642,48 @@ pub fn raise_ambient(caps: u64) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_unit(text: &str) -> Unit {
+        let mut file = crate::unit::UnitFile::default();
+        file.parse_str(text);
+        Unit {
+            id: "t.service".into(),
+            names: vec!["t.service".into()],
+            fragment: None,
+            dropins: Vec::new(),
+            load_state: crate::loader::LoadState::Loaded,
+            load_error: None,
+            file,
+        }
+    }
+
+    #[test]
+    fn implied_no_new_privileges() {
+        // chronyd: root, SYS_ADMIN left out of the bounding set, seccomp, and
+        // an explicit NoNewPrivileges=no after =yes.
+        let chronyd = test_unit(
+            "[Service]\nCapabilityBoundingSet=~CAP_SYS_ADMIN CAP_MKNOD\nNoNewPrivileges=yes\n\
+             SystemCallFilter=~@mount\nRestrictAddressFamilies=AF_INET\nNoNewPrivileges=no\n",
+        );
+        assert!(!no_new_privileges(&chronyd, true));
+        // NetworkManager: an allow list without SYS_ADMIN.
+        let nm = test_unit("[Service]\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW\nRestrictRealtime=true\n");
+        assert!(!no_new_privileges(&nm, true));
+        // Not root: implied, unless SYS_ADMIN stays as an ambient capability.
+        assert!(no_new_privileges(&nm, false));
+        let amb = test_unit("[Service]\nAmbientCapabilities=CAP_SYS_ADMIN\nRestrictRealtime=true\n");
+        assert!(!no_new_privileges(&amb, false));
+        let amb_dropped = test_unit(
+            "[Service]\nAmbientCapabilities=CAP_SYS_ADMIN\nCapabilityBoundingSet=CAP_NET_RAW\nRestrictRealtime=true\n",
+        );
+        assert!(no_new_privileges(&amb_dropped, false));
+        // No sandboxing setting: never implied; explicit =yes always wins.
+        assert!(!no_new_privileges(&test_unit("[Service]\nUser=x\n"), false));
+        assert!(no_new_privileges(&test_unit("[Service]\nNoNewPrivileges=yes\n"), true));
+    }
 }
