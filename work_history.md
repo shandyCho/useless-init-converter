@@ -465,3 +465,53 @@ quickly, which still fail without `systemd --user`.
 3. Check whether logind's CreateSession waits for user@UID's start job
    (JobRemoved timing from sdcompat's dynamic units).
 4. Session 3's leftovers: rejected method_return to logind, tty1 getty.
+
+## Session 6: 2026-10-20
+
+Owner reported: the s6 boot works now, but the display stays black and DNS
+does not work. Boot `5a77d4846e22455cb973e4531a511135` (2026-10-19
+03:31–03:36), the first with `57777ef`/`f98c376`. The new syslog copy
+worked: `journalctl -b -1 -t sdcompatd -t sdcompat` showed the causes.
+
+- **`57777ef` works:** polkitd started at 22.6 s (was +105 s); logind,
+  polkit, accounts-daemon, NetworkManager-dispatcher and wpa_supplicant were
+  "started beside" the boot's change. No stall.
+- **Black display, bug fixed (`053d665`):** every `user@UID.service` failed
+  with `PAM: pam_setcred: Failure setting user credentials`, so
+  `systemd --user` never ran (this is the session 4/5 "second blocker").
+  Fedora's `/usr/lib/pam.d/systemd-user` has no `auth` lines; Linux-PAM then
+  uses `/etc/pam.d/other`, whose `pam_deny` fails pam_setcred. systemd
+  ignores the pam_setcred result (logs at debug); `pam.rs` now does the same.
+  gdm's greeters then died on "org.freedesktop.systemd1 does not exist", as
+  before.
+- **DNS, bug fixed (`36a323d`):** `/etc/resolv.conf` is a symlink to
+  resolved's `stub-resolv.conf` (127.0.0.53), and `systemd-resolved.service`
+  was excluded by `systemd-*`, so nothing answered ("activation of
+  dbus-org.freedesktop.resolve1.service failed: excluded"). Decision: add
+  `systemd-resolved.service` and its varlink/monitor sockets to the default
+  INCLUDE (resolved needs nothing from PID 1), not point resolv.conf
+  elsewhere. `sdcompat plan`: resolved is a longrun in the sysinit bundle,
+  the two sockets are bound by its runner; only sandboxing keys are warned.
+- Seen, not acted on: `user-runtime-dir@6057x.service` ExecStop exit 1 when
+  greeter sessions ended (probably follows from user@ failing);
+  "stopping shutdown.target (conflicts with systemd-hostnamed.service)"
+  (shutdown.target was not active, harmless).
+- **Verified:** `cargo build`, `cargo test` ok; sandbox suite 113/113 (1 SKIP,
+  transient scope). Not verified on a real boot; shellcheck still not
+  installed (no shell script changed).
+
+### Current state
+
+As in session 5, plus `053d665` and `36a323d`. Expected on the next s6
+boot: `systemd --user` runs for gdm's greeter users, and DNS works.
+Whether GNOME then reaches a login screen is unknown: the next problem may
+be session 5's observation that the greeter session closes ~0.2 s after
+user@ starts (logind's CreateSession not waiting for user@).
+
+### Next steps
+
+1. Owner installs the new build and boots the s6 entry. Check: login screen
+   appears; `resolvectl status` and `getent hosts fedoraproject.org` on
+   tty9. If the screen is still black: `journalctl -b -1 -t sdcompatd -t
+   sdcompat` and `journalctl -b -1 _UID=60578` (or the greeter's uid).
+2. Session 5's next steps 3–4 still apply.
