@@ -1526,3 +1526,59 @@ saved by the last systemd boot and never save later toggles.
    entry is unaffected. Also the checks from the rfkill/journald entry.
 2. Then: cgroup-BPF settings (IPAddressDeny=, DeviceAllow=) if wanted;
    SELinux enforcing.
+
+### Setup options for resolved and journald (same day, `063cf34`)
+
+- Owner asked, after a discussion of which systemd pieces could still go
+  (only resolved and journald are realistic: logind, `systemd --user`,
+  udevd and libsystemd are held by GNOME and Fedora's packaging), for
+  setup options to drop resolved and to use JOURNAL=no.
+- Constraint: /etc/resolv.conf is shared with the systemd boot (a
+  symlink to ../run/systemd/resolve/stub-resolv.conf here). Decision:
+  change only /run on the s6 boot. New config key RESOLVED (config.rs,
+  like JOURNAL: `no` drops systemd-resolved.service and its two varlink
+  sockets from INCLUDE, so the systemd-* EXCLUDE glob covers them). New s6
+  oneshot dist/s6/resolv (`early resolv`, after mount-api; setup adds it
+  to sdcompat-sysinit/contents.d like syslog for JOURNAL=no): writes
+  /run/NetworkManager/conf.d/99-sdcompat-no-resolved.conf with
+  dns=default (NetworkManager would otherwise pick systemd-resolved from
+  the symlink) and rc-manager=symlink (rc-manager=auto would use
+  /usr/sbin/resolvconf, which on Fedora is resolvectl), and makes the
+  stub path /etc/resolv.conf points to a symlink to
+  /run/NetworkManager/resolv.conf (NetworkManager always writes that).
+  nss-resolve finds no resolved and falls through to `dns`.
+- Known limit: NetworkManager reads /run/NetworkManager/conf.d before
+  /etc, so a `dns=` in /etc/NetworkManager overrides it (none on this
+  machine). Documented.
+- setup-fedora.sh: --journal and --resolved/--no-resolved added; JOURNAL
+  and RESOLVED now default to what the installed sdcompat.conf says
+  (`conf_bool`), and `set_conf_key` sets or removes the key in an existing
+  config (before, the config was only written on a first install). Bug
+  fixed with it: a re-run without --no-journal on a no-journal install
+  removed contents.d/syslog while the config kept JOURNAL=no.
+  s6_dir_sum ignores contents.d/resolv as it does contents.d/syslog.
+- Tests: config unit test (RESOLVED=no excludes the three units; 32 + 1
+  ignored). `early resolv` in `unshare -rm` with a tmpfs on /run: the conf
+  file, the stub symlink, /etc/resolv.conf reading NetworkManager's file;
+  `NetworkManager --print-config` there shows the snippet loaded with
+  dns=default, rc-manager=symlink. set_conf_key/conf_bool on a scratch
+  copy: no/no then yes/yes leaves the file identical to the original,
+  repeating is a no-op. `--dry-run --no-resolved` plan and steps;
+  dist/s6 with resolv in sdcompat-sysinit compiles with s6-rc-compile
+  (resolv after mount-api). `sdcompat plan` on this machine's units with
+  RESOLVED=no: resolved gone (89 -> 88 longruns). Sandbox 164/164,
+  shellcheck/bash -n. Docs: README/README-us, TESTING/TESTING-us (DNS
+  check), dist/sdcompat.conf.
+- Not tested: a real boot with --no-resolved (NetworkManager writing the
+  file, name resolution, VPN DNS), --no-journal switching on the real
+  install.
+
+### Next steps
+
+1. Owner: push, reinstall (add `--no-resolved` and/or `--no-journal` if
+   wanted), reboot into s6. With --no-resolved: `pgrep -x
+   systemd-resolve` (nothing), `cat /etc/resolv.conf` (NetworkManager's),
+   `ping fedoraproject.org`; then boot the systemd entry once and check
+   DNS still goes through resolved there (`resolvectl status`). Plus the
+   sandboxing checks from the entry above.
+2. Then: cgroup-BPF settings, SELinux enforcing.
