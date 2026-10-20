@@ -24,6 +24,8 @@ s6, s6-rc and s6-linux-init programs with the right directories.
 
 %build
 %set_build_flags
+# skarnet_sysroot: build-skarnet-rpms.sh builds against the RPMs it just made,
+# unpacked there, instead of what is installed.
 ./configure \
     --prefix=%{_prefix} \
     --bindir=%{_bindir} \
@@ -32,7 +34,8 @@ s6, s6-rc and s6-linux-init programs with the right directories.
     --libdir=%{_libdir} \
     --includedir=%{_includedir} \
     --sysconfdir=%{_sysconfdir} \
-    --with-sysdeps=%{_libdir}/skalibs/sysdeps \
+    --with-sysdeps=%{?skarnet_sysroot}%{_libdir}/skalibs/sysdeps \
+    %{?skarnet_sysroot:--with-include=%{skarnet_sysroot}%{_includedir} --with-dynlib=%{skarnet_sysroot}%{_libdir} --with-lib=%{skarnet_sysroot}%{_libdir}} \
     --disable-allstatic \
     --disable-rpath \
     --enable-util-linux

@@ -75,8 +75,9 @@ RPMs in dependency order:
 dist/rpm/build-skarnet-rpms.sh
 ```
 
-- Without mock, it uses `rpmbuild` and asks for your `sudo` password to install
-  each `-devel` package, because the next package builds against it.
+- Without mock, it uses `rpmbuild`. Each package is unpacked into
+  `~/rpmbuild-skarnet/sysroot`, and the next one builds against that. Nothing
+  is installed and no `sudo` is needed.
 - With mock (`sudo dnf install mock && sudo usermod -aG mock $USER`, then log
   out and back in), everything is built in clean chroots instead.
 

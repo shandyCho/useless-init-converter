@@ -28,6 +28,8 @@ Headers, shared library links and pkg-config files for s6-linux-init.
 
 %build
 %set_build_flags
+# skarnet_sysroot: build-skarnet-rpms.sh builds against the RPMs it just made,
+# unpacked there, instead of what is installed.
 ./configure \
     --prefix=%{_prefix} \
     --bindir=%{_bindir} \
@@ -36,7 +38,8 @@ Headers, shared library links and pkg-config files for s6-linux-init.
     --libdir=%{_libdir} \
     --includedir=%{_includedir} \
     --pkgconfdir=%{_libdir}/pkgconfig \
-    --with-sysdeps=%{_libdir}/skalibs/sysdeps \
+    --with-sysdeps=%{?skarnet_sysroot}%{_libdir}/skalibs/sysdeps \
+    %{?skarnet_sysroot:--with-include=%{skarnet_sysroot}%{_includedir} --with-dynlib=%{skarnet_sysroot}%{_libdir} --with-lib=%{skarnet_sysroot}%{_libdir}} \
     --enable-shared \
     --disable-static \
     --disable-allstatic \

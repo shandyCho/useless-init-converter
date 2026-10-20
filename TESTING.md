@@ -72,8 +72,9 @@ RPM을 빌드합니다.
 dist/rpm/build-skarnet-rpms.sh
 ```
 
-- mock이 없으면 `rpmbuild`를 씁니다. 다음 패키지가 앞 패키지를 이용해 빌드되므로,
-  각 `-devel` 패키지를 설치할 때 `sudo` 비밀번호를 묻습니다.
+- mock이 없으면 `rpmbuild`를 씁니다. 각 패키지를 `~/rpmbuild-skarnet/sysroot`에
+  풀어 두고 다음 패키지는 그것을 이용해 빌드하므로, 아무것도 설치하지 않으며
+  `sudo`도 필요 없습니다.
 - mock을 쓰려면(`sudo dnf install mock && sudo usermod -aG mock $USER` 후 로그아웃했다가
   다시 로그인) 깨끗한 chroot 안에서 모두 빌드합니다.
 

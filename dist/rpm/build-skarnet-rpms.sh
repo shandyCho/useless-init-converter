@@ -5,9 +5,11 @@
 #   dist/rpm/build-skarnet-rpms.sh [OUTDIR]        # default: ~/rpmbuild-skarnet
 #
 # With mock installed (and you in the "mock" group) everything is built in
-# clean chroots with `mock --chain`; nothing is installed on the host.
-# Otherwise rpmbuild is used, and each -devel package is installed with
-# `sudo dnf` because the next package builds against it.
+# clean chroots with `mock --chain`. Otherwise rpmbuild is used, and each
+# package is unpacked into OUTDIR/sysroot, which the next one builds against
+# (not installed: a new skalibs soname would conflict with the installed
+# execline and s6). Either way nothing is installed on the host and no sudo
+# is needed.
 #
 # Afterwards:  sudo dist/setup-fedora.sh --rpms OUTDIR/rpms
 set -euo pipefail
@@ -21,6 +23,7 @@ RELEASE=1.$(date +%Y%m%d%H%M)
 
 die() { echo "error: $*" >&2; exit 1; }
 command -v rpmbuild >/dev/null || die "rpmbuild missing: sudo dnf install rpm-build gcc make"
+command -v rpm2cpio >/dev/null && command -v cpio >/dev/null || die "rpm2cpio or cpio missing: sudo dnf install rpm cpio"
 [ -r "$VERSIONS" ] || die "$VERSIONS missing"
 
 ORDER=()
@@ -70,18 +73,25 @@ if command -v mock >/dev/null && id -nG | grep -qw mock; then
     mock --chain --localrepo="$OUT/mock-repo" "${srpms[@]}"
     find "$OUT/mock-repo" -name '*.rpm' ! -name '*.src.rpm' -exec cp {} "$OUT/rpms/" \;
 else
-    echo "==> Building with rpmbuild (each -devel package is installed for the next build)"
+    echo "==> Building with rpmbuild (each package is unpacked into $OUT/sysroot for the next build)"
+    SYSROOT=$OUT/sysroot
+    rm -rf "$SYSROOT"
+    mkdir -p "$SYSROOT"
     for name in "${ORDER[@]}"; do
         echo "  building $name"
         # Drop RPMs of earlier releases so only this build is installed/copied.
         find "$OUT/RPMS" "$OUT/rpms" \( -name "$name-[0-9]*.rpm" -o -name "$name-devel-[0-9]*.rpm" \
             -o -name "$name-debuginfo-[0-9]*.rpm" -o -name "$name-debugsource-[0-9]*.rpm" \) -delete
-        rpmbuild "${TOP[@]}" -ba "$OUT/SPECS/$name.spec" >"$OUT/$name.build.log" 2>&1 \
+        # --nodeps: the -devel BuildRequires are met by the sysroot, not by
+        # installed packages.
+        rpmbuild "${TOP[@]}" --define "skarnet_sysroot $SYSROOT" --nodeps \
+            -ba "$OUT/SPECS/$name.spec" >"$OUT/$name.build.log" 2>&1 \
             || die "$name failed, see $OUT/$name.build.log"
         mapfile -t built < <(find "$OUT/RPMS" -name "$name-[0-9]*.rpm" -o -name "$name-devel-[0-9]*.rpm" | grep -v debug)
         cp "${built[@]}" "$OUT/rpms/"
-        # The last package is not a build dependency of anything.
-        [ "$name" = "${ORDER[-1]}" ] || sudo dnf install -y "${built[@]}"
+        for rpm in "${built[@]}"; do
+            rpm2cpio "$rpm" | (cd "$SYSROOT" && cpio -idm --quiet)
+        done
     done
 fi
 
