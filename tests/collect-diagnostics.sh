@@ -53,6 +53,11 @@ else
     copy /var/lib/sdcompat/current/report.txt report.txt
     copy /etc/sdcompat/sdcompat.conf sdcompat.conf
     copy /etc/sdcompat/boot-options boot-options
+    # setup-fedora copies these root-owned; dbus's socket needs its own label.
+    run s6-services ls -lnZ /etc/sdcompat/s6
+    run dbus-socket ls -lnZ /run/dbus/system_bus_socket
+    run earlyoom s6-svstat /run/service/earlyoom
+    copy /run/sdcompat/devices devices.txt
     for f in /boot/loader/entries/*-sdcompat.conf; do copy "$f" "boot-entry-$(basename "$f")"; done
     run avc ausearch -m AVC,USER_AVC -ts boot
 fi
