@@ -1510,6 +1510,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         fdstore: crate::fdstore::Store::default(),
     });
     daemon.verify_state_reader().await;
+    daemon.load_dynamic_oneshots();
     if let Some(def) = daemon.index.read().unwrap().default_target.clone() {
         daemon.started_targets.lock().unwrap().insert(def);
     }

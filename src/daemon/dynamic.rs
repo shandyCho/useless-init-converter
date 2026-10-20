@@ -54,6 +54,39 @@ impl Daemon {
         self.dynamic.lock().unwrap().get(id).map(|d| d.kind)
     }
 
+    /// Active oneshot instances (RemainAfterExit=yes) are recorded here, so a
+    /// restarted daemon still reports them active and runs their ExecStop=
+    /// at shutdown (systemd-backlight@ saves the brightness then). RUN_DIR
+    /// is fresh at boot.
+    fn oneshot_marker(&self, id: &str) -> PathBuf {
+        self.cfg.run_dir.join("dyn-oneshot").join(id)
+    }
+
+    fn set_oneshot_active(&self, id: &str, active: bool) {
+        let path = self.oneshot_marker(id);
+        let r = if active {
+            path.parent().map(fs::create_dir_all).unwrap_or(Ok(())).and_then(|_| fs::write(&path, ""))
+        } else {
+            match fs::remove_file(&path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                r => r,
+            }
+        };
+        if let Err(e) = r {
+            eprintln!("sdcompatd: {}: {e}", path.display());
+        }
+    }
+
+    /// Startup: take over the active oneshot instances of a previous daemon.
+    pub(super) fn load_dynamic_oneshots(&self) {
+        let Ok(rd) = fs::read_dir(self.cfg.run_dir.join("dyn-oneshot")) else { return };
+        let mut dynamic = self.dynamic.lock().unwrap();
+        for e in rd.flatten() {
+            let id = e.file_name().to_string_lossy().into_owned();
+            dynamic.insert(id, Dynamic { kind: Kind::Oneshot, active: true });
+        }
+    }
+
     fn dyn_dir(&self, id: &str) -> PathBuf {
         self.cfg.run_dir.join("dyn").join(id)
     }
@@ -171,6 +204,7 @@ impl Daemon {
             let ok = self.run_runner("up", id, None).await
                 && self.job_outcome(id, started_at, "done") == "done";
             let remain = unit.get_bool("Service", "RemainAfterExit", false);
+            self.set_oneshot_active(id, ok && remain);
             self.dynamic
                 .lock()
                 .unwrap()
@@ -239,6 +273,7 @@ impl Daemon {
             if active {
                 self.run_runner("down", id, None).await;
             }
+            self.set_oneshot_active(id, false);
             self.dynamic.lock().unwrap().remove(id);
             return "done";
         }
@@ -262,6 +297,7 @@ impl Daemon {
     /// Shutdown: s6-rc doesn't know the on-demand oneshots, so run their
     /// ExecStop= here, as systemd stops every unit (systemd-backlight@ saves
     /// the brightness then). sdcompatd goes down before the filesystems.
+    /// Instances started by an earlier daemon come from load_dynamic_oneshots().
     pub(super) async fn stop_dynamic_oneshots(&self) {
         let ids: Vec<String> = self
             .dynamic

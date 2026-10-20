@@ -393,7 +393,11 @@ restart_daemon() {
 }
 grep -v '^ALLOW_UIDS=' "$W/sdcompat.conf" > "$W/unpriv.conf"
 BIN=$(sed -n 's/^RUNNER=//p' "$W/sdcompat.conf")
+# An on-demand oneshot instance (like systemd-backlight@) outlives the daemon.
+call StartUnit ss prep@b.service replace
+expect_state prep@b.service active/exited
 restart_daemon "$W/unpriv.conf"
+expect_state prep@b.service active/exited
 denied() { $B call $MGR "$@" 2>&1 | grep -q "Access denied"; }
 expect_state devlater.service active/running
 expect_state devwant.service inactive/dead 1
@@ -419,6 +423,18 @@ if [ -n "$SR" ]; then
 fi
 # Back to the normal daemon, so the sandbox stays usable.
 restart_daemon "$W/sdcompat.conf"
+
+echo "== shutdown stops on-demand oneshots"
+# As rc.shutdown: the marker, then s6-rc takes sdcompatd down (SIGTERM).
+: > "$R/run/shutting-down"
+kill "$(cat "$W/daemon.pid")"
+tries=30
+while [ $tries -gt 0 ] && ! grep -qx "down b" "$R/prep.out"; do tries=$((tries - 1)); sleep 0.2; done
+grep -qx "down b" "$R/prep.out" && ok "prep@b's ExecStop= ran, started by an earlier daemon" || bad "prep@b not stopped at shutdown"
+[ ! -e "$R/run/dyn-oneshot/prep@b.service" ] && ok "its marker is gone" || bad "prep@b marker left"
+rm -f "$R/run/shutting-down"
+restart_daemon "$W/sdcompat.conf"
+expect_state prep@b.service inactive/dead
 
 echo
 echo "passed: $pass  failed: $fail"
