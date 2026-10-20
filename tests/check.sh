@@ -418,22 +418,30 @@ denied() { $B call $MGR "$@" 2>&1 | grep -q "Access denied"; }
 expect_state devlater.service active/running
 expect_state devwant.service inactive/dead 1
 
-denied StartUnit ss once.service replace && ok "StartUnit denied" || bad "StartUnit allowed"
-denied StopUnit ss hello.service replace && ok "StopUnit denied" || bad "StopUnit allowed"
-denied EnableUnitFiles asbb 1 once.service false false && ok "EnableUnitFiles denied" || bad "EnableUnitFiles allowed"
-denied Reload && ok "Reload denied" || bad "Reload allowed"
-denied SetEnvironment as 1 X=1 && ok "SetEnvironment denied" || bad "SetEnvironment allowed"
-denied KillUnit ssi hello.service all 15 && ok "KillUnit denied" || bad "KillUnit allowed"
-denied StartTransientUnit 'ssa(sv)a(sa(sv))' x.service fail 1 ExecStart 'a(sasb)' 1 /bin/true 1 /bin/true false 0 \
-    && ok "StartTransientUnit denied" || bad "StartTransientUnit allowed"
-expect_state hello.service active/running
+# Root is always allowed, as with systemd: these only mean something when
+# the suite runs as an ordinary user.
+unpriv=yes
+[ "$(id -u)" -eq 0 ] && unpriv=no
+if [ $unpriv = yes ]; then
+    denied StartUnit ss once.service replace && ok "StartUnit denied" || bad "StartUnit allowed"
+    denied StopUnit ss hello.service replace && ok "StopUnit denied" || bad "StopUnit allowed"
+    denied EnableUnitFiles asbb 1 once.service false false && ok "EnableUnitFiles denied" || bad "EnableUnitFiles allowed"
+    denied Reload && ok "Reload denied" || bad "Reload allowed"
+    denied SetEnvironment as 1 X=1 && ok "SetEnvironment denied" || bad "SetEnvironment allowed"
+    denied KillUnit ssi hello.service all 15 && ok "KillUnit denied" || bad "KillUnit allowed"
+    denied StartTransientUnit 'ssa(sv)a(sa(sv))' x.service fail 1 ExecStart 'a(sasb)' 1 /bin/true 1 /bin/true false 0 \
+        && ok "StartTransientUnit denied" || bad "StartTransientUnit allowed"
+    expect_state hello.service active/running
+else
+    echo "SKIP denied calls (running as root, which is always allowed)"
+fi
 $B call $MGR ListUnits >/dev/null && ok "read-only ListUnits allowed" || bad "ListUnits denied"
 rm -f "$R/act.out"
 $B emit /org/freedesktop/DBus org.freedesktop.systemd1.Activator ActivationRequest s act.service
 sleep 1.5
 expect_state act.service active/running  # still running from the real activation
 [ ! -e "$R/act.out" ] && ok "forged ActivationRequest ignored for unprivileged caller" || bad "forged activation worked"
-if [ -n "$SR" ]; then
+if [ -n "$SR" ] && [ $unpriv = yes ]; then
     SYSTEMCTL=$(dirname "$SR")/systemctl "$(dirname "$0")/systemctl.sh" start once.service >/dev/null 2>&1 \
         && bad "private socket accepted an unprivileged peer" || ok "private socket refuses an unprivileged peer"
 fi
