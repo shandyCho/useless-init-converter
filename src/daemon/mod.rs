@@ -109,6 +109,9 @@ pub struct Daemon {
     pub private: Mutex<Vec<(u64, Connection)>>,
     /// Template instances started on demand (see dynamic.rs).
     pub dynamic: Mutex<BTreeMap<String, dynamic::Dynamic>>,
+    /// Unit markers (needs-restart, needs-reload) set by package scriptlets
+    /// through SetUnitProperties, acted on by EnqueueMarkedJobs.
+    pub markers: Mutex<BTreeMap<String, BTreeSet<String>>>,
     /// Jobs on the same unit run one after another.
     unit_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Parsed unit files (cleared by Reload and unit file operations).
@@ -145,6 +148,30 @@ pub fn unit_path(name: &str) -> String {
 
 pub fn job_path(id: u32) -> String {
     format!("{JOB_PREFIX}{id}")
+}
+
+/// Apply a Markers= assignment with systemd's syntax: "+m"/"-m" add or
+/// remove single markers, a plain list replaces them all.
+fn apply_markers(mut cur: BTreeSet<String>, words: &[String]) -> Result<BTreeSet<String>, String> {
+    let relative = words.iter().any(|w| w.starts_with(['+', '-']));
+    if relative && words.iter().any(|w| !w.starts_with(['+', '-'])) {
+        return Err("Bad marker syntax.".into());
+    }
+    if !relative {
+        cur.clear();
+    }
+    for w in words {
+        let m = w.trim_start_matches(['+', '-']);
+        if !matches!(m, "needs-reload" | "needs-restart") {
+            return Err(format!("Unknown marker \"{m}\"."));
+        }
+        if w.starts_with('-') {
+            cur.remove(m);
+        } else {
+            cur.insert(m.to_string());
+        }
+    }
+    Ok(cur)
 }
 
 /// Targets/services that mean "shut the machine down" (logind starts these).
@@ -619,6 +646,67 @@ impl Daemon {
         Ok(())
     }
 
+    /// Runtime property changes: only Markers= is kept (package scriptlets
+    /// mark units for EnqueueMarkedJobs); the others are accepted and ignored.
+    async fn set_unit_properties(&self, c: &Peer, msg: &Message, name: &str, props: &[(String, OwnedValue)]) -> R<()> {
+        self.require_privileged(c, msg).await?;
+        for (key, v) in props {
+            if key != "Markers" {
+                continue;
+            }
+            let words: Vec<String> = match &**v {
+                Value::Array(a) => a.iter().filter_map(|x| <&str>::try_from(x).ok().map(String::from)).collect(),
+                _ => return Err(err(E_INVALID_ARGS, "Markers= takes a string array")),
+            };
+            let (id, unit) = self.load_unit(name);
+            if unit.load_state == LoadState::NotFound {
+                return Err(err(E_NO_UNIT, format!("Unit {name} not found.")));
+            }
+            let mut all = self.markers.lock().unwrap();
+            let m = apply_markers(all.get(&id).cloned().unwrap_or_default(), &words).map_err(|e| err(E_INVALID_ARGS, e))?;
+            if m.is_empty() {
+                all.remove(&id);
+            } else {
+                all.insert(id, m);
+            }
+        }
+        self.reply(c, msg, &()).await
+    }
+
+    /// Like systemd's: try-restart the units marked needs-restart, reload the
+    /// active ones marked only needs-reload, and clear the markers. Package
+    /// updates restart their services this way (systemd-update-helper).
+    async fn enqueue_marked(&self, c: &Peer, msg: &Message) -> R<()> {
+        self.require_privileged(c, msg).await?;
+        let marked = std::mem::take(&mut *self.markers.lock().unwrap());
+        let mut queued = Vec::new();
+        for (name, m) in marked {
+            let jtype = if m.contains("needs-restart") { "try-restart" } else { "reload" };
+            match self.check_job(&name, jtype, true, false).await {
+                Ok((id, unit)) => queued.push((self.new_job(&id, jtype), id, unit, jtype)),
+                // A reload of an inactive unit is a no-op for systemd too.
+                Err(e) if e.name == E_INACTIVE => {}
+                Err(e) => eprintln!("sdcompatd: marked {name}: {}", e.msg),
+            }
+        }
+        let paths: Vec<ObjectPath<'static>> = queued.iter().map(|(job, ..)| op(job_path(*job))).collect();
+        if let Err(e) = self.reply(c, msg, &(paths,)).await {
+            let mut jobs = self.jobs.lock().unwrap();
+            for (job, ..) in &queued {
+                jobs.remove(job);
+            }
+            return Err(e);
+        }
+        for (job, id, ..) in &queued {
+            self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(*job, op(job_path(*job)), id.clone())).await;
+        }
+        futures_util::future::join_all(
+            queued.iter().map(|(job, id, unit, jtype)| self.execute_job(*job, id, unit, jtype, "fail")),
+        )
+        .await;
+        Ok(())
+    }
+
     /// dbus-daemon --systemd-activation asks us to start a service.
     async fn handle_activation(&self, name: String) {
         let res = match self.check_job(&name, "start", false, true).await {
@@ -1062,7 +1150,11 @@ impl Daemon {
             if iface.is_empty() || iface == UNIT_IFACE {
                 return self.unit_method(c, msg, &name, member).await;
             }
-            if member == "SetProperties" || member == "Ref" || member == "Unref" {
+            if member == "SetProperties" {
+                let (_runtime, props): (bool, Vec<(String, OwnedValue)>) = Self::args(msg)?;
+                return self.set_unit_properties(c, msg, &name, &props).await;
+            }
+            if member == "Ref" || member == "Unref" {
                 self.require_privileged(c, msg).await?;
                 return self.reply(c, msg, &()).await;
             }
@@ -1245,8 +1337,13 @@ impl Daemon {
             }
             "StartTransientUnit" => self.start_transient(c, msg).await,
             "AttachProcessesToUnit" => self.attach_processes(c, msg).await,
-            // Reference counting and runtime property changes are accepted and ignored.
-            "RefUnit" | "UnrefUnit" | "AbandonScope" | "SetUnitProperties" => {
+            "SetUnitProperties" => {
+                let (name, _runtime, props): (String, bool, Vec<(String, OwnedValue)>) = Self::args(msg)?;
+                self.set_unit_properties(c, msg, &name, &props).await
+            }
+            "EnqueueMarkedJobs" => self.enqueue_marked(c, msg).await,
+            // Reference counting is accepted and ignored.
+            "RefUnit" | "UnrefUnit" | "AbandonScope" => {
                 self.require_privileged(c, msg).await?;
                 self.reply(c, msg, &()).await
             }
@@ -1502,6 +1599,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         atom_order: Mutex::new(None),
         private: Mutex::new(Vec::new()),
         dynamic: Mutex::new(BTreeMap::new()),
+        markers: Mutex::new(BTreeMap::new()),
         unit_locks: Mutex::new(HashMap::new()),
         unit_cache: Mutex::new(HashMap::new()),
         file_state_cache: Mutex::new(HashMap::new()),
@@ -1619,4 +1717,28 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         let _ = std::fs::remove_dir(flag);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(v: &[&str]) -> BTreeSet<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn words(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn markers_syntax() {
+        let m = apply_markers(set(&["needs-reload"]), &words(&["+needs-restart"])).unwrap();
+        assert_eq!(m, set(&["needs-reload", "needs-restart"]));
+        assert_eq!(apply_markers(m.clone(), &words(&["-needs-reload"])).unwrap(), set(&["needs-restart"]));
+        assert_eq!(apply_markers(m.clone(), &words(&["needs-reload"])).unwrap(), set(&["needs-reload"]));
+        assert_eq!(apply_markers(m, &[]).unwrap(), set(&[]));
+        assert!(apply_markers(set(&[]), &words(&["+needs-restart", "needs-reload"])).is_err());
+        assert!(apply_markers(set(&[]), &words(&["+bogus"])).is_err());
+    }
 }

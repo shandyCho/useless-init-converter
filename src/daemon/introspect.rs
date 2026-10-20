@@ -16,6 +16,8 @@ pub const MANAGER: &str = r#"
   <method name="ResetFailedUnit"><arg type="s" direction="in"/></method>
   <method name="ResetFailed"/>
   <method name="GetUnitProcesses"><arg type="s" direction="in"/><arg type="a(sus)" direction="out"/></method>
+  <method name="SetUnitProperties"><arg type="s" direction="in"/><arg type="b" direction="in"/><arg type="a(sv)" direction="in"/></method>
+  <method name="EnqueueMarkedJobs"><arg type="ao" direction="out"/></method>
   <method name="StartTransientUnit"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="a(sv)" direction="in"/><arg type="a(sa(sv))" direction="in"/><arg type="o" direction="out"/></method>
   <method name="GetJob"><arg type="u" direction="in"/><arg type="o" direction="out"/></method>
   <method name="CancelJob"><arg type="u" direction="in"/></method>

@@ -146,6 +146,25 @@ expect_state dep.service inactive/dead
 call ResetFailedUnit s failing.service
 expect_state failing.service inactive/dead
 
+echo "== markers (package updates)"
+# systemd-update-helper marks units at a package update and then enqueues
+# them: needs-restart try-restarts, needs-reload reloads if active.
+old=$(prop hello.service Service MainPID)
+rm -f "$R/reload.out"
+call SetUnitProperties 'sba(sv)' hello.service true 1 Markers as 1 +needs-restart
+call SetUnitProperties 'sba(sv)' reloadable.service true 1 Markers as 1 +needs-reload
+call SetUnitProperties 'sba(sv)' once.service true 1 Markers as 1 +needs-restart
+expect_eq "Markers set" "$(prop hello.service Unit Markers)" "1 needs-restart"
+call SetUnitProperties 'sba(sv)' hello.service true 1 Markers as 2 +needs-restart needs-reload 2>/dev/null \
+    && bad "mixed marker syntax accepted" || ok "mixed marker syntax rejected"
+call EnqueueMarkedJobs
+sleep 1.5
+new=$(prop hello.service Service MainPID)
+[ "$old" != "$new" ] && [ "$new" != 0 ] && ok "needs-restart restarted ($old -> $new)" || bad "needs-restart: $old -> $new"
+expect_eq "needs-reload ran ExecReload" "$(cat "$R/reload.out" 2>/dev/null)" "reloaded"
+expect_state once.service inactive/dead
+expect_eq "Markers cleared" "$(prop hello.service Unit Markers)" "0"
+
 echo "== errors"
 $B call $MGR StartUnit ss nope.service replace 2>&1 | grep -q "not found" && ok "unknown unit error" || bad "unknown unit error"
 
@@ -255,6 +274,15 @@ if [ -n "$SR" ]; then
         && ok "systemd-run --on-active created a timer" || bad "systemd-run --on-active"
     sleep 4
     expect_eq "transient timer fired its service" "$(cat "$R/srt.out" 2>/dev/null)" "fired"
+    # What the systemd RPM's file trigger runs after a package update.
+    sc() { SYSTEMCTL=$(dirname "$SR")/systemctl "$(dirname "$0")/systemctl.sh" "$@"; }
+    old=$(prop hello.service Service MainPID)
+    sc set-property hello.service Markers=+needs-restart >/dev/null 2>&1 \
+        && ok "systemctl set-property Markers" || bad "systemctl set-property Markers"
+    sc enqueue-marked >/dev/null 2>&1 && ok "systemctl enqueue-marked" || bad "systemctl enqueue-marked"
+    sleep 0.5
+    new=$(prop hello.service Service MainPID)
+    [ "$old" != "$new" ] && [ "$new" != 0 ] && ok "enqueue-marked restarted hello ($old -> $new)" || bad "enqueue-marked: $old -> $new"
     # The failed sr-wait.service stays loaded; a reload must not put it into
     # the s6-rc database (its service directory collided with the daemon's).
     call Reload && ok "daemon-reload with a failed transient unit loaded"

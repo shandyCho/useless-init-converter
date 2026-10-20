@@ -292,7 +292,7 @@ impl Daemon {
         p.insert("OnFailureJobMode".into(), s("replace"));
         p.insert("IgnoreOnIsolate".into(), Value::from(unit.get_bool("Unit", "IgnoreOnIsolate", false)));
         p.insert("NeedDaemonReload".into(), Value::from(false));
-        p.insert("Markers".into(), strv(Vec::new()));
+        p.insert("Markers".into(), strv(self.markers.lock().unwrap().get(id).map(|m| m.iter().cloned().collect()).unwrap_or_default()));
         p.insert("JobTimeoutUSec".into(), Value::from(u64::MAX));
         p.insert("JobRunningTimeoutUSec".into(), Value::from(u64::MAX));
         p.insert("JobTimeoutAction".into(), s("none"));
