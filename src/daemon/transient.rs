@@ -6,8 +6,58 @@ use std::fs;
 
 use zbus::zvariant::{OwnedValue, Value};
 
-use super::Daemon;
+use super::{Daemon, Transient};
 use crate::state::{self, keys};
+
+// Scopes and slices (systemd-run --scope, logind's session scopes, slices)
+// are kept in RUN_DIR/units/<name>/, with the unit's other state, so a
+// restarted daemon takes them over. gc_scopes() removes the directory once
+// a scope is empty; stopping a slice removes it too. RUN_DIR is fresh at boot.
+const T_KIND: &str = "transient-kind";
+const T_CGROUP: &str = "transient-cgroup";
+const T_SIGHUP: &str = "transient-sighup";
+const T_SLICE: &str = "transient-slice";
+const T_DESCRIPTION: &str = "transient-description";
+
+pub(super) fn save_scope(run_dir: &std::path::Path, name: &str, t: &Transient) {
+    let st = state::for_unit(run_dir, name);
+    st.set(T_CGROUP, &t.cgroup.display().to_string());
+    st.set(T_SIGHUP, if t.send_sighup { "1" } else { "0" });
+    st.set(T_SLICE, &t.slice);
+    st.set(T_DESCRIPTION, &t.description.replace('\n', " "));
+    // Last: a record without it is incomplete and not loaded.
+    st.set(T_KIND, t.kind);
+}
+
+/// The recorded scopes and slices whose cgroup still exists.
+pub(super) fn load_scopes(run_dir: &std::path::Path) -> Vec<(String, Transient)> {
+    let Ok(rd) = fs::read_dir(run_dir.join("units")) else { return Vec::new() };
+    let mut out = Vec::new();
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let st = state::for_unit(run_dir, &name);
+        let kind = match st.get(T_KIND).as_deref() {
+            Some("scope") => "scope",
+            Some("slice") => "slice",
+            _ => continue,
+        };
+        let Some(cgroup) = st.get(T_CGROUP).map(std::path::PathBuf::from) else { continue };
+        if !cgroup.is_dir() {
+            continue;
+        }
+        out.push((
+            name.clone(),
+            Transient {
+                kind,
+                cgroup,
+                send_sighup: st.get(T_SIGHUP).as_deref() == Some("1"),
+                slice: st.get(T_SLICE).unwrap_or_default(),
+                description: st.get(T_DESCRIPTION).unwrap_or(name),
+            },
+        ));
+    }
+    out
+}
 
 const UNIT_KEYS: &[&str] = &[
     "Description", "Documentation", "Requires", "Requisite", "Wants", "BindsTo", "PartOf",
@@ -280,5 +330,37 @@ impl Daemon {
                     &(id.clone(), super::op(super::unit_path(&id)))).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_round_trip() {
+        let run = std::env::temp_dir().join(format!("sdcompat-scopes-{}", std::process::id()));
+        let cg = run.join("cg");
+        std::fs::create_dir_all(cg.join("run-u1.scope")).unwrap();
+        let scope = Transient {
+            kind: "scope",
+            cgroup: cg.join("run-u1.scope"),
+            send_sighup: true,
+            slice: "system.slice".into(),
+            description: "a\nb".into(),
+        };
+        save_scope(&run, "run-u1.scope", &scope);
+        // Its cgroup is gone: not taken over.
+        let gone = Transient { cgroup: cg.join("gone.slice"), kind: "slice", ..scope.clone() };
+        save_scope(&run, "gone.slice", &gone);
+        // Ordinary unit state is not a scope record.
+        state::for_unit(&run, "x.service").set(keys::RESULT, "success");
+        let got = load_scopes(&run);
+        assert_eq!(got.len(), 1);
+        let (n, t) = &got[0];
+        assert_eq!(n, "run-u1.scope");
+        assert_eq!((t.kind, &t.cgroup, t.send_sighup), ("scope", &scope.cgroup, true));
+        assert_eq!((t.slice.as_str(), t.description.as_str()), ("system.slice", "a b"));
+        std::fs::remove_dir_all(&run).unwrap();
     }
 }

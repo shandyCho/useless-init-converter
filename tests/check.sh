@@ -399,11 +399,21 @@ call StartUnit ss inst@b.service replace
 call StartUnit ss prep@c.service replace
 expect_state inst@b.service active/running
 expect_state prep@c.service active/exited
+# And a scope (like a logind session scope), where cgroups are writable.
+sleep 1000 &
+kpid=$!
+kscope=no
+call StartTransientUnit 'ssa(sv)a(sa(sv))' keep-scope.scope fail 1 PIDs au 1 "$kpid" 0 2>/dev/null && kscope=yes
 restart_daemon "$W/unpriv.conf"
 expect_state inst@b.service active/running
 expect_state prep@b.service active/exited
 expect_state prep@c.service active/exited
 $B call $MGR ListUnits | grep -q '"inst@b.service"' && ok "inst@b listed by the new daemon" || bad "inst@b not in ListUnits"
+if [ $kscope = yes ]; then
+    expect_state keep-scope.scope active/running
+else
+    echo "SKIP scope across a daemon restart (needs a writable cgroup)"
+fi
 denied() { $B call $MGR "$@" 2>&1 | grep -q "Access denied"; }
 expect_state devlater.service active/running
 expect_state devwant.service inactive/dead 1
@@ -441,6 +451,14 @@ sleep 1
 expect_eq "listening socket kept across daemon restarts" "$(stat -c %i "$R/test.sock")" "$i1"
 expect_state prep@b.service inactive/dead
 [ ! -e "$R/run/dyn/inst@b.service" ] && ok "inst@b's service directory removed" || bad "inst@b's service directory left"
+if [ $kscope = yes ]; then
+    # The restarted daemon still knows its cgroup: stopping it ends the process.
+    call StopUnit ss keep-scope.scope replace
+    tries=30
+    while [ $tries -gt 0 ] && kill -0 $kpid 2>/dev/null; do tries=$((tries - 1)); sleep 0.2; done
+    kill -0 $kpid 2>/dev/null && bad "keep-scope's process survived StopUnit" || ok "StopUnit on a scope from an earlier daemon"
+fi
+kill $kpid 2>/dev/null
 
 echo "== shutdown stops on-demand oneshots"
 # As rc.shutdown: the marker, then s6-rc takes sdcompatd down (SIGTERM).

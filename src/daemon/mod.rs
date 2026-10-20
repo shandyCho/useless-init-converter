@@ -76,6 +76,7 @@ pub struct Peer {
     pub pid: Option<u32>,
 }
 
+#[derive(Clone)]
 pub struct Transient {
     /// "scope" or "slice"
     pub kind: &'static str,
@@ -702,6 +703,7 @@ impl Daemon {
             crate::cgroup::kill_all(&dir, libc::SIGKILL, 0);
             crate::cgroup::remove(&dir);
             self.transient.lock().unwrap().remove(id);
+            let _ = std::fs::remove_dir_all(self.cfg.unit_run_dir(id));
             self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitRemoved", &(id.to_string(), op(unit_path(id)))).await;
             return;
         }
@@ -795,10 +797,9 @@ impl Daemon {
         if kind == "slice" {
             slice = crate::cgroup::parent_slice(&name);
         }
-        self.transient
-            .lock()
-            .unwrap()
-            .insert(name.clone(), Transient { kind, cgroup: dir, send_sighup, slice, description });
+        let t = Transient { kind, cgroup: dir, send_sighup, slice, description };
+        transient::save_scope(&self.cfg.run_dir, &name, &t);
+        self.transient.lock().unwrap().insert(name.clone(), t);
         let job = self.new_job(&name, "start");
         self.reply_job(c, msg, job).await?;
         self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitNew", &(name.clone(), op(unit_path(&name)))).await;
@@ -1511,6 +1512,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     });
     daemon.verify_state_reader().await;
     daemon.load_dynamic();
+    daemon.transient.lock().unwrap().extend(transient::load_scopes(&daemon.cfg.run_dir));
     if let Some(def) = daemon.index.read().unwrap().default_target.clone() {
         daemon.started_targets.lock().unwrap().insert(def);
     }
