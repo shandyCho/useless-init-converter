@@ -340,6 +340,23 @@ jid=${job##*/}
 $B get-property $DEST "$job" org.freedesktop.systemd1.Job State | grep -q waiting && ok "second job waits for the first" || bad "job not queued"
 $B call $MGR CancelJob u "$jid" >/dev/null 2>&1 && ok "CancelJob on a queued job" || bad "CancelJob failed"
 wait
+# logind polls its stop jobs this way and lets a user go only on
+# UnknownObject; NoSuchJob kept users "closing" forever.
+if command -v dbus-send >/dev/null; then
+    tries=30
+    while [ $tries -gt 0 ]; do
+        e=$(dbus-send --bus="unix:path=$R/bus" --print-reply --dest=$DEST "$job" \
+            org.freedesktop.DBus.Properties.Get string:org.freedesktop.systemd1.Job string:State 2>&1)
+        case $e in *Error.UnknownObject*) break ;; esac
+        tries=$((tries - 1)); sleep 0.2
+    done
+    case $e in
+        *Error.UnknownObject*) ok "finished job's object is UnknownObject" ;;
+        *) bad "finished job's object: $e" ;;
+    esac
+else
+    echo "SKIP finished job's object (no dbus-send)"
+fi
 
 echo "== fd store"
 call StartUnit ss fdkeep.service replace

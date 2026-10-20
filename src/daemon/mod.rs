@@ -1056,7 +1056,11 @@ impl Daemon {
             return Ok(self.unit_props(&id, &unit, &active).await);
         }
         if let Some(job) = path.strip_prefix(JOB_PREFIX).and_then(|j| j.parse::<u32>().ok()) {
-            let p = self.job_props(job).ok_or_else(|| err(E_NO_JOB, format!("Job {job} does not exist.")))?;
+            // A finished job's object is gone: systemd (sd-bus) answers
+            // UnknownObject here, not NoSuchJob, and logind's
+            // manager_job_is_active() only treats UnknownObject as "done";
+            // anything else keeps the user in "closing" forever.
+            let p = self.job_props(job).ok_or_else(|| err(E_UNKNOWN_OBJECT, format!("Unknown object '{path}'.")))?;
             let mut m = Ifaces::new();
             m.insert("org.freedesktop.systemd1.Job".into(), p);
             return Ok(m);
@@ -1164,6 +1168,9 @@ impl Daemon {
             }
         }
         if let Some(job) = path.strip_prefix(JOB_PREFIX).and_then(|j| j.parse::<u32>().ok()) {
+            if !self.jobs.lock().unwrap().contains_key(&job) {
+                return Err(err(E_UNKNOWN_OBJECT, format!("Unknown object '{path}'.")));
+            }
             if member == "Cancel" {
                 self.require_privileged(c, msg).await?;
                 self.cancel_job(job)?;
