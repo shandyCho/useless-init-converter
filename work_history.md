@@ -2511,3 +2511,64 @@ This boot's real AVC list has not been read (root only).
    unaffected); then `setup-fedora.sh --enforcing`.
 3. Maybe: make the fd store not need a reboot for limit changes.
 4. Still open: beside3 sandbox flake.
+
+## Session: 2026-10-21: SELinux, the permissive boot's AVCs
+
+Owner ran `sudo ausearch -m avc,user_avc,selinux_err -ts boot -i >
+~/avc.txt` on the s6 boot (permissive, JOURNAL=no): 64 denials. By cause:
+
+- **Bug, fixed (`c3560ff`): implied NoNewPrivileges=.** `nnp_transition`
+  denied init_t -> chronyd_t, NetworkManager_t, boltd_t, virtlogd_t: the
+  runner set no_new_privs for root services whose CapabilityBoundingSet=
+  leaves out CAP_SYS_ADMIN. Under enforcing their exec would fail. systemd
+  asks the child's *effective* set, which a bounding-set drop does not
+  change before exec, so for root it never implies NNP; proof on this
+  machine: under systemd + enforcing NM and chronyd do reach their
+  domains, and the policy has no nnp_transition for them. chronyd's
+  explicit `NoNewPrivileges=no` (for setuid sendmail) was also overridden.
+  This corrects the sandboxing entry's reading of systemd's doc ("dropped
+  from its bounding set" was wrong). Now: root, or a User= service with
+  SYS_ADMIN ambient (and in the bounding set). Test
+  `implied_no_new_privileges` fails on the old rule.
+- **Bug, fixed (`c3560ff`): Symlinks=.** init_t `unlink` on
+  systemd_varlink_registry_t (hostnamed's runner): socket.rs removed and
+  recreated every Symlinks= link; the policy allows only create. Now a
+  link already pointing at the socket is left alone (systemd's
+  symlink_idempotent).
+- **Fixed (`c3560ff`): ProtectHome= tmpfs** labelled as the path it
+  covers (systemd's mount_tmpfs + label_fix_full). firewalld
+  (ProtectHome=tmpfs) creating `/root/.cache` was denied on tmpfs_t; on
+  admin_home_t it is still denied (no create for firewalld_t), so that
+  one is policy-side, as under systemd.
+- **JOURNAL=no only, output lost, not fixed:** NetworkManager dispatcher
+  scripts (NetworkManager_dispatcher_{chronyc,iscsid}_t) writing the
+  service's stdout pipe (pipefs, labelled init_t, from s6-log's pipe);
+  systemd-user-runtime-dir, restorecon, loadkeys, rsyslogd writing the
+  catch-all s6-svscan-log fifo (var_run_t). Under enforcing the kernel
+  swaps those fds for /dev/null at exec; the programs still run. With
+  JOURNAL=yes stdout is journald's stream socket, as under systemd.
+- **Policy-side, not sdcompat:** systemd-hostnamed reading /proc/pressure
+  (proc_psi_t) and listing /run/dbus (system_dbusd_var_run_t dir read).
+  Same binary and domain under systemd; not checked on a systemd boot.
+- Tests: cargo test 45 + 2 ignored; release build; sandbox 184/184.
+- Note: another session's uncommitted "why the s6 boot uses more RAM"
+  entry is above this one; this file was left uncommitted for the owner.
+
+### Current state
+
+All sdcompat-caused denials of the permissive boot are fixed in code
+(`6b2ffe3`, `c3560ff`), not yet on a boot. Left: output loss under
+JOURNAL=no and policy-side denials, none of which stop a service.
+
+### Next steps
+
+1. Owner: push, reinstall, reboot s6 (still permissive), rerun the
+   ausearch: no nnp_transition, no varlink unlink, no tmpfs_t lnk_file.
+2. Then one enforcing boot: at GRUB, `e` on the s6 entry, delete
+   `enforcing=0`, Ctrl-X. Check `getenforce`, GNOME login, `systemctl
+   --failed`, `ps -eZ` domains, ausearch for denials. If it breaks,
+   reboot to the default systemd entry. If it works: `setup-fedora.sh
+   --enforcing`.
+3. Maybe: JOURNAL=no output loss (relay service stdout through the
+   journal relay's stream socket instead of an s6-log pipe).
+4. Still open: beside3 sandbox flake; fd store limit changes.
