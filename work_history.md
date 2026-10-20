@@ -2032,3 +2032,37 @@ user managers under s6, as with systemd (not verified on a real boot).
 1. Owner: reboot into the s6 boot, then part 1's next step 1 (both
    commands, and `time sudo systemctl reload user@1000.service`).
 2. Earlier next steps unchanged.
+
+## Session: 2026-10-20 (s6 boot of 23:47): user-reload-restart verified
+
+- Owner rebooted into the s6 boot (PID 1 s6-svscan, up 23:47:52; binary
+  from the 23:41 setup, fd store started 23:48:05, so it runs `efec5bc`)
+  and ran part 1's next step 1:
+  - `sudo systemctl --user -M $USER@ is-system-running` → `running`
+    (sd-bus `unixexec:` → `systemd-run -M.host -PGq --wait -pUser=1000
+    -pPAMName=login systemd-stdio-bridge --user` works through the
+    `#stdio` fd store path, including the PAM session).
+  - `sudo /usr/lib/systemd/systemd-update-helper user-reload-restart;
+    echo $?` → `0`, with no error output this time.
+  - `time sudo systemctl reload user@1000.service` → 0.43 s, success.
+- Checked afterwards (read-only): `/run/sdcompat/units/user@1000.service/
+  reloads-done` is `2` (the helper's reload and the manual one each saw
+  RELOADING=1→READY=1), and the user manager is now `systemd --user
+  --deserialize=11`, i.e. it re-executed. So the reload wait works
+  against a real user manager; 0.43 s is how long the re-exec takes.
+- No code changes.
+
+### Current state
+
+User manager reload/restart on package updates works on the real s6 boot:
+`--user -M UID@` via systemd-run --pipe, and reload waiting for READY=1.
+The lesson from part 3 stands (fd store code changes need a reboot).
+
+### Next steps
+
+1. Still to check on the s6 boot: chrony MainPID change on `dnf reinstall
+   chrony`, mount-rootfs/oo7-daemon.
+2. Then: mount propagation, cgroup-BPF settings, SELinux enforcing.
+3. Maybe: make the fd store not need a reboot for limit changes (the
+   PUTting client passes the limit).
+4. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
