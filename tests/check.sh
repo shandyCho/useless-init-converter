@@ -325,6 +325,17 @@ else
 fi
 kill $spid 2>/dev/null
 
+echo "== units wanted by devices"
+expect_state devwant.service active/running
+expect_state devnotready.service inactive/dead 1
+expect_state devuntagged.service inactive/dead 1
+expect_eq "devices recorded" "$(cat "$R/run/devices")" "+test:dev0 devwant.service"
+# A restarted daemon starts only what is new: devwant stays stopped.
+call StopUnit ss devwant.service replace
+expect_state devwant.service inactive/dead
+touch "$W/udev/tags/systemd/+test:dev3"
+printf 'E:SYSTEMD_WANTS=devlater.service\nG:systemd\n' > "$W/udev/data/+test:dev3"
+
 echo "== unprivileged caller (ALLOW_UIDS empty, no polkit)"
 # Swap the daemon for one with config $1; its PID goes to daemon.pid so that
 # tests/sandbox.sh stop finds it.
@@ -339,6 +350,9 @@ grep -v '^ALLOW_UIDS=' "$W/sdcompat.conf" > "$W/unpriv.conf"
 BIN=$(sed -n 's/^RUNNER=//p' "$W/sdcompat.conf")
 restart_daemon "$W/unpriv.conf"
 denied() { $B call $MGR "$@" 2>&1 | grep -q "Access denied"; }
+expect_state devlater.service active/running
+expect_state devwant.service inactive/dead 1
+
 denied StartUnit ss once.service replace && ok "StartUnit denied" || bad "StartUnit allowed"
 denied StopUnit ss hello.service replace && ok "StopUnit denied" || bad "StopUnit allowed"
 denied EnableUnitFiles asbb 1 once.service false false && ok "EnableUnitFiles denied" || bad "EnableUnitFiles allowed"

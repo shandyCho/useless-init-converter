@@ -950,6 +950,55 @@ As in session 9. The new skarnet RPMs are built in
    `ls -Z /run/dbus/system_bus_socket` (system_dbusd_var_run_t), no earlyoom
    loop in /run/uncaught-logs/current, then recollect diagnostics.
 2. Bluetooth until step 3: `sudo systemctl start bluetooth.service`.
-3. Implement udev `SYSTEMD_WANTS` (watch udev for tagged devices, start
-   the wanted units), or at least start bluetooth.target when
-   /sys/class/bluetooth has a device.
+3. Done below (udev `SYSTEMD_WANTS`).
+
+### Device-wanted units (fix #2, same day)
+
+- New `src/daemon/devices.rs`: the daemon listens on udevd's netlink group
+  (NETLINK_KOBJECT_UEVENT group 2; messages with the "libudev" header, only
+  accepted with SCM_CREDENTIALS uid 0, since only root can send to the
+  group) and, at startup, scans `/run/udev/tags/systemd` + `data/<id>`.
+  A device counts when tagged "systemd" (CURRENT_TAGS / `Q:` lines when
+  present, as systemd 247+), not SYSTEMD_READY=0 and not removed. Device ids
+  follow libudev (b/c major:minor, nIFINDEX, +subsystem:sysname), so events
+  and database entries match. On first sight all SYSTEMD_WANTS units start;
+  on a later change only newly listed ones (systemd's rule). Names without a
+  unit suffix get `.service`.
+- Seen devices are saved in RUN_DIR/devices, so a restarted sdcompatd does
+  not start them again (a unit the admin stopped stays stopped); /run is
+  fresh at boot. ENOBUFS on the socket triggers a resync from the database.
+  The reader is a plain thread feeding a tokio channel (no new tokio feature).
+- Excluded units are skipped silently: on the owner's laptop that is
+  `systemd-backlight@…` (backlight and kbd backlight) and
+  `systemd-rfkill.socket`, so screen brightness and rfkill state are still
+  not restored under s6 (separate issue). The rest of its database wants
+  bluetooth.target, sound.target, tpm2.target, bolt.service (thunderbolt; it
+  wasn't running either) and two mounts, all translated.
+- `check_job` got a `manual` flag: RefuseManualStart/Stop don't apply to
+  device-wanted starts (as in systemd). Both existing callers pass true.
+- Config: `UDEV_DIR` (default /run/udev, empty = off) and `UDEV_MONITOR`
+  (default yes). sdcompatd runs as init_t, like systemd, which does the same
+  netlink/`/run/udev` access, so no policy change is expected; not verified
+  under enforcing (no sesearch here).
+- Tests: unit tests for message parsing, ids, presence rules, database
+  lines, the state file; `netlink_monitor` (ignored by default) sends a real
+  udev message over netlink and passed under `unshare -rn cargo test --
+  --ignored netlink_monitor`. Sandbox: fake udev database (UDEV_MONITOR=no);
+  ready device's unit starts, SYSTEMD_READY=0 and current-tag-less ones
+  don't, the state file is right, and after a daemon restart a stopped unit
+  stays stopped while a newly added device's unit starts. `cargo test`
+  27 passed + 1 ignored; sandbox 126/126 twice; release build ok.
+  Docs: README/README-us (implemented list, config keys, layout),
+  dist/sdcompat.conf. Not run: a real boot.
+
+### Next steps (replacing the ones above)
+
+1. Owner: `cargo build --release` (done here already),
+   `sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms --yes`,
+   reboot into s6. Check: Bluetooth switch works, `systemctl status
+   bluetooth.service` active, `cat /run/sdcompat/devices`, `journalctl -b |
+   grep 'wanted by device'`, plus step 1 of the setup fix above (earlyoom,
+   socket label, ownership). Then recollect diagnostics.
+2. systemd-backlight/systemd-rfkill under s6 (include them, or an s6
+   service), if the owner wants brightness/rfkill state kept.
+3. Session 9's other next steps still apply.

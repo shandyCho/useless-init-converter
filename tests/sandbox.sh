@@ -43,6 +43,8 @@ REBOOT_CMD=touch $R/reboot-requested
 JOURNAL=yes
 JOURNAL_STDOUT=$R/jstdout
 TRANSIENT_DIR=$R/transient
+UDEV_DIR=$W/udev
+UDEV_MONITOR=no
 EOF
 
 cat > "$U/multi-user.target" <<EOF
@@ -367,6 +369,24 @@ cat > "$U/act.service" <<EOF
 [Service]
 ExecStart=/bin/sh -c 'echo activated >> $R/act.out; exec sleep 1000'
 EOF
+
+# --- units wanted by devices (udev SYSTEMD_WANTS), from a fake udev database ---
+mkdir -p "$W/udev/tags/systemd" "$W/udev/data"
+udev_dev() { # udev_dev ID DATA-LINES...
+    id=$1
+    shift
+    touch "$W/udev/tags/systemd/$id"
+    printf '%s\n' "$@" > "$W/udev/data/$id"
+}
+udev_dev +test:dev0 "E:SYSTEMD_WANTS=devwant" "G:systemd" "Q:systemd"
+udev_dev +test:dev1 "E:SYSTEMD_WANTS=devnotready.service" "E:SYSTEMD_READY=0" "G:systemd"
+udev_dev +test:dev2 "E:SYSTEMD_WANTS=devuntagged.service" "G:systemd" "Q:seat"
+for n in devwant devnotready devuntagged devlater; do
+cat > "$U/$n.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+done
 
 # --- starting beside a busy s6-rc change ---
 # hold.service is ready only once $R/hold-<name> exists, so an s6-rc change

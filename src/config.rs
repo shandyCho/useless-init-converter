@@ -63,6 +63,11 @@ pub struct Config {
     pub journal_stdout: PathBuf,
     /// Where StartTransientUnit writes unit files (systemd-run).
     pub transient_dir: PathBuf,
+    /// udev's runtime directory: units in SYSTEMD_WANTS of devices in its
+    /// database are started (None: device wants are ignored).
+    pub udev_dir: Option<PathBuf>,
+    /// Also follow udevd's netlink events (devices added after startup).
+    pub udev_monitor: bool,
 }
 
 /// Units added to INCLUDE when JOURNAL=yes.
@@ -172,6 +177,8 @@ impl Config {
             journal: true,
             journal_stdout: PathBuf::from("/run/systemd/journal/stdout"),
             transient_dir: PathBuf::from("/run/systemd/transient"),
+            udev_dir: Some(PathBuf::from("/run/udev")),
+            udev_monitor: true,
         }
     }
 
@@ -231,6 +238,8 @@ impl Config {
                 "JOURNAL" => cfg.journal = crate::unit::parse_bool(&v).unwrap_or(true),
                 "TRANSIENT_DIR" => cfg.transient_dir = PathBuf::from(&v),
                 "JOURNAL_STDOUT" => cfg.journal_stdout = PathBuf::from(&v),
+                "UDEV_DIR" => cfg.udev_dir = opt(&v),
+                "UDEV_MONITOR" => cfg.udev_monitor = crate::unit::parse_bool(&v).unwrap_or(true),
                 "ALLOW_UIDS" => {
                     cfg.allow_uids = v.split_whitespace().filter_map(|s| s.parse().ok()).collect()
                 }

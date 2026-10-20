@@ -99,6 +99,10 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 - 권한: 상태를 바꾸는 호출에는 root, `ALLOW_UIDS`에 있는 uid, 또는 systemd의 action ID(`manage-units`, `manage-unit-files`, `reload-daemon`, `set-environment`; 정책 파일은 systemd에 포함)에 대한 polkit 허가가 필요합니다. polkit이 없으면 root가 아닌 호출자는 거부됩니다. `ALLOW_UIDS`는 root와 같은 권한입니다.
 - D-Bus 활성화 요청은 버스 데몬 자신이 보낸 것만 받아들이며, 활성화 때문에 데이터베이스를 다시 만들지 않습니다.
 - 같은 유닛의 작업은 차례로 실행되며, 대기 중인 작업은 취소할 수 있습니다.
+- 장치가 원하는 유닛(udev의 `SYSTEMD_WANTS`, 예: 블루투스 어댑터의 `bluetooth.target`,
+  `sound.target`, `bolt.service`)은 장치가 나타나면 시작됩니다. udevd의 이벤트와, 데몬이
+  시작할 때는 udev 데이터베이스를 봅니다. 그중 제외된 유닛(`systemd-backlight@`,
+  `systemd-rfkill`)은 건너뜁니다.
 
 ## 아직 구현되지 않은 것
 
@@ -341,6 +345,7 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 - `JOURNAL`: `yes`(기본값)이면 systemd-journald를 실행하고 서비스 출력을 보냅니다. `no`이면 `LOG_DIR` 아래 서비스별 s6-log 디렉터리를 씁니다.
 - `LOG_DIR`: `JOURNAL=no`일 때 s6-log 디렉터리가 들어갈 위치.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
+- `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 원하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
 - `INCLUDE`: 기본값으로 sdcompat에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, 절전 서비스)를 통과시킵니다.
 
 ## 소스 구조
@@ -365,7 +370,8 @@ src/pam.rs         dlopen(libpam)을 이용한 PAMName=
 src/client.rs      데몬용 작은 클라이언트
 src/fdstore.rs     파일 디스크립터 저장소(FDSTORE=1, 보관 중인 리스닝 소켓)
 src/daemon/        D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓,
-                   요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs)
+                   요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs),
+                   장치가 원하는 유닛(devices.rs)
 dist/              setup-fedora.sh, 설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
                    s6-linux-init 골격, kernel-install 플러그인, sdcompat.spec
 dist/rpm/          dist/skarnet.versions에 있는 skarnet 패키지의 spec과 빌드 스크립트

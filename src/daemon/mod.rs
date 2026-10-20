@@ -5,6 +5,7 @@
 //! Dispatch is done by hand (no zbus ObjectServer) because systemd clients
 //! rely on details such as Properties.GetAll("") returning every interface.
 
+mod devices;
 mod dynamic;
 mod introspect;
 mod private;
@@ -393,8 +394,9 @@ impl Daemon {
         id
     }
 
-    /// Validate a job request; returns the canonical unit id.
-    async fn check_job(&self, name: &str, jtype: &str, allow_reload: bool) -> R<(String, Unit)> {
+    /// Validate a job request; returns the canonical unit id. `manual`: asked
+    /// for by a client, so RefuseManualStart=/RefuseManualStop= apply.
+    async fn check_job(&self, name: &str, jtype: &str, allow_reload: bool, manual: bool) -> R<(String, Unit)> {
         let (id, unit) = self.load_unit(name);
         if jtype == "start" && shutdown_action(&id).is_some() {
             return Ok((id, unit));
@@ -408,13 +410,13 @@ impl Daemon {
             LoadState::Loaded => {}
         }
         let starts = matches!(jtype, "start" | "restart" | "reload-or-restart");
-        if starts && unit.get_bool("Unit", "RefuseManualStart", false) {
+        if manual && starts && unit.get_bool("Unit", "RefuseManualStart", false) {
             return Err(err(
                 E_ONLY_BY_DEP,
                 format!("Operation refused, unit {name} may be requested by dependency only (it is configured to refuse manual start/stop)."),
             ));
         }
-        if jtype == "stop" && unit.get_bool("Unit", "RefuseManualStop", false) {
+        if manual && jtype == "stop" && unit.get_bool("Unit", "RefuseManualStop", false) {
             return Err(err(E_ONLY_BY_DEP, format!("Operation refused, unit {name} may be requested by dependency only (it is configured to refuse manual start/stop).")));
         }
         if jtype == "reload" && !Self::can_reload(&unit) {
@@ -580,7 +582,7 @@ impl Daemon {
 
     async fn job_method(&self, c: &Peer, msg: &Message, name: &str, mode: &str, jtype: &str) -> R<()> {
         self.require_privileged(c, msg).await?;
-        let (id, unit) = self.check_job(name, jtype, true).await?;
+        let (id, unit) = self.check_job(name, jtype, true, true).await?;
         let job = self.new_job(&id, jtype);
         self.reply_job(c, msg, job).await?;
         self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), id.clone())).await;
@@ -590,7 +592,7 @@ impl Daemon {
 
     /// dbus-daemon --systemd-activation asks us to start a service.
     async fn handle_activation(&self, name: String) {
-        let res = match self.check_job(&name, "start", false).await {
+        let res = match self.check_job(&name, "start", false, true).await {
             Ok((id, unit)) => {
                 let job = self.new_job(&id, "start");
                 self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), id.clone())).await;
@@ -1541,6 +1543,8 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
             rec.reconcile_beside().await;
         }
     });
+
+    tokio::spawn(daemon.clone().watch_devices());
 
     let gc = daemon.clone();
     tokio::spawn(async move {

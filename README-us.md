@@ -108,6 +108,10 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 - D-Bus activation is accepted only from the bus daemon itself, and never makes
   the daemon regenerate its database.
 - Jobs on the same unit run one after another; queued jobs can be cancelled.
+- Units wanted by devices (udev's `SYSTEMD_WANTS`, e.g. `bluetooth.target` for a
+  Bluetooth adapter, `sound.target`, `bolt.service`) start when the device
+  appears, from udevd's events and, at startup, from udev's database. Excluded
+  units among them (`systemd-backlight@`, `systemd-rfkill`) are skipped.
 
 ## Not implemented (yet)
 
@@ -359,6 +363,7 @@ and defaults). The most important keys:
 - `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR`.
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
+- `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
 - `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS) and the sleep services.
 
 ## Source layout
@@ -383,7 +388,8 @@ src/pam.rs         PAMName= via dlopen(libpam)
 src/client.rs      small client for the daemon
 src/fdstore.rs     file descriptor store (FDSTORE=1, held listening sockets)
 src/daemon/        D-Bus API: dispatch, properties, s6 backend, private socket,
-                   on-demand instances (dynamic.rs), systemd-run (transient.rs)
+                   on-demand instances (dynamic.rs), systemd-run (transient.rs),
+                   units wanted by devices (devices.rs)
 dist/              setup-fedora.sh, config, D-Bus policy, s6 services, early-boot helper,
                    s6-linux-init skeleton, kernel-install plugin, sdcompat.spec
 dist/rpm/          specs and build script for the skarnet packages in dist/skarnet.versions
