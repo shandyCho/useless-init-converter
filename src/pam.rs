@@ -105,12 +105,9 @@ impl Session {
                 (s.lib.end)(s.handle, r);
                 return Err(e);
             }
-            let r = (s.lib.setcred)(s.handle, PAM_ESTABLISH_CRED | PAM_SILENT);
-            if r != PAM_SUCCESS {
-                let e = s.err("pam_setcred", r);
-                (s.lib.end)(s.handle, r);
-                return Err(e);
-            }
+            // Not fatal, as in systemd: stacks without auth lines (Fedora's
+            // systemd-user) fall back to "other", whose pam_deny fails here.
+            (s.lib.setcred)(s.handle, PAM_ESTABLISH_CRED | PAM_SILENT);
             let r = (s.lib.open_session)(s.handle, PAM_SILENT);
             if r != PAM_SUCCESS {
                 let e = s.err("pam_open_session", r);
