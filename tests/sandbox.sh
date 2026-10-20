@@ -5,9 +5,23 @@
 #   tests/sandbox.sh [WORKDIR]      set up and start everything
 #   tests/sandbox.sh WORKDIR stop   tear it down
 # SANDBOX_JOURNAL=no sets it up as a JOURNAL=no install (per-service s6-log).
+# SANDBOX_FDSTORE=no runs it without the standalone sdcompat-fdstore (the
+# daemon then holds the fds itself).
+#
+# Needs `cargo build` in this workspace; the standalone tools it uses
+# (sdcompat-notify, sdcompat-fdstore, sdcompat-journal-relay) are built here.
 set -eu
 
-BIN=$(cd "$(dirname "$0")/.." && pwd)/target/debug/sdcompat
+TOP=$(cd "$(dirname "$0")/.." && pwd)
+BIN=$TOP/target/debug
+GEN=$BIN/sdcompat-gen
+DAEMON=$BIN/sdcompatd
+for p in sdcompat-notify sdcompat-fdstore sdcompat-journal-relay; do
+    cargo build --quiet --manifest-path "$TOP/standalone/$p/Cargo.toml"
+done
+NOTIFY=$TOP/standalone/sdcompat-notify/target/debug/sdcompat-notify
+FDSTORE=$TOP/standalone/sdcompat-fdstore/target/debug/sdcompat-fdstore
+RELAY=$TOP/standalone/sdcompat-journal-relay/target/debug/sdcompat-journal-relay
 W=${1:-${TMPDIR:-/tmp}/sdcompat-sandbox}
 # Sockets need short paths (sun_path is 108 bytes).
 R=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sdc-test
@@ -38,7 +52,8 @@ BOOTED_FLAG=
 PRIVATE_SOCKET=$R/private
 BUS_ADDRESS=unix:path=$R/bus
 ALLOW_UIDS=$(id -u)
-RUNNER=$BIN
+RUNNER=$BIN/sdcompat-runner
+TIMER_RUNNER=$BIN/sdcompat-timers
 POWEROFF_CMD=touch $R/poweroff-requested
 REBOOT_CMD=touch $R/reboot-requested
 JOURNAL=${SANDBOX_JOURNAL:-yes}
@@ -71,7 +86,7 @@ cat > "$U/notifier.service" <<EOF
 Description=Type=notify service
 [Service]
 Type=notify
-ExecStart=/bin/sh -c 'sleep 0.3; $BIN notify --ready --status="all good"; exec sleep 1000'
+ExecStart=/bin/sh -c 'sleep 0.3; $NOTIFY --ready --status="all good"; exec sleep 1000'
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -233,7 +248,7 @@ Description=Type=notify-reload
 [Service]
 Type=notify-reload
 ReloadSignal=USR1
-ExecStart=/bin/sh -c 'trap "$BIN notify --reloading; sleep 1; echo reloaded >> $R/notreload.out; $BIN notify --ready" USR1; $BIN notify --ready; while :; do sleep 0.1; done'
+ExecStart=/bin/sh -c 'trap "$NOTIFY --reloading; sleep 1; echo reloaded >> $R/notreload.out; $NOTIFY --ready" USR1; $NOTIFY --ready; while :; do sleep 0.1; done'
 EOF
 
 # --- timers ---
@@ -295,7 +310,7 @@ BindsTo=prep@%i.service
 After=prep@%i.service
 [Service]
 Type=notify
-ExecStart=/bin/sh -c 'echo instance %i up; $BIN notify --ready; exec sleep 1000'
+ExecStart=/bin/sh -c 'echo instance %i up; $NOTIFY --ready; exec sleep 1000'
 EOF
 
 # --- Conflicts= (like gdm.service vs getty@tty1.service) ---
@@ -567,7 +582,7 @@ disable *
 EOF
 
 C="--config $W/sdcompat.conf"
-"$BIN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket watch.path chg.path bad.service after-bad.service >/dev/null
+"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket watch.path chg.path bad.service after-bad.service >/dev/null
 
 # Stand-in for journald's stdout stream socket: records each connection.
 mkdir -p "$R/journal"
@@ -590,13 +605,15 @@ while True:
 ' "$R/jstdout" "$R/journal" &
 echo $! > "$W/pids"
 sleep 0.3
-"$BIN" $C preset notifier.service >/dev/null
-"$BIN" $C reload --no-update
+"$GEN" $C preset notifier.service >/dev/null
+"$GEN" $C reload --no-update
 
 # The fd store runs apart from the daemon, like the sdcompat-fdstore service.
-"$BIN" $C fdstore >"$W/fdstore.log" 2>&1 &
-echo $! >> "$W/pids"
-sleep 0.3
+if [ "${SANDBOX_FDSTORE:-yes}" = yes ]; then
+    "$FDSTORE" --socket "$R/run/fdstore" >"$W/fdstore.log" 2>&1 &
+    echo $! >> "$W/pids"
+    sleep 0.3
+fi
 
 # JOURNAL=no: the journal-relay service, forwarding to a stand-in /dev/log
 # that writes what it gets to $R/devlog.out.
@@ -610,7 +627,7 @@ with open(sys.argv[2], "ab", buffering=0) as f:
         f.write(s.recv(65536) + b"\n")
 ' "$R/devlog" "$R/devlog.out" >/dev/null 2>&1 &
     echo $! >> "$W/pids"
-    "$BIN" journal-relay --dir "$R/jrelay" --syslog "$R/devlog" >"$W/jrelay.log" 2>&1 &
+    "$RELAY" --dir "$R/jrelay" --syslog "$R/devlog" >"$W/jrelay.log" 2>&1 &
     echo $! >> "$W/pids"
     sleep 0.3
 fi
@@ -638,7 +655,7 @@ EOF
 dbus-daemon --config-file="$W/bus.conf" --systemd-activation --nofork --nopidfile >"$W/dbus.log" 2>&1 &
 echo $! >> "$W/pids"
 sleep 0.3
-"$BIN" $C daemon --address "unix:path=$R/bus" >"$W/daemon.log" 2>&1 &
+"$DAEMON" $C daemon --address "unix:path=$R/bus" >"$W/daemon.log" 2>&1 &
 echo $! > "$W/daemon.pid"
 sleep 0.5
 

@@ -9,39 +9,55 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
  systemctl / dnf 스크립틀릿 / libsystemd 클라이언트 / dbus-daemon 활성화
               │ org.freedesktop.systemd1 (시스템 버스 + /run/systemd/private)
               ▼
-   sdcompat 데몬 ── 작업(job), 유닛 상태, enable/disable/preset, scope
+   sdcompatd ── 작업(job), 유닛 상태, enable/disable/preset, scope
               │ s6-rc -u/-d, s6-svc, s6-svstat
               ▼
-   s6-rc 데이터베이스  ◄── sdcompat reload: 유닛 파일 → s6-rc 소스 → 컴파일
+   s6-rc 데이터베이스  ◄── sdcompat-gen reload: 유닛 파일 → s6-rc 소스 → 컴파일
               │
-   s6-supervise ── run/finish 스크립트가 `sdcompat run|finish|up|down` 호출
+   s6-supervise ── run/finish 스크립트가 `sdcompat-runner run|finish|up|down`,
+                   `sdcompat-timers timer-run|path-run` 호출
                    (User=, Environment=, 소켓, NOTIFY_SOCKET, Restart= 등)
 ```
 
 라이브러리를 바꿔치기하는 방식이 아니라 프로토콜 수준에서 동작합니다. 진짜
 `systemctl`과 `libsystemd`가 systemd와 대화하듯 그대로 sdcompat과 대화합니다.
 
-## 구성 요소 (바이너리 하나, `sdcompat`)
+## 구성 요소
 
-| 명령 | 역할 |
-|---|---|
-| `sdcompat reload` | 모든 유닛을 s6-rc 소스 트리로 변환하고, 직접 작성한 s6 서비스(`EXTRA_SOURCE`)와 함께 컴파일한 뒤 라이브 상태를 전환합니다(`s6-rc-update`). 변환 보고서를 남깁니다. |
-| `sdcompat daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
-| `sdcompat run/finish/up/down` | 생성된 s6 스크립트가 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. |
-| `sdcompat timer-run` | `.timer` 하나를 s6 longrun으로 실행합니다. 다음 실행 시각을 계산하고 데몬에 유닛 시작을 요청합니다. |
-| `sdcompat path-run` | `.path` 유닛 하나를 s6 longrun으로 실행하며 inotify로 감시합니다. |
-| `sdcompat start/stop/restart UNIT` | 데몬용 최소 클라이언트입니다(private 소켓 또는 버스). |
-| `sdcompat notify` | `systemd-notify` 대체입니다. |
-| `sdcompat journal-relay` | `JOURNAL=no`일 때 journald의 클라이언트 소켓(`/run/systemd/journal/socket`과 `stdout`)을 열고 받은 내용을 rsyslog로 넘깁니다. `systemd --user`의 세션 버스인 dbus-broker는 이 소켓이 없으면 시작하지 않습니다. |
-| `sdcompat log UNIT [-f]` | 서비스 로그를 보여줍니다(`journalctl -u`, `JOURNAL=no`이면 s6-log 디렉터리). |
-| `sdcompat enable/disable/mask/preset/is-enabled` | 오프라인 유닛 파일 관리입니다. |
+sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공간 하나(`crates/`)로,
+서로 함께 동작하며 서로에게 의존할 수 있습니다. **독립 도구**(`standalone/`)는
+각각 별도의 프로젝트로, 혼자 빌드·설치·실행되고, 본체는 이것들 없이도 동작합니다.
+
+**본체 도구** (`/usr/libexec/sdcompat`에 설치):
+
+| 도구 | 명령 | 역할 |
+|---|---|---|
+| `sdcompat-gen` | `reload`, `plan` | 모든 유닛을 s6-rc 소스 트리로 변환하고, 직접 작성한 s6 서비스(`EXTRA_SOURCE`)와 함께 컴파일한 뒤 라이브 상태를 전환합니다(`s6-rc-update`). 변환 보고서를 남깁니다. |
+| | `enable/disable/mask/unmask/preset/is-enabled` | 오프라인 유닛 파일 관리입니다. |
+| `sdcompatd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
+| | `start/stop/restart UNIT`, `log UNIT [-f]` | 데몬용 최소 클라이언트(private 소켓 또는 버스)와, 서비스 로그 보기(`journalctl -u`, `JOURNAL=no`이면 s6-log 디렉터리)입니다. |
+| `sdcompat-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. |
+| `sdcompat-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
+| `sdcompat` | 위의 모든 명령 | 사용자가 쓰는 명령(`/usr/bin/sdcompat`)입니다. 명령을 맡은 도구를 실행하므로 `sdcompat reload`도 그대로 동작합니다. |
+
+**독립 도구** (선택, 각각 별도 프로젝트와 RPM):
+
+| 프로젝트 | 역할 | 없으면 |
+|---|---|---|
+| `sdcompat-fdstore` | `FDSTORE=` fd와 리스닝 소켓을 별도 프로세스에서 보관합니다. 설정 파일과 유닛 파일을 읽지 않습니다. | sdcompatd가 직접 보관합니다. sdcompatd를 다시 시작하면 사라집니다. |
+| `sdcompat-journal-relay` | `JOURNAL=no`일 때 journald의 클라이언트 소켓(`/run/systemd/journal/socket`과 `stdout`)을 열고 받은 내용을 rsyslog로 넘깁니다. `systemd --user`의 세션 버스인 dbus-broker는 이 소켓이 없으면 시작하지 않습니다. | `JOURNAL=no`에는 꼭 필요합니다. `JOURNAL=yes`(기본값)에서는 영향이 없습니다. |
+| `sdcompat-notify` | `systemd-notify` 대체입니다. `$NOTIFY_SOCKET`을 설정하는 어떤 서비스 관리자 아래에서도 동작합니다. | 계속 설치되어 있는 `systemd-notify`를 쓰면 됩니다. |
+
+각각의 빌드·설치·실행 방법: [standalone/sdcompat-fdstore](standalone/sdcompat-fdstore/README.md),
+[standalone/sdcompat-journal-relay](standalone/sdcompat-journal-relay/README.md),
+[standalone/sdcompat-notify](standalone/sdcompat-notify/README.md).
 
 ## 구현된 기능
 
 **변환** (`.service` → longrun/oneshot, `.target` → bundle, `.timer`/`.path` → longrun, `.mount`/`.swap` → oneshot)
 - `Requires=`, `Requisite=`, `BindsTo=`, 그리고 `After=`/`Before=`와 함께 쓰인 `Wants=`는 s6-rc 의존성이 됩니다. 타깃은 `Wants=` 전부를 끌어옵니다.
 - `.wants/`, `.requires/`, `.upholds/` 디렉터리, 별칭, 템플릿/인스턴스, 마스킹, 드롭인, 지정자(specifier).
-- 암묵적 의존성: `DefaultDependencies=` → `sysinit.target`, `Type=dbus` → `dbus.socket`.
+- 암묵적 의존성: `DefaultDependencies=` → `sysinit.target`, `Type=dbus` → `dbus.socket`. `BusName=`이 있는(다른 `Type=`의) 서비스도 `dbus.socket` 다음에 시작합니다. systemd는 이런 서비스를 버스 활성화로 시작하지만, 여기서는 소켓 유닛이 부팅 때 시작할 수 있기 때문입니다.
 - 의존성 순환은 컴파일을 실패시키는 대신 끊고 보고합니다.
 - `DEP_MAP`은 systemd 유닛을 직접 작성한 s6 서비스에 대응시킵니다. 예: `dbus.service` → `dbus`.
 - 활성화된 `.socket`은 자신의 서비스를 끌어옵니다. 소켓은 러너가 바인드하며, 이름 또는 `Service=`로 짝을 찾습니다.
@@ -78,13 +94,13 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 - `Accept=no` 소켓 활성화: `ListenStream/Datagram/SequentialPacket/FIFO/Special`와 `LISTEN_FDS`, `LISTEN_PID`, `LISTEN_FDNAMES`. 소켓이 있는 서비스가 정상 종료하면 systemd처럼 소켓에 다음 활동이 있을 때 다시 시작됩니다(systemd-rfkill은 할 일이 없으면 종료합니다). `.socket`을 시작하면(`systemctl start`, udev의 `SYSTEMD_WANTS`) 그 서비스가 소켓과 함께 시작됩니다.
 - `Restart=`(모든 모드), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=`(reboot/poweroff/halt).
-- `FDSTORE=1` / `FileDescriptorStoreMax=`: 저장된 fd를 보관했다가 재시작 후 돌려줍니다(journald와 logind가 사용). 리스닝 소켓도 같은 방식으로 보관하므로 서비스를 재시작해도 열린 채로 유지됩니다. 저장소는 별도의 s6 서비스 `sdcompat-fdstore`(`sdcompat fdstore`)이므로 sdcompatd를 다시 시작해도 fd가 남습니다. 이 서비스가 없으면 데몬이 직접 보관합니다. `FileDescriptorStoreMax=`가 있는 서비스는 이 서비스 다음에 시작됩니다.
+- `FDSTORE=1` / `FileDescriptorStoreMax=`: 저장된 fd를 보관했다가 재시작 후 돌려줍니다(journald와 logind가 사용). 리스닝 소켓도 같은 방식으로 보관하므로 서비스를 재시작해도 열린 채로 유지됩니다. 저장소는 독립 도구 `sdcompat-fdstore`를 실행하는 별도의 s6 서비스이므로 sdcompatd를 다시 시작해도 fd가 남습니다. 이 도구를 설치하지 않았으면 데몬이 직접 보관합니다. `FileDescriptorStoreMax=`가 있는 서비스는 이 서비스 다음에 시작됩니다.
 - `TimeoutStartSec=`는 러너가 직접 적용합니다. 시간을 넘기면 시작이 실패하고 서비스는 종료됩니다.
 - 출력은 stdout 스트림 프로토콜을 통해 **systemd-journald**로 보냅니다(PID 1이 하는 방식 그대로). journald가 cgroup으로 유닛을 식별하므로 `journalctl -u UNIT`과 `systemctl status`의 로그 줄이 동작합니다. `JOURNAL=no`이면 서비스마다 s6-log 디렉터리를 씁니다.
 - 조건과 단언: 경로, 커널 명령줄, 가상화, 보안 등에 대한 `Condition*=`/`Assert*=`.
 - systemd와 같은 경로(`system.slice/<unit>`)의 cgroup v2, `KillMode=`, `MemoryMax/High`, `CPUQuota/Weight`, `TasksMax`, `IOWeight`.
 - 샌드박스: `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `Read{Write,Only}Paths`, `InaccessiblePaths`, `NoNewPrivileges`, `CapabilityBoundingSet`, `AmbientCapabilities`, `PrivateDevices`, `PrivateNetwork`, `PrivateIPC`, `PrivateMounts`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `ProtectProc`, `ProcSubset`. 마운트, capability 제거, 시스템 콜 필터, 암묵적인 `NoNewPrivileges=`는 systemd와 같습니다. 차이점: 유닛의 각 프로세스(`ExecStartPre=`, 주 프로세스, `ExecStop=`)가 네트워크/IPC/UTS 네임스페이스를 따로 받습니다(systemd는 유닛마다 하나를 공유). `ProtectControlGroups=private|strict`는 cgroup 트리를 읽기 전용으로만 만듭니다(cgroup 네임스페이스 없음). 나머지 지시어는 보고서에 "ignored"로 표시됩니다.
-- seccomp: `SystemCallFilter=`, `SystemCallErrorNumber=`, `SystemCallArchitectures=`. systemd의 시스템 콜 그룹(`@system-service` 등, `systemd-analyze syscall-filter`에서 만든 `src/syscall-groups.txt`)을 씁니다. 또한 `RestrictAddressFamilies=`, `RestrictNamespaces=`, `MemoryDenyWriteExecute=`(커널에 `PR_SET_MDWE`가 있으면 systemd처럼 그것을 사용), `LockPersonality=`, `RestrictRealtime=`, `RestrictSUIDSGID=`를 systemd와 같은 규칙과 errno로 적용합니다. systemd와 마찬가지로 `RestrictAddressFamilies=`는 i386 ABI에는 적용되지 않습니다(`socket()`이 `socketcall()`을 거침). libseccomp는 실행 중에 불러옵니다.
+- seccomp: `SystemCallFilter=`, `SystemCallErrorNumber=`, `SystemCallArchitectures=`. systemd의 시스템 콜 그룹(`@system-service` 등, `systemd-analyze syscall-filter`에서 만든 `crates/sdcompat-exec/src/syscall-groups.txt`)을 씁니다. 또한 `RestrictAddressFamilies=`, `RestrictNamespaces=`, `MemoryDenyWriteExecute=`(커널에 `PR_SET_MDWE`가 있으면 systemd처럼 그것을 사용), `LockPersonality=`, `RestrictRealtime=`, `RestrictSUIDSGID=`를 systemd와 같은 규칙과 errno로 적용합니다. systemd와 마찬가지로 `RestrictAddressFamilies=`는 i386 ABI에는 적용되지 않습니다(`socket()`이 `socketcall()`을 거침). libseccomp는 실행 중에 불러옵니다.
 - cgroup BPF: `DevicePolicy=`, `DeviceAllow=`(`/dev/` 노드, 그리고 /proc/devices의 `char-`/`block-` 분류, 글롭 포함. `PrivateDevices=`는 `DevicePolicy=closed`를 뜻함), `IPAddressDeny=`, `IPAddressAllow=`(주소, 프리픽스, `any`, `localhost`, `link-local`, `multicast`). systemd처럼 러너가 손으로 조립한 eBPF 프로그램(`sd_devices`, `sd_fw_ingress`, `sd_fw_egress`)을 유닛의 cgroup에서 아무것도 실행되기 전에 붙입니다. 커널이 거부한 프로그램은 시작을 실패시키지 않고 로그만 남깁니다(`... not enforced: ...`). 차이점: 주소 목록을 BPF 맵 대신 프로그램 안에 넣어 컴파일하고, 슬라이스에 설정한 목록은 적용하지 않습니다.
 - SELinux는 systemd에서와 같습니다. s6 트리 전체가 `init_t`로 실행되므로(정책 모듈 `dist/selinux/sdcompat.cil`) 서비스는 각자의 도메인(`chronyd_t`, `xdm_t` 등)으로 들어가고, `user@.service`는 `systemd --user`를 사용자 도메인에서 시작할 수 있습니다. `RuntimeDirectory=` 등의 디렉터리와 소켓 파일은 file_contexts의 레이블을 받고, 소켓 유닛의 소켓은 그것을 쓰는 서비스의 레이블을 가집니다.
 
@@ -153,7 +169,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 **권장 패키지:** earlyoom(systemd-oomd 대신), chrony, NetworkManager,
 rsyslog(`JOURNAL=no`일 때만).
 
-**빌드:** cargo와 rust. 크레이트는 zbus, tokio, futures-util, libc, serde입니다
+**빌드:** cargo와 rust. 본체는 zbus, tokio, futures-util, libc, serde를, 독립 도구는 libc만 씁니다
 (`Cargo.toml`).
 
 ## Fedora에서 시험하기
@@ -168,7 +184,7 @@ skarnet RPM을 빌드하세요. 다음 절 참고). root로 실행되는 것은 
 시스템은 건드리지 않습니다.
 
 ```sh
-cargo build
+cargo build                           # 본체. 독립 도구는 sandbox.sh가 빌드합니다
 tests/sandbox.sh ~/sdc-sandbox        # 별도의 s6-svscan, s6-rc, D-Bus 버스
 tests/check.sh ~/sdc-sandbox          # 시나리오 검사 119개, 마지막은 비특권 호출자 단계 (샌드박스마다 한 번)
 tests/systemctl.sh status hello.service   # 네임스페이스 안에서 진짜 systemctl 실행
@@ -229,7 +245,8 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 | `--yes` | 시작 전에 묻지 않습니다 |
 | `--rpms=DIR` | `dist/rpm/build-skarnet-rpms.sh`로 빌드한 RPM에서 skarnet 도구를 설치합니다 |
 | `--build-s6` | 대신 skarnet 도구를 소스에서 `/usr`로 빌드합니다(rpm이 관리하지 않음) |
-| `--rebuild` | `target/release/sdcompat`이 있어도 sdcompat을 다시 빌드합니다 |
+| `--rebuild` | 이미 빌드되어 있어도 sdcompat과 독립 도구를 다시 빌드합니다 |
+| `--without=목록` | 이 독립 도구를 설치하지 않습니다(쉼표로 구분: `sdcompat-fdstore`, `sdcompat-notify`, `sdcompat-journal-relay`. 마지막 것은 `--no-journal`에 필요합니다) |
 | `--no-journal` / `--journal` | systemd-journald 없이 rsyslog와 서비스별 s6-log 디렉터리를 씁니다 / journald로 되돌립니다 |
 | `--no-resolved` / `--resolved` | s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / resolved로 되돌립니다 |
 | `--enforcing` | s6 부팅 항목에 `enforcing=0`을 추가하지 않습니다 |
@@ -358,31 +375,39 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 ## 소스 구조
 
 ```
-src/unit.rs        유닛 파일 파서, 단어 분리, 시간 간격
-src/loader.rs      검색 경로, 별칭, 템플릿, 드롭인, 지정자
-src/gen.rs         계획 → s6-rc 소스, 컴파일, s6-rc-update, 보고서
-src/runner.rs      실행 환경, 준비 완료 신호, 재시작 정책
-src/install.rs     enable/disable/mask/preset, 유닛 파일 상태
-src/socket.rs      소켓 유닛(sd_listen_fds)
-src/sandbox.rs     네임스페이스, 마운트, capability
-src/seccomp.rs     SystemCallFilter=와 나머지 seccomp 기반 설정(libseccomp)
-src/bpf.rs         DevicePolicy=/DeviceAllow=, IPAddressDeny=/IPAddressAllow=(cgroup eBPF)
-src/selinux.rs     파일과 소켓 레이블(libselinux)
-src/cgroup.rs      systemd 호환 cgroup 구조와 자원 제어
-src/conditions.rs  Condition*/Assert*
-src/calendar.rs    OnCalendar= 파서와 다음 실행 시각 검색
-src/timer.rs       타이머 러너(.timer마다 s6 longrun 하나)
-src/pathunit.rs    path 유닛 러너(inotify)
-src/mountunit.rs   .mount/.swap 유닛
-src/pam.rs         dlopen(libpam)을 이용한 PAMName=
-src/client.rs      데몬용 작은 클라이언트
-src/fdstore.rs     파일 디스크립터 저장소(FDSTORE=1, 보관 중인 리스닝 소켓)
-src/journal.rs     journal-relay: journald 클라이언트 소켓을 syslog로 전달(JOURNAL=no)
-src/daemon/        D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓,
-                   요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs),
-                   장치가 원하는 유닛(devices.rs)
-dist/              setup-fedora.sh, 설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
-                   s6-linux-init 골격, kernel-install 플러그인, sdcompat.spec
-dist/rpm/          dist/skarnet.versions에 있는 skarnet 패키지의 spec과 빌드 스크립트
-tests/             비특권 샌드박스, 시나리오 검사, systemctl 래퍼
+crates/                    본체 (Cargo 작업공간 하나)
+  sdcompat-base/           본체의 모든 크레이트가 함께 쓰는 부분
+    unit.rs                유닛 파일 파서, 단어 분리, 시간 간격
+    loader.rs              검색 경로, 별칭, 템플릿, 드롭인, 지정자
+    config.rs, envfile.rs  sdcompat.conf, EnvironmentFile= 형식
+    state.rs               유닛별 상태 파일(RUN_DIR/units/<유닛>/)
+    index.rs               생성된 데이터베이스의 색인(유닛 → s6-rc 서비스)
+    fdstore.rs             fd 저장소 클라이언트와, 데몬이 대신 쓰는 저장소
+    calendar.rs            OnCalendar= 파서와 다음 실행 시각 검색
+    timerspec.rs, pathspec.rs, mountunit.rs   .timer/.path/.mount 유닛의 내용
+  sdcompat-install/        enable/disable/mask/preset, 유닛 파일 상태
+  sdcompat-exec/           서비스 프로세스를 준비하는 부분:
+    sandbox.rs             네임스페이스, 마운트, capability
+    seccomp.rs             SystemCallFilter=와 나머지 seccomp 기반 설정(libseccomp)
+    bpf.rs                 DevicePolicy=/DeviceAllow=, IPAddressDeny=/IPAddressAllow=(cgroup eBPF)
+    cgroup.rs              systemd 호환 cgroup 구조와 자원 제어
+    selinux.rs, pam.rs     레이블(libselinux), PAMName=(libpam), 둘 다 dlopen으로
+    socket.rs              소켓 유닛(sd_listen_fds)
+    execcmd.rs, conditions.rs   Exec*= 명령줄, Condition*/Assert*
+  sdcompat-client/         데몬용 작은 D-Bus 클라이언트
+  sdcompat-gen/            계획 → s6-rc 소스, 컴파일, s6-rc-update, 보고서 (도구 sdcompat-gen)
+  sdcompat-runner/         실행 환경, 준비 완료 신호, 재시작 정책 (도구 sdcompat-runner)
+  sdcompat-timers/         타이머와 path 유닛 러너 (도구 sdcompat-timers)
+  sdcompatd/               D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓,
+                           요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs),
+                           장치가 원하는 유닛(devices.rs) (도구 sdcompatd)
+  sdcompat/                알맞은 도구를 실행하는 sdcompat 명령
+standalone/                별도 프로젝트. 각각 README와 spec이 있습니다
+  sdcompat-fdstore/        파일 디스크립터 저장소 서버
+  sdcompat-journal-relay/  journald 클라이언트 소켓을 syslog로 전달(JOURNAL=no)
+  sdcompat-notify/         systemd-notify 대체
+dist/                      setup-fedora.sh, 설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
+                           s6-linux-init 골격, kernel-install 플러그인, sdcompat.spec
+dist/rpm/                  dist/skarnet.versions에 있는 skarnet 패키지의 spec과 빌드 스크립트
+tests/                     비특권 샌드박스, 시나리오 검사, systemctl 래퍼
 ```

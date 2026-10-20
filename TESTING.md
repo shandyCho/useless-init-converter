@@ -117,9 +117,13 @@ tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 
 `JOURNAL=no` 설치(journald 대신 서비스별 s6-log)를 시험하려면 샌드박스를
 `SANDBOX_JOURNAL=no tests/sandbox.sh ~/sdc`로 띄우세요. 그러면 `check.sh`는 서비스 출력을
-journal 스트림 대신 `~/sdc/logs/` 아래에서 확인하고, `sdcompat journal-relay`로 native 메시지와
+journal 스트림 대신 `~/sdc/logs/` 아래에서 확인하고, `sdcompat-journal-relay`로 native 메시지와
 스트림 메시지를 보내 봅니다(소켓은 `$XDG_RUNTIME_DIR/sdc-test/jrelay`, 받은 내용은 대역 `/dev/log`가
 같은 곳의 `devlog.out`에 씁니다).
+
+본체가 독립 도구 `sdcompat-fdstore` 없이 동작하는지 보려면 `SANDBOX_FDSTORE=no`를 앞에 붙여
+`sandbox.sh`와 `check.sh`를 실행하세요. 그러면 데몬이 fd를 직접 보관하므로, 데몬을 다시 시작한
+뒤 fd가 사라졌는지를 확인합니다. 독립 도구는 `tests/sandbox.sh`가 `standalone/`에서 빌드합니다.
 
 이어서 Fedora의 진짜 `systemctl`로 샌드박스를 조작해 보세요.
 
@@ -291,7 +295,7 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms --yes
 ```
 
 설정 스크립트를 다시 실행해도 안전합니다. `/etc/sdcompat` 설정은 그대로 두고, 새
-바이너리를 설치하고, 데이터베이스와 부팅 항목을 다시 만들며, 바꾸는 파일은 백업합니다.
+바이너리(본체 도구와 독립 도구)를 빌드해 설치하고, 데이터베이스와 부팅 항목을 다시 만들며, 바꾸는 파일은 백업합니다.
 `/etc/sdcompat/s6`의 s6 서비스는 직접 고치지 않았다면 새 버전으로 바뀝니다. 고친
 서비스는 "keeping your modified …"를 출력하고 그대로 두니, `dist/s6`의 새 버전을 직접
 합치세요. s6로 부팅한 상태에서 실행하면 sdcompatd를 재시작해서 재부팅 없이 새

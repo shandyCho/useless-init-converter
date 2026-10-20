@@ -61,7 +61,7 @@ expect_eq "notify STATUS= relayed" "$(prop notifier.service Service StatusText)"
 # The notify helper must block in poll() after READY=1, not spin.
 ticks() {
     t=0
-    for p in $(pgrep -u "$(id -u)" -f 'sdcompat run .*-- notifier\.service$'); do
+    for p in $(pgrep -u "$(id -u)" -f 'sdcompat-runner run .*-- notifier\.service$'); do
         t=$((t + $(awk '{print $14 + $15}' "/proc/$p/stat" 2>/dev/null || echo 0)))
     done
     echo "$t"
@@ -520,12 +520,12 @@ echo "== unprivileged caller (ALLOW_UIDS empty, no polkit)"
 restart_daemon() {
     kill "$(cat "$W/daemon.pid")" 2>/dev/null
     sleep 0.5
-    "$BIN" --config "$1" daemon --address "unix:path=$R/bus" >>"$W/daemon.log" 2>&1 &
+    "$DAEMON" --config "$1" daemon --address "unix:path=$R/bus" >>"$W/daemon.log" 2>&1 &
     echo $! > "$W/daemon.pid"
     sleep 1
 }
 grep -v '^ALLOW_UIDS=' "$W/sdcompat.conf" > "$W/unpriv.conf"
-BIN=$(sed -n 's/^RUNNER=//p' "$W/sdcompat.conf")
+DAEMON=$(dirname "$(sed -n 's/^RUNNER=//p' "$W/sdcompat.conf")")/sdcompatd
 # On-demand instances outlive the daemon: a longrun (like user@UID) with the
 # oneshot it is bound to, and a oneshot alone (like systemd-backlight@).
 call StartUnit ss inst@b.service replace
@@ -583,13 +583,21 @@ restart_daemon "$W/sdcompat.conf"
 # Stopping the oneshot stops the longrun bound to it: the daemon knows both.
 call StopUnit ss prep@b.service replace
 expect_state inst@b.service inactive/dead
-# The fd store is its own process: what units stored survived both daemon swaps.
+# With sdcompat-fdstore the store is its own process: what units stored
+# survived both daemon swaps. Without it (SANDBOX_FDSTORE=no) the daemon
+# held them, so they went with it and the socket was bound anew.
 call RestartUnit ss fdkeep.service replace
 sleep 1
-expect_eq "FDSTORE=1 fd kept across daemon restarts" "$(tail -1 "$R/fdkeep.out" 2>/dev/null)" "start names=kept"
 call RestartUnit ss sock.service replace
 sleep 1
-expect_eq "listening socket kept across daemon restarts" "$(stat -c %i "$R/test.sock")" "$i1"
+if [ -e "$W/fdstore.log" ]; then
+    expect_eq "FDSTORE=1 fd kept across daemon restarts" "$(tail -1 "$R/fdkeep.out" 2>/dev/null)" "start names=kept"
+    expect_eq "listening socket kept across daemon restarts" "$(stat -c %i "$R/test.sock")" "$i1"
+else
+    expect_eq "FDSTORE=1 fd gone with the daemon (no sdcompat-fdstore)" "$(tail -1 "$R/fdkeep.out" 2>/dev/null)" "start names="
+    [ "$(stat -c %i "$R/test.sock")" != "$i1" ] && ok "listening socket bound anew (no sdcompat-fdstore)" \
+        || bad "listening socket kept without sdcompat-fdstore"
+fi
 expect_state prep@b.service inactive/dead
 [ ! -e "$R/run/dyn/inst@b.service" ] && ok "inst@b's service directory removed" || bad "inst@b's service directory left"
 if [ $kscope = yes ]; then

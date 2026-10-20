@@ -1,0 +1,15 @@
+[package]
+name = "sdcompat-fdstore"
+version = "0.1.0"
+edition = "2021"
+description = "Holds file descriptors (systemd's FDSTORE=) for services, apart from the service manager"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# Its own project, not a member of the sdcompat workspace above it.
+[workspace]

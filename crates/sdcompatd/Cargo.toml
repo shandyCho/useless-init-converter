@@ -1,0 +1,17 @@
+[package]
+name = "sdcompatd"
+version.workspace = true
+edition.workspace = true
+description = "The org.freedesktop.systemd1 D-Bus API on top of s6-rc (sdcompatd)"
+
+[dependencies]
+sdcompat-base.workspace = true
+sdcompat-install.workspace = true
+sdcompat-exec.workspace = true
+sdcompat-gen.workspace = true
+sdcompat-client.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+libc.workspace = true
+serde.workspace = true

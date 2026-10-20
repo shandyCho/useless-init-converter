@@ -19,7 +19,10 @@
 #                   built with dist/rpm/build-skarnet-rpms.sh (recommended:
 #                   Fedora does not package them)
 #   --build-s6      instead build them from source into /usr (untracked by rpm)
-#   --rebuild       rebuild sdcompat even if target/release/sdcompat exists
+#   --rebuild       rebuild sdcompat and its tools even if they are built
+#   --without=LIST  do not install these standalone tools (comma-separated):
+#                   sdcompat-fdstore, sdcompat-notify, sdcompat-journal-relay
+#                   (the last one is needed with --no-journal)
 #   --remove-s6     with --uninstall: also remove the skarnet tools this script built
 #   --no-journal    no systemd-journald: rsyslog + per-service s6-log directories
 #                   (journalctl and the log lines in systemctl status won't work)
@@ -56,6 +59,11 @@ SKARNET_MANIFEST=/var/lib/sdcompat/skarnet-files.txt
 S6_SUMS=/var/lib/sdcompat/s6-dist-sums.txt
 
 RPM_DIR=""
+# The core's tools (the Cargo workspace in $REPO) and the standalone ones
+# (each its own project in $REPO/standalone).
+CORE_TOOLS=(sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd)
+STANDALONE=(sdcompat-fdstore sdcompat-notify sdcompat-journal-relay)
+WITHOUT=""
 DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0 JOURNAL="" RESOLVED="" REMOVE_S6=0
 KI_PLUGIN=/etc/kernel/install.d/90-sdcompat.install
 for a in "$@"; do
@@ -67,13 +75,14 @@ for a in "$@"; do
         --build-s6) BUILD_S6=1 ;;
         --rpms=*) RPM_DIR=${a#--rpms=} ;;
         --rebuild) REBUILD=1 ;;
+        --without=*) WITHOUT=,${a#--without=}, ;;
         --uninstall) UNINSTALL=1 ;;
         --no-journal) JOURNAL=0 ;;
         --journal) JOURNAL=1 ;;
         --no-resolved) RESOLVED=0 ;;
         --resolved) RESOLVED=1 ;;
         --remove-s6) REMOVE_S6=1 ;;
-        -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -87,6 +96,12 @@ conf_bool() {
 }
 JOURNAL=${JOURNAL:-$(conf_bool JOURNAL)}
 RESOLVED=${RESOLVED:-$(conf_bool RESOLVED)}
+# wanted NAME: whether the standalone tool NAME is to be installed.
+wanted() { case $WITHOUT in *",$1,"*) return 1 ;; *) return 0 ;; esac; }
+if [ "$JOURNAL" = 0 ] && ! wanted sdcompat-journal-relay; then
+    echo "error: --no-journal needs sdcompat-journal-relay (drop it from --without)" >&2
+    exit 2
+fi
 
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
@@ -161,6 +176,14 @@ uninstall() {
         run rm -f /etc/s6.conf
     fi
     run rm -rf "$S6LI_BASE"
+    local t
+    for t in "${STANDALONE[@]}"; do
+        if command -v rpm >/dev/null && rpm -q "$t" >/dev/null 2>&1; then
+            echo "  $t is installed as an RPM; remove it with: dnf remove $t"
+        else
+            run rm -f "$LIBEXEC/$t"
+        fi
+    done
     if command -v rpm >/dev/null && rpm -q sdcompat >/dev/null 2>&1; then
         echo "  sdcompat is installed as an RPM; remove it with: dnf remove sdcompat"
     else
@@ -236,7 +259,7 @@ install_packages() {
     local pkgs=(dbus-daemon earlyoom chrony NetworkManager
                 policycoreutils-python-utils grubby curl tar gcc make patch)
     [ "$JOURNAL" = 1 ] || pkgs+=(rsyslog)
-    [ -x "$REPO/target/release/sdcompat" ] && [ "$REBUILD" = 0 ] || pkgs+=(cargo rust)
+    [ -x "$REPO/target/release/sdcompatd" ] && [ "$REBUILD" = 0 ] || pkgs+=(cargo rust)
     if ! rpm -q gdm gnome-shell >/dev/null 2>&1; then
         warn "gdm/gnome-shell are not installed. For a full desktop run:"
         warn "  dnf group install workstation-product-environment"
@@ -341,21 +364,45 @@ install_skarnet() {
     fi
 }
 
+# build DIR: cargo build --release in DIR, as the user who ran sudo.
+build() {
+    local builder=${SUDO_USER:-root}
+    if [ "$builder" != root ]; then
+        run su "$builder" -c "cd '$1' && cargo build --release"
+    else
+        run sh -c "cd '$1' && cargo build --release"
+    fi
+}
+
+# The standalone tools: each is its own project and its own RPM.
+install_standalone() {
+    local t
+    for t in "${STANDALONE[@]}"; do
+        wanted "$t" || continue
+        if rpm -q "$t" >/dev/null 2>&1; then
+            echo "  $t RPM is installed, using it"
+            continue
+        fi
+        local dir=$REPO/standalone/$t
+        [ -x "$dir/target/release/$t" ] && [ "$REBUILD" = 0 ] || build "$dir"
+        run install -Dm0755 "$dir/target/release/$t" "$LIBEXEC/$t"
+    done
+}
+
 install_sdcompat() {
     say "Installing sdcompat"
+    install_standalone
     if rpm -q sdcompat >/dev/null 2>&1; then
         echo "  sdcompat RPM is installed, using it"
         return
     fi
-    if [ ! -x "$REPO/target/release/sdcompat" ] || [ "$REBUILD" = 1 ]; then
-        local builder=${SUDO_USER:-root}
-        if [ "$builder" != root ]; then
-            run su "$builder" -c "cd '$REPO' && cargo build --release"
-        else
-            run sh -c "cd '$REPO' && cargo build --release"
-        fi
+    if [ ! -x "$REPO/target/release/sdcompatd" ] || [ "$REBUILD" = 1 ]; then
+        build "$REPO"
     fi
-    run install -Dm0755 "$REPO/target/release/sdcompat" "$LIBEXEC/sdcompat"
+    local t
+    for t in "${CORE_TOOLS[@]}"; do
+        run install -Dm0755 "$REPO/target/release/$t" "$LIBEXEC/$t"
+    done
     run install -Dm0755 "$DIST/early" "$LIBEXEC/early"
     run ln -sfn ../libexec/sdcompat/sdcompat /usr/bin/sdcompat
     run install -Dm0644 "$DIST/dbus/sdcompat.conf" /usr/share/dbus-1/system.d/sdcompat.conf
@@ -516,10 +563,10 @@ enable_units() {
 build_database() {
     say "Translating units into an s6-rc database"
     if [ "$DRY" = 1 ]; then
-        printf '  + sdcompat reload --no-update\n'
+        printf '  + sdcompat-gen reload --no-update\n'
         return
     fi
-    "$LIBEXEC/sdcompat" reload --no-update
+    "$LIBEXEC/sdcompat-gen" reload --no-update
     local report=/var/lib/sdcompat/current/report.txt
     echo "  report: $report"
     grep -E '^(translated|skipped|cycles broken):' "$report" | sed 's/^/  /'

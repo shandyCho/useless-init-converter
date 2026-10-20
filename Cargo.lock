@@ -343,9 +343,84 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 [[package]]
 name = "sdcompat"
 version = "0.1.0"
+
+[[package]]
+name = "sdcompat-base"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "sdcompat-client"
+version = "0.1.0"
+dependencies = [
+ "sdcompat-base",
+ "serde",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
+name = "sdcompat-exec"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "sdcompat-base",
+]
+
+[[package]]
+name = "sdcompat-gen"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "sdcompat-base",
+ "sdcompat-install",
+]
+
+[[package]]
+name = "sdcompat-install"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "sdcompat-base",
+]
+
+[[package]]
+name = "sdcompat-runner"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "sdcompat-base",
+ "sdcompat-client",
+ "sdcompat-exec",
+ "sdcompat-install",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
+name = "sdcompat-timers"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "sdcompat-base",
+ "sdcompat-client",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
+name = "sdcompatd"
+version = "0.1.0"
 dependencies = [
  "futures-util",
  "libc",
+ "sdcompat-base",
+ "sdcompat-client",
+ "sdcompat-exec",
+ "sdcompat-gen",
+ "sdcompat-install",
  "serde",
  "tokio",
  "zbus",

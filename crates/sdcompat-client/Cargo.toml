@@ -1,0 +1,11 @@
+[package]
+name = "sdcompat-client"
+version.workspace = true
+edition.workspace = true
+description = "Minimal D-Bus client for the sdcompat daemon"
+
+[dependencies]
+sdcompat-base.workspace = true
+serde.workspace = true
+zbus.workspace = true
+tokio.workspace = true

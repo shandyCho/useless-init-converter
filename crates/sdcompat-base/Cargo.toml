@@ -1,0 +1,8 @@
+[package]
+name = "sdcompat-base"
+version.workspace = true
+edition.workspace = true
+description = "Unit files, sdcompat.conf, state files and the database index: what every sdcompat crate shares"
+
+[dependencies]
+libc.workspace = true

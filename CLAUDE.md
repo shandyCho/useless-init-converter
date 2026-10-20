@@ -16,12 +16,21 @@ if they turned out to be wrong.
 
 ## Working on this project
 
-- Build and test: `cargo build`, `cargo test`, then the sandbox suite:
-  `tests/sandbox.sh DIR && tests/check.sh DIR; tests/sandbox.sh DIR stop`.
+- Layout: the core is one Cargo workspace (`crates/`); its crates may depend
+  on each other. `standalone/*` are separate projects (each its own
+  `[workspace]`, Cargo.lock, README pair and spec) and must not depend on the
+  core or on each other: no path dependencies, no shared code. The core must
+  keep working without them.
+- Build and test: `cargo build`, `cargo test`; for each standalone project
+  `cargo test --manifest-path standalone/NAME/Cargo.toml`; then the sandbox
+  suite: `tests/sandbox.sh DIR && tests/check.sh DIR; tests/sandbox.sh DIR stop`
+  (it builds the standalone tools), also with `SANDBOX_JOURNAL=no` and
+  `SANDBOX_FDSTORE=no` in front of both scripts when touching those parts.
   Everything runs unprivileged and never touches the host's init system.
 - Shell scripts must pass `bash -n` and `shellcheck -S warning`.
 - Docs exist in Korean and English: `README.md`/`README-us.md`,
-  `TESTING.md`/`TESTING-us.md`. Change both together.
+  `TESTING.md`/`TESTING-us.md`, and each standalone project's README pair.
+  Change both together.
 - The owner pushes to GitHub; this machine has no GitHub credentials.
 - The development machine runs Artix with s6 as the real init. Never kill
   processes by a pattern that could match the system's or the owner's own s6

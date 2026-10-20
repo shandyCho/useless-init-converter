@@ -123,9 +123,14 @@ sandbox. To run it again, recreate the sandbox:
 To test a `JOURNAL=no` install (per-service s6-log instead of journald), set up
 the sandbox with `SANDBOX_JOURNAL=no tests/sandbox.sh ~/sdc`. `check.sh` then
 looks for service output under `~/sdc/logs/` instead of the journal stream, and
-sends native and stream messages through `sdcompat journal-relay` (sockets in
+sends native and stream messages through `sdcompat-journal-relay` (sockets in
 `$XDG_RUNTIME_DIR/sdc-test/jrelay`, forwarded to a stand-in `/dev/log` that
 writes `devlog.out` next to them).
+
+To check that the core works without the standalone `sdcompat-fdstore`, run
+`sandbox.sh` and `check.sh` with `SANDBOX_FDSTORE=no` in front. The daemon then
+holds the fds itself, so `check.sh` checks that they are gone after the daemon
+restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
 Then try Fedora's real `systemctl` against the sandbox:
 
@@ -305,7 +310,8 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms --yes
 ```
 
 Running the setup script again is safe. It keeps your `/etc/sdcompat`
-configuration, installs the new binary, regenerates the database and the
+configuration, builds and installs the new binaries (the core tools and the
+standalone ones), regenerates the database and the
 boot entry, and backs up what it replaces. The s6 services in
 `/etc/sdcompat/s6` are updated to the new version unless you edited them;
 for an edited one it prints "keeping your modified …" and you merge the new

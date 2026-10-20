@@ -1,0 +1,14 @@
+[package]
+name = "sdcompat-runner"
+version.workspace = true
+edition.workspace = true
+description = "Run one systemd service under s6 with systemd's execution semantics (sdcompat-runner)"
+
+[dependencies]
+sdcompat-base.workspace = true
+sdcompat-install.workspace = true
+sdcompat-exec.workspace = true
+sdcompat-client.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+libc.workspace = true

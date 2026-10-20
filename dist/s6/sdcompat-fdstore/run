@@ -1,4 +1,11 @@
 #!/bin/sh
 # Holds FDSTORE= fds and listening sockets apart from sdcompatd, so they
-# survive its restarts.
-exec /usr/libexec/sdcompat/sdcompat fdstore --ready-fd 3
+# survive its restarts. sdcompat-fdstore is a separate, optional project:
+# without it, report ready and idle; sdcompatd then holds the fds itself.
+bin=/usr/libexec/sdcompat/sdcompat-fdstore
+if [ ! -x "$bin" ]; then
+    echo "sdcompat-fdstore is not installed; sdcompatd holds the fds" >&2
+    echo >&3
+    exec sleep infinity
+fi
+exec "$bin" --socket /run/sdcompat/fdstore --ready-fd 3

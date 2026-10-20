@@ -1,0 +1,15 @@
+[package]
+name = "sdcompat-notify"
+version = "0.1.0"
+edition = "2021"
+description = "systemd-notify replacement: sends sd_notify messages to $NOTIFY_SOCKET"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# Its own project, not a member of the sdcompat workspace above it.
+[workspace]

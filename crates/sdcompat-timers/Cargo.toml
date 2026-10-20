@@ -1,0 +1,12 @@
+[package]
+name = "sdcompat-timers"
+version.workspace = true
+edition.workspace = true
+description = "Run .timer and .path units under s6 (sdcompat-timers)"
+
+[dependencies]
+sdcompat-base.workspace = true
+sdcompat-client.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+libc.workspace = true

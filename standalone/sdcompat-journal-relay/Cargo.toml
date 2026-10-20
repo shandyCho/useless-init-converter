@@ -1,0 +1,15 @@
+[package]
+name = "sdcompat-journal-relay"
+version = "0.1.0"
+edition = "2021"
+description = "journald's client sockets without journald: forwards log messages to syslog"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# Its own project, not a member of the sdcompat workspace above it.
+[workspace]

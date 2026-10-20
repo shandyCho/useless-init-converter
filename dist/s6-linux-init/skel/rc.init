@@ -20,8 +20,8 @@ for opt in $(cat /proc/cmdline); do
 done
 
 # Pick up unit files installed or enabled while the system was down.
-if [ "$reload" = 1 ] && ! /usr/libexec/sdcompat/sdcompat reload --no-update; then
-    echo "rc.init: sdcompat reload failed, booting the previous database" >&2
+if [ "$reload" = 1 ] && ! /usr/libexec/sdcompat/sdcompat-gen reload --no-update; then
+    echo "rc.init: sdcompat-gen reload failed, booting the previous database" >&2
 fi
 [ -e "$db" ] || db=/var/lib/sdcompat/compiled
 

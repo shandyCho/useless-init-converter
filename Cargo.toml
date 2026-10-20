@@ -1,10 +1,19 @@
-[package]
-name = "sdcompat"
+# sdcompat: the systemd compatibility layer, split into crates by role.
+# The standalone tools in standalone/ are separate projects, not members.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "systemd compatibility layer on top of s6-rc: unit translation, service runner and org.freedesktop.systemd1 D-Bus API"
 
-[dependencies]
+[workspace.dependencies]
+sdcompat-base = { path = "crates/sdcompat-base" }
+sdcompat-install = { path = "crates/sdcompat-install" }
+sdcompat-exec = { path = "crates/sdcompat-exec" }
+sdcompat-client = { path = "crates/sdcompat-client" }
+sdcompat-gen = { path = "crates/sdcompat-gen" }
 zbus = { version = "5.19", default-features = false, features = ["tokio", "p2p"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "time", "sync", "fs", "io-util", "signal"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

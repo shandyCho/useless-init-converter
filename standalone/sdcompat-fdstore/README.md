@@ -1,0 +1,53 @@
+# sdcompat-fdstore
+
+[English](README-us.md) | **한국어**
+
+서비스의 파일 디스크립터를 보관하는 작은 서버입니다. systemd의 `FDSTORE=1`과
+`FileDescriptorStoreMax=`처럼, 서비스가 맡긴 fd와 소켓 활성화 서비스의 리스닝
+소켓을 자기 프로세스에 들고 있다가, 서비스나 서비스 관리자가 다시 시작한 뒤
+돌려줍니다.
+
+sdcompat 프로젝트에서 떼어 낸 독립 도구입니다. 설정 파일도 유닛 파일도 읽지
+않으며, 다른 sdcompat 구성 요소 없이 빌드·설치·실행됩니다. 의존성은 libc뿐입니다.
+
+## 빌드
+
+```sh
+cargo build --release
+cargo test
+```
+
+## 설치
+
+```sh
+sudo install -Dm0755 target/release/sdcompat-fdstore /usr/libexec/sdcompat/sdcompat-fdstore
+```
+
+RPM: `sdcompat-fdstore.spec` (맨 위 주석에 소스 tarball 만드는 방법이 있습니다).
+
+## 실행
+
+```sh
+sdcompat-fdstore [--socket PATH] [--ready-fd N]
+```
+
+- `--socket PATH`: 기다릴 소켓(기본값 `/run/sdcompat/fdstore`).
+- `--ready-fd N`: 소켓을 연 뒤 fd N에 줄바꿈을 씁니다(s6의 준비 완료 알림).
+
+root와, 서버를 실행한 사용자만 쓸 수 있습니다. sdcompat과 함께 쓸 때는
+`/etc/sdcompat/s6/sdcompat-fdstore` s6 서비스가 이것을 실행합니다. 이 도구가
+없으면 그 서비스는 아무것도 하지 않고, sdcompatd가 fd를 직접 보관합니다.
+
+## 프로토콜
+
+`SOCK_SEQPACKET` 소켓, 메시지마다 fd 하나(SCM_RIGHTS):
+
+| 요청 | 응답 |
+|---|---|
+| `PUT\0<키>\0<이름>\0<최대>` + fd | `OK` 또는 `ERR <메시지>` |
+| `GET\0<키>` | fd마다 `FD\0<이름>` + fd, 마지막에 `END` |
+| `DEL\0<키>[\0<이름>]` | `OK` |
+
+`<최대>`는 그 키가 가질 수 있는 fd 수입니다(서비스의 `FileDescriptorStoreMax=`).
+서버가 유닛 파일을 읽지 않도록 클라이언트가 보냅니다. 없으면 `<유닛>#sockets`(1024개)와
+`<유닛>#stdio`(3개) 키만 받습니다.

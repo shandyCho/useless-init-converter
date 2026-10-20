@@ -9,39 +9,56 @@ libsystemd and D-Bus clients, while **s6-linux-init + s6-rc** run the system.
  systemctl / dnf scriptlets / libsystemd clients / dbus-daemon activation
               │ org.freedesktop.systemd1 (system bus + /run/systemd/private)
               ▼
-   sdcompat daemon ── jobs, unit state, enable/disable/preset, scopes
+   sdcompatd ── jobs, unit state, enable/disable/preset, scopes
               │ s6-rc -u/-d, s6-svc, s6-svstat
               ▼
-   s6-rc database  ◄── sdcompat reload: unit files → s6-rc source → compile
+   s6-rc database  ◄── sdcompat-gen reload: unit files → s6-rc source → compile
               │
-   s6-supervise ── run/finish scripts call `sdcompat run|finish|up|down`
+   s6-supervise ── run/finish scripts call `sdcompat-runner run|finish|up|down`
                    (User=, Environment=, sockets, NOTIFY_SOCKET, Restart=, ...)
+                   and `sdcompat-timers timer-run|path-run`
 ```
 
 It works at the protocol level, not by replacing libraries: the real `systemctl`
 and `libsystemd` talk to it exactly as they would talk to systemd.
 
-## Components (one binary, `sdcompat`)
+## Components
 
-| Command | Role |
-|---|---|
-| `sdcompat reload` | Translates every unit into an s6-rc source tree, compiles it together with your hand-written s6 services (`EXTRA_SOURCE`) and switches the live state (`s6-rc-update`). Writes a coverage report. |
-| `sdcompat daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
-| `sdcompat run/finish/up/down` | Called by the generated s6 scripts; does what systemd does between `fork()` and `exec()`. |
-| `sdcompat timer-run` | Runs one `.timer` as an s6 longrun: computes elapses and asks the daemon to start the unit. |
-| `sdcompat path-run` | Runs one `.path` unit as an s6 longrun, watching with inotify. |
-| `sdcompat start/stop/restart UNIT` | Minimal client for the daemon (private socket or bus). |
-| `sdcompat notify` | `systemd-notify` replacement. |
-| `sdcompat journal-relay` | With `JOURNAL=no`: listens on journald's client sockets (`/run/systemd/journal/socket` and `stdout`) and forwards to rsyslog. dbus-broker, the session bus of `systemd --user`, refuses to start without them. |
-| `sdcompat log UNIT [-f]` | Shows a service's log (`journalctl -u`, or the s6-log directory with `JOURNAL=no`). |
-| `sdcompat enable/disable/mask/preset/is-enabled` | Offline unit file management. |
+sdcompat is split by role. The **core** is one Cargo workspace (`crates/`):
+its parts work together and may depend on each other. The **standalone
+tools** (`standalone/`) are separate projects: each builds, installs and runs
+on its own, and the core works without them.
+
+**Core tools** (installed in `/usr/libexec/sdcompat`):
+
+| Tool | Commands | Role |
+|---|---|---|
+| `sdcompat-gen` | `reload`, `plan` | Translates every unit into an s6-rc source tree, compiles it together with your hand-written s6 services (`EXTRA_SOURCE`) and switches the live state (`s6-rc-update`). Writes a coverage report. |
+| | `enable/disable/mask/unmask/preset/is-enabled` | Offline unit file management. |
+| `sdcompatd` | `daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
+| | `start/stop/restart UNIT`, `log UNIT [-f]` | Minimal client for the daemon (private socket or bus); a service's log (`journalctl -u`, or the s6-log directory with `JOURNAL=no`). |
+| `sdcompat-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. |
+| `sdcompat-timers` | `timer-run`, `path-run` | Runs one `.timer` (computes elapses) or `.path` unit (inotify) as an s6 longrun and asks the daemon to start the unit. |
+| `sdcompat` | any of the above | The command users know (`/usr/bin/sdcompat`): runs the tool that handles the command, so `sdcompat reload` still works. |
+
+**Standalone tools** (optional, each its own project and RPM):
+
+| Project | Role | Without it |
+|---|---|---|
+| `sdcompat-fdstore` | Holds `FDSTORE=` fds and listening sockets in a process of its own. Reads no configuration or unit files. | sdcompatd holds them itself; they are lost when sdcompatd restarts. |
+| `sdcompat-journal-relay` | With `JOURNAL=no`: listens on journald's client sockets (`/run/systemd/journal/socket` and `stdout`) and forwards to rsyslog. dbus-broker, the session bus of `systemd --user`, refuses to start without them. | Needed for `JOURNAL=no`; nothing with `JOURNAL=yes` (the default). |
+| `sdcompat-notify` | `systemd-notify` replacement; works under any service manager that sets `$NOTIFY_SOCKET`. | Use `systemd-notify`, which stays installed. |
+
+How each one is built, installed and run: [standalone/sdcompat-fdstore](standalone/sdcompat-fdstore/README-us.md),
+[standalone/sdcompat-journal-relay](standalone/sdcompat-journal-relay/README-us.md),
+[standalone/sdcompat-notify](standalone/sdcompat-notify/README-us.md).
 
 ## What is implemented
 
 **Translation** (`.service` → longrun/oneshot, `.target` → bundle, `.timer`/`.path` → longrun, `.mount`/`.swap` → oneshot)
 - `Requires=`, `Requisite=`, `BindsTo=`, and `Wants=` combined with `After=`/`Before=`, become s6-rc dependencies. Targets pull in all of their `Wants=`.
 - `.wants/`, `.requires/` and `.upholds/` directories, aliases, templates/instances, masking, drop-ins, specifiers.
-- Implicit dependencies: `DefaultDependencies=` → `sysinit.target`; `Type=dbus` → `dbus.socket`.
+- Implicit dependencies: `DefaultDependencies=` → `sysinit.target`; `Type=dbus` → `dbus.socket`. Services with `BusName=` (and another `Type=`) are also ordered after `dbus.socket`: systemd starts them by bus activation, but here a socket unit may start them at boot.
 - Dependency cycles are broken (and reported) instead of failing the compile.
 - `DEP_MAP` maps systemd units to hand-written s6 services. For example, `dbus.service` → `dbus`.
 - An enabled `.socket` pulls in its service. The runner binds the sockets, matched by name or by `Service=`.
@@ -84,15 +101,16 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 - `FDSTORE=1` / `FileDescriptorStoreMax=`: stored fds are held and handed back
   after a restart (journald and logind use this). Listening sockets are held
   the same way, so they stay open across service restarts. The store is its
-  own s6 service, `sdcompat-fdstore` (`sdcompat fdstore`), so the fds also
-  survive a restart of sdcompatd; without it the daemon holds them itself.
+  own s6 service running the standalone `sdcompat-fdstore` tool, so the fds
+  also survive a restart of sdcompatd; when that tool is not installed the
+  daemon holds them itself.
   Services with `FileDescriptorStoreMax=` start after it.
 - `TimeoutStartSec=` is enforced by the runner: on timeout the start fails and the service is terminated.
 - Output goes to **systemd-journald** through its stdout stream protocol (as PID 1 does). journald attributes it to the unit from the cgroup, so `journalctl -u UNIT` and the log lines in `systemctl status` work. With `JOURNAL=no`, each service gets an s6-log directory instead.
 - Conditions and asserts: `Condition*=`/`Assert*=` for paths, the kernel command line, virtualization, security and more.
 - cgroup v2 at systemd's paths (`system.slice/<unit>`), `KillMode=`, and `MemoryMax/High`, `CPUQuota/Weight`, `TasksMax`, `IOWeight`.
 - Sandboxing: `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `Read{Write,Only}Paths`, `InaccessiblePaths`, `NoNewPrivileges`, `CapabilityBoundingSet`, `AmbientCapabilities`, `PrivateDevices`, `PrivateNetwork`, `PrivateIPC`, `PrivateMounts`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `ProtectProc`, `ProcSubset`, with the same mounts, capability drops, syscall filters and implied `NoNewPrivileges=` as systemd. Differences: each process of a unit (`ExecStartPre=`, main, `ExecStop=`) gets its own network/IPC/UTS namespace, where systemd shares one per unit; `ProtectControlGroups=private|strict` only make the cgroup tree read-only (no cgroup namespace). Every other directive is listed as "ignored" in the report.
-- seccomp: `SystemCallFilter=`, `SystemCallErrorNumber=` and `SystemCallArchitectures=`, with systemd's syscall groups (`@system-service`, ...; `src/syscall-groups.txt`, from `systemd-analyze syscall-filter`), and `RestrictAddressFamilies=`, `RestrictNamespaces=`, `MemoryDenyWriteExecute=` (the kernel's `PR_SET_MDWE` when it has it, as systemd), `LockPersonality=`, `RestrictRealtime=`, `RestrictSUIDSGID=`, with systemd's rules and errnos. As in systemd, `RestrictAddressFamilies=` doesn't cover the i386 ABI (its `socket()` goes through `socketcall()`). libseccomp is loaded at run time.
+- seccomp: `SystemCallFilter=`, `SystemCallErrorNumber=` and `SystemCallArchitectures=`, with systemd's syscall groups (`@system-service`, ...; `crates/sdcompat-exec/src/syscall-groups.txt`, from `systemd-analyze syscall-filter`), and `RestrictAddressFamilies=`, `RestrictNamespaces=`, `MemoryDenyWriteExecute=` (the kernel's `PR_SET_MDWE` when it has it, as systemd), `LockPersonality=`, `RestrictRealtime=`, `RestrictSUIDSGID=`, with systemd's rules and errnos. As in systemd, `RestrictAddressFamilies=` doesn't cover the i386 ABI (its `socket()` goes through `socketcall()`). libseccomp is loaded at run time.
 - cgroup BPF: `DevicePolicy=`, `DeviceAllow=` (`/dev/` nodes and `char-`/`block-` classes from /proc/devices, globs included; `PrivateDevices=` implies `DevicePolicy=closed`), `IPAddressDeny=` and `IPAddressAllow=` (addresses, prefixes, `any`, `localhost`, `link-local`, `multicast`). Like systemd, the runner attaches hand-assembled eBPF programs (`sd_devices`, `sd_fw_ingress`, `sd_fw_egress`) to the unit's cgroup before anything runs there, and a program the kernel refuses is logged (`... not enforced: ...`) without failing the start. Differences: the address lists are compiled into the program instead of BPF maps, and lists set on slices are not applied.
 - SELinux as under systemd: the s6 tree runs in `init_t` (policy module `dist/selinux/sdcompat.cil`), so services enter their own domains (`chronyd_t`, `xdm_t`, ...) and `user@.service` can start `systemd --user` in the user's domain. `RuntimeDirectory=` and the other directories, and socket files, get their file_contexts label; the sockets of socket units carry the label of the service that uses them.
 
@@ -167,8 +185,8 @@ none is needed to build. Without one, the matching feature is missing:
 **Recommended packages:** earlyoom (replaces systemd-oomd), chrony,
 NetworkManager, rsyslog (only with `JOURNAL=no`).
 
-**Build:** cargo and rust. The crates are zbus, tokio, futures-util, libc
-and serde (`Cargo.toml`).
+**Build:** cargo and rust. The core uses zbus, tokio, futures-util, libc
+and serde (`Cargo.toml`); the standalone tools only libc.
 
 ## Testing on Fedora
 
@@ -182,7 +200,7 @@ the skarnet RPMs first; see the next section). Nothing runs as root and the
 host's init system is never touched.
 
 ```sh
-cargo build
+cargo build                           # the core; sandbox.sh builds the standalone tools
 tests/sandbox.sh ~/sdc-sandbox        # private s6-svscan, s6-rc and D-Bus bus
 tests/check.sh ~/sdc-sandbox          # 119 scenario checks, ending with an unprivileged-caller phase (once per sandbox)
 tests/systemctl.sh status hello.service   # the real systemctl, in a namespace
@@ -246,7 +264,8 @@ Other options:
 | `--yes` | Don't ask before starting |
 | `--rpms=DIR` | Install the skarnet tools from RPMs built with `dist/rpm/build-skarnet-rpms.sh` |
 | `--build-s6` | Build the skarnet tools from source into `/usr` instead (not tracked by rpm) |
-| `--rebuild` | Rebuild sdcompat even if `target/release/sdcompat` exists |
+| `--rebuild` | Rebuild sdcompat and the standalone tools even if they are built |
+| `--without=LIST` | Do not install these standalone tools (comma-separated: `sdcompat-fdstore`, `sdcompat-notify`, `sdcompat-journal-relay`; the last is needed with `--no-journal`) |
 | `--no-journal` / `--journal` | No systemd-journald: rsyslog plus one s6-log directory per service / back to journald |
 | `--no-resolved` / `--resolved` | No systemd-resolved on the s6 boot: NetworkManager handles DNS itself / back to resolved |
 | `--enforcing` | Don't add `enforcing=0` to the s6 boot entry |
@@ -380,31 +399,39 @@ and defaults). The most important keys:
 ## Source layout
 
 ```
-src/unit.rs        unit file parser, word splitting, time spans
-src/loader.rs      search path, aliases, templates, drop-ins, specifiers
-src/gen.rs         plan → s6-rc source, compile, s6-rc-update, report
-src/runner.rs      exec environment, readiness, restart policy
-src/install.rs     enable/disable/mask/preset, unit file state
-src/socket.rs      socket units (sd_listen_fds)
-src/sandbox.rs     namespaces, mounts and capabilities
-src/seccomp.rs     SystemCallFilter= and the other seccomp-based settings (libseccomp)
-src/bpf.rs         DevicePolicy=/DeviceAllow= and IPAddressDeny=/IPAddressAllow= (cgroup eBPF)
-src/selinux.rs     file and socket labels (libselinux)
-src/cgroup.rs      systemd-compatible cgroup layout and resource control
-src/conditions.rs  Condition*/Assert*
-src/calendar.rs    OnCalendar= parser and next-elapse search
-src/timer.rs       timer runner (one s6 longrun per .timer)
-src/pathunit.rs    path unit runner (inotify)
-src/mountunit.rs   .mount/.swap units
-src/pam.rs         PAMName= via dlopen(libpam)
-src/client.rs      small client for the daemon
-src/fdstore.rs     file descriptor store (FDSTORE=1, held listening sockets)
-src/journal.rs     journal-relay: journald's client sockets to syslog (JOURNAL=no)
-src/daemon/        D-Bus API: dispatch, properties, s6 backend, private socket,
-                   on-demand instances (dynamic.rs), systemd-run (transient.rs),
-                   units wanted by devices (devices.rs)
-dist/              setup-fedora.sh, config, D-Bus policy, s6 services, early-boot helper,
-                   s6-linux-init skeleton, kernel-install plugin, sdcompat.spec
-dist/rpm/          specs and build script for the skarnet packages in dist/skarnet.versions
-tests/             unprivileged sandbox, scenario checks, systemctl wrapper
+crates/                    the core (one Cargo workspace)
+  sdcompat-base/           shared by all core crates
+    unit.rs                unit file parser, word splitting, time spans
+    loader.rs              search path, aliases, templates, drop-ins, specifiers
+    config.rs, envfile.rs  sdcompat.conf, EnvironmentFile= format
+    state.rs               per-unit state files (RUN_DIR/units/<unit>/)
+    index.rs               the generated database's index (unit → s6-rc service)
+    fdstore.rs             fd store client and the daemon's fallback store
+    calendar.rs            OnCalendar= parser and next-elapse search
+    timerspec.rs, pathspec.rs, mountunit.rs   what .timer/.path/.mount units say
+  sdcompat-install/        enable/disable/mask/preset, unit file state
+  sdcompat-exec/           how a service process is set up:
+    sandbox.rs             namespaces, mounts and capabilities
+    seccomp.rs             SystemCallFilter= and the other seccomp-based settings (libseccomp)
+    bpf.rs                 DevicePolicy=/DeviceAllow= and IPAddressDeny=/IPAddressAllow= (cgroup eBPF)
+    cgroup.rs              systemd-compatible cgroup layout and resource control
+    selinux.rs, pam.rs     labels (libselinux), PAMName= (libpam), both via dlopen
+    socket.rs              socket units (sd_listen_fds)
+    execcmd.rs, conditions.rs   Exec*= command lines, Condition*/Assert*
+  sdcompat-client/         small D-Bus client for the daemon
+  sdcompat-gen/            plan → s6-rc source, compile, s6-rc-update, report (tool sdcompat-gen)
+  sdcompat-runner/         exec environment, readiness, restart policy (tool sdcompat-runner)
+  sdcompat-timers/         timer and path unit runners (tool sdcompat-timers)
+  sdcompatd/               D-Bus API: dispatch, properties, s6 backend, private socket,
+                           on-demand instances (dynamic.rs), systemd-run (transient.rs),
+                           units wanted by devices (devices.rs) (tool sdcompatd)
+  sdcompat/                the sdcompat command, which runs the right tool
+standalone/                separate projects, each with its own README and spec
+  sdcompat-fdstore/        file descriptor store server
+  sdcompat-journal-relay/  journald's client sockets to syslog (JOURNAL=no)
+  sdcompat-notify/         systemd-notify replacement
+dist/                      setup-fedora.sh, config, D-Bus policy, s6 services, early-boot helper,
+                           s6-linux-init skeleton, kernel-install plugin, sdcompat.spec
+dist/rpm/                  specs and build script for the skarnet packages in dist/skarnet.versions
+tests/                     unprivileged sandbox, scenario checks, systemctl wrapper
 ```

@@ -9,7 +9,7 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-bin=$(cargo test --lib --no-run --message-format=json 2>/dev/null |
+bin=$(cargo test -p sdcompat-exec --lib --no-run --message-format=json 2>/dev/null |
     sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -n 1)
-[ -x "$bin" ] || { echo "cannot find the test binary (cargo test --lib --no-run)" >&2; exit 1; }
+[ -x "$bin" ] || { echo "cannot find the test binary (cargo test -p sdcompat-exec --lib --no-run)" >&2; exit 1; }
 exec sudo "$bin" --ignored --exact bpf::tests::kernel_enforces --nocapture

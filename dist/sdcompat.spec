@@ -1,6 +1,6 @@
 # Build from a tarball that contains vendored crates:
 #   cargo vendor && tar czf sdcompat-0.1.0.tar.gz --transform 's,^,sdcompat-0.1.0/,' \
-#       Cargo.toml Cargo.lock src dist vendor .cargo
+#       Cargo.toml Cargo.lock crates dist vendor .cargo
 # with .cargo/config.toml pointing [source.crates-io] at vendor/.
 Name:           sdcompat
 Version:        0.1.0
@@ -25,12 +25,19 @@ Recommends:     rsyslog
 Recommends:     earlyoom
 # The s6 command; setup-fedora.sh writes /etc/s6.conf for it.
 Recommends:     s6-frontend
+# Separate projects (standalone/), each its own package; sdcompat works
+# without them. sdcompat-journal-relay is needed for JOURNAL=no.
+Recommends:     sdcompat-fdstore
+Recommends:     sdcompat-notify
+Suggests:       sdcompat-journal-relay
 
 %description
-Translates systemd unit files into an s6-rc database, runs services with
-systemd's execution semantics, and serves the org.freedesktop.systemd1 D-Bus
-API (system bus and /run/systemd/private) so systemctl, libsystemd and other
-clients keep working with s6 as the init system.
+Translates systemd unit files into an s6-rc database (sdcompat-gen), runs
+services with systemd's execution semantics (sdcompat-runner, sdcompat-timers),
+and serves the org.freedesktop.systemd1 D-Bus API on the system bus and
+/run/systemd/private (sdcompatd), so systemctl, libsystemd and other clients
+keep working with s6 as the init system. The sdcompat command passes each
+subcommand to the tool that handles it.
 
 %prep
 %autosetup
@@ -42,7 +49,9 @@ cargo build --release --offline
 cargo test --release --offline
 
 %install
-install -Dm0755 target/release/sdcompat %{buildroot}%{_libexecdir}/sdcompat/sdcompat
+for t in sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd; do
+    install -Dm0755 target/release/$t %{buildroot}%{_libexecdir}/sdcompat/$t
+done
 install -Dm0755 dist/early %{buildroot}%{_libexecdir}/sdcompat/early
 install -d %{buildroot}%{_bindir}
 ln -s ../libexec/sdcompat/sdcompat %{buildroot}%{_bindir}/sdcompat
