@@ -978,8 +978,15 @@ As in session 9. The new skarnet RPMs are built in
   device-wanted starts (as in systemd). Both existing callers pass true.
 - Config: `UDEV_DIR` (default /run/udev, empty = off) and `UDEV_MONITOR`
   (default yes). sdcompatd runs as init_t, like systemd, which does the same
-  netlink/`/run/udev` access, so no policy change is expected; not verified
-  under enforcing (no sesearch here).
+  netlink/`/run/udev` access, so no policy change is needed. Checked with
+  sesearch/seinfo 4.7.1 against the loaded policy (owner installed them):
+  init_t self netlink_kobject_uevent_socket {create bind setopt read ...};
+  capability net_admin (SO_RCVBUFFORCE); file_type:dir {open read search}
+  for /run/udev; udev_var_run_t and init_var_run_t are in the pidfile
+  attribute, which gives init_t file {open read} and dir {add_name
+  remove_name write}; init_var_run_t:file {create write rename} for
+  /run/sdcompat/devices(.tmp). Netlink multicast delivery has no per-message
+  check. Not yet run enforcing.
 - Tests: unit tests for message parsing, ids, presence rules, database
   lines, the state file; `netlink_monitor` (ignored by default) sends a real
   udev message over netlink and passed under `unshare -rn cargo test --
