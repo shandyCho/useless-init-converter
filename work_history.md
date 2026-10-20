@@ -2636,3 +2636,75 @@ boots; they will run it on each boot.
 
 1. Owner: `sudo tests/memcompare.sh snap` on both boots (same apps open),
    then `compare` and send the output.
+
+## Session: 2026-10-21: the first enforcing s6 boot
+
+Owner booted s6 enforcing (`getenforce`: Enforcing). GNOME login worked;
+polkitd, chronyd, NetworkManager, boltd run in their own domains (the
+nnp_transition fix from `c3560ff` works). `systemctl --failed`:
+systemd-hostnamed. `ausearch ... > ~/avc-enforcing.txt`: 107 AVCs.
+
+- **Bug, fixed (`c5f2e06`): catch-all logger could not rotate.** 49 x
+  `rename` on `current`, init_t -> var_run_t, from s6-log in
+  /run/uncaught-logs (`s6-log -bpd3 -- 1 T /run/uncaught-logs`), every 2 s
+  from 30 s into boot. init_t has no rename on var_run_t files (it does on
+  init_var_run_t). While rotation fails s6-log stops writing, so the
+  catch-all fifo can fill and block whatever writes to it. Not seen on the
+  permissive boots (permissive allows and logs once). Fix:
+  sdcompat.cil labels `/run/uncaught-logs(/.*)?` init_var_run_t (filecon
+  plus a named type transition for init_t creating it in /run, like
+  /run/sdcompat); setup-fedora.sh restorecons it on a running boot, so the
+  stuck logger rotates on its next retry. Checked with sesearch: init_t
+  on init_var_run_t files has create/rename/write/setattr/unlink, and
+  read/open/lock through `pidfile`.
+- **Bug, fixed (`c5f2e06`): stale Result=.** hostnamed's later runs
+  exited 0 on their idle timeout but showed `failed (Result: exit-code)`,
+  status=0/SUCCESS. The runner never cleared the result at a new start,
+  and the exit handler keeps a non-success result already in the state
+  file. Now prepare_start() clears it (systemd's service_start() resets
+  it too). Sandbox test `second.service` (fails once, exits 0 the second
+  time); without the fix it fails (and NFailedUnits is off by one).
+- **Bug, fixed (`c5f2e06`): hostnamed started before the bus.** Its log
+  says `Failed to run event loop: Transport endpoint is not connected` at
+  01:57:33, 30 s after it started. Start order: the
+  systemd-hostnamed.socket started it at boot (no on-demand socket
+  activation) before dbus-daemon made /run/dbus (hostnamed pid 1613,
+  dbus-daemon 1960). sd-bus then waits with an inotify watch on /run/dbus;
+  the `read` on system_dbusd_var_run_t dir is denied for
+  systemd_hostnamed_t, so it ran without a bus and failed at its 30 s
+  idle exit. Under systemd it is bus-activated, so the bus already
+  exists. Fix: gen.rs gives services with BusName= (not Type=dbus, which
+  already Requires= it) Wants= + After= dbus.socket (mapped to the s6
+  `dbus` service). Affects gdm, polkit, hostnamed, localed, logind and
+  timedated on the owner's db. Unit test `bus_name_orders_after_dbus`.
+  Decision: ordering, not a policy rule for hostnamed, because localed and
+  timedated have the same pattern and the rule would not cover them.
+- Seen, not changed: JOURNAL=no output lost as expected (NM dispatcher
+  scripts on the init_t pipe; systemd-user-runtime-dir, rsyslogd,
+  loadkeys, restorecon and now agetty (the tty9 early getty, getty_t) on
+  the s6-svscan-log fifo). Under enforcing the fds become /dev/null; the
+  programs run. hostnamed's /proc/pressure denial didn't show up this
+  time.
+- Tests: cargo test 46 + 2 ignored; release build; sandbox 187/187.
+  bash -n and shellcheck -S warning clean. The CIL was not compiled here
+  (no secilc, semodule needs root); it uses the same forms as the
+  existing lines.
+
+### Current state
+
+Enforcing works on the s6 boot except for the three bugs above, fixed in
+code but not yet on a boot.
+
+### Next steps
+
+1. Owner: push, reinstall (`setup-fedora.sh`; it loads the new
+   sdcompat.cil and restorecons /run/uncaught-logs), then
+   `ls -Zd /run/uncaught-logs` should say init_var_run_t. Reboot s6
+   enforcing.
+2. Check: `systemctl --failed` empty, `ausearch -m avc -ts boot -i` has no
+   `rename` from s6-log and no hostnamed /run/dbus read,
+   `sudo ls /run/uncaught-logs` shows rotated `@...s` files.
+3. If clean: `setup-fedora.sh --enforcing` (drop `enforcing=0`).
+4. Still open: JOURNAL=no output loss; on-demand socket activation (the
+   root cause of early starts and part of the RAM gap); beside3 sandbox
+   flake; fd store limit changes.
