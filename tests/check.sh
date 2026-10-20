@@ -47,6 +47,18 @@ echo "== boot state"
 expect_state hello.service active/running
 expect_state notifier.service active/running
 expect_eq "notify STATUS= relayed" "$(prop notifier.service Service StatusText)" "all good"
+# The notify helper must block in poll() after READY=1, not spin.
+ticks() {
+    t=0
+    for p in $(pgrep -u "$(id -u)" -f 'sdcompat run .*-- notifier\.service$'); do
+        t=$((t + $(awk '{print $14 + $15}' "/proc/$p/stat" 2>/dev/null || echo 0)))
+    done
+    echo "$t"
+}
+t0=$(ticks)
+sleep 1
+t1=$(ticks)
+[ $((t1 - t0)) -lt 10 ] && ok "notify helper idle" || bad "notify helper used $((t1 - t0)) ticks in 1 s"
 expect_eq "alias resolves" "$(upath hello-alias.service)" "/org/freedesktop/systemd1/unit/hello_2eservice"
 expect_eq "UnitFileState enabled" "$(prop hello.service Unit UnitFileState)" "enabled"
 expect_eq "preset disabled" "$(prop failing.service Unit UnitFilePreset)" "disabled"

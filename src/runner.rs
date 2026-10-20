@@ -1305,10 +1305,11 @@ impl Runner {
                 let nfds = if pidfd >= 0 { 2 } else { 1 };
                 let wait = match (ready, deadline) {
                     _ if pidfd < 0 => 1000,
-                    (false, Some(d)) => ((d.saturating_sub(util::now_monotonic_usec())) / 1000) as i32,
+                    (false, Some(d)) => (d.saturating_sub(util::now_monotonic_usec()) / 1000).min(i32::MAX as u64) as i32,
+                    // -1 blocks until a message arrives or the service exits.
                     _ => -1,
                 };
-                unsafe { libc::poll(pfds.as_mut_ptr(), nfds, wait.max(0)) };
+                unsafe { libc::poll(pfds.as_mut_ptr(), nfds, wait) };
                 let died = if pidfd >= 0 {
                     pfds[1].revents != 0
                 } else {
