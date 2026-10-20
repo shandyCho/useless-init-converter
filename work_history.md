@@ -1876,3 +1876,32 @@ Also=.
 2. The earlier steps still stand: chrony MainPID change on reinstall,
    mount-rootfs/oo7-daemon, user-reload-restart, mount propagation,
    cgroup-BPF, SELinux enforcing, beside3 flake, user-runtime-dir ExecStop.
+
+## Session: 2026-10-20 late night, part 4: setup restarts sdcompatd
+
+- Owner reran setup (23:04) and `systemctl preset` (23:08) on the s6
+  boot; cups.socket/path were still disabled. Cause: setup installed the
+  new binary but the running daemon (started 22:55) kept the old code, so
+  the preset fix (`36e443d`) was not in effect.
+- **Change (`852b02d`):** setup's new `restart_daemon` step (after
+  build_database) runs `s6-svc -wR -T 30000 -r
+  /run/s6-rc/servicedirs/sdcompatd` when that service dir exists and is
+  supervised (i.e. on the s6 boot; skipped on the systemd boot); warns,
+  doesn't fail, if not ready in 30 s. The daemon already keeps dynamic
+  units, the fd store (separate process) and devices across restarts.
+  sdcompat-fdstore and journal-relay are deliberately not restarted
+  (would drop held fds / log sockets); they get the new binary at the
+  next boot. Docs: TESTING/TESTING-us (re-running setup).
+- Tests: bash -n, shellcheck -S warning, `--dry-run` on this s6 boot
+  prints the step. Not tested: a real (root) run of the restart.
+- Workaround given to the owner for cups now: `sudo systemctl enable
+  --now cups.socket cups.path` (enable has no Also= ordering problem).
+
+### Next steps
+
+1. Owner: push, rerun setup on the s6 boot; check `s6-svstat
+   /run/s6-rc/servicedirs/sdcompatd` shows a fresh uptime, then
+   `sudo systemctl disable cups.socket cups.path && sudo systemctl preset
+   cups.path cups.socket cups.service && systemctl is-enabled cups.socket
+   cups.path` → enabled, enabled.
+2. Earlier next steps unchanged.
