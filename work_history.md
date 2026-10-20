@@ -1252,3 +1252,46 @@ saved by the last systemd boot and never save later toggles.
   (state after restart, ListUnits, directory left). With it: sandbox
   150/150 twice, `cargo test` 27 passed + 1 ignored, shellcheck/bash -n
   pass, release build ok. Docs: README/README-us.
+
+### fd store across daemon restarts (same day, `25c41c7`)
+
+- Before: the fd store (FDSTORE= fds, held listening sockets "<unit>#sockets")
+  lived in sdcompatd's memory, so a daemon restart closed them all: the next
+  service restart got no stored fds and rebound its sockets.
+- Decision: move the store into its own process instead of handing fds to
+  a successor (nothing outlives the daemon to receive them) or using
+  s6-rc's s6rc-fdholder (its rules belong to s6-rc's pipelines). New
+  subcommand `sdcompat fdstore [--ready-fd N]` serves the unchanged
+  protocol on RUN_DIR/fdstore (fdstore::serve_forever; the limit function
+  moved to fdstore::limit). New s6 longrun dist/s6/sdcompat-fdstore
+  (flag-essential, after mount-api, in sdcompat-sysinit; sdcompatd now
+  depends on it). The daemon serves the store itself only when nothing
+  answers there (`fdstore::is_served`): old installs, manual runs, and a
+  running system until its next boot (s6-rc-update adds the service but
+  doesn't start it). A real stop deletes a unit's keys through the
+  protocol (`drop_stored_fds`, DEL) instead of the in-process map.
+  Restarting the store process itself still loses the fds (as
+  s6-fdholderd).
+- Possibly also fixes journald's "FDSTORE: fd store not reachable" before
+  sdcompatd is up (Session 9 next step 4): the store now starts right after
+  mount-api. Not guaranteed: journald has DefaultDependencies=no, so it is
+  not ordered after the store. Check on the next boot.
+- Tests: tests/sandbox.sh starts `sdcompat fdstore` before s6-svscan;
+  check.sh, after both daemon swaps, restarts fdkeep.service (expects its
+  FDSTORE fd back) and sock.service (same socket inode as before). With the
+  daemon always serving (old behaviour) both fail; sandbox 152/152 twice
+  otherwise. By hand: without the store process the daemon serves it and a
+  service restart gets its fd back. dist/s6 compiles with s6-rc-compile
+  (stub generated bundles): sdcompatd's dependencies include
+  sdcompat-fdstore. `cargo test` 27 passed + 1 ignored, shellcheck/bash -n
+  pass, release build ok. Docs: README/README-us, `sdcompat` usage text.
+
+### Next steps
+
+1. Owner: push, reinstall (`sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
+   --yes`; it should add /etc/sdcompat/s6/sdcompat-fdstore and update
+   sdcompatd and sdcompat-sysinit), reboot into s6, then check
+   `s6-rc -a list | grep -x sdcompat-fdstore`, `grep -c 'fd store not
+   reachable' /run/uncaught-logs/current`, Bluetooth timing, vconsole,
+   brightness/rfkill save, and collect diagnostics.
+2. Transient scopes/slices across daemon restarts (still lost).
