@@ -754,6 +754,32 @@ What the diagnostics showed:
   `semodule -l` check after updating. Fedora 44 or 45; README check
   count 118 -> 119.
 
+- **s6-frontend (`88bb40d`), owner asked for the `s6` command.** Decision:
+  0.1.0.0, not the current 0.2.0.0, because 0.1.0.0 is built for exactly
+  the pinned set (skalibs 2.15.1.0, execline 2.9.9.2, s6 2.15.1.0, s6-rc
+  0.7.0.0, s6-linux-init 1.2.0.2); 0.2.0.0 needs skalibs 2.16, execline
+  2.10, s6 2.15.1.1, s6-rc 0.8 (s6-rc 0.8 itself only bumps dependencies,
+  no database format change, so upgrading the whole set later is an
+  option). SHA-256 matches skarnet's `.sha256` file. `/etc/s6.conf`
+  (`dist/s6.conf`) sets `bootdb = /var/lib/sdcompat/compiled`; scandir
+  `/run/service` and livedir `/run/s6-rc` are already the defaults.
+  Upstream bug found: `s6 live status SERVICES...` failed ("unable to take
+  locks: No such file or directory"; livedir passed as " /run/s6-rc" in a
+  depth-1 execline block, and "-cbe" without its space). 0.2.0.0 has the
+  fix; backported as `dist/rpm/s6-frontend-live-status.patch`. Docs list
+  the safe subcommands (live status, process status/restart/kill, system
+  reboot/poweroff = same s6-linux-init shutdown as systemctl) and the ones
+  not to use next to sdcompat (repository, set, live install,
+  start/stop-everything, system boot). `s6 live start/stop` and `s6
+  process restart` bypass sdcompat (no job, no ExecStop=), like s6-rc.
+  Verified: the spec builds with rpmbuild (patch applies with fuzz 0);
+  a scratch build run against the live tree as a normal user: `s6 version
+  show`, `s6 live status`, `s6 live status sshd.service gdm.service
+  earlyoom` (after the patch) work; `s6 process status` needs root
+  (supervise dirs). `setup-fedora.sh --dry-run --rpms=` installs the RPM
+  and writes /etc/s6.conf. Not run: build-skarnet-rpms.sh end to end
+  (sudo), the `--build-s6` path, anything as root.
+
 ### Current state
 
 The s6 boot reaches GNOME with services in their own SELinux domains,
@@ -773,3 +799,6 @@ userdb should carry their policy labels.
 3. Session 7's reload flake (s6-rc-update "Broken pipe") is still open.
 4. FDSTORE before sdcompatd is up: queue or retry in the runner.
 5. Session 8's step 4 (other seccomp-based keys, FreezeUnit/ThawUnit).
+6. Rebuild the RPMs (`dist/rpm/build-skarnet-rpms.sh`, now six) so
+   s6-frontend is installed; check `s6 live status` and `sudo s6 process
+   status sshd.service` on the s6 boot.
