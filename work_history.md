@@ -1072,7 +1072,12 @@ No code changes.
    `journalctl -b | grep -E 'wanted by device|beside'`: bluetooth.target
    should be done within a second or two of sdcompatd's start, with
    "start bluetooth.service: ... starting it beside".
-2. Collect `ls -lnZ /etc/sdcompat/s6`, `ls -Z /run/dbus/system_bus_socket`
-   and `/run/sdcompat/devices` in collect-diagnostics.sh.
+2. Done (`d768ffa`): collect-diagnostics.sh (s6 boot mode) now saves
+   `ls -lnZ /etc/sdcompat/s6` (s6-services.txt), `ls -lnZ
+   /run/dbus/system_bus_socket` (dbus-socket.txt), `s6-svstat
+   /run/service/earlyoom` (earlyoom.txt) and `/run/sdcompat/devices`
+   (devices.txt). bash -n/shellcheck pass; the commands were tried by hand
+   unprivileged (s6-svstat needs root, which this branch runs as). No doc
+   change: TESTING doesn't list the archive's files.
 3. vconsole setup under s6 (include systemd-vconsole-setup or an s6 oneshot).
 4. Session 11's remaining next steps (backlight/rfkill) still apply.
