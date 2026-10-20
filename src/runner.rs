@@ -516,7 +516,24 @@ impl Runner {
         let output = self.unit.get("Service", "StandardOutput").unwrap_or_else(|| default_out.into());
         let error = self.unit.get("Service", "StandardError").unwrap_or_else(|| "inherit".into());
 
-        let open = |path: &str, flags: i32| -> Result<i32, String> {
+        // fd:NAME from systemd-run --pipe/--stdio (see daemon::transient).
+        // Taken once: the store's copies would keep the caller's pipes open.
+        let stdio = if [&input, &output, &error].iter().any(|s| s.starts_with("fd:")) {
+            let store = self.cfg.run_dir.join("fdstore");
+            let key = format!("{}#stdio", self.unit.id);
+            let fds = crate::fdstore::get(&store, &key);
+            crate::fdstore::del(&store, &key, None);
+            fds
+        } else {
+            Vec::new()
+        };
+        let stdio_fd = |spec: &str| {
+            use std::os::fd::AsRawFd;
+            let name = spec.strip_prefix("fd:")?;
+            stdio.iter().find(|(n, _)| n == name).map(|(_, f)| f.as_raw_fd())
+        };
+
+        let open =|path: &str, flags: i32| -> Result<i32, String> {
             let c = cstr(path);
             let fd = unsafe { libc::open(c.as_ptr(), flags | libc::O_CLOEXEC, 0o644) };
             if fd < 0 {
@@ -550,6 +567,9 @@ impl Runner {
             s if s.starts_with("file:") => {
                 place(open(&s[5..], libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?, 0)
             }
+            s if stdio_fd(s).is_some() => unsafe {
+                libc::dup2(stdio_fd(s).unwrap(), 0);
+            },
             _ => place(open("/dev/null", libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?, 0),
         }
 
@@ -574,6 +594,9 @@ impl Runner {
                     open(&s[9..], libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC).map_err(|e| (code, e))?,
                     target,
                 ),
+                s if stdio_fd(s).is_some() => unsafe {
+                    libc::dup2(stdio_fd(s).unwrap(), target);
+                },
                 // journal, kmsg, syslog: journald's stream if available,
                 // otherwise keep the s6 log pipe.
                 s if s.starts_with("journal") || s.starts_with("kmsg") || s == "syslog" || s == "inherit" => {
@@ -1343,10 +1366,16 @@ impl Runner {
         let st_dir = self.st.dir.clone();
         let store = self.cfg.run_dir.join("fdstore");
         let unit_id = self.unit.id.clone();
+        let notify_reload = self.service_type() == "notify-reload";
         double_fork(|| {
             let st = UnitState::new(st_dir);
+            // Present only with a helper that counts reloads, so cmd_reload
+            // doesn't wait on a service started by an older binary.
+            if notify_reload {
+                st.set(keys::RELOADS_DONE, &st.get_u64(keys::RELOADS_DONE).to_string());
+            }
             let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, main_pid as i32, 0) } as i32;
-            let mut ready = false;
+            let (mut ready, mut reloading) = (false, false);
             let release = |reason: Option<&str>| {
                 if let Some(r) = reason {
                     st.set(keys::START_FAILED, r);
@@ -1390,6 +1419,11 @@ impl Runner {
                             ready = true;
                             release(None);
                             self.after_ready(main_pid);
+                        } else if line == "RELOADING=1" {
+                            reloading = true;
+                        } else if line == "READY=1" && reloading {
+                            reloading = false;
+                            st.set(keys::RELOADS_DONE, &(st.get_u64(keys::RELOADS_DONE) + 1).to_string());
                         } else if let Some(s) = line.strip_prefix("STATUS=") {
                             st.set(keys::STATUS_TEXT, s);
                         } else if let Some(p) = line.strip_prefix("MAINPID=") {
@@ -1946,7 +1980,25 @@ impl Runner {
                         .get("Service", "ReloadSignal")
                         .and_then(|s| util::signal_number(&s))
                         .unwrap_or(libc::SIGHUP);
-                    unsafe { libc::kill(p as i32, sig) };
+                    let before = self.st.get(keys::RELOADS_DONE).map(|_| self.st.get_u64(keys::RELOADS_DONE));
+                    if unsafe { libc::kill(p as i32, sig) } < 0 {
+                        return 1;
+                    }
+                    // Like systemd: done once the service has sent RELOADING=1
+                    // and then READY=1, within TimeoutStartSec=.
+                    let Some(before) = before else { return 0 };
+                    let deadline = self.start_timeout().map(|t| std::time::Instant::now() + t);
+                    while self.st.get_u64(keys::RELOADS_DONE) == before {
+                        if unsafe { libc::kill(p as i32, 0) } < 0 {
+                            log(self.id(), "exited while reloading");
+                            return 1;
+                        }
+                        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                            log(self.id(), "reload timed out");
+                            return 1;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
                     return 0;
                 }
             }

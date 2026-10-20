@@ -209,6 +209,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | No busy runner | `top -b -n1 -o %CPU \| head -15` | no `sdcompat` process near 100 % CPU |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (twice, a few seconds apart) | `up (pid …) N seconds`, with N growing (not restarting) |
 | Restart on package update | `systemctl show -p MainPID chronyd`, then `sudo dnf reinstall -y chrony`, then the first command again | a different MainPID (the update marked chronyd needs-restart and `systemctl enqueue-marked` restarted it) |
+| User managers on package update | `sudo systemctl --user -M $USER@ is-system-running`, then `sudo /usr/lib/systemd/systemd-update-helper user-reload-restart; echo $?` | `running` or `degraded` (reached through `systemd-run --pipe`), then `0` |
 | The `s6` command | `s6 live status \| head` | services with `up`, e.g. `NetworkManager.service/longrun//up/explicit` |
 | Bus and userdb labels | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t` and `systemd_userdbd_runtime_t` |
 | Overall state | `systemctl is-system-running` | `running` (`degraded` is OK; see next line) |

@@ -150,6 +150,9 @@ pub fn limit(cfg: &crate::config::Config, key: &str) -> usize {
     if key.ends_with("#sockets") {
         return 1024;
     }
+    if key.ends_with("#stdio") {
+        return 3;
+    }
     crate::loader::Loader::new(cfg)
         .load(key)
         .get("Service", "FileDescriptorStoreMax")

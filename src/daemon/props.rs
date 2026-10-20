@@ -498,7 +498,8 @@ impl Daemon {
         p.insert("OOMPolicy".into(), s("stop"));
         p.insert("OpenFile".into(), Value::from(Vec::<(String, String, u64)>::new()));
         p.insert("ExtraFileDescriptorNames".into(), strv(Vec::new()));
-        p.insert("ReloadSignal".into(), Value::from(libc::SIGHUP));
+        let reload_signal = unit.get("Service", "ReloadSignal").and_then(|s| util::signal_number(&s));
+        p.insert("ReloadSignal".into(), Value::from(reload_signal.unwrap_or(libc::SIGHUP)));
         p.insert("ExecMainStartTimestamp".into(), Value::from(st.get_u64(keys::EXEC_MAIN_START)));
         p.insert("ExecMainStartTimestampMonotonic".into(), Value::from(st.get_u64("exec-main-start-mono")));
         p.insert("ExecMainExitTimestamp".into(), Value::from(st.get_u64(keys::EXEC_MAIN_EXIT)));

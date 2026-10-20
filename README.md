@@ -92,7 +92,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 - 조회: `GetUnit`, `LoadUnit`, `GetUnitByPID`, `ListUnits*`, `ListJobs`, `GetUnitProcesses`. Unit, Service, Target, Scope, Job 속성을 제공하며 `GetAll("")`도 지원합니다.
 - 유닛 파일: `Enable/Disable/Reenable/Mask/Unmask/Preset*UnitFiles`, `GetUnitFileState`, `ListUnitFiles*`, `Get/SetDefaultTarget`.
 - 매니저: `Reload`/`Reexecute`(s6 데이터베이스 재생성 및 갱신), `KillUnit`, `ResetFailed*`, `Set/UnsetEnvironment`, `PowerOff/Reboot/Halt`.
-- 패키지 설치와 업데이트: systemd RPM의 파일 트리거가 `systemctl daemon-reload`를 실행하고, 이것이 s6 데이터베이스를 재생성하므로 새로 설치된 유닛은 바로 s6 서비스가 됩니다(dnf, GNOME 소프트웨어, PackageKit 모두 같습니다. 데이터베이스는 부팅할 때마다 재생성되기도 합니다). 업데이트 때는 패키지 스크립트렛이 유닛에 `Markers=+needs-restart`/`+needs-reload`를 표시하고(`SetUnitProperties`), 이어서 `systemctl enqueue-marked`(`EnqueueMarkedJobs`)가 실행 중인 유닛을 systemd처럼 재시작하거나 다시 읽게 합니다.
+- 패키지 설치와 업데이트: systemd RPM의 파일 트리거가 `systemctl daemon-reload`를 실행하고, 이것이 s6 데이터베이스를 재생성하므로 새로 설치된 유닛은 바로 s6 서비스가 됩니다(dnf, GNOME 소프트웨어, PackageKit 모두 같습니다. 데이터베이스는 부팅할 때마다 재생성되기도 합니다). 업데이트 때는 패키지 스크립트렛이 유닛에 `Markers=+needs-restart`/`+needs-reload`를 표시하고(`SetUnitProperties`), 이어서 `systemctl enqueue-marked`(`EnqueueMarkedJobs`)가 실행 중인 유닛을 systemd처럼 재시작하거나 다시 읽게 합니다. 사용자 유닛의 경우 파일 트리거가 `user@*.service`를 reload하고(사용자 매니저가 `ReloadSignal=`을 받아 다시 실행됩니다. 모든 `Type=notify-reload`와 마찬가지로 reload는 `RELOADING=1`/`READY=1`을 기다립니다), 각 사용자 매니저에서 `systemctl --user -M UID@ enqueue-marked`를 실행합니다. 이것은 `systemd-run --pipe`(표준 입출력을 파일 디스크립터로 전달)와 `systemd-stdio-bridge`를 거칩니다.
 - 임시(transient) 유닛: `.scope`와 `.slice` 유닛에 대한 `StartTransientUnit`(`PIDs` 또는 `PIDFDs`; logind, podman, flatpak이 사용). `AttachProcessesToUnit`, `Scope.Abandon`, 참조 카운트 호출(수락만 함)도 지원합니다. scope와 slice는 `/run/sdcompat/units`에 기록되므로 다시 시작한 데몬이 넘겨받습니다(세션 scope가 계속 동작합니다).
 - **`systemd-run`**: 보조 유닛을 포함한 임시 `.service`, `.timer`, `.path` 유닛(`--on-calendar`/`--on-active`는 타이머와 서비스를 함께 보냅니다). 속성은 `/run/systemd/transient/`의 유닛 파일이 됩니다. `systemd-run --wait`는 `PropertiesChanged`와 종료 상태를 받습니다. 끝난 임시 유닛은 언로드됩니다.
 - 템플릿 인스턴스는 데이터베이스를 다시 컴파일하지 않고 필요할 때 만들어집니다(예: `user@1000.service`, `user-runtime-dir@1000.service`). 의존성이 먼저 시작되고, 멈춘 유닛을 필요로 하는 유닛은 함께 멈춥니다. 종료할 때 활성 상태인 oneshot 인스턴스를 멈춰 `ExecStop=`이 실행됩니다(systemd-backlight@가 밝기를 저장합니다). 이 인스턴스는 `/run/sdcompat/dyn-oneshot`에 기록되므로 데몬을 다시 시작한 뒤에도 마찬가지입니다. 다시 시작한 데몬은 실행 중인 인스턴스(`/run/sdcompat/dyn`의 서비스 디렉터리)도 넘겨받아 이전처럼 상태를 보고하고 멈춥니다.
@@ -110,7 +110,6 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 
 - initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `setup-fedora.sh`가 경고합니다.
 - `Accept=yes` 소켓과 첫 시작의 요청 시(on-demand) 활성화. 서비스는 소켓과 함께 미리 시작됩니다(그 뒤의 재시작만 소켓 활동을 기다립니다).
-- 시스템 매니저에서의 `systemd-run --pipe`/`--stdio`(파일 디스크립터 전달). `--pty`, `--wait`, `--scope`, `--on-*`, `--user`는 동작합니다.
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
 - `AccuracySec=`(타이머는 묶지 않고 제시간에 실행), `WakeSystem=`, `OnClockChange=`.
 - 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivateUsers=`, `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, 그리고 BPF 기반 설정: `IPAddressDeny=`/`IPAddressAllow=`, `DeviceAllow=`/`DevicePolicy=`, `RestrictFileSystems=`(systemd는 이들을 위해 유닛의 cgroup에 eBPF 프로그램을 붙입니다).

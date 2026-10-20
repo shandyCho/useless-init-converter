@@ -199,6 +199,7 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | 바쁜 러너 없음 | `top -b -n1 -o %CPU \| head -15` | CPU를 100 % 가까이 쓰는 `sdcompat` 프로세스가 없습니다 |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (몇 초 간격으로 두 번) | `up (pid …) N seconds`, N이 늘어납니다(재시작하지 않음) |
 | 패키지 업데이트 시 재시작 | `systemctl show -p MainPID chronyd`, 이어서 `sudo dnf reinstall -y chrony`, 그다음 첫 명령을 다시 | MainPID가 바뀝니다(업데이트가 chronyd에 needs-restart를 표시하고 `systemctl enqueue-marked`가 재시작합니다) |
+| 패키지 업데이트 시 사용자 매니저 | `sudo systemctl --user -M $USER@ is-system-running`, 이어서 `sudo /usr/lib/systemd/systemd-update-helper user-reload-restart; echo $?` | `running` 또는 `degraded`(`systemd-run --pipe`를 거쳐 도달), 그다음 `0` |
 | `s6` 명령 | `s6 live status \| head` | `up`인 서비스들, 예: `NetworkManager.service/longrun//up/explicit` |
 | 버스와 userdb 레이블 | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t`와 `systemd_userdbd_runtime_t` |
 | 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |

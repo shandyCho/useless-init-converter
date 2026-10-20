@@ -217,6 +217,16 @@ ExecStart=/bin/sh -c 'trap "echo reloaded >> $R/reload.out" HUP; while :; do sle
 ExecReload=/bin/kill -HUP \$MAINPID
 EOF
 
+# Like user@.service: the reload is done when READY=1 follows RELOADING=1.
+cat > "$U/notreload.service" <<EOF
+[Unit]
+Description=Type=notify-reload
+[Service]
+Type=notify-reload
+ReloadSignal=USR1
+ExecStart=/bin/sh -c 'trap "$BIN notify --reloading; sleep 1; echo reloaded >> $R/notreload.out; $BIN notify --ready" USR1; $BIN notify --ready; while :; do sleep 0.1; done'
+EOF
+
 # --- timers ---
 for n in tick cal persist later; do
 cat > "$U/$n.service" <<EOF

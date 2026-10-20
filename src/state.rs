@@ -82,6 +82,9 @@ pub mod keys {
     pub const INVOCATION: &str = "invocation";
     pub const CGROUP: &str = "cgroup";
     pub const NOTIFY_SOCKET: &str = "notify";
+    /// Count of RELOADING=1 ... READY=1 cycles seen by the notify helper
+    /// (Type=notify-reload); a reload waits for it to go up.
+    pub const RELOADS_DONE: &str = "reloads-done";
     /// The start failed (s6-rc was still told "ready" so wanted-by units go on).
     pub const START_FAILED: &str = "start-failed";
     /// Not started because a required unit (Requires=/BindsTo=/Requisite=) failed.

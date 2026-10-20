@@ -99,6 +99,14 @@ fn exec_line(path: &str, argv: &[String], ignore: bool, flags: &[String]) -> Str
     s
 }
 
+fn stdio_name(key: &str) -> &'static str {
+    match key {
+        "StandardInput" => "stdin",
+        "StandardOutput" => "stdout",
+        _ => "stderr",
+    }
+}
+
 fn usec(v: u64) -> String {
     if v == u64::MAX {
         "infinity".into()
@@ -136,8 +144,11 @@ fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str
         return Ok(out);
     }
     match name {
+        // systemd-run --pipe/--stdio: start_transient_file puts the fds into
+        // the fd store as "<unit>#stdio"; the runner takes them from there.
         n if n.starts_with("Standard") && n.ends_with("FileDescriptor") => {
-            return Err("passing file descriptors (systemd-run --pipe/--stdio) is not supported by sdcompat".into());
+            let key = n.trim_end_matches("FileDescriptor");
+            out.push(("Service", key.to_string(), format!("fd:{}", stdio_name(key))));
         }
         "Environment" => {
             if let Value::Array(a) = v {
@@ -283,7 +294,21 @@ impl Daemon {
         Ok(())
     }
 
+    /// Put the fds of Standard*FileDescriptor properties into the fd store.
+    pub(super) fn store_stdio(&self, name: &str, props: &[(String, OwnedValue)]) -> Result<(), String> {
+        use std::os::fd::AsRawFd;
+        let store = self.cfg.run_dir.join("fdstore");
+        for (k, v) in props {
+            let Some(key) = k.strip_suffix("FileDescriptor").filter(|k| k.starts_with("Standard")) else { continue };
+            let Value::Fd(fd) = &**v else { return Err(format!("{k}: not a file descriptor")) };
+            crate::fdstore::put(&store, &format!("{name}#stdio"), stdio_name(key), fd.as_raw_fd())
+                .map_err(|e| format!("{k}: {e}"))?;
+        }
+        Ok(())
+    }
+
     pub(super) fn remove_transient_file(&self, id: &str) {
+        crate::fdstore::del(&self.cfg.run_dir.join("fdstore"), &format!("{id}#stdio"), None);
         let _ = fs::remove_file(self.cfg.transient_dir.join(id));
         self.unit_cache.lock().unwrap().remove(id);
         let _ = fs::remove_dir_all(self.cfg.unit_run_dir(id));

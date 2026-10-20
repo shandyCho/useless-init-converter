@@ -283,6 +283,17 @@ if [ -n "$SR" ]; then
     sleep 0.5
     new=$(prop hello.service Service MainPID)
     [ "$old" != "$new" ] && [ "$new" != 0 ] && ok "enqueue-marked restarted hello ($old -> $new)" || bad "enqueue-marked: $old -> $new"
+    # What the file trigger for user units runs (systemd-update-helper
+    # user-reload-restart): reload user@*.service, then reach each user
+    # manager through systemd-run -PGq --wait ... systemd-stdio-bridge.
+    call StartUnit ss notreload.service replace
+    expect_state notreload.service active/running
+    expect_eq "ReloadSignal property" "$(prop notreload.service Service ReloadSignal)" "10"
+    expect_eq "systemctl list-units by pattern" "$(sc list-units 'notrel*' --legend=no --plain 2>&1 | cut -d' ' -f1)" "notreload.service"
+    sc reload 'notrel*.service' >/dev/null 2>&1 && ok "systemctl reload with a glob" || bad "systemctl reload notrel*"
+    expect_eq "notify-reload waits for READY=1" "$(cat "$R/notreload.out" 2>/dev/null)" "reloaded"
+    expect_state notreload.service active/running
+    expect_eq "systemd-run -PGq --wait pipes stdio" "$(echo piped | run_sr -PGq --wait /bin/cat 2>&1)" "piped"
     # The failed sr-wait.service stays loaded; a reload must not put it into
     # the s6-rc database (its service directory collided with the daemon's).
     call Reload && ok "daemon-reload with a failed transient unit loaded"

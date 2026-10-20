@@ -920,6 +920,10 @@ impl Daemon {
             self.remove_transient_file(name);
             return Err(err(E_LOAD_FAILED, unit.load_error.unwrap_or_else(|| format!("Unit {name} failed to load."))));
         }
+        if let Err(e) = self.store_stdio(&id, props) {
+            self.remove_transient_file(&id);
+            return Err(err(E_INVALID_ARGS, e));
+        }
         let job = self.new_job(&id, "start");
         if let Err(e) = self.reply_job(c, msg, job).await {
             self.remove_transient_file(&id);
