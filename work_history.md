@@ -2066,3 +2066,24 @@ The lesson from part 3 stands (fd store code changes need a reboot).
 3. Maybe: make the fd store not need a reboot for limit changes (the
    PUTting client passes the limit).
 4. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
+
+## Session: 2026-10-20, part 2: chrony restart on package update confirmed
+
+- Owner reports `sudo dnf reinstall -y chrony` changed chronyd's MainPID
+  on the s6 boot (checked earlier by the owner, not recorded until now). So
+  `mark-restart-system-units` → `systemctl enqueue-marked` restarts
+  system services on package updates under s6, as with systemd.
+- No code changes.
+
+### Current state
+
+Package updates restart system services (chronyd) and reload/restart
+user managers on the real s6 boot.
+
+### Next steps
+
+1. Still to check on the s6 boot: mount-rootfs/oo7-daemon.
+2. Then: mount propagation, cgroup-BPF settings, SELinux enforcing.
+3. Maybe: make the fd store not need a reboot for limit changes (the
+   PUTting client passes the limit).
+4. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
