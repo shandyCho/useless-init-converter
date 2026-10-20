@@ -163,7 +163,7 @@ skarnet RPM을 빌드하세요. 다음 절 참고). root로 실행되는 것은 
 ```sh
 cargo build
 tests/sandbox.sh ~/sdc-sandbox        # 별도의 s6-svscan, s6-rc, D-Bus 버스
-tests/check.sh ~/sdc-sandbox          # 시나리오 검사 118개, 마지막은 비특권 호출자 단계 (샌드박스마다 한 번)
+tests/check.sh ~/sdc-sandbox          # 시나리오 검사 119개, 마지막은 비특권 호출자 단계 (샌드박스마다 한 번)
 tests/systemctl.sh status hello.service   # 네임스페이스 안에서 진짜 systemctl 실행
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop

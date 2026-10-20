@@ -18,7 +18,8 @@ PID 1로 두고 Fedora의 GNOME 세션을 띄우는 것까지 다룹니다. 단�
 
 ## 0. 시작하기 전에
 
-- **가상 머신**에 **Fedora 44 Workstation**(GNOME)을 설치해 쓰세요. 메모리 4 GB,
+- **가상 머신**에 **Fedora 44 또는 45 Workstation**(GNOME)을 설치해 쓰세요(s6 부팅은
+  Fedora 45에서 시험했습니다). 메모리 4 GB,
   디스크 30 GB 이상이 좋습니다. 5단계 전에 **스냅샷을 찍어 두세요**. 부팅이
   잘못됐을 때 가장 빨리 되돌리는 방법입니다.
 - `sudo`를 쓸 수 있는 일반 사용자로 로그인하세요.
@@ -51,6 +52,14 @@ git log -1 --oneline               # 보고할 때 쓸 커밋 해시를 적어 �
 
 ```sh
 sudo dnf install -y gcc make rpm-build cargo rust dbus-daemon python3 curl
+```
+
+전체 의존성 목록은 [README.md](README.md#의존성)에 있습니다. sdcompat은 libpam,
+libselinux, libseccomp를 링크하지 않고 실행 중에 불러옵니다. Fedora Workstation에는
+이미 있지만, 네 개가 모두 설치되어 있는지 확인하세요.
+
+```sh
+rpm -q pam libselinux libseccomp policycoreutils
 ```
 
 ## 2. s6 패키지 빌드와 설치
@@ -89,12 +98,18 @@ tests/sandbox.sh ~/sdc
 tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 ```
 
-**기대 결과:** 마지막 줄이 `passed: N  failed: 0`입니다(N은 100개 정도). 다음 줄은
+**기대 결과:** 마지막 줄이 `passed: N  failed: 0`입니다(N은 120개 정도). 다음 줄은
 정상이며 실패가 아닙니다.
 - `SKIP transient scope (needs a writable cgroup …)`. cgroup을 만들려면 root가 필요합니다.
 - `Call failed: Job type reload is not applicable …`. 오류가 제대로 반환되는지 확인하는 검사입니다.
 - `tests/sandbox.sh`가 출력하는 `sdcompat[bad.service]: ExecStart=/bin/sh failed: exit status 1`.
   `bad.service`는 의존성 처리를 검사하려고 일부러 실패하게 만든 유닛입니다.
+
+**알려진 간헐적 실패:** 실행의 절반 정도에서 같은 14개 검사가 실패합니다
+(`hello.service: expected active/running, got inactive/dead`, `tick.timer: …`,
+`job not queued`, `CancelJob failed` 등). 데이터베이스를 다시 불러올 때 생기는 알려진
+버그입니다(`s6-rc-update: … Broken pipe`). 샌드박스를 새로 만들어 다시 실행하세요. 다른
+검사가 실패하거나 이 14개가 매번 실패할 때만 알려 주세요.
 
 `check.sh`는 샌드박스를 띄운 직후의 상태를 기대하므로 샌드박스마다 한 번만 실행됩니다. 다시
 실행하려면 샌드박스를 새로 만드세요: `tests/sandbox.sh ~/sdc stop && tests/sandbox.sh ~/sdc`.
@@ -174,6 +189,9 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | SELinux 도메인 | `ps -eZ \| grep -E ' (s6-svscan\|chronyd\|gdm\|systemd-logind)$'` | `init_t`, `chronyd_t`, `xdm_t`, `systemd_logind_t` (`unconfined_service_t`가 아님) |
 | SELinux 거부 | `sudo ausearch -m AVC -ts boot \| audit2allow` | 없는 것이 좋습니다. 있으면 출력을 보내 주세요 |
 | fwupd | `fwupdmgr get-devices` | 장치 목록(fwupd가 시스템 콜 필터를 켠 채 시작됩니다) |
+| 바쁜 러너 없음 | `top -b -n1 -o %CPU \| head -15` | CPU를 100 % 가까이 쓰는 `sdcompat` 프로세스가 없습니다 |
+| earlyoom | `sudo s6-svstat /run/service/earlyoom` (몇 초 간격으로 두 번) | `up (pid …) N seconds`, N이 늘어납니다(재시작하지 않음) |
+| 버스와 userdb 레이블 | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t`와 `systemd_userdbd_runtime_t` |
 | 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |
 | 실패한 유닛 | `systemctl --failed` | 없는 것이 좋습니다. 있으면 적어 두세요 |
 | 저널 | `journalctl -b \| head` | 이번 부팅의 로그 |
@@ -226,6 +244,11 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms --yes
 
 설정 스크립트를 다시 실행해도 안전합니다. `/etc/sdcompat` 설정은 그대로 두고, 새
 바이너리를 설치하고, 데이터베이스와 부팅 항목을 다시 만들며, 바꾸는 파일은 백업합니다.
+SELinux 정책 모듈도 다시 불러옵니다. 불러와졌는지 확인하세요.
+
+```sh
+sudo semodule -l | grep -x sdcompat
+```
 
 업데이트에서 `dist/rpm/`이 바뀌었다면 먼저 s6 패키지를 다시 빌드해 설치하세요(2단계).
 

@@ -19,7 +19,8 @@ Stop at the first stage that fails and report it (see
 
 ## 0. Before you start
 
-- Use a **virtual machine** with **Fedora 44 Workstation** (GNOME), at least
+- Use a **virtual machine** with **Fedora 44 or 45 Workstation** (GNOME; the s6
+  boot has been tested on Fedora 45), at least
   4 GB RAM and 30 GB disk, and **take a snapshot** before stage 5. That is the
   quickest way back if a boot goes wrong.
 - Log in as a normal user that can use `sudo`.
@@ -53,6 +54,15 @@ Install everything needed to build and test:
 
 ```sh
 sudo dnf install -y gcc make rpm-build cargo rust dbus-daemon python3 curl
+```
+
+The full list of dependencies is in
+[README-us.md](README-us.md#dependencies). sdcompat loads libpam, libselinux
+and libseccomp at run time instead of linking them. Fedora Workstation already
+has them, but check that all four are installed:
+
+```sh
+rpm -q pam libselinux libseccomp policycoreutils
 ```
 
 ## 2. Build and install the s6 packages
@@ -91,12 +101,19 @@ tests/sandbox.sh ~/sdc
 tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 ```
 
-**Expected:** the last line is `passed: N  failed: 0` (N is about 100). These
+**Expected:** the last line is `passed: N  failed: 0` (N is about 120). These
 lines are normal and not failures:
 - `SKIP transient scope (needs a writable cgroup …)`. Creating cgroups needs root.
 - `Call failed: Job type reload is not applicable …`. That one is a check that an error is returned.
 - `sdcompat[bad.service]: ExecStart=/bin/sh failed: exit status 1`, printed by `tests/sandbox.sh`.
   `bad.service` fails on purpose, to test how its dependents are handled.
+
+**Known flaky failure:** about half of the runs fail the same 14 checks
+(`hello.service: expected active/running, got inactive/dead`, `tick.timer: …`,
+`job not queued`, `CancelJob failed`, …). This is a known bug when the
+database is reloaded (`s6-rc-update: … Broken pipe`). Recreate the sandbox and
+run it again. Report it only if other checks fail, or if these 14 fail every
+time.
 
 `check.sh` expects the state right after the sandbox starts, so it runs once per
 sandbox. To run it again, recreate the sandbox:
@@ -181,6 +198,9 @@ After logging in to GNOME, open a terminal and go through this list:
 | SELinux domains | `ps -eZ \| grep -E ' (s6-svscan\|chronyd\|gdm\|systemd-logind)$'` | `init_t`, `chronyd_t`, `xdm_t`, `systemd_logind_t` (not `unconfined_service_t`) |
 | SELinux denials | `sudo ausearch -m AVC -ts boot \| audit2allow` | ideally nothing; send the output otherwise |
 | fwupd | `fwupdmgr get-devices` | a device list (fwupd starts with its syscall filter) |
+| No busy runner | `top -b -n1 -o %CPU \| head -15` | no `sdcompat` process near 100 % CPU |
+| earlyoom | `sudo s6-svstat /run/service/earlyoom` (twice, a few seconds apart) | `up (pid …) N seconds`, with N growing (not restarting) |
+| Bus and userdb labels | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t` and `systemd_userdbd_runtime_t` |
 | Overall state | `systemctl is-system-running` | `running` (`degraded` is OK; see next line) |
 | Failed units | `systemctl --failed` | ideally none; note any that are listed |
 | Journal | `journalctl -b \| head` | log lines from this boot |
@@ -235,7 +255,12 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms --yes
 
 Running the setup script again is safe. It keeps your `/etc/sdcompat`
 configuration, installs the new binary, regenerates the database and the
-boot entry, and backs up what it replaces.
+boot entry, and backs up what it replaces. It also reloads the SELinux policy
+module; check that it is loaded:
+
+```sh
+sudo semodule -l | grep -x sdcompat
+```
 
 If `dist/rpm/` changed in the update, rebuild and reinstall the s6 packages
 first (stage 2).

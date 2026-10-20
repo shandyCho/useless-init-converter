@@ -174,7 +174,7 @@ host's init system is never touched.
 ```sh
 cargo build
 tests/sandbox.sh ~/sdc-sandbox        # private s6-svscan, s6-rc and D-Bus bus
-tests/check.sh ~/sdc-sandbox          # 118 scenario checks, ending with an unprivileged-caller phase (once per sandbox)
+tests/check.sh ~/sdc-sandbox          # 119 scenario checks, ending with an unprivileged-caller phase (once per sandbox)
 tests/systemctl.sh status hello.service   # the real systemctl, in a namespace
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop

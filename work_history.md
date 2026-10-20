@@ -747,6 +747,12 @@ What the diagnostics showed:
   "Dependencies" section in README.md/README-us.md (required packages, the
   dlopen()ed libpam/libselinux/libseccomp and what is lost without each,
   recommended packages, build crates).
+- Then TESTING.md/TESTING-us.md: dependency check (`rpm -q pam libselinux
+  libseccomp policycoreutils`) in stage 1, N about 120 and the known
+  14-check reload flake in stage 3, three stage-6 rows for this
+  session's fixes (busy runner, earlyoom, bus/userdb labels), and a
+  `semodule -l` check after updating. Fedora 44 or 45; README check
+  count 118 -> 119.
 
 ### Current state
 
