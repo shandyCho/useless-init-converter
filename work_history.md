@@ -1406,3 +1406,47 @@ saved by the last systemd boot and never save later toggles.
 2. Order services with FileDescriptorStoreMax= after sdcompat-fdstore
    (journald), then check the FDSTORE count again.
 3. Older items: rejected reply to logind; loadkeys/restorecon fifo AVCs.
+
+### rfkill reconcile timeout and journald fd store ordering (same day, `937acad`, `3386a53`)
+
+- rfkill (`937acad`): owner chose the proposed fix. The runner signals s6
+  readiness when it enters the socket wait (s6's view: up and ready, like
+  a listening socket unit), so reconcile's `s6-rc -u change` returns at
+  once. Consequence: a start that wakes a waiting service can't go by s6
+  readiness any more (same run process, already ready), so the wake path
+  uses new `wait_woken()`: done when ACTIVE_ENTER >= job start (after_ready
+  stamps it for every Type=) or CONDITION/DEPENDENCY/START_FAILED is set
+  (job_outcome() sorts those out; stale ones can't be there, since the
+  previous run succeeded and prepare_start() cleared them), failed when
+  down and not wanted up, timeout at the start timeout. The wake check
+  moved before `active.contains(id)`: a unit started beside and not yet
+  recorded used to go through start_beside() and wait for readiness
+  until timeout (also broken before; now woken).
+- journald (`3386a53`): gen.rs adds `sdcompat-fdstore` to the
+  dependencies of services with FileDescriptorStoreMax= > 0 when that s6
+  service is among the extra sources. Checked with `sdcompat plan` on a
+  scratch config (extra source with sdcompat-fdstore and mount-api): the
+  FileDescriptorStoreMax= unit lists `depends: sdcompat-fdstore`, a plain
+  one doesn't. journald now also waits for mount-api (~90 ms at boot).
+  No sandbox test: the sandbox runs `sdcompat fdstore` outside s6-rc, so
+  the dependency isn't generated there.
+- Tests: sandbox react2.socket/react2.service started beside hold4's
+  change: ran, inactive (waiting), recorded in s6-rc once the change
+  ended, re-activated by a FIFO write, stopped and down in s6-rc. Without
+  the runner change it fails ("react2 not in s6-rc -a list"), 157/158.
+  With it: 158/158 twice (scope parts skipped unprivileged), `cargo test`
+  28 passed + 1 ignored, release build ok, shellcheck/bash -n pass. Docs:
+  README/README-us (fd store bullet).
+- Git: this Fedora checkout has no user identity; commits are made with
+  `git -c user.name=shandy-c -c user.email=...` (same author as before),
+  config unchanged.
+
+### Next steps
+
+1. Owner: push, reinstall, reboot into s6. Check: `grep -c 'fd store not
+   reachable' /run/uncaught-logs/current` (expect 0), no "recording
+   systemd-rfkill.service" line, `s6-rc -a list | grep -x
+   systemd-rfkill.service` after the boot's change ends, toggle airplane
+   mode later than 2 min after boot, reboot, and the state comes back.
+2. Older items: rejected reply to logind; loadkeys/restorecon fifo AVCs;
+   maybe rmdir the sandbox cgroups after root runs.
