@@ -142,6 +142,9 @@ impl Config {
                 "systemd-resolved.service",
                 "systemd-resolved-varlink.socket",
                 "systemd-resolved-monitor.socket",
+                // udev restarts it for each new console (vtcon); the boot run
+                // is the vconsole s6 oneshot, since sdcompatd isn't up yet.
+                "systemd-vconsole-setup.service",
             ]
             .iter()
             .map(|s| s.to_string())

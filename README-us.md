@@ -364,7 +364,7 @@ and defaults). The most important keys:
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
-- `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS) and the sleep services.
+- `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font) and the sleep services.
 
 ## Source layout
 

@@ -86,8 +86,18 @@ sysusers)
 sysctl)
     /usr/sbin/sysctl -q --system || warn "sysctl --system exited $?"
     ;;
+vconsole)
+    # Keymap and font from /etc/vconsole.conf. udev's 90-vconsole.rules asks
+    # for systemd-vconsole-setup.service for each console during the
+    # trigger, before sdcompatd is up to start it, so run it here once
+    # udev has settled. Later consoles go through sdcompatd.
+    [ -e /dev/tty0 ] || exit 0
+    v=/usr/lib/systemd/systemd-vconsole-setup
+    [ -x "$v" ] || exit 0
+    "$v" || warn "systemd-vconsole-setup exited $?"
+    ;;
 *)
-    echo "usage: $0 mount-api|mount-fs|umount-fs|udev-trigger|modules-load|hostname|tmpfiles|sysusers|sysctl" >&2
+    echo "usage: $0 mount-api|mount-fs|umount-fs|udev-trigger|modules-load|hostname|tmpfiles|sysusers|sysctl|vconsole" >&2
     exit 2
     ;;
 esac
