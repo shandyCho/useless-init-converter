@@ -313,7 +313,23 @@ touch "$R/hold2-ready"
 wait $hold
 sleep 1.5
 in_s6rc beside2.service && bad "beside2 recorded in s6-rc after its stop" || ok "beside2 stopped beside the change stays down"
-$L -d change hold1.service hold2.service
+# A target: its longrun starts beside the change, not after it.
+$L -u change hold3.service &
+hold=$!
+sleep 0.5
+timeout 10 $B call $MGR StartUnit ss beside.target replace >/dev/null 2>&1
+expect_state beside3.service active/running
+if kill -0 $hold 2>/dev/null && ! in_s6rc beside3.service; then
+    ok "beside3 started beside the change, s6-rc not told yet"
+else
+    bad "beside3 not started beside the holding change"
+fi
+touch "$R/hold3-ready"
+wait $hold
+tries=30
+while [ $tries -gt 0 ] && ! in_s6rc beside3.service; do tries=$((tries - 1)); sleep 0.2; done
+in_s6rc beside3.service && ok "beside3 recorded in s6-rc afterwards" || bad "beside3 not in s6-rc -a list"
+$L -d change hold1.service hold2.service hold3.service beside3.service
 
 echo "== transient scope"
 sleep 1000 &

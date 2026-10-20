@@ -401,7 +401,7 @@ if addr.startswith("@"):
 socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM).sendto(b"READY=1", addr)
 os.execv("/bin/sleep", ["sleep", "1000"])
 PYT
-for n in 1 2; do
+for n in 1 2 3; do
 cat > "$U/hold$n.service" <<EOF
 [Service]
 Type=notify
@@ -416,6 +416,16 @@ EOF
 cat > "$U/beside2.service" <<EOF
 [Service]
 ExecStart=/bin/sleep 1000
+EOF
+# A target started while hold3's change keeps the lock (udev wanting
+# bluetooth.target while the boot waits for the network).
+cat > "$U/beside3.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat > "$U/beside.target" <<EOF
+[Unit]
+Wants=beside3.service
 EOF
 
 # --- path units ---

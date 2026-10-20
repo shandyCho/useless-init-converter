@@ -485,6 +485,41 @@ impl Daemon {
         Some(self.wait_ready(id, unit, None).await)
     }
 
+    /// start_beside() for each longrun of a bundle. At boot, udev wants
+    /// bluetooth.target and sound.target while the boot's change waits for
+    /// NetworkManager-wait-online, so their `s6-rc change` started bluetoothd
+    /// only once the network was up. True when nothing is left for
+    /// `s6-rc change`; otherwise it starts the rest (oneshots, longruns whose
+    /// dependencies are not up, native s6 services).
+    async fn start_bundle_beside(&self, id: &str) -> bool {
+        if self.s6_lock.try_lock().is_ok() && !self.s6rc_lock_held() {
+            return false;
+        }
+        let active = self.active_atoms().await;
+        let mut left: Vec<String> = self.bundle_atoms(id).await.into_iter().filter(|a| !active.contains(a)).collect();
+        // One member may need another: repeat while something starts.
+        loop {
+            let before = left.len();
+            let mut rest = Vec::new();
+            for atom in left {
+                let started = match self.kind_of(&atom) {
+                    Some(Kind::Longrun) => {
+                        let (_, unit) = self.load_unit(&atom);
+                        self.start_beside(&atom, &unit).await.is_some()
+                    }
+                    _ => false,
+                };
+                if !started {
+                    rest.push(atom);
+                }
+            }
+            left = rest;
+            if left.is_empty() || left.len() == before {
+                return left.is_empty();
+            }
+        }
+    }
+
     /// Record the longruns start_beside() started as up in s6-rc, once no
     /// other change holds the lock.
     pub(super) async fn reconcile_beside(&self) {
@@ -604,6 +639,9 @@ impl Daemon {
             None => "failed",
             Some(Kind::Bundle) => {
                 self.started_targets.lock().unwrap().insert(id.to_string());
+                if !isolate && self.start_bundle_beside(id).await {
+                    return "done";
+                }
                 let mut names = vec![id.to_string()];
                 let mut args = vec!["-u", "change"];
                 if isolate {
