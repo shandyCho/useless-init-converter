@@ -1,6 +1,6 @@
 #!/bin/bash
-# Build RPMs for skalibs, execline, s6, s6-rc, s6-linux-init and s6-frontend
-# (Fedora does not package them), in dependency order.
+# Build RPMs for the skarnet.org packages listed in dist/skarnet.versions
+# (Fedora does not package them), in that order.
 #
 #   dist/rpm/build-skarnet-rpms.sh [OUTDIR]        # default: ~/rpmbuild-skarnet
 #
@@ -14,36 +14,50 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 OUT=${1:-$HOME/rpmbuild-skarnet}
-ORDER=(skalibs execline s6 s6-rc s6-linux-init s6-frontend)
-declare -A SHA256=(
-    [skalibs-2.15.1.0]=f9c905e74935c6fe911c7e344e3e89d5fbd2014c1a04650b524b15ce9b5635d1
-    [execline-2.9.9.2]=908ed4db3a6b3a23a205d8fd4cf2a71089156f2aeae0f54656045aafad2dee32
-    [s6-2.15.1.0]=eab9c46e22b66b16135f9a05ec68a0ea287d9060b84d10defaaa2caad158ab52
-    [s6-rc-0.7.0.0]=bf5b8ce0da5a4ee70d642b818b61d9916a7a9b64a457595f388113e54a188688
-    [s6-linux-init-1.2.0.2]=6fad014da162c0c81924197c57d16e1a75c133b34a20e423431a1b741e907b1d
-    [s6-frontend-0.1.0.0]=ed7bba6f2c13dd16ebf17fda0d482f4ba4848d80f5b4d7edd22d8b60a869f994
-)
+VERSIONS=$HERE/../skarnet.versions
+# Each build gets a newer Release, so dnf upgrades packages whose version did
+# not change but that were rebuilt against newer libraries.
+RELEASE=1.$(date +%Y%m%d%H%M)
 
 die() { echo "error: $*" >&2; exit 1; }
 command -v rpmbuild >/dev/null || die "rpmbuild missing: sudo dnf install rpm-build gcc make"
+[ -r "$VERSIONS" ] || die "$VERSIONS missing"
+
+ORDER=()
+declare -A VER SHA256
+while read -r name ver sum _; do
+    case $name in ''|'#'*) continue ;; esac
+    ORDER+=("$name")
+    VER[$name]=$ver
+    SHA256[$name]=$sum
+done <"$VERSIONS"
 
 mkdir -p "$OUT"/{SOURCES,SPECS,SRPMS,RPMS,BUILD,rpms}
 TOP=(--define "_topdir $OUT")
 
 echo "==> Downloading and verifying sources"
 for name in "${ORDER[@]}"; do
-    ver=$(rpmspec -q --qf '%{version}\n' "$HERE/$name.spec" 2>/dev/null | head -1)
-    [ -n "$ver" ] || ver=$(sed -n 's/^Version: *//p' "$HERE/$name.spec")
+    ver=${VER[$name]}
     tarball="$OUT/SOURCES/$name-$ver.tar.gz"
-    want=${SHA256[$name-$ver]:-}
-    [ -n "$want" ] || die "no pinned checksum for $name-$ver (update SHA256 in $0)"
     [ -s "$tarball" ] || curl -fsSL -o "$tarball" "https://skarnet.org/software/$name/$name-$ver.tar.gz"
-    echo "$want  $tarball" | sha256sum -c --quiet - || die "checksum mismatch for $tarball"
-    cp "$HERE/$name.spec" "$OUT/SPECS/"
-    for p in "$HERE/$name"-*.patch; do
-        if [ -e "$p" ]; then cp "$p" "$OUT/SOURCES/"; fi
+    echo "${SHA256[$name]}  $tarball" | sha256sum -c --quiet - || die "checksum mismatch for $tarball"
+    # The spec takes its version from skarnet.versions, and the patches
+    # made for this release.
+    patches=()
+    for p in "$HERE/$name-$ver"-*.patch; do
+        if [ -e "$p" ]; then
+            cp "$p" "$OUT/SOURCES/"
+            patches+=("$(basename "$p")")
+        fi
     done
-    echo "  $name-$ver ok"
+    {
+        printf '%%global skarnet_version %s\n%%global skarnet_release %s\n' "$ver" "$RELEASE"
+        awk -v list="${patches[*]}" '
+            { print }
+            /^Source0:/ { n = split(list, p, " "); for (i = 1; i <= n; i++) printf "Patch%d: %s\n", i - 1, p[i] }
+        ' "$HERE/$name.spec"
+    } >"$OUT/SPECS/$name.spec"
+    echo "  $name-$ver ok${patches[*]:+ (patches: ${patches[*]})}"
 done
 
 if command -v mock >/dev/null && id -nG | grep -qw mock; then
@@ -66,7 +80,8 @@ else
             || die "$name failed, see $OUT/$name.build.log"
         mapfile -t built < <(find "$OUT/RPMS" -name "$name-[0-9]*.rpm" -o -name "$name-devel-[0-9]*.rpm" | grep -v debug)
         cp "${built[@]}" "$OUT/rpms/"
-        [ "$name" = s6-frontend ] || sudo dnf install -y "${built[@]}"
+        # The last package is not a build dependency of anything.
+        [ "$name" = "${ORDER[-1]}" ] || sudo dnf install -y "${built[@]}"
     done
 fi
 

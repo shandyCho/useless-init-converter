@@ -1,6 +1,8 @@
 Name:           s6
-Version:        2.15.1.0
-Release:        1%{?dist}
+# Version and release come from dist/skarnet.versions (build-skarnet-rpms.sh
+# defines them); build with that script, not with rpmbuild directly.
+Version:        %{skarnet_version}
+Release:        %{skarnet_release}%{?dist}
 Summary:        skarnet.org's small and secure supervision software suite
 License:        ISC
 URL:            https://skarnet.org/software/s6/
@@ -23,7 +25,7 @@ Requires:       %{name}%{?_isa} = %{version}-%{release}
 Headers, shared library links and pkg-config files for s6.
 
 %prep
-%autosetup
+%autosetup -p1
 
 %build
 %set_build_flags
@@ -58,8 +60,7 @@ Headers, shared library links and pkg-config files for s6.
 %files devel
 %{_includedir}/*/
 %{_libdir}/lib*.so
-%{_libdir}/pkgconfig/libs6.pc
-%{_libdir}/pkgconfig/libs6auto.pc
+%{_libdir}/pkgconfig/*.pc
 
 %changelog
 * Sun Oct 18 2026 sdcompat - 2.15.1.0-1

@@ -191,10 +191,11 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 **추가**만 합니다. 덮어쓰는 파일은 `/var/lib/sdcompat/setup-backup/`에 백업합니다.
 하는 일은 다음과 같습니다.
 
-1. `dbus-daemon`, `earlyoom`, `chrony`, `NetworkManager`와 skarnet 도구(skalibs 2.15.1.0,
-   execline 2.9.9.2, s6 2.15.1.0, s6-rc 0.7.0.0, s6-linux-init 1.2.0.2, s6-frontend 0.1.0.0)를
-   직접 빌드한
-   RPM(`--rpms=DIR`) 또는 소스(`--build-s6`)에서 설치합니다.
+1. `dbus-daemon`, `earlyoom`, `chrony`, `NetworkManager`와 skarnet 도구를 직접 빌드한
+   RPM(`--rpms=DIR`) 또는 소스(`--build-s6`)에서 설치합니다. 버전과 체크섬은
+   `build-skarnet-rpms.sh`와 `--build-s6`가 함께 읽는 파일 하나, `dist/skarnet.versions`에
+   고정되어 있습니다. 새 릴리스로 옮길 때는 그 파일만 고치면 됩니다. execline은 multicall
+   바이너리 하나(`/usr/bin/execline`)로 빌드하므로 SELinux 모듈에 명령 목록이 없습니다.
 2. sdcompat을 빌드하고 설치합니다. `dist/sdcompat.spec`으로 만든 sdcompat RPM이 설치되어 있으면 그것을 씁니다.
 3. `/etc/sdcompat/`에 설정, s6 서비스(초기 부팅, dbus-daemon, 데몬, earlyoom), 부팅 옵션을
    쓰고, `s6` 명령용 `/etc/s6.conf`를 씁니다. systemd-journald는 s6 서비스로 실행됩니다. `--no-journal`을 주면 s6 전용 rsyslog
@@ -304,16 +305,16 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 ## `s6` 명령 (s6-frontend)
 
 설정 스크립트는 `s6` 명령을 제공하는 [s6-frontend](https://skarnet.org/software/s6-frontend/)
-0.1.0.0을 설치하고, sdcompat의 데이터베이스(`bootdb = /var/lib/sdcompat/compiled`)를 쓰도록
-`/etc/s6.conf`(`dist/s6.conf`)를 씁니다. 0.1.0.0은 고정된 s6 2.15.1.0 / s6-rc 0.7.0.0에 맞춰
-나온 릴리스이며, 0.2.0.0은 s6-rc 0.8이 필요합니다. 서비스 이름은 s6-rc의 이름입니다:
+(버전은 `dist/skarnet.versions`)를 설치하고, sdcompat의 데이터베이스
+(`bootdb = /var/lib/sdcompat/compiled`)를 쓰도록 `/etc/s6.conf`(`dist/s6.conf`)를 씁니다.
+서비스 이름은 s6-rc의 이름입니다:
 `sshd.service`, `gdm.service` 등과 sdcompat 자체의 s6 서비스(`dbus`, `sdcompatd`, `earlyoom`,
 `udevd` 등).
 
 | 명령 | 하는 일 |
 |---|---|
 | `s6 live status` | 모든 서비스와 종류, 상태 (root 불필요) |
-| `s6 live status sshd.service` | 지정한 서비스의 상태 (`dist/rpm/s6-frontend-live-status.patch`의 백포트 수정) |
+| `s6 live status sshd.service` | 지정한 서비스의 상태 |
 | `sudo s6 process status sshd.service` | 감독 중인 프로세스 (`s6-svstat`) |
 | `sudo s6 process restart sshd.service` | 프로세스만 재시작하고, 그것에 의존하는 것은 그대로 둠 (`s6-svc -r`) |
 | `sudo s6 process kill -s HUP sshd.service` | 프로세스에 시그널 보내기 |
@@ -367,6 +368,6 @@ src/daemon/        D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓
                    요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs)
 dist/              setup-fedora.sh, 설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
                    s6-linux-init 골격, kernel-install 플러그인, sdcompat.spec
-dist/rpm/          skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend의 spec과 빌드 스크립트
+dist/rpm/          dist/skarnet.versions에 있는 skarnet 패키지의 spec과 빌드 스크립트
 tests/             비특권 샌드박스, 시나리오 검사, systemctl 래퍼
 ```

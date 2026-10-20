@@ -1,12 +1,12 @@
 Name:           s6-frontend
-Version:        0.1.0.0
-Release:        1%{?dist}
+# Version and release come from dist/skarnet.versions (build-skarnet-rpms.sh
+# defines them); build with that script, not with rpmbuild directly.
+Version:        %{skarnet_version}
+Release:        %{skarnet_release}%{?dist}
 Summary:        The s6 command: one frontend to s6, s6-rc and s6-linux-init
 License:        ISC
 URL:            https://skarnet.org/software/s6-frontend/
 Source0:        https://skarnet.org/software/%{name}/%{name}-%{version}.tar.gz
-# Backport from 0.2.0.0: "s6 live status SERVICES..." failed.
-Patch0:         s6-frontend-live-status.patch
 
 BuildRequires:  gcc
 BuildRequires:  make

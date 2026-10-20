@@ -263,8 +263,11 @@ module; check that it is loaded:
 sudo semodule -l | grep -x sdcompat
 ```
 
-If `dist/rpm/` changed in the update, rebuild and reinstall the s6 packages
-first (stage 2).
+If `dist/skarnet.versions` or `dist/rpm/` changed in the update, rebuild and
+reinstall the s6 packages first (stage 2). Do that from the **normal systemd
+boot**: the new s6 and s6-rc programs then never act on a running s6 tree
+started by the old ones, and the next s6 boot compiles its database with the
+new s6-rc.
 
 ## Removing it
 

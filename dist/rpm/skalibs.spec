@@ -1,6 +1,8 @@
 Name:           skalibs
-Version:        2.15.1.0
-Release:        1%{?dist}
+# Version and release come from dist/skarnet.versions (build-skarnet-rpms.sh
+# defines them); build with that script, not with rpmbuild directly.
+Version:        %{skarnet_version}
+Release:        %{skarnet_release}%{?dist}
 Summary:        General-purpose C library used by skarnet.org software
 License:        ISC
 URL:            https://skarnet.org/software/skalibs/
@@ -23,7 +25,7 @@ Headers, the libskarnet.so link, the pkg-config file and the sysdeps
 directory needed to build skarnet.org software.
 
 %prep
-%autosetup
+%autosetup -p1
 
 %build
 %set_build_flags
@@ -47,12 +49,12 @@ directory needed to build skarnet.org software.
 %files
 %license COPYING
 %doc AUTHORS NEWS README
-%{_libdir}/libskarnet.so.*
+%{_libdir}/lib*.so.*
 
 %files devel
 %{_includedir}/skalibs/
-%{_libdir}/libskarnet.so
-%{_libdir}/pkgconfig/libskarnet.pc
+%{_libdir}/lib*.so
+%{_libdir}/pkgconfig/*.pc
 %{_libdir}/skalibs/
 
 %changelog

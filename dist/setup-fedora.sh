@@ -15,7 +15,7 @@
 #   --enforcing     do not add enforcing=0 to the s6 boot entry (default: SELinux
 #                   permissive on that entry only, until you have a local policy)
 #   --no-grub       do not add the boot entry
-#   --rpms=DIR      install skalibs/execline/s6/s6-rc/s6-linux-init/s6-frontend from RPMs
+#   --rpms=DIR      install the skarnet tools (dist/skarnet.versions) from RPMs
 #                   built with dist/rpm/build-skarnet-rpms.sh (recommended:
 #                   Fedora does not package them)
 #   --build-s6      instead build them from source into /usr (untracked by rpm)
@@ -33,23 +33,18 @@ LIBEXEC=/usr/libexec/sdcompat
 SHARE=/usr/share/sdcompat
 BACKUP=/var/lib/sdcompat/setup-backup/$(date +%Y%m%d-%H%M%S)
 
-# skarnet versions known to work together (same set as Artix's s6 stack).
-SKALIBS_VER=2.15.1.0
-EXECLINE_VER=2.9.9.2
-S6_VER=2.15.1.0
-S6RC_VER=0.7.0.0
-S6LI_VER=1.2.0.2
-# s6-frontend (the s6 command): 0.1.0.0 is the release built for the versions above.
-S6FE_VER=0.1.0.0
-# SHA-256 of the release tarballs (pinned; a mismatch aborts the build).
-declare -A SKARNET_SHA256=(
-    [skalibs-2.15.1.0]=f9c905e74935c6fe911c7e344e3e89d5fbd2014c1a04650b524b15ce9b5635d1
-    [execline-2.9.9.2]=908ed4db3a6b3a23a205d8fd4cf2a71089156f2aeae0f54656045aafad2dee32
-    [s6-2.15.1.0]=eab9c46e22b66b16135f9a05ec68a0ea287d9060b84d10defaaa2caad158ab52
-    [s6-rc-0.7.0.0]=bf5b8ce0da5a4ee70d642b818b61d9916a7a9b64a457595f388113e54a188688
-    [s6-linux-init-1.2.0.2]=6fad014da162c0c81924197c57d16e1a75c133b34a20e423431a1b741e907b1d
-    [s6-frontend-0.1.0.0]=ed7bba6f2c13dd16ebf17fda0d482f4ba4848d80f5b4d7edd22d8b60a869f994
-)
+# The skarnet.org packages, their versions and the SHA-256 of their release
+# tarballs, in build order. dist/skarnet.versions is the only place they are
+# listed (build-skarnet-rpms.sh reads it too). s6-frontend is optional.
+SKARNET=()
+declare -A SKARNET_VER SKARNET_SHA256
+while read -r name ver sum _; do
+    case $name in ''|'#'*) continue ;; esac
+    SKARNET+=("$name")
+    SKARNET_VER[$name]=$ver
+    SKARNET_SHA256[$name]=$sum
+done <"$DIST/skarnet.versions"
+SKARNET_OPTIONAL=" s6-frontend "
 SKARNET_MANIFEST=/var/lib/sdcompat/skarnet-files.txt
 
 RPM_DIR=""
@@ -223,8 +218,8 @@ install_packages() {
 }
 
 install_skarnet() {
-    say "Installing skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend"
-    local missing=()
+    say "Installing ${SKARNET[*]}"
+    local missing=() p
     if [ -n "$RPM_DIR" ]; then
         local rpms=()
         local f
@@ -236,17 +231,16 @@ install_skarnet() {
         return
     fi
     if [ "$BUILD_S6" = 0 ]; then
-        local p
-        for p in skalibs execline s6 s6-rc s6-linux-init; do
-            if ! rpm -q "$p" >/dev/null 2>&1 && ! dnf -q list --available "$p" >/dev/null 2>&1; then
+        local want=()
+        for p in "${SKARNET[@]}"; do
+            if rpm -q "$p" >/dev/null 2>&1 || dnf -q list --available "$p" >/dev/null 2>&1; then
+                want+=("$p")
+            elif [[ $SKARNET_OPTIONAL != *" $p "* ]]; then
                 missing+=("$p")
             fi
         done
         if [ ${#missing[@]} = 0 ]; then
-            # s6-frontend (the s6 command) is optional.
-            local fe=()
-            dnf -q list s6-frontend >/dev/null 2>&1 && fe=(s6-frontend)
-            run dnf install -y skalibs execline s6 s6-rc s6-linux-init "${fe[@]}"
+            run dnf install -y "${want[@]}"
             return
         fi
         if [ "$DRY" = 0 ]; then
@@ -258,48 +252,59 @@ install_skarnet() {
         warn "not packaged: ${missing[*]} (dry run continues as if --build-s6 were given)"
     fi
     # Building into /usr must not overwrite files owned by installed RPMs, and
-    # the six must be versions that fit together.
+    # they must be versions that fit together.
     local owned=()
-    for p in skalibs execline s6 s6-rc s6-linux-init s6-frontend; do
+    for p in "${SKARNET[@]}"; do
         rpm -q "$p" >/dev/null 2>&1 && owned+=("$p")
     done
     if [ ${#owned[@]} -gt 0 ]; then
-        die "already installed as RPMs: ${owned[*]}. Remove them (dnf remove ${owned[*]}) so all six are built as one matching set, or package the missing ones."
+        die "already installed as RPMs: ${owned[*]}. Remove them (dnf remove ${owned[*]}) so all are built as one matching set, or package the missing ones."
     fi
     # Build in dependency order into /usr (statically linked against skalibs).
     local work=/tmp/sdcompat-skarnet-build
     [ "$DRY" = 1 ] || work=$(mktemp -d)
-    local spec
-    for spec in "skalibs $SKALIBS_VER" "execline $EXECLINE_VER" "s6 $S6_VER" \
-                "s6-rc $S6RC_VER" "s6-linux-init $S6LI_VER" "s6-frontend $S6FE_VER"; do
-        set -- $spec
-        local name=$1 ver=$2
+    local name
+    for name in "${SKARNET[@]}"; do
+        local ver=${SKARNET_VER[$name]} want=${SKARNET_SHA256[$name]}
         echo "  building $name $ver"
         run curl -fsSL -o "$work/$name.tar.gz" "https://skarnet.org/software/$name/$name-$ver.tar.gz"
-        local want=${SKARNET_SHA256[$name-$ver]:-}
-        [ -n "$want" ] || die "no pinned checksum for $name-$ver"
         if [ "$DRY" = 0 ]; then
             echo "$want  $work/$name.tar.gz" | sha256sum -c --quiet - || die "checksum mismatch for $name-$ver"
         else
             printf '  + verify sha256 %s\n' "$want"
         fi
         run tar -xzf "$work/$name.tar.gz" -C "$work"
-        local p
-        for p in "$DIST/rpm/$name"-*.patch; do
+        for p in "$DIST/rpm/$name-$ver"-*.patch; do
             if [ -e "$p" ]; then run patch -d "$work/$name-$ver" -p1 -i "$p"; fi
         done
-        # s6-frontend reads /etc/s6.conf (not PREFIX/etc) and aligns its
-        # tables with util-linux's column.
+        # As in the RPM specs: execline as one multicall binary (the SELinux
+        # module labels /usr/bin/execline); s6-frontend reads /etc/s6.conf
+        # (not PREFIX/etc) and aligns its tables with util-linux's column.
         local conf=(--prefix=/usr)
-        [ "$name" = s6-frontend ] && conf+=(--sysconfdir=/etc --enable-util-linux)
+        case $name in
+            execline) conf+=(--enable-multicall) ;;
+            s6-frontend) conf+=(--sysconfdir=/etc --enable-util-linux) ;;
+        esac
+        local stage=$work/stage-$name
         if [ "$DRY" = 0 ]; then
-            # Stage once to record what gets installed (for --uninstall --remove-s6),
-            # then install for real: later packages build against it.
+            # Install into a stage, record it (for --uninstall --remove-s6),
+            # then copy it to /: later packages build against it.
             (cd "$work/$name-$ver" && ./configure "${conf[@]}" >/dev/null && make -j"$(nproc)" >/dev/null \
-                && make install DESTDIR="$work/stage" >/dev/null && make install >/dev/null)
-            (cd "$work/stage" && find . \( -type f -o -type l \) | sed 's|^\.||') >>"$work/manifest"
+                && make install DESTDIR="$stage" >/dev/null)
+            if [ "$name" = execline ]; then
+                # bash owns /usr/bin/cd, umask and wait: execline's go out of PATH.
+                mkdir -p "$stage/usr/libexec/execline"
+                for p in cd umask wait; do
+                    rm -f "$stage/usr/bin/$p"
+                    ln -s /usr/bin/execline "$stage/usr/libexec/execline/$p"
+                done
+            fi
+            (cd "$stage" && find . \( -type f -o -type l \) | sed 's|^\.||') >>"$work/manifest"
+            # Not cp -a: that would also copy the /tmp SELinux labels.
+            cp -dR --preserve=mode,timestamps,links "$stage/." /
         else
-            printf '  + (cd %s && ./configure %s && make && make install)\n' "$work/$name-$ver" "${conf[*]}"
+            printf '  + (cd %s && ./configure %s && make && make install DESTDIR=%s) && cp -dR %s/. /\n' \
+                "$work/$name-$ver" "${conf[*]}" "$stage" "$stage"
         fi
     done
     if [ "$DRY" = 0 ]; then
@@ -446,13 +451,9 @@ setup_selinux() {
 
 # The installed programs that dist/selinux/sdcompat.cil labels init_exec_t.
 skarnet_files() {
-    local f n names
-    names=$(sed -n 's|^(filecon "/usr/bin/(\([^)]*\))".*|\1|p' "$DIST/selinux/sdcompat.cil" | tr '|' ' ')
-    for f in /usr/bin/s6-* /usr/bin/ucspilogd; do
+    local f
+    for f in /usr/bin/s6-* /usr/bin/ucspilogd /usr/bin/execline; do
         [ -e "$f" ] && echo "$f"
-    done
-    for n in $names; do
-        [ -e "/usr/bin/$n" ] && echo "/usr/bin/$n"
     done
     for f in /usr/libexec/execline /usr/libexec/s6 /usr/libexec/s6-rc; do
         [ -d "$f" ] && echo "$f"

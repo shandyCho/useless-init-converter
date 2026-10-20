@@ -203,9 +203,11 @@ entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
 `/var/lib/sdcompat/setup-backup/`. It does the following:
 
 1. Installs `dbus-daemon`, `earlyoom`, `chrony`, `NetworkManager`, and the
-   skarnet tools (skalibs 2.15.1.0, execline 2.9.9.2, s6 2.15.1.0, s6-rc 0.7.0.0,
-   s6-linux-init 1.2.0.2, s6-frontend 0.1.0.0) from your RPMs (`--rpms=DIR`) or from
-   source (`--build-s6`).
+   skarnet tools from your RPMs (`--rpms=DIR`) or from source (`--build-s6`).
+   Their versions and checksums are pinned in one file, `dist/skarnet.versions`,
+   which `build-skarnet-rpms.sh` and `--build-s6` both read: to move to new
+   releases, edit that file only. execline is built as one multicall binary,
+   `/usr/bin/execline`, so the SELinux module does not list its commands.
 2. Builds and installs sdcompat. If the sdcompat RPM from `dist/sdcompat.spec` is installed, it uses that instead.
 3. Writes `/etc/sdcompat/`: the config, the s6 services (early boot, dbus-daemon,
    the daemon, earlyoom) and the boot options, and `/etc/s6.conf` for the `s6` command. systemd-journald runs as an s6
@@ -320,17 +322,16 @@ check `journalctl -u systemd-logind` and `journalctl -u user@1000.service`
 ## The `s6` command (s6-frontend)
 
 The setup script installs [s6-frontend](https://skarnet.org/software/s6-frontend/)
-0.1.0.0, which provides the `s6` command, and writes `/etc/s6.conf`
-(`dist/s6.conf`) so that it uses sdcompat's database
-(`bootdb = /var/lib/sdcompat/compiled`). 0.1.0.0 is the release built for the
-pinned s6 2.15.1.0 / s6-rc 0.7.0.0; 0.2.0.0 needs s6-rc 0.8. Service names
+(version in `dist/skarnet.versions`), which provides the `s6` command, and
+writes `/etc/s6.conf` (`dist/s6.conf`) so that it uses sdcompat's database
+(`bootdb = /var/lib/sdcompat/compiled`). Service names
 are the s6-rc names: `sshd.service`, `gdm.service`, … and sdcompat's own s6
 services (`dbus`, `sdcompatd`, `earlyoom`, `udevd`, …).
 
 | Command | What it does |
 |---|---|
 | `s6 live status` | every service with its type and state (no root needed) |
-| `s6 live status sshd.service` | the state of the listed services (a backported fix in `dist/rpm/s6-frontend-live-status.patch`) |
+| `s6 live status sshd.service` | the state of the listed services |
 | `sudo s6 process status sshd.service` | the supervised process (`s6-svstat`) |
 | `sudo s6 process restart sshd.service` | restart the process only, not what depends on it (`s6-svc -r`) |
 | `sudo s6 process kill -s HUP sshd.service` | send a signal to the process |
@@ -385,6 +386,6 @@ src/daemon/        D-Bus API: dispatch, properties, s6 backend, private socket,
                    on-demand instances (dynamic.rs), systemd-run (transient.rs)
 dist/              setup-fedora.sh, config, D-Bus policy, s6 services, early-boot helper,
                    s6-linux-init skeleton, kernel-install plugin, sdcompat.spec
-dist/rpm/          specs and build script for skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend
+dist/rpm/          specs and build script for the skarnet packages in dist/skarnet.versions
 tests/             unprivileged sandbox, scenario checks, systemctl wrapper
 ```

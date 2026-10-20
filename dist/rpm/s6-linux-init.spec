@@ -1,6 +1,8 @@
 Name:           s6-linux-init
-Version:        1.2.0.2
-Release:        1%{?dist}
+# Version and release come from dist/skarnet.versions (build-skarnet-rpms.sh
+# defines them); build with that script, not with rpmbuild directly.
+Version:        %{skarnet_version}
+Release:        %{skarnet_release}%{?dist}
 Summary:        Tools for running an s6-based init system on Linux
 License:        ISC
 URL:            https://skarnet.org/software/s6-linux-init/
@@ -22,7 +24,7 @@ Requires:       %{name}%{?_isa} = %{version}-%{release}
 Headers, shared library links and pkg-config files for s6-linux-init.
 
 %prep
-%autosetup
+%autosetup -p1
 
 %build
 %set_build_flags
@@ -59,7 +61,7 @@ Headers, shared library links and pkg-config files for s6-linux-init.
 %files devel
 %{_includedir}/*/
 %{_libdir}/lib*.so
-%{_libdir}/pkgconfig/libs6_linux_init.pc
+%{_libdir}/pkgconfig/*.pc
 
 %changelog
 * Sun Oct 18 2026 sdcompat - 1.2.0.2-1

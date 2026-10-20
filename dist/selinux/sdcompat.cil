@@ -17,7 +17,9 @@
 
 (filecon "/usr/bin/s6-[^/]+" file (system_u object_r init_exec_t ((s0) (s0))))
 (filecon "/usr/bin/ucspilogd" file (system_u object_r init_exec_t ((s0) (s0))))
-(filecon "/usr/bin/(background|backtick|case|define|dollarat|elgetopt|elgetpositionals|elglob|eltest|emptyenv|envfile|exec|execline-cd|execline-umask|execlineb|exit|export|export-array|fdblock|fdclose|fdmove|fdreserve|fdswap|forbacktickx|foreground|forstdin|forx|getcwd|getpid|heredoc|homeof|if|ifelse|ifte|ifthenelse|importas|loopwhilex|multidefine|multisubstitute|pipeline|piperw|posix-cd|posix-umask|redirfd|runblock|shift|trap|tryexec|unexport|withstdinas)" file (system_u object_r init_exec_t ((s0) (s0))))
+; execline is built as one multicall binary (dist/rpm/execline.spec), so this
+; one file covers every execline command, whatever a release names them.
+(filecon "/usr/bin/execline" file (system_u object_r init_exec_t ((s0) (s0))))
 (filecon "/usr/libexec/execline/[^/]+" file (system_u object_r init_exec_t ((s0) (s0))))
 (filecon "/usr/libexec/s6/[^/]+" file (system_u object_r init_exec_t ((s0) (s0))))
 (filecon "/usr/libexec/s6-rc/[^/]+" file (system_u object_r init_exec_t ((s0) (s0))))

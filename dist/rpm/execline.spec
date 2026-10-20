@@ -1,6 +1,8 @@
 Name:           execline
-Version:        2.9.9.2
-Release:        2%{?dist}
+# Version and release come from dist/skarnet.versions (build-skarnet-rpms.sh
+# defines them); build with that script, not with rpmbuild directly.
+Version:        %{skarnet_version}
+Release:        %{skarnet_release}%{?dist}
 Summary:        Non-interactive scripting language
 License:        ISC
 URL:            https://skarnet.org/software/execline/
@@ -23,7 +25,7 @@ Requires:       %{name}%{?_isa} = %{version}-%{release}
 Headers, shared library links and pkg-config files for execline.
 
 %prep
-%autosetup
+%autosetup -p1
 
 %build
 %set_build_flags
@@ -40,20 +42,26 @@ Headers, shared library links and pkg-config files for execline.
     --disable-static \
     --disable-allstatic \
     --disable-rpath \
-    --enable-pkgconfig
+    --enable-pkgconfig \
+    --enable-multicall
 %make_build
 
 %install
 # Not %make_install: it sets INSTALL=/usr/bin/install, which lacks the -l
 # (symlink) option of the bundled tools/install.sh.
 %{__make} install DESTDIR=%{buildroot}
-# bash owns /usr/bin/cd, umask and wait (POSIX wrappers around its builtins).
-# The cd and umask links point to execline-cd and execline-umask, which stay;
-# wait moves out of PATH. Only s6-linux-init's container mode (-C, not used by
-# sdcompat) calls it, as /usr/bin/wait.
-rm %{buildroot}%{_bindir}/cd %{buildroot}%{_bindir}/umask
+# One multicall binary, /usr/bin/execline, and a symlink per command: the
+# SELinux module (dist/selinux/sdcompat.cil) labels that one file, whatever
+# commands a release has.
+#
+# bash owns /usr/bin/cd, umask and wait (POSIX wrappers around its builtins),
+# so execline's go to %{_libexecdir}/%{name}, out of PATH. Only s6-linux-init's
+# container mode (-C, not used by sdcompat) calls wait.
 mkdir -p %{buildroot}%{_libexecdir}/%{name}
-mv %{buildroot}%{_bindir}/wait %{buildroot}%{_libexecdir}/%{name}/wait
+for c in cd umask wait; do
+    rm %{buildroot}%{_bindir}/$c
+    ln -s %{_bindir}/execline %{buildroot}%{_libexecdir}/%{name}/$c
+done
 
 %files
 %license COPYING
@@ -66,7 +74,7 @@ mv %{buildroot}%{_bindir}/wait %{buildroot}%{_libexecdir}/%{name}/wait
 %files devel
 %{_includedir}/*/
 %{_libdir}/lib*.so
-%{_libdir}/pkgconfig/libexecline.pc
+%{_libdir}/pkgconfig/*.pc
 
 %changelog
 * Mon Oct 19 2026 sdcompat - 2.9.9.2-2
