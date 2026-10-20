@@ -291,7 +291,7 @@ and defaults). The most important keys:
 - `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR`.
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
-- `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated and the sleep services.
+- `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS) and the sleep services.
 
 ## Source layout
 

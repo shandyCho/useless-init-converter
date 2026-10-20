@@ -133,6 +133,10 @@ impl Config {
                 "systemd-suspend-then-hibernate.service",
                 "systemd-logind-varlink.socket",
                 "systemd-hostnamed.socket",
+                // Fedora's /etc/resolv.conf points at resolved's 127.0.0.53.
+                "systemd-resolved.service",
+                "systemd-resolved-varlink.socket",
+                "systemd-resolved-monitor.socket",
             ]
             .iter()
             .map(|s| s.to_string())
