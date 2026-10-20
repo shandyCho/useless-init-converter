@@ -1217,6 +1217,7 @@ saved by the last systemd boot and never save later toggles.
   RUN_DIR/devices. Files, not one list, so concurrent starts/stops don't
   race on a shared file. Dynamic longruns (user@) are not covered: their
   map entry is still lost on a daemon restart (they keep running under s6).
+  (Covered since: see the next entry.)
 - Tests: check.sh starts prep@b before the unprivileged-daemon swap and
   expects active/exited after it; a new "shutdown stops on-demand
   oneshots" section creates RUN_DIR/shutting-down, SIGTERMs the daemon and
@@ -1226,3 +1227,28 @@ saved by the last systemd boot and never save later toggles.
   restart, ExecStop at shutdown); "marker gone" passes either way. With
   it: sandbox 143/143 twice, `cargo test` 27 passed + 1 ignored,
   shellcheck/bash -n pass, release build ok. Docs: README/README-us.
+
+### Dynamic longruns across daemon restarts (same day, `f91b631`)
+
+- Before: a restarted daemon forgot on-demand longruns (user@UID,
+  systemd-run services, timers, paths) though s6 kept running them: they
+  were reported inactive/dead, missing from ListUnits, and StopUnit or a
+  stopped BindsTo= target did nothing (dyn_stop returns early without a
+  map entry), so they stayed running unmanaged.
+- `load_dynamic()` (was load_dynamic_oneshots) also scans RUN_DIR/dyn:
+  each service directory still linked into the scan directory becomes a
+  Longrun entry again. No new state: dyn_start writes and links the
+  directory, dyn_stop unlinks and removes it, so its presence is the
+  record. Unlinked directories (a start that failed half-way) are skipped;
+  dyn_start rewrites them. Status comes from s6-svstat as before, so an
+  instance that exited meanwhile shows inactive/failed correctly.
+- Not restored (unchanged): the daemon's in-memory fd store (FDSTORE= fds
+  and held sockets) for every unit, and transient scopes/slices.
+- Tests: check.sh now starts inst@b (longrun, BindsTo=prep@b) and prep@c
+  before the daemon swap; after it inst@b active/running, prep@b and
+  prep@c active/exited, inst@b in ListUnits; with the normal daemon back,
+  StopUnit prep@b stops inst@b and removes its service directory; the
+  shutdown section uses prep@c. Without the longrun part: 3 failures
+  (state after restart, ListUnits, directory left). With it: sandbox
+  150/150 twice, `cargo test` 27 passed + 1 ignored, shellcheck/bash -n
+  pass, release build ok. Docs: README/README-us.
