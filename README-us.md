@@ -88,6 +88,8 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 - Conditions and asserts: `Condition*=`/`Assert*=` for paths, the kernel command line, virtualization, security and more.
 - cgroup v2 at systemd's paths (`system.slice/<unit>`), `KillMode=`, and `MemoryMax/High`, `CPUQuota/Weight`, `TasksMax`, `IOWeight`.
 - Sandboxing subset: `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `Read{Write,Only}Paths`, `InaccessiblePaths`, `NoNewPrivileges`, `CapabilityBoundingSet`, `AmbientCapabilities`. Every other directive is listed as "ignored" in the report.
+- seccomp: `SystemCallFilter=`, `SystemCallErrorNumber=` and `SystemCallArchitectures=`, with systemd's syscall groups (`@system-service`, ...; `src/syscall-groups.txt`, from `systemd-analyze syscall-filter`). libseccomp is loaded at run time.
+- SELinux as under systemd: the s6 tree runs in `init_t` (policy module `dist/selinux/sdcompat.cil`), so services enter their own domains (`chronyd_t`, `xdm_t`, ...) and `user@.service` can start `systemd --user` in the user's domain. `RuntimeDirectory=` and the other directories, and socket files, get their file_contexts label; the sockets of socket units carry the label of the service that uses them.
 
 **D-Bus API** (what `systemctl` and libraries call)
 - Jobs: `Start/Stop/Restart/TryRestart/Reload/ReloadOrRestart…Unit`, with `JobNew`/`JobRemoved` signals and systemd's job results (`done`, `failed`, `dependency`, `timeout`). Isolate is supported.
@@ -114,7 +116,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 - `systemd-run --pipe`/`--stdio` (passing file descriptors) on the system manager. `--pty`, `--wait`, `--scope`, `--on-*` and `--user` work.
 - autofs: `.automount` units mount eagerly.
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`.
-- Watchdog, credentials (`LoadCredential=`), `PrivateDevices/Network/Users`, seccomp, `ProtectKernel*`.
+- Watchdog, credentials (`LoadCredential=`), `PrivateDevices/Network/Users`, `ProtectKernel*`, and the other seccomp-based settings (`RestrictAddressFamilies=`, `RestrictNamespaces=`, `MemoryDenyWriteExecute=`, `LockPersonality=`, `RestrictRealtime=`).
 - Cancelling a job that is already running.
 - `ExecStop=` only runs when a unit is stopped through the daemon (`systemctl stop`), not when s6-rc stops services directly, for example at shutdown.
 
@@ -145,7 +147,7 @@ host's init system is never touched.
 ```sh
 cargo build
 tests/sandbox.sh ~/sdc-sandbox        # private s6-svscan, s6-rc and D-Bus bus
-tests/check.sh ~/sdc-sandbox          # 113 scenario checks, ending with an unprivileged-caller phase (once per sandbox)
+tests/check.sh ~/sdc-sandbox          # 118 scenario checks, ending with an unprivileged-caller phase (once per sandbox)
 tests/systemctl.sh status hello.service   # the real systemctl, in a namespace
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop
@@ -183,7 +185,10 @@ entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
 4. Enables chronyd, NetworkManager and gdm, and sets `graphical.target` as the default.
 5. Runs `sdcompat reload --no-update` and prints the translation summary.
 6. Generates `/etc/s6-linux-init/current` with a rescue getty on tty9.
-7. Labels `bin/init` as `init_exec_t` for SELinux.
+7. SELinux: labels `bin/init` as `init_exec_t` and loads the policy module
+   `dist/selinux/sdcompat.cil`, which labels the s6, s6-rc, s6-linux-init and
+   execline programs and sdcompat's binaries `init_exec_t`, so that the whole
+   s6 tree stays in `init_t` as systemd does. `--uninstall` removes the module.
 8. Installs the kernel-install plugin and uses it to copy the default boot entry with `init=/usr/sbin/init-selinux` added. It removes the
    splash (`rhgb quiet`, `plymouth.enable=0`), because plymouth's quit unit is
    systemd-only. It also adds `enforcing=0`; pass `--enforcing` to leave that out.
@@ -303,6 +308,8 @@ src/runner.rs      exec environment, readiness, restart policy
 src/install.rs     enable/disable/mask/preset, unit file state
 src/socket.rs      socket units (sd_listen_fds)
 src/sandbox.rs     namespaces and capabilities subset
+src/seccomp.rs     SystemCallFilter= (libseccomp, systemd's syscall groups)
+src/selinux.rs     file and socket labels (libselinux)
 src/cgroup.rs      systemd-compatible cgroup layout and resource control
 src/conditions.rs  Condition*/Assert*
 src/calendar.rs    OnCalendar= parser and next-elapse search

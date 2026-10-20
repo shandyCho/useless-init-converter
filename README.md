@@ -83,6 +83,8 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 - 조건과 단언: 경로, 커널 명령줄, 가상화, 보안 등에 대한 `Condition*=`/`Assert*=`.
 - systemd와 같은 경로(`system.slice/<unit>`)의 cgroup v2, `KillMode=`, `MemoryMax/High`, `CPUQuota/Weight`, `TasksMax`, `IOWeight`.
 - 샌드박스 일부: `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `Read{Write,Only}Paths`, `InaccessiblePaths`, `NoNewPrivileges`, `CapabilityBoundingSet`, `AmbientCapabilities`. 나머지 지시어는 보고서에 "ignored"로 표시됩니다.
+- seccomp: `SystemCallFilter=`, `SystemCallErrorNumber=`, `SystemCallArchitectures=`. systemd의 시스템 콜 그룹(`@system-service` 등, `systemd-analyze syscall-filter`에서 만든 `src/syscall-groups.txt`)을 씁니다. libseccomp는 실행 중에 불러옵니다.
+- SELinux는 systemd에서와 같습니다. s6 트리 전체가 `init_t`로 실행되므로(정책 모듈 `dist/selinux/sdcompat.cil`) 서비스는 각자의 도메인(`chronyd_t`, `xdm_t` 등)으로 들어가고, `user@.service`는 `systemd --user`를 사용자 도메인에서 시작할 수 있습니다. `RuntimeDirectory=` 등의 디렉터리와 소켓 파일은 file_contexts의 레이블을 받고, 소켓 유닛의 소켓은 그것을 쓰는 서비스의 레이블을 가집니다.
 
 **D-Bus API** (`systemctl`과 라이브러리가 호출하는 것)
 - 작업: `Start/Stop/Restart/TryRestart/Reload/ReloadOrRestart…Unit`, `JobNew`/`JobRemoved` 시그널, systemd의 작업 결과(`done`, `failed`, `dependency`, `timeout`). isolate도 지원합니다.
@@ -105,7 +107,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 - 시스템 매니저에서의 `systemd-run --pipe`/`--stdio`(파일 디스크립터 전달). `--pty`, `--wait`, `--scope`, `--on-*`, `--user`는 동작합니다.
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
 - `AccuracySec=`(타이머는 묶지 않고 제시간에 실행), `WakeSystem=`, `OnClockChange=`.
-- 워치독, 자격 증명(`LoadCredential=`), `PrivateDevices/Network/Users`, seccomp, `ProtectKernel*`.
+- 워치독, 자격 증명(`LoadCredential=`), `PrivateDevices/Network/Users`, `ProtectKernel*`, 그리고 나머지 seccomp 기반 설정(`RestrictAddressFamilies=`, `RestrictNamespaces=`, `MemoryDenyWriteExecute=`, `LockPersonality=`, `RestrictRealtime=`).
 - 이미 실행 중인 작업의 취소.
 - `ExecStop=`은 데몬을 통해 유닛을 멈출 때(`systemctl stop`)만 실행되고, s6-rc가 직접 서비스를 멈출 때(예: 종료 시)는 실행되지 않습니다.
 
@@ -134,7 +136,7 @@ skarnet RPM을 빌드하세요. 다음 절 참고). root로 실행되는 것은 
 ```sh
 cargo build
 tests/sandbox.sh ~/sdc-sandbox        # 별도의 s6-svscan, s6-rc, D-Bus 버스
-tests/check.sh ~/sdc-sandbox          # 시나리오 검사 113개, 마지막은 비특권 호출자 단계 (샌드박스마다 한 번)
+tests/check.sh ~/sdc-sandbox          # 시나리오 검사 118개, 마지막은 비특권 호출자 단계 (샌드박스마다 한 번)
 tests/systemctl.sh status hello.service   # 네임스페이스 안에서 진짜 systemctl 실행
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop
@@ -171,7 +173,10 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 4. chronyd, NetworkManager, gdm을 활성화하고 `graphical.target`을 기본값으로 설정합니다.
 5. `sdcompat reload --no-update`를 실행하고 변환 요약을 출력합니다.
 6. tty9에 복구용 getty가 있는 `/etc/s6-linux-init/current`를 생성합니다.
-7. SELinux용으로 `bin/init`에 `init_exec_t` 레이블을 붙입니다.
+7. SELinux: `bin/init`에 `init_exec_t` 레이블을 붙이고 정책 모듈
+   `dist/selinux/sdcompat.cil`을 불러옵니다. 이 모듈은 s6, s6-rc, s6-linux-init,
+   execline 프로그램과 sdcompat 바이너리를 `init_exec_t`로 표시해서, systemd처럼
+   s6 트리 전체가 `init_t`에 머물게 합니다. `--uninstall`이 모듈을 제거합니다.
 8. kernel-install 플러그인을 설치하고, 이를 이용해 기본 부팅 항목을 복사하면서
    `init=/usr/sbin/init-selinux`를 추가합니다. plymouth의 종료 유닛은 systemd 전용이라
    스플래시를 제거합니다(`rhgb quiet`, `plymouth.enable=0`). `enforcing=0`도 추가하며,
@@ -288,6 +293,8 @@ src/runner.rs      실행 환경, 준비 완료 신호, 재시작 정책
 src/install.rs     enable/disable/mask/preset, 유닛 파일 상태
 src/socket.rs      소켓 유닛(sd_listen_fds)
 src/sandbox.rs     네임스페이스와 capability 일부
+src/seccomp.rs     SystemCallFilter= (libseccomp, systemd의 시스템 콜 그룹)
+src/selinux.rs     파일과 소켓 레이블(libselinux)
 src/cgroup.rs      systemd 호환 cgroup 구조와 자원 제어
 src/conditions.rs  Condition*/Assert*
 src/calendar.rs    OnCalendar= 파서와 다음 실행 시각 검색

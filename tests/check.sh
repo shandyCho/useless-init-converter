@@ -74,6 +74,15 @@ esac
 expect_state forking.service active/running
 expect_eq "forking MainPID from PIDFile" "$(prop forking.service Service MainPID)" "$(cat "$R/fork.pid")"
 
+echo "== SystemCallFilter="
+call StartUnit ss scf-deny.service replace
+call StartUnit ss scf-allow.service replace
+expect_state scf-deny.service inactive/dead
+expect_eq "deny list blocks kill with EPERM" "$(cat "$R/scf-deny.out" 2>/dev/null)" "blocked"
+expect_eq "'+' command is not filtered" "$(cat "$R/scf-plus.out" 2>/dev/null)" "allowed"
+expect_state scf-allow.service inactive/dead
+expect_eq "fwupd's allow list: mlock fails with EPERM" "$(cat "$R/scf-allow.out" 2>/dev/null)" "errno 1"
+
 echo "== system state"
 expect_eq "SystemState degraded" "$($B get-property $MGR SystemState | cut -d'"' -f2)" "degraded"
 # failing, flappy, and bad.service (fails at boot on purpose)

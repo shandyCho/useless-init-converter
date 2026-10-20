@@ -171,6 +171,9 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | 확인 항목 | 명령 | 기대 결과 |
 |---|---|---|
 | s6가 PID 1 | `cat /proc/1/comm` | `s6-svscan` |
+| SELinux 도메인 | `ps -eZ \| grep -E ' (s6-svscan\|chronyd\|gdm\|systemd-logind)$'` | `init_t`, `chronyd_t`, `xdm_t`, `systemd_logind_t` (`unconfined_service_t`가 아님) |
+| SELinux 거부 | `sudo ausearch -m AVC -ts boot \| audit2allow` | 없는 것이 좋습니다. 있으면 출력을 보내 주세요 |
+| fwupd | `fwupdmgr get-devices` | 장치 목록(fwupd가 시스템 콜 필터를 켠 채 시작됩니다) |
 | 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |
 | 실패한 유닛 | `systemctl --failed` | 없는 것이 좋습니다. 있으면 적어 두세요 |
 | 저널 | `journalctl -b \| head` | 이번 부팅의 로그 |

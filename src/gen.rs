@@ -118,7 +118,7 @@ const SERVICE_KEYS: &[&str] = &[
     "RestartMode", "PAMName", "DelegateSubgroup", "LimitCPU", "LimitFSIZE", "LimitDATA", "LimitSTACK", "LimitCORE", "LimitRSS",
     "LimitNOFILE", "LimitAS", "LimitNPROC", "LimitMEMLOCK", "LimitLOCKS", "LimitSIGPENDING",
     "LimitMSGQUEUE", "LimitNICE", "LimitRTPRIO", "LimitRTTIME", "SendSIGHUP", "TimeoutAbortSec",
-    "FileDescriptorStoreMax",
+    "FileDescriptorStoreMax", "SystemCallFilter", "SystemCallErrorNumber", "SystemCallArchitectures",
 ];
 
 fn longrun_type(unit: &Unit) -> bool {

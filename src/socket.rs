@@ -42,6 +42,7 @@ pub fn bind_unix(path: &str, ty: i32, unit: &Unit) -> Result<i32, String> {
                 .unwrap_or(0o755);
             if !parent.exists() {
                 fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+                crate::selinux::restorecon(&parent.display().to_string());
                 let _ = fs::set_permissions(parent, fs::Permissions::from_mode(mode));
             }
         }
@@ -71,6 +72,7 @@ pub fn bind_unix(path: &str, ty: i32, unit: &Unit) -> Result<i32, String> {
         return Err(format!("bind {path}: {}", errno()));
     }
     if !abstract_ns {
+        crate::selinux::restorecon(path);
         let mode = unit
             .get("Socket", "SocketMode")
             .and_then(|m| u32::from_str_radix(&m, 8).ok())

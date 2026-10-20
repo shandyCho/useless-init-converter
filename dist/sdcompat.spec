@@ -18,6 +18,8 @@ Requires:       s6-rc
 Requires:       execline
 Requires:       dbus-daemon
 Requires:       util-linux
+Requires(post): policycoreutils
+Requires(postun): policycoreutils
 Recommends:     s6-linux-init
 Recommends:     rsyslog
 Recommends:     earlyoom
@@ -50,12 +52,28 @@ install -d %{buildroot}%{_datadir}/sdcompat/s6-linux-init
 cp -a dist/s6-linux-init/skel %{buildroot}%{_datadir}/sdcompat/s6-linux-init/skel
 install -Dm0644 dist/rsyslog.conf %{buildroot}%{_datadir}/sdcompat/rsyslog.conf
 install -Dm0755 dist/s6-linux-init/init-selinux %{buildroot}%{_sbindir}/init-selinux
-%{_prefix}/lib/kernel/install.d/90-sdcompat.install
+install -Dm0644 dist/selinux/sdcompat.cil %{buildroot}%{_datadir}/sdcompat/selinux/sdcompat.cil
 install -Dm0755 dist/kernel-install/90-sdcompat.install %{buildroot}%{_prefix}/lib/kernel/install.d/90-sdcompat.install
 install -d %{buildroot}%{_sharedstatedir}/sdcompat %{buildroot}%{_localstatedir}/log/sdcompat
 
+%post
+# Keep the s6 tree in init_t (see dist/selinux/sdcompat.cil). The skarnet
+# packages are relabelled too; they are usually installed before this one.
+if [ -x /usr/sbin/semodule ]; then
+    semodule -i %{_datadir}/sdcompat/selinux/sdcompat.cil || :
+    restorecon $(rpm -ql execline s6 s6-rc s6-linux-init 2>/dev/null | grep '^/usr/') \
+        %{_libexecdir}/sdcompat/* 2>/dev/null || :
+fi
+
+%postun
+if [ "$1" -eq 0 ] && [ -x /usr/sbin/semodule ]; then
+    semodule -r sdcompat 2>/dev/null || :
+    restorecon $(rpm -ql execline s6 s6-rc s6-linux-init 2>/dev/null | grep '^/usr/') 2>/dev/null || :
+fi
+
 %files
 %{_bindir}/sdcompat
+%{_prefix}/lib/kernel/install.d/90-sdcompat.install
 %{_libexecdir}/sdcompat/
 %{_sbindir}/init-selinux
 %{_datadir}/dbus-1/system.d/sdcompat.conf

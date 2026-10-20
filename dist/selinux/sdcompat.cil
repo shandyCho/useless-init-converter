@@ -1,0 +1,27 @@
+; SELinux policy module for booting with s6 + sdcompat.
+;
+; systemd runs as init_t and every service enters its own domain through the
+; policy's init_t transitions (chronyd_exec_t -> chronyd_t, xdm_exec_t ->
+; xdm_t, user@.service -> the user's domain, ...). Under s6 the same holds only
+; if the whole supervision tree stays in init_t: init_t executing a bin_t
+; program becomes unconfined_service_t, so the s6, s6-rc, s6-linux-init and
+; execline programs and sdcompat's own binaries are labelled init_exec_t, like
+; /usr/lib/systemd/systemd. Run from any other domain they keep that domain
+; (unconfined_t stays unconfined_t).
+;
+; /run/sdcompat holds the notify sockets services write to and is labelled
+; like systemd's /run/systemd.
+;
+; Load:   semodule -i sdcompat.cil, then restorecon the files below
+; Remove: semodule -r sdcompat
+
+(filecon "/usr/bin/s6-[^/]+" file (system_u object_r init_exec_t ((s0) (s0))))
+(filecon "/usr/bin/ucspilogd" file (system_u object_r init_exec_t ((s0) (s0))))
+(filecon "/usr/bin/(background|backtick|case|define|dollarat|elgetopt|elgetpositionals|elglob|eltest|emptyenv|envfile|exec|execline-cd|execline-umask|execlineb|exit|export|export-array|fdblock|fdclose|fdmove|fdreserve|fdswap|forbacktickx|foreground|forstdin|forx|getcwd|getpid|heredoc|homeof|if|ifelse|ifte|ifthenelse|importas|loopwhilex|multidefine|multisubstitute|pipeline|piperw|posix-cd|posix-umask|redirfd|runblock|shift|trap|tryexec|unexport|withstdinas)" file (system_u object_r init_exec_t ((s0) (s0))))
+(filecon "/usr/libexec/execline/[^/]+" file (system_u object_r init_exec_t ((s0) (s0))))
+(filecon "/usr/libexec/s6/[^/]+" file (system_u object_r init_exec_t ((s0) (s0))))
+(filecon "/usr/libexec/s6-rc/[^/]+" file (system_u object_r init_exec_t ((s0) (s0))))
+(filecon "/usr/libexec/sdcompat/[^/]+" file (system_u object_r init_exec_t ((s0) (s0))))
+
+(filecon "/run/sdcompat(/.*)?" any (system_u object_r init_var_run_t ((s0) (s0))))
+(typetransition init_t var_run_t dir "sdcompat" init_var_run_t)

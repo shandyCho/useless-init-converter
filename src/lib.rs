@@ -17,6 +17,8 @@ pub mod pam;
 pub mod pathunit;
 pub mod runner;
 pub mod sandbox;
+pub mod seccomp;
+pub mod selinux;
 pub mod socket;
 pub mod state;
 pub mod timer;

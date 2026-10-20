@@ -34,6 +34,7 @@ const EXIT_GROUP: i32 = 216;
 const EXIT_USER: i32 = 217;
 const EXIT_CAPABILITIES: i32 = 218;
 const EXIT_NAMESPACE: i32 = 226;
+const EXIT_SECCOMP: i32 = 231;
 
 fn errno() -> String {
     std::io::Error::last_os_error().to_string()
@@ -260,6 +261,7 @@ impl Runner {
                 let d = d.split(':').next().unwrap_or(&d).to_string();
                 let path = PathBuf::from(base).join(&d);
                 fs::create_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                crate::selinux::restorecon(&path.display().to_string());
                 let _ = fs::set_permissions(&path, fs::Permissions::from_mode(mode));
                 if *key != "ConfigurationDirectory" {
                     if let Some(u) = &self.user {
@@ -427,6 +429,18 @@ impl Runner {
         let c_env: Vec<CString> = env.iter().map(|(k, v)| cstr(&format!("{k}={v}"))).collect();
         let mut p_env: Vec<*const libc::c_char> = c_env.iter().map(|c| c.as_ptr()).collect();
         p_env.push(std::ptr::null());
+        // Last, as systemd does: from here on only execve() has to be allowed.
+        if !cmd.privileged {
+            match crate::seccomp::Filter::from_unit(&self.unit) {
+                Ok(Some(f)) => {
+                    if let Err(e) = f.apply() {
+                        return (EXIT_SECCOMP, e);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => return (EXIT_SECCOMP, format!("SystemCallFilter=: {e}")),
+            }
+        }
         unsafe { libc::execve(c_path.as_ptr(), p_argv.as_ptr(), p_env.as_ptr()) };
         (EXIT_EXEC, format!("exec {path}: {}", errno()))
     }
@@ -931,13 +945,19 @@ impl Runner {
             if !held.is_empty() {
                 fds = held;
             } else {
-                for s in &socks {
-                    for b in socket::bind_all(s)? {
-                        let owned = unsafe { OwnedFd::from_raw_fd(b.fd) };
-                        // Best effort: without the daemon we just rebind next time.
-                        let _ = crate::fdstore::put(&store, &key, &b.name, owned.as_raw_fd());
-                        fds.push((b.name, owned));
-                    }
+                // As systemd: the sockets carry the label of the service's domain.
+                let label = self
+                    .main_command()
+                    .ok()
+                    .and_then(|m| crate::selinux::exec_label(&execcmd::resolve_path(&m.path)));
+                crate::selinux::set_socket_label(label.as_deref());
+                let bound: Result<Vec<_>, String> = socks.iter().map(socket::bind_all).collect();
+                crate::selinux::set_socket_label(None);
+                for b in bound?.into_iter().flatten() {
+                    let owned = unsafe { OwnedFd::from_raw_fd(b.fd) };
+                    // Best effort: without the daemon we just rebind next time.
+                    let _ = crate::fdstore::put(&store, &key, &b.name, owned.as_raw_fd());
+                    fds.push((b.name, owned));
                 }
             }
         }
@@ -1219,6 +1239,7 @@ impl Runner {
     fn start_notify_helper(&mut self, main_pid: u32) -> Result<String, String> {
         let dir = self.cfg.run_dir.join("notify");
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        crate::selinux::restorecon(&dir.display().to_string());
         let inv = self.st.get(keys::INVOCATION).unwrap_or_else(|| main_pid.to_string());
         let path = dir.join(&inv[..inv.len().min(32)]);
         let _ = fs::remove_file(&path);

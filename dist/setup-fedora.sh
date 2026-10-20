@@ -138,6 +138,9 @@ uninstall() {
     else
         run rm -rf "$LIBEXEC" "$SHARE" /usr/bin/sdcompat /usr/sbin/init-selinux \
             /usr/share/dbus-1/system.d/sdcompat.conf
+        if command -v semodule >/dev/null && semodule -l 2>/dev/null | grep -qx sdcompat; then
+            run semodule -r sdcompat
+        fi
     fi
     if [ "$REMOVE_S6" = 1 ] && [ -r "$SKARNET_MANIFEST" ]; then
         echo "  removing the skarnet tools listed in $SKARNET_MANIFEST"
@@ -145,6 +148,11 @@ uninstall() {
             case $f in /usr/*) run rm -f "$f" ;; esac
         done <"$SKARNET_MANIFEST"
         run rm -f "$SKARNET_MANIFEST"
+    fi
+    if command -v restorecon >/dev/null; then
+        local files
+        mapfile -t files < <(skarnet_files)
+        [ "${#files[@]}" -gt 0 ] && run restorecon -R "${files[@]}"
     fi
     echo "  Kept: /etc/sdcompat (your configuration), /var/lib/sdcompat, /var/log/sdcompat,"
     echo "  installed packages, and enabled units (all harmless for the systemd boot)."
@@ -307,6 +315,7 @@ install_sdcompat() {
     run rm -rf "$SHARE/s6-linux-init/skel"
     run cp -a "$DIST/s6-linux-init/skel" "$SHARE/s6-linux-init/skel"
     run install -Dm0644 "$DIST/rsyslog.conf" "$SHARE/rsyslog.conf"
+    run install -Dm0644 "$DIST/selinux/sdcompat.cil" "$SHARE/selinux/sdcompat.cil"
 }
 
 configure_sdcompat() {
@@ -401,8 +410,31 @@ setup_selinux() {
     if ! semanage fcontext -l 2>/dev/null | grep -q "^$S6LI_BASE/bin/init "; then
         run semanage fcontext -a -t init_exec_t "$S6LI_BASE/bin/init"
     fi
+    # ... and the whole s6 tree must stay there, so that services enter their
+    # own domains as under systemd (see dist/selinux/sdcompat.cil).
+    run semodule -i "$SHARE/selinux/sdcompat.cil"
+    local files
+    mapfile -t files < <(skarnet_files)
     run restorecon -R "$S6LI_BASE" "$LIBEXEC" /usr/sbin/init-selinux /etc/sdcompat \
-        /var/lib/sdcompat /var/log/sdcompat /usr/share/dbus-1/system.d/sdcompat.conf
+        /var/lib/sdcompat /var/log/sdcompat /usr/share/dbus-1/system.d/sdcompat.conf "${files[@]}"
+    [ -d /run/sdcompat ] && run restorecon -R /run/sdcompat
+    return 0
+}
+
+# The installed programs that dist/selinux/sdcompat.cil labels init_exec_t.
+skarnet_files() {
+    local f n names
+    names=$(sed -n 's|^(filecon "/usr/bin/(\([^)]*\))".*|\1|p' "$DIST/selinux/sdcompat.cil" | tr '|' ' ')
+    for f in /usr/bin/s6-* /usr/bin/ucspilogd; do
+        [ -e "$f" ] && echo "$f"
+    done
+    for n in $names; do
+        [ -e "/usr/bin/$n" ] && echo "/usr/bin/$n"
+    done
+    for f in /usr/libexec/execline /usr/libexec/s6 /usr/libexec/s6-rc; do
+        [ -d "$f" ] && echo "$f"
+    done
+    return 0
 }
 
 boot_args() {
@@ -452,7 +484,9 @@ This will set up booting Fedora with s6-linux-init + s6-rc + sdcompat:
   * write:   /etc/sdcompat/ (config, s6 services, boot options),
              $S6LI_BASE, /usr/sbin/init-selinux, $LIBEXEC
   * enable:  chronyd, NetworkManager, gdm; default target graphical.target
-  * SELinux: label $S6LI_BASE/bin/init as init_exec_t
+  * SELinux: label $S6LI_BASE/bin/init as init_exec_t; load the policy module
+             $SHARE/selinux/sdcompat.cil (s6 tools and sdcompat as init_exec_t,
+             so services run in their own domains as under systemd)
   * logs:    $([ "$JOURNAL" = 1 ] && echo "systemd-journald as an s6 service (journalctl works)" || echo "rsyslog + s6-log directories, no journal")
   * GRUB:    add "$TITLE" with init=/usr/sbin/init-selinux, no splash$([ "$ENFORCING" = 1 ] || echo ", SELinux permissive"),
              and a kernel-install plugin that adds it for every new kernel

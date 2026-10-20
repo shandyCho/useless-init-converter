@@ -82,6 +82,26 @@ ExecStart=/bin/sh -c 'echo once > $R/once.out'
 ExecStop=/bin/sh -c 'echo stopped >> $R/once.out'
 EOF
 
+# SystemCallFilter=: a deny list, fwupd's allow list (fwupd checks that
+# mlock fails) and a '+' command, which is not filtered.
+cat > "$U/scf-deny.service" <<EOF
+[Service]
+Type=oneshot
+SystemCallFilter=~kill
+SystemCallErrorNumber=EPERM
+ExecStart=/bin/sh -c 'if kill -0 \$\$\$\$ 2>/dev/null; then echo allowed; else echo blocked; fi > $R/scf-deny.out'
+ExecStartPost=+/bin/sh -c 'if kill -0 \$\$\$\$ 2>/dev/null; then echo allowed; else echo blocked; fi > $R/scf-plus.out'
+EOF
+
+cat > "$U/scf-allow.service" <<EOF
+[Service]
+Type=oneshot
+SystemCallFilter=@basic-io @file-system @io-event @ipc @network-io @process @sync @signal @timer @chown ioctl uname fadvise64 sysinfo madvise mremap splice vmsplice copy_file_range
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+ExecStart=/usr/bin/python3 -c 'import ctypes; c = ctypes.CDLL(None, use_errno=True); b = ctypes.create_string_buffer(4096); r = c.mlock(b, 4096); open("$R/scf-allow.out", "w").write("ok" if r == 0 else "errno %%d" % ctypes.get_errno())'
+EOF
+
 cat > "$U/dep.service" <<EOF
 [Unit]
 Description=Depends on once.service

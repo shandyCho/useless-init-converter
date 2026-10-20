@@ -178,6 +178,9 @@ After logging in to GNOME, open a terminal and go through this list:
 | Check | Command | Expected |
 |---|---|---|
 | s6 is PID 1 | `cat /proc/1/comm` | `s6-svscan` |
+| SELinux domains | `ps -eZ \| grep -E ' (s6-svscan\|chronyd\|gdm\|systemd-logind)$'` | `init_t`, `chronyd_t`, `xdm_t`, `systemd_logind_t` (not `unconfined_service_t`) |
+| SELinux denials | `sudo ausearch -m AVC -ts boot \| audit2allow` | ideally nothing; send the output otherwise |
+| fwupd | `fwupdmgr get-devices` | a device list (fwupd starts with its syscall filter) |
 | Overall state | `systemctl is-system-running` | `running` (`degraded` is OK; see next line) |
 | Failed units | `systemctl --failed` | ideally none; note any that are listed |
 | Journal | `journalctl -b \| head` | log lines from this boot |
