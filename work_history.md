@@ -913,7 +913,7 @@ As in session 9. The new skarnet RPMs are built in
   hostnamed reading /proc/pressure (proc_psi_t), firewalld on a tmpfs
   `.cache`, setfiles/restorecon on initctl and a device_t chr_file.
 
-- Fix (owner chose this one first): setup-fedora.sh records a checksum of
+- Fix (`1c7af61`, owner chose this one first): setup-fedora.sh records a checksum of
   each /etc/sdcompat/s6 dir it installs in
   /var/lib/sdcompat/s6-dist-sums.txt. On a rerun a dir is replaced (with a
   backup) if it matches the recorded checksum, or, for installs made before
