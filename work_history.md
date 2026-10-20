@@ -2429,3 +2429,36 @@ by the kernel (scratch-cgroup test). Not yet seen on a real s6 boot.
 2. Then: SELinux enforcing (the runner will need bpf permissions).
 3. Maybe: make the fd store not need a reboot for limit changes.
 4. Still open: beside3 sandbox flake.
+
+## Session: 2026-10-21: BPF programs on a real s6 boot
+
+- Owner pushed, reran setup and booted into s6 (PID 1 `s6-svscan`,
+  `JOURNAL=no`). The three TESTING rows:
+  - bpftool: polkit.service has one `cgroup_device` `sd_devices`;
+    systemd-logind.service has `sd_devices`, `sd_fw_ingress`,
+    `sd_fw_egress`, one each, all `multi`. As expected.
+  - "not enforced": the owner ran `journalctl -b -g`, which with
+    `JOURNAL=no` only sees the initrd's journal, so it proves nothing. Checked
+    instead: the runner's `log()` also writes to stderr, and no
+    `/var/log/sdcompat/*/current` (70 logs, all readable) contains "not
+    enforced"; polkit's is empty. `/var/log/messages` (root-only) not
+    grepped.
+  - `pkaction | head -3` lists three actions: polkitd answers under
+    `DevicePolicy=strict`.
+- Also seen: logind, polkitd, gnome-shell running; a GNOME seat0 session on
+  tty2. No code changed.
+
+### Current state
+
+DevicePolicy=/DeviceAllow= and IPAddressDeny=/IPAddressAllow= are attached
+on a real s6 boot (JOURNAL=no) with no refused programs, and polkit works
+under strict. Not yet seen with JOURNAL=yes.
+
+### Next steps
+
+1. Optional: `sudo grep 'not enforced' /var/log/messages` for completeness;
+   the JOURNAL=yes boot's `journalctl -b -g 'not enforced'` when next used.
+2. SELinux enforcing (the runner will need bpf { prog_load prog_run } and
+   the cgroup attach permissions).
+3. Maybe: make the fd store not need a reboot for limit changes.
+4. Still open: beside3 sandbox flake.
