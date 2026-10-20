@@ -2406,3 +2406,26 @@ IPAddressDeny=/IPAddressAllow= fixed for the verifier, not yet rerun.
 2. Then: SELinux enforcing (the runner will need bpf permissions).
 3. Maybe: make the fd store not need a reboot for limit changes.
 4. Still open: beside3 sandbox flake.
+
+## Session: 2026-10-21: kernel test passes
+
+- Owner reran `tests/bpf-root.sh` after `c9c2b7b`: `kernel_enforces ... ok`.
+  So in the real kernel: all three programs load and attach; a second
+  apply replaces rather than adds (one program per attach type); inside
+  the cgroup /dev/null opens, /dev/zero gets EPERM (strict, /dev/null rw),
+  UDP to 127.0.0.1 is sent, to 192.0.2.1 gets EPERM (deny any, allow
+  localhost); the scratch cgroup is removed. No code changed.
+
+### Current state
+
+DevicePolicy=/DeviceAllow= and IPAddressDeny=/IPAddressAllow= are enforced
+by the kernel (scratch-cgroup test). Not yet seen on a real s6 boot.
+
+### Next steps
+
+1. Owner: push, rerun setup, reboot into s6. Check the three TESTING rows
+   (bpftool on polkit/logind, no "not enforced" in the journal, pkaction)
+   and that GNOME login, journald, logind and polkit come up as before.
+2. Then: SELinux enforcing (the runner will need bpf permissions).
+3. Maybe: make the fd store not need a reboot for limit changes.
+4. Still open: beside3 sandbox flake.
