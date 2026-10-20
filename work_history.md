@@ -1009,3 +1009,70 @@ As in session 9. The new skarnet RPMs are built in
 2. systemd-backlight/systemd-rfkill under s6 (include them, or an s6
    service), if the owner wants brightness/rfkill state kept.
 3. Session 9's other next steps still apply.
+
+## Session 12: 2026-10-20
+
+Checked the owner's diagnostics from a real s6 boot (`/tmp/sdcompat-diag.xF60rn.tar.gz`,
+HEAD 6847a34, Fedora 45, kernel 7.2.11, SELinux permissive via `enforcing=0`).
+No code changes.
+
+- Works: PID 1 s6-svscan, `systemctl --failed` empty, is-system-running
+  `running`; bluetooth.service and bolt.service active. Device-wanted starts
+  logged for bolt (thunderbolt 0-0/domain0), sys-kernel-config.mount,
+  sys-fs-fuse-connections.mount, sound.target, tpm2.target,
+  bluetooth.target. earlyoom started once, no restart loop.
+- Problem: device-wanted *targets* started 26 s late (14:35:40, boot
+  14:35:14). Targets are bundles, start_beside() only handles longruns, so
+  their `s6-rc change` waits for the boot's change, which was held by
+  NetworkManager-wait-online until Wi-Fi came up (NM "startup complete" at
+  the same second). bluetoothd therefore started 26 s after wireplumber
+  ("BlueZ system service is not available" at 14:35:18). Without a
+  network this could be the full wait-online timeout.
+- bluetoothd "Failed to set mode: Failed (0x03)" at 14:36:19 and 14:36:57,
+  each followed by hci0 setup again: looks like the Bluetooth switch being
+  toggled; not confirmed with the owner whether the switch worked.
+- New, not acted on: udev's vtcon rule runs `systemctl --no-block restart
+  systemd-vconsole-setup.service`, which fails (systemd-* excluded), so
+  /etc/vconsole.conf isn't applied on the text console.
+- Known items seen again: journald FDSTORE before sdcompatd is up, home1
+  excluded noise, user-runtime-dir@60578 ExecStop exit 1, AVCs for
+  hostnamed (proc_psi_t, watch /run, /run/dbus), journald map
+  syslogd_tmpfs_t, restorecon on the s6-svscan-log fifo, firewalld `.cache`
+  on tmpfs.
+- Not in the diagnostics: ownership of /etc/sdcompat/s6/earlyoom and the
+  label of /run/dbus/system_bus_socket (script doesn't collect them).
+  Owner checked by hand: earlyoom dir is uid/gid 0, the socket is
+  system_dbusd_var_run_t. Session 11's setup fix is confirmed on a real boot.
+
+### Target delay fix (same day, `71ae087`)
+
+- `src/daemon/s6.rs`: new `start_bundle_beside()`. Starting a bundle (not
+  isolate) while another change holds the s6-rc lock now runs
+  `start_beside()` for each member longrun that isn't up, repeating while
+  members start (one may need another). If that leaves nothing, the job is
+  done without `s6-rc change`; otherwise `s6-rc change` on the bundle still
+  runs for the rest (oneshots, longruns with dependencies down, native s6
+  services like dbus), so nothing is skipped, only started earlier.
+  reconcile_beside() records the members in s6-rc later, as for services.
+  On the owner's db: bluetooth.target = bluetooth.service (longrun),
+  sound.target = alsa-state.service + alsa-restore.service (oneshot, so
+  sound.target still waits if alsa-restore isn't up yet), tpm2.target empty.
+- Test: sandbox `beside.target` (Wants=beside3.service) started while
+  hold3's change holds the lock: beside3 active while the change still
+  runs and not yet in s6-rc, recorded afterwards. Without the fix beside3
+  stays inactive/dead (3 failures, also two knock-on devwant ones from the
+  job still pending). With it: `cargo test` 27 passed + 1 ignored, sandbox
+  129/129 twice, shellcheck/bash -n pass, release build ok. No doc change
+  (beside starts aren't described in README/TESTING). Not run: a real boot.
+
+### Next steps
+
+1. Owner: `sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
+   --yes` (or install the new release binary), reboot into s6, check
+   `journalctl -b | grep -E 'wanted by device|beside'`: bluetooth.target
+   should be done within a second or two of sdcompatd's start, with
+   "start bluetooth.service: ... starting it beside".
+2. Collect `ls -lnZ /etc/sdcompat/s6`, `ls -Z /run/dbus/system_bus_socket`
+   and `/run/sdcompat/devices` in collect-diagnostics.sh.
+3. vconsole setup under s6 (include systemd-vconsole-setup or an s6 oneshot).
+4. Session 11's remaining next steps (backlight/rfkill) still apply.
