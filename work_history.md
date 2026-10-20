@@ -515,3 +515,74 @@ user@ starts (logind's CreateSession not waiting for user@).
    tty9. If the screen is still black: `journalctl -b -1 -t sdcompatd -t
    sdcompat` and `journalctl -b -1 _UID=60578` (or the greeter's uid).
 2. Session 5's next steps 3–4 still apply.
+
+## Session 7: 2026-10-20
+
+Owner reported: the s6 boot and the GNOME login work. Checked their
+`sudo tests/collect-diagnostics.sh` archive (boot of 2026-10-20 09:30,
+build `959a482`, SELinux permissive via `enforcing=0`).
+
+- **Session 6 fixes confirmed on a real boot:** gdm's greeter and the
+  owner's session 2 on tty2 (seat0) run, `user@1000.service` runs
+  `systemd --user` (session 3, class manager), gnome-shell and
+  gnome-session are up. `systemd-resolved.service` is active, NetworkManager
+  uses it, chronyd resolved the pool names (DNS works). Suspend also works
+  (s2idle entry and resume).
+- **Bug fixed (`90003e2`): the s6 `syslog` (rsyslogd) restarted every
+  second** with "could not open config file '/etc/sdcompat/rsyslog.conf'"
+  (seen in `/run/uncaught-logs`). Setup does not add `syslog` to
+  sdcompat-sysinit with journald, but the default DEP_MAP still mapped
+  `systemd-journald.socket` and `syslog.socket` to `syslog`, so
+  systemd-journald.service, the dracut units, sockets.target and
+  storage-target-mode.target pulled it in. `Config::finish` now drops these
+  two mappings when JOURNAL=yes (a user mapping to another name is kept).
+  `sdcompat plan` on the owner's config: the only differences are
+  `syslog` → `systemd-journald.service` in the deps and `syslog` gone from
+  the two bundles.
+- Seen, not fixed (need the owner's decision):
+  - `fwupd.service` fails: "syscall filtering is configured but not
+    working". The unit sets `Environment=FWUPD_SYSCALL_FILTER=systemd` and
+    fwupd checks that a SystemCallFilter is in force; sdcompat ignores
+    SystemCallFilter=. Options: implement seccomp (larger), or drop that
+    variable when the filter is ignored.
+  - `systemd-suspend.service` "fails" (exit 1) although suspend works:
+    systemd-sleep calls `FreezeUnit`/`ThawUnit` on the Manager, which
+    sdcompat lacks (could write `cgroup.freeze` of the unit's cgroup).
+  - SELinux: running `systemd --user` needs `transition` from
+    `unconfined_service_t` (sdcompat) to `unconfined_t`; allowed only
+    because the boot entry is permissive. Matters for enforcing.
+  - chronyc's `write`/`sendto` on `/run/chrony/chronyd.sock` (121 AVCs):
+    chronyd runs as `unconfined_service_t` instead of `chronyd_t`, probably
+    the same missing domain transition.
+  - Harmless or not ours: home1 excluded (pam_systemd_home,
+    accounts-daemon), `ReleaseSession ... NoSuchSession` on session end,
+    `user-runtime-dir@0` ExecStop exit 1, malcontent and orca messages.
+- **Sandbox flake, found but not fixed:** about half the sandbox runs fail
+  the same 14 checks, on the old code too (old: 3 of 4 runs, new: 2 of 5).
+  The first `daemon-reload` fails in s6-rc-update with "unable to manage new
+  service directories in .../live: Broken pipe"; `gen.rs`'s retry then
+  succeeds, but s6-svscan has lost the service directories ("unable to chdir
+  to hello.service") and the oneshot runner is gone (`s6rc-oneshot-runner/s:
+  Connection refused`). The services "started beside" (`s6-svc -u`) just
+  before are probably involved. This is likely session 5's "14 checks"
+  failure. It could also break a daemon-reload on a real boot.
+- **Verified:** `cargo build` and `cargo test` pass (new
+  `config::tests::journal_drops_syslog_map`). Sandbox: 113/113 in 3 of 5 runs
+  with the fix; the other 2 hit the flake above. No shell script changed.
+  Not verified on a real boot.
+
+### Current state
+
+The s6 boot reaches a working GNOME desktop with DNS. With `90003e2`,
+no rsyslogd should run under s6 with journald.
+
+### Next steps
+
+1. Fix the s6-rc-update "Broken pipe" during daemon-reload and make the
+   retry recover (or refuse) instead of leaving a broken live dir.
+2. Owner installs `90003e2` and reboots: `/run/uncaught-logs/current`
+   should have no rsyslogd lines; `s6-rc -a list` should not list `syslog`.
+3. Decide on fwupd (SystemCallFilter) and FreezeUnit/ThawUnit.
+4. SELinux domain transitions for services and `systemd --user` before
+   trying enforcing mode.
+5. Session 5's next steps 3–4 still apply.
