@@ -1774,3 +1774,62 @@ namespacing should work once mount-api creates mount-rootfs.
    settings, SELinux enforcing.
 3. Still open: the beside3 sandbox flake; user-runtime-dir@UID ExecStop
    exit 1 at greeter logout.
+
+## Session: 2026-10-20 late night, part 2: s6 services on package install/update
+
+Owner asked for s6 services to be made when packages are installed or
+updated (dnf or GNOME Software).
+
+- **Installs were already covered** (design decision 2): the systemd RPM's
+  transfiletriggerin runs `systemd-update-helper system-reload-restart`,
+  i.e. `systemctl daemon-reload` (→ Reload → gen::regenerate) and then
+  `systemctl enqueue-marked`; `%systemd_post` runs `systemctl preset`
+  (PresetUnitFiles, implemented). GNOME Software/PackageKit go through the
+  same RPM scriptlets. The database is also regenerated at every s6 boot,
+  so packages installed on the systemd boot are picked up then.
+- **Gap found: restarts on update.** `%systemd_postun_with_restart`
+  (chrony, earlyoom, ...) runs `mark-restart-system-units` →
+  `systemctl set-property UNIT Markers=+needs-restart`, which sdcompat
+  accepted and ignored, and `systemctl enqueue-marked` failed with "Unknown
+  method EnqueueMarkedJobs" (swallowed by `|| :`). Updated daemons kept
+  running the old binary until the next boot.
+- **Fix (`713658d`):** SetUnitProperties (and Unit.SetProperties) keep
+  Markers= with systemd's syntax (`+m`/`-m` or a plain list replacing all;
+  mixing is "Bad marker syntax", unknown markers rejected; other
+  properties still ignored); the Markers property shows them;
+  EnqueueMarkedJobs try-restarts needs-restart units, reloads active
+  needs-reload ones (inactive: no-op, like systemd's try-reload), clears
+  the markers, replies with the job paths and runs the jobs concurrently
+  (mode fail). Markers live in memory only (lost if the daemon restarts
+  between mark and enqueue). Introspection updated.
+- Tests: unit test `daemon::tests::markers_syntax` (35 + 1 ignored).
+  check.sh: busctl section (needs-restart restarts hello, needs-reload runs
+  reloadable's ExecReload, a marked inactive unit stays inactive, markers
+  cleared, mixed syntax rejected) and, with systemd-run present, the real
+  `systemctl set-property hello.service Markers=+needs-restart` +
+  `systemctl enqueue-marked` (Fedora 45 host systemctl 262). Sandbox:
+  JOURNAL=yes 173/173, JOURNAL=no 178/178. Release build, shellcheck/bash
+  -n on check.sh. Docs: README/README-us (package installs and updates),
+  TESTING/TESTING-us (real-boot row: `dnf reinstall chrony` changes
+  chronyd's MainPID). `cargo fmt` is not installed here, so not run.
+- Not tested: a real dnf transaction under s6. User units:
+  `systemctl reload user@*.service` (user-reload-restart) was not looked at.
+
+### Current state
+
+As in the entry above, plus: package updates restart/reload their marked
+services under s6. git has no identity on this machine; commits use the
+owner's name/email via `git -c`.
+
+### Next steps
+
+1. Owner: push, rerun setup, reboot into s6. Check mount-rootfs/oo7-daemon
+   (entry above), then `sudo dnf reinstall -y chrony` and compare
+   `systemctl show -p MainPID chronyd` before and after; and install a
+   package with a new service (e.g. `sudo dnf install -y cups`): `systemctl
+   status cups` should show it known (and enabled per preset) without a
+   reboot.
+2. Look at user-reload-restart (`systemctl reload user@*.service`) under
+   sdcompat.
+3. Then: mount propagation, cgroup-BPF settings, SELinux enforcing.
+4. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
