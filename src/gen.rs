@@ -74,6 +74,9 @@ pub struct Plan {
     pub triggers: BTreeMap<String, String>,
 }
 
+/// The s6 service (dist/s6) that serves the fd store.
+const FDSTORE_SERVICE: &str = "sdcompat-fdstore";
+
 const UNIT_KEYS: &[&str] = &[
     "Description", "Documentation", "Requires", "Requisite", "Wants", "BindsTo", "PartOf",
     "Upholds", "Before", "After", "DefaultDependencies", "RefuseManualStart",
@@ -367,6 +370,13 @@ pub fn plan(cfg: &Config) -> Plan {
         // Timers and path units start their unit through the daemon.
         if matches!(unit.utype(), "timer" | "path") && plan.extra_names.contains(&cfg.daemon_service) {
             deps.insert(cfg.daemon_service.clone());
+        }
+        // FDSTORE=1 goes to the sdcompat-fdstore service. journald starts
+        // before it otherwise (DefaultDependencies=no): "fd store not reachable".
+        let fdstore_max: usize =
+            unit.get("Service", "FileDescriptorStoreMax").and_then(|v| v.parse().ok()).unwrap_or(0);
+        if unit.utype() == "service" && fdstore_max > 0 && plan.extra_names.contains(FDSTORE_SERVICE) {
+            deps.insert(FDSTORE_SERVICE.into());
         }
 
         let kind = if is_target {

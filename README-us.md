@@ -85,6 +85,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
   the same way, so they stay open across service restarts. The store is its
   own s6 service, `sdcompat-fdstore` (`sdcompat fdstore`), so the fds also
   survive a restart of sdcompatd; without it the daemon holds them itself.
+  Services with `FileDescriptorStoreMax=` start after it.
 - `TimeoutStartSec=` is enforced by the runner: on timeout the start fails and the service is terminated.
 - Output goes to **systemd-journald** through its stdout stream protocol (as PID 1 does). journald attributes it to the unit from the cgroup, so `journalctl -u UNIT` and the log lines in `systemctl status` work. With `JOURNAL=no`, each service gets an s6-log directory instead.
 - Conditions and asserts: `Condition*=`/`Assert*=` for paths, the kernel command line, virtualization, security and more.
