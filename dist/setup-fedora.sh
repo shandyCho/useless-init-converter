@@ -185,10 +185,22 @@ uninstall() {
         fi
     done
     if command -v rpm >/dev/null && rpm -q sdcompat >/dev/null 2>&1; then
-        echo "  sdcompat is installed as an RPM; remove it with: dnf remove sdcompat"
+        echo "  sdcompat is installed as RPMs; remove them with: dnf remove ${CORE_TOOLS[*]}"
     else
-        run rm -rf "$LIBEXEC" "$SHARE" /usr/bin/sdcompat /usr/sbin/init-selinux \
-            /usr/share/dbus-1/system.d/sdcompat.conf
+        # A tool may still be installed as its own RPM (packages/).
+        for t in "${CORE_TOOLS[@]}"; do
+            if command -v rpm >/dev/null && rpm -q "$t" >/dev/null 2>&1; then
+                echo "  $t is installed as an RPM; remove it with: dnf remove $t"
+            else
+                run rm -f "$LIBEXEC/$t"
+            fi
+        done
+        run rm -f "$LIBEXEC/early"
+        [ "$DRY" = 1 ] || rmdir "$LIBEXEC" 2>/dev/null || true
+        if ! { command -v rpm >/dev/null && rpm -q sdcompatd >/dev/null 2>&1; }; then
+            run rm -f /usr/share/dbus-1/system.d/sdcompat.conf
+        fi
+        run rm -rf "$SHARE" /usr/bin/sdcompat /usr/sbin/init-selinux
         if command -v semodule >/dev/null && semodule -l 2>/dev/null | grep -qx sdcompat; then
             run semodule -r sdcompat
         fi
@@ -393,14 +405,19 @@ install_sdcompat() {
     say "Installing sdcompat"
     install_standalone
     if rpm -q sdcompat >/dev/null 2>&1; then
-        echo "  sdcompat RPM is installed, using it"
+        echo "  sdcompat RPMs are installed, using them"
         return
     fi
     if [ ! -x "$REPO/target/release/sdcompatd" ] || [ "$REBUILD" = 1 ]; then
         build "$REPO"
     fi
+    # Each tool is its own RPM (packages/); leave the ones rpm owns alone.
     local t
     for t in "${CORE_TOOLS[@]}"; do
+        if rpm -q "$t" >/dev/null 2>&1; then
+            echo "  $t RPM is installed, using it"
+            continue
+        fi
         run install -Dm0755 "$REPO/target/release/$t" "$LIBEXEC/$t"
     done
     run install -Dm0755 "$DIST/early" "$LIBEXEC/early"

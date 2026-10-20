@@ -2802,3 +2802,69 @@ main still has the single binary, with the enforcing fixes (`c5f2e06`).
 3. Still open from before: the enforcing re-check of `c5f2e06`
    (uncaught-logs label, Result=, BusName ordering); JOURNAL=no output
    loss; on-demand socket activation; beside3 flake.
+
+## Session: 2026-10-21: one RPM per core tool (branch `split-projects`)
+
+The owner clarified the earlier request ("split sdcompat into smaller modules
+that may depend on each other"): they meant dependency *packages*, not
+crates. Chosen with the owner: the source stays one workspace; each core
+executable becomes its own RPM, and the packages depend on each other with
+`Requires`. The four library crates are only used to build and are not
+packaged. The specs live in `packages/`.
+
+### Changes
+
+- `packages/`: `sdcompat-gen.spec`, `sdcompat-runner.spec`,
+  `sdcompat-timers.spec`, `sdcompatd.spec`, and `sdcompat.spec` (moved from
+  `dist/`). All build from one tarball `sdcompat-VERSION.tar.gz`
+  (`%autosetup -n sdcompat-%{version}`, `cargo build/test -p NAME`).
+  `build-rpms.sh [OUTDIR]` (default ~/rpmbuild-sdcompat) vendors the crates,
+  makes the tarball, runs `rpmbuild -bb` for each spec, and copies the
+  non-debug RPMs to OUTDIR/rpms. README pair.
+- Package contents and Requires, from what each tool runs at run time:
+  - sdcompat-runner: the binary; Requires s6, shadow-utils (useradd);
+    Recommends sdcompatd (OnFailure=/OnSuccess= go through the daemon).
+  - sdcompatd: the binary and the D-Bus policy; Requires s6, s6-rc,
+    dbus-daemon, sdcompat-runner (transient services, stop/reload-exec);
+    Recommends sdcompat-timers (transient timers).
+  - sdcompat-timers: Requires sdcompatd (starts units through it).
+  - sdcompat-gen: the binary and /var/lib/sdcompat; Requires s6-rc,
+    sdcompat-runner, sdcompat-timers (the generated scripts run them).
+  - sdcompat: the dispatcher, early, config, /etc/sdcompat/s6, skel,
+    init-selinux, SELinux module, kernel-install plugin, /var/log/sdcompat;
+    Requires the four tool packages, the s6 stack, etc. Its %post loads the
+    module and relabels /usr/libexec/sdcompat/* (the tools are installed
+    first because of the Requires; later updates get labels from the loaded
+    policy).
+  - Tool packages are pinned to `= %{version}-%{release}`.
+  - Requires cycles avoided with Recommends (runner→sdcompatd,
+    sdcompatd→timers).
+- `setup-fedora.sh`: install skips a core tool whose own RPM is installed;
+  uninstall removes core tools one by one (leaving RPM-owned ones), and the
+  D-Bus policy only when the sdcompatd RPM is not installed; the
+  remove-hint names all five packages.
+- README pair: the components section and source layout point at
+  `packages/`. CLAUDE.md: packaging rule.
+
+### Tests
+
+- `packages/build-rpms.sh` into the scratchpad: all five RPMs built; the
+  %check `cargo test -p` passed in each. File lists checked: no file is in
+  two packages. A test install was not possible (rpm --root needs root),
+  so the Requires were checked only with `rpm -qp --requires`.
+- bash -n and shellcheck -S warning clean; setup-fedora.sh --dry-run OK.
+- No Rust code changed, so the sandbox suite was not rerun.
+
+### Current state
+
+Branch `split-projects`: the core workspace with crates, the standalone
+projects, and now one RPM per core tool. main is unchanged.
+
+### Next steps
+
+1. Owner: review and merge `split-projects`, push.
+2. On Fedora: `packages/build-rpms.sh`, `sudo dnf install
+   ~/rpmbuild-sdcompat/rpms/*.rpm` (with the skarnet RPMs), check that dnf
+   resolves the Requires, that `/usr/libexec/sdcompat/*` is init_exec_t
+   after install, then `setup-fedora.sh` and an s6 boot.
+3. Still open: the items in the previous session's next steps.

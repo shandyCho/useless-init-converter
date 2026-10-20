@@ -21,6 +21,11 @@ if they turned out to be wrong.
   `[workspace]`, Cargo.lock, README pair and spec) and must not depend on the
   core or on each other: no path dependencies, no shared code. The core must
   keep working without them.
+- Packaging: each core executable is its own RPM (`packages/NAME.spec`, all
+  built from one workspace tarball by `packages/build-rpms.sh`), and they
+  depend on each other with `Requires`; the library crates are not packaged.
+  The `sdcompat` package holds the boot setup (`dist/`) and requires the tools.
+  Keep the five specs at the same Version.
 - Build and test: `cargo build`, `cargo test`; for each standalone project
   `cargo test --manifest-path standalone/NAME/Cargo.toml`; then the sandbox
   suite: `tests/sandbox.sh DIR && tests/check.sh DIR; tests/sandbox.sh DIR stop`

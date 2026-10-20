@@ -40,6 +40,11 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 | `sdcompat-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
 | `sdcompat` | 위의 모든 명령 | 사용자가 쓰는 명령(`/usr/bin/sdcompat`)입니다. 명령을 맡은 도구를 실행하므로 `sdcompat reload`도 그대로 동작합니다. |
 
+본체 도구는 각각 RPM 패키지가 되고, 패키지끼리 `Requires`로 의존합니다. 소스는 작업공간
+하나에 그대로 있으며, 라이브러리 크레이트(`sdcompat-base`, `-install`, `-exec`, `-client`)는
+빌드할 때만 쓰이고 패키지가 되지 않습니다. 패키지 구성과 빌드 방법:
+[packages/README.md](packages/README.md).
+
 **독립 도구** (선택, 각각 별도 프로젝트와 RPM):
 
 | 프로젝트 | 역할 | 없으면 |
@@ -218,7 +223,7 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
    `build-skarnet-rpms.sh`와 `--build-s6`가 함께 읽는 파일 하나, `dist/skarnet.versions`에
    고정되어 있습니다. 새 릴리스로 옮길 때는 그 파일만 고치면 됩니다. execline은 multicall
    바이너리 하나(`/usr/bin/execline`)로 빌드하므로 SELinux 모듈에 명령 목록이 없습니다.
-2. sdcompat을 빌드하고 설치합니다. `dist/sdcompat.spec`으로 만든 sdcompat RPM이 설치되어 있으면 그것을 씁니다.
+2. sdcompat을 빌드하고 설치합니다. `packages/build-rpms.sh`로 만든 sdcompat RPM이 설치되어 있으면 그것을 씁니다.
 3. `/etc/sdcompat/`에 설정, s6 서비스(초기 부팅, dbus-daemon, 데몬, earlyoom), 부팅 옵션을
    쓰고, `s6` 명령용 `/etc/s6.conf`를 씁니다. systemd-journald는 s6 서비스로 실행됩니다. `--no-journal`을 주면 s6 전용 rsyslog
    설정을 쓰므로, journald가 `/dev/log`를 쓰는 systemd 부팅에는 영향이 없습니다. 이때 s6 서비스
@@ -407,7 +412,8 @@ standalone/                별도 프로젝트. 각각 README와 spec이 있습�
   sdcompat-journal-relay/  journald 클라이언트 소켓을 syslog로 전달(JOURNAL=no)
   sdcompat-notify/         systemd-notify 대체
 dist/                      setup-fedora.sh, 설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
-                           s6-linux-init 골격, kernel-install 플러그인, sdcompat.spec
+                           s6-linux-init 골격, kernel-install 플러그인
+packages/                  본체 도구의 RPM spec(도구마다 하나)과 빌드 스크립트
 dist/rpm/                  dist/skarnet.versions에 있는 skarnet 패키지의 spec과 빌드 스크립트
 tests/                     비특권 샌드박스, 시나리오 검사, systemctl 래퍼
 ```

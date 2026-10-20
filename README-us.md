@@ -41,6 +41,12 @@ on its own, and the core works without them.
 | `sdcompat-timers` | `timer-run`, `path-run` | Runs one `.timer` (computes elapses) or `.path` unit (inotify) as an s6 longrun and asks the daemon to start the unit. |
 | `sdcompat` | any of the above | The command users know (`/usr/bin/sdcompat`): runs the tool that handles the command, so `sdcompat reload` still works. |
 
+Each core tool is its own RPM package, and the packages depend on each other
+with `Requires`. The source stays in the one workspace; the library crates
+(`sdcompat-base`, `-install`, `-exec`, `-client`) are used only to build and
+are not packaged. The packages and how to build them:
+[packages/README-us.md](packages/README-us.md).
+
 **Standalone tools** (optional, each its own project and RPM):
 
 | Project | Role | Without it |
@@ -235,7 +241,7 @@ entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
    which `build-skarnet-rpms.sh` and `--build-s6` both read: to move to new
    releases, edit that file only. execline is built as one multicall binary,
    `/usr/bin/execline`, so the SELinux module does not list its commands.
-2. Builds and installs sdcompat. If the sdcompat RPM from `dist/sdcompat.spec` is installed, it uses that instead.
+2. Builds and installs sdcompat. If the sdcompat RPMs from `packages/build-rpms.sh` are installed, it uses them instead.
 3. Writes `/etc/sdcompat/`: the config, the s6 services (early boot, dbus-daemon,
    the daemon, earlyoom) and the boot options, and `/etc/s6.conf` for the `s6` command. systemd-journald runs as an s6
    service. With `--no-journal`, an s6-only rsyslog config is used instead, so the
@@ -431,7 +437,8 @@ standalone/                separate projects, each with its own README and spec
   sdcompat-journal-relay/  journald's client sockets to syslog (JOURNAL=no)
   sdcompat-notify/         systemd-notify replacement
 dist/                      setup-fedora.sh, config, D-Bus policy, s6 services, early-boot helper,
-                           s6-linux-init skeleton, kernel-install plugin, sdcompat.spec
+                           s6-linux-init skeleton, kernel-install plugin
+packages/                  RPM specs for the core tools (one per tool) and their build script
 dist/rpm/                  specs and build script for the skarnet packages in dist/skarnet.versions
 tests/                     unprivileged sandbox, scenario checks, systemctl wrapper
 ```
