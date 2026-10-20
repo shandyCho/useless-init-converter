@@ -1363,3 +1363,46 @@ saved by the last systemd boot and never save later toggles.
 1. Real boot check from the fd store entry still applies.
 2. Maybe: tests/sandbox.sh stop could rmdir the sandbox units' empty
    cgroups when run as root, so root runs leave nothing behind.
+
+### Real boot diagnostics after the fd store change (2026-10-20, no code change)
+
+- Owner booted the s6 entry (ae139bb installed, SELinux permissive) and ran
+  `sudo tests/collect-diagnostics.sh` (/tmp/sdcompat-diag.mukbC6.tar.gz).
+  pid 1 s6-svscan, `is-system-running` running, `--failed` empty,
+  sdcompat-fdstore active.
+- Works: backlight (both systemd-backlight@ instances active/exited);
+  vconsole oneshot ran at 17:10:22 and no `vtcon… failed` after sdcompatd
+  was up (the two at 17:10:20 are before it, expected); device-wanted
+  bluetooth.service started beside at 17:10:22, 8 s before NM "startup
+  complete" (target delay fix confirmed). bluetoothd "Failed to set mode"
+  at 17:10:23, 17:13:30, 17:13:33 as before.
+- Bug, systemd-rfkill: started beside at boot (17:10:22), exited idle and
+  went into the socket wait (run process up, not ready). Once the boot's
+  change finished, reconcile_beside_locked() ran `s6-rc -u change` for it;
+  s6-rc waits for readiness, which a waiting runner never sends, so it
+  timed out at 17:12:15 ("recording systemd-rfkill.service in s6-rc:
+  s6-svlisten: fatal: timed out", "unable to start ... exited 99") and
+  brought it down. Checked on the live system afterwards: no run process,
+  socket-wait key gone (finish's "stopped" branch), so rfkill changes
+  after 17:12:15 were not saved this boot. Only the beside path hits it
+  (a unit s6-rc already counts as up isn't waited for).
+- Not fixed: journald's "FDSTORE: fd store not reachable" (2 lines).
+  journald started at 17:10:20.078, sdcompat-fdstore at .171: no ordering
+  between them, as feared in 25c41c7.
+- Known, unchanged: rejected method_return to logind (requested_reply=0,
+  once), home1 excluded noise, user-runtime-dir@60578/@0 ExecStop exit 1,
+  /run/varlink/registry symlinks (directory missing). AVCs down to 9:
+  hostnamed proc_psi_t and /run/dbus, firewalld .cache, restorecon and
+  (new, from the vconsole oneshot) loadkeys writing the s6-svscan-log
+  fifo (var_run_t); under enforcing their output would be lost.
+
+### Next steps
+
+1. Fix the rfkill reconcile timeout. Proposal: the runner signals
+   readiness when it enters the socket wait (s6's view: up, like a
+   listening socket unit), or reconcile skips/records units in socket-wait
+   without waiting. Add a sandbox test: react.service started beside, idle
+   exit, then reconcile.
+2. Order services with FileDescriptorStoreMax= after sdcompat-fdstore
+   (journald), then check the FDSTORE count again.
+3. Older items: rejected reply to logind; loadkeys/restorecon fifo AVCs.
