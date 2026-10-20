@@ -1294,4 +1294,32 @@ saved by the last systemd boot and never save later toggles.
    `s6-rc -a list | grep -x sdcompat-fdstore`, `grep -c 'fd store not
    reachable' /run/uncaught-logs/current`, Bluetooth timing, vconsole,
    brightness/rfkill save, and collect diagnostics.
-2. Transient scopes/slices across daemon restarts (still lost).
+2. Done below (scopes and slices across daemon restarts).
+
+### Scopes and slices across daemon restarts (same day, `9df4162`)
+
+- Before: transient scopes and slices (StartTransientUnit: logind's
+  session-N.scope and user-UID.slice, systemd-run --scope, podman,
+  flatpak) lived only in the daemon's map. After a daemon restart they
+  were unknown: logind's StopUnit/KillUnit of a session scope would fail
+  (no unit file to load; not observed, follows from check_job), and
+  GetUnitByPID/ListUnits lost them.
+- Now each one is recorded in its unit state directory,
+  RUN_DIR/units/<name>/transient-{cgroup,sighup,slice,description,kind}
+  (one file per value, like the rest of the unit state; kind written last,
+  so an incomplete record is skipped). `transient::save_scope()` after a
+  successful StartTransientUnit; `load_scopes()` at daemon startup takes
+  back the records whose cgroup directory still exists; gc_scopes() then
+  drops scopes that emptied meanwhile (it already removed the state dir),
+  and stopping a slice now removes its state dir too. Description newlines
+  become spaces (read_trimmed state files).
+- Tests: unit test `scope_round_trip` (a record with an existing cgroup
+  dir is loaded with all fields; one whose cgroup is gone and ordinary
+  unit state are not). check.sh: keep-scope.scope (a sleep) created before
+  the daemon swap, active/running after it, and StopUnit from the restarted
+  daemon kills its process. That part is skipped here like the existing
+  scope test (no writable cgroup unprivileged on this machine), so the
+  live path is only covered by the unit test until it runs as root or with
+  cgroup delegation. `cargo test` 28 passed + 1 ignored, sandbox 152/152
+  twice (scope parts skipped), shellcheck/bash -n pass. Docs:
+  README/README-us.
