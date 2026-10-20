@@ -2105,3 +2105,54 @@ user managers on the real s6 boot.
 2. Maybe: make the fd store not need a reboot for limit changes (the
    PUTting client passes the limit).
 3. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
+
+## Session: 2026-10-21: mount propagation; /run/user/UID mounted twice
+
+- Checked on the s6 boot of 2026-10-20 23:47 (read-only): every mount is
+  `private`. systemd PID 1 runs MS_REC|MS_SHARED on / at boot
+  (mount-setup.c); nothing did here. sandbox.rs already makes / an rslave
+  in a unit's namespace, as systemd does, but a slave of a private mount
+  receives nothing, so mounts made after a unit (or flatpak app, or
+  container) started never reached it. **Fix:** early mount-api runs
+  `mount --make-rshared /` after the API mounts; mount-fs's mounts are
+  shared as their parent is. Shown under `unshare -rm` (scratch script):
+  an rslave namespace doesn't see a later mount with / private, does with
+  / rshared.
+- **Bug found on the way:** /run/user/1000 was two tmpfs (0:150, 0:151;
+  mount IDs 1606/1607, the second on the first). systemd-user-runtime-dir
+  skips the mount if the path is already a mount point, so two runs of
+  `start 1000` overlapped. Cause: logind (262) starts
+  user-runtime-dir@UID and then user@UID (BindsTo= it) without waiting;
+  execute_job takes the per-unit lock, but user@'s dependency start
+  (start_any → dyn_start) didn't, and the oneshot path only marks the
+  unit active after ExecStart returns. **Fix:** start_any takes the
+  dependency's unit lock; the second start then finds it active. (Cycles
+  of Requires= between dynamic units recursed forever before; now they
+  would wait forever instead; no worse.) Possibly related to the open
+  "user-runtime-dir@UID ExecStop exit 1": stop unmounted one of the two.
+- Commit `6efd974`. Tests: cargo test 36 + 1 ignored; release build;
+  sandbox JOURNAL=yes 183/183, JOURNAL=no 188/188. New check: StartUnit
+  prep@d then inst@d (BindsTo= prep@d) back to back, with prep@d's
+  ExecStart sleeping 1 s: ExecStart ran once. Without the lock it fails
+  with 2 (checked). bash -n, shellcheck -S warning. TESTING/TESTING-us:
+  two real-boot rows (propagation shared; /run/user/$UID mounted once).
+- Not tested: a real boot with the new early script and daemon.
+- Also still seen: /run is mounted twice (initramfs tmpfs, then
+  s6-linux-init's on top), which hides the initramfs's /run, e.g.
+  /run/credentials/systemd-cryptsetup@... mounts. Not looked at.
+
+### Current state
+
+Under s6, / should now be shared like with systemd, and user-runtime-dir
+runs once per login (both unverified on a real boot).
+
+### Next steps
+
+1. Owner: push, rerun setup, reboot into s6. Check the two new TESTING
+   rows: `findmnt -no PROPAGATION /` → `shared`; `findmnt -n
+   /run/user/$UID | wc -l` → `1`. Then see whether user-runtime-dir@UID's
+   ExecStop still exits 1 on logout/shutdown.
+2. Maybe: the double /run (s6-linux-init over the initramfs's).
+3. Then: cgroup-BPF settings, SELinux enforcing.
+4. Maybe: make the fd store not need a reboot for limit changes.
+5. Still open: beside3 sandbox flake.
