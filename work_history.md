@@ -2010,3 +2010,25 @@ user managers under s6, as with systemd (not verified on a real boot).
 
 1. Owner: rerun setup on the s6 boot, then repeat part 1's next step 1.
 2. Earlier next steps unchanged.
+
+## Session: 2026-10-21, part 3: setup rerun; the fd store still runs old code
+
+- Owner reran setup (23:41) with `--rebuild --no-resolved --no-journal`.
+  The new binary is installed and sdcompatd was restarted (23:41:24), but
+  `sdcompat fdstore` is still the 23:37 process: by design setup doesn't
+  restart it. The `#stdio` limit (3) from `efec5bc` is evaluated in the fd
+  store process, and the old code loads "<unit>#stdio" as a unit, gets
+  FileDescriptorStoreMax 0, and answers "ERR fd store full". So
+  StartTransientUnit with --pipe would still fail until the next boot.
+  Told the owner to reboot (restarting the fd store would drop the fds
+  services hold in it).
+- Lesson: changes to fdstore::limit (or anything else the fd store
+  process runs) only take effect at the next boot; a later fix could make
+  the daemon not depend on that, e.g. the store lets the PUTting client
+  pass the limit.
+
+### Next steps
+
+1. Owner: reboot into the s6 boot, then part 1's next step 1 (both
+   commands, and `time sudo systemctl reload user@1000.service`).
+2. Earlier next steps unchanged.
