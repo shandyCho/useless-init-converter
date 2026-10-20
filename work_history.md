@@ -1927,3 +1927,71 @@ real machine.
 2. Then: user-reload-restart, mount propagation, cgroup-BPF settings,
    SELinux enforcing.
 3. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
+
+## Session: 2026-10-21: user-reload-restart
+
+Owner asked to look at user-reload-restart. The systemd RPM's file
+triggers for /usr/lib/systemd/user run `systemd-update-helper
+user-reload-restart` (install) and `user-reload` / `user-restart`
+(removal/upgrade): `systemctl reload "user@*.service"` on the system
+manager, then `systemctl --user -M UID@ enqueue-marked` per user;
+`mark-*-user-units` and `remove-user-units` also use `--user -M UID@`.
+
+- Checked live on the s6 boot (read-only): `systemctl list-units 'user@*'`
+  works (ListUnitsByPatterns); user@1000's systemd already ran with
+  `--deserialize=29`, so the RTMIN+25 reload signal had reached it before.
+- **Gap 1: reload didn't wait.** For Type=notify-reload, cmd_reload sent
+  the signal and returned at once; systemd waits for RELOADING=1 then
+  READY=1. The following `--user -M` calls could hit a re-executing
+  manager. **Fix:** the notify helper counts RELOADING=1→READY=1 cycles
+  in the state key `reloads-done`; cmd_reload waits for it to go up, and
+  fails if the main process exits or TimeoutStartSec= (default 90 s)
+  passes. The helper writes the key at start, so a service started by an
+  older binary (no key) is not waited on, so there's no 90 s hang after
+  setup on a running system.
+- **Gap 2: `-M UID@` didn't work at all.** sd-bus reaches another user's
+  manager with `unixexec:path=systemd-run,argv1=-M.host,-PGq,--wait,
+  -pUser=UID,-pPAMName=login,systemd-stdio-bridge,--user`, and sdcompat
+  rejected StandardInputFileDescriptor etc. ("passing file descriptors
+  ... not supported"). So update-time restarts/markers/disables of user
+  units all failed silently (`|| :`). **Fix:** StartTransientUnit puts the
+  fds into the fd store as `<unit>#stdio` (names stdin/stdout/stderr,
+  limit 3) and writes `Standard*=fd:NAME` into the transient unit file;
+  setup_stdio fetches them once and deletes the key (store copies would
+  keep the caller's pipes open, so no EOF). remove_transient_file deletes
+  the key too. A unit with ExecStartPre= would hand the fds to the first
+  command only; systemd-run units don't have one.
+- Minor: the ReloadSignal property was hardcoded to SIGHUP; now reads
+  ReloadSignal=.
+- Commit `efec5bc`. Tests: cargo test 36 + 1 ignored; release build;
+  sandbox JOURNAL=yes 180/180, JOURNAL=no 185/185 (new: notreload.service
+  with ReloadSignal=USR1 that answers after 1 s; `systemctl reload
+  'notrel*.service'`, `list-units` by pattern, ReloadSignal property,
+  `echo piped | systemd-run -PGq --wait cat`). By hand in the sandbox:
+  busctl over `unixexec:` → systemd-run -PGq --wait systemd-stdio-bridge
+  got the manager's Version twice; the transient units were unloaded
+  shortly after. bash -n, shellcheck -S warning. Docs: README/README-us
+  (package updates; `--pipe` removed from "not implemented"),
+  TESTING/TESTING-us (new real-boot row).
+- Not tested: the real root path (`-pUser=UID -pPAMName=login`, i.e. a PAM
+  session for the bridge) and the wait against a real user manager. The
+  current user@1000 was started by the old helper, so its next reload
+  won't be waited on until the next boot.
+
+### Current state
+
+Package updates of user units should now restart/reload them in running
+user managers under s6, as with systemd (not verified on a real boot).
+
+### Next steps
+
+1. Owner: push, rerun setup on the s6 boot, then the TESTING row "User
+   managers on package update": `sudo systemctl --user -M $USER@
+   is-system-running` → running/degraded; `sudo
+   /usr/lib/systemd/systemd-update-helper user-reload-restart; echo $?`
+   → 0. After the next reboot, `time sudo systemctl reload
+   user@1000.service` should take a moment (the wait) and succeed.
+2. Still to check on the s6 boot: chrony MainPID change on reinstall,
+   mount-rootfs/oo7-daemon.
+3. Then: mount propagation, cgroup-BPF settings, SELinux enforcing.
+4. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
