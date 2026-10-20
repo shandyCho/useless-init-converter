@@ -105,6 +105,52 @@ SystemCallArchitectures=native
 ExecStart=/usr/bin/python3 -c 'import ctypes; c = ctypes.CDLL(None, use_errno=True); b = ctypes.create_string_buffer(4096); r = c.mlock(b, 4096); open("$R/scf-allow.out", "w").write("ok" if r == 0 else "errno %%d" % ctypes.get_errno())'
 EOF
 
+# The other sandboxing settings. The seccomp-based ones work unprivileged;
+# the namespaces and mounts only as root (check.sh skips those otherwise).
+cat > "$W/harden.py" <<'PYT'
+import ctypes, errno, os, socket, sys
+out = []
+def t(name, f):
+    try:
+        f()
+        out.append(f"{name} allowed")
+    except OSError as e:
+        out.append(f"{name} {errno.errorcode.get(e.errno, e.errno)}")
+t("inet", lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+t("unix", lambda: socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM))
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mmap.restype = ctypes.c_void_p
+p = libc.mmap(None, 4096, 7, 0x22, -1, 0)
+out.append("mmap-wx " + ("allowed" if p not in (None, 2**64 - 1) else errno.errorcode[ctypes.get_errno()]))
+f = os.path.join(sys.argv[2], "harden-suid")
+open(f, "w").close()
+t("chmod-suid", lambda: os.chmod(f, 0o4755))
+t("unshare-user", lambda: os.unshare(os.CLONE_NEWUSER))
+t("procsys", lambda: open("/proc/sys/kernel/domainname", "w").write("x"))
+out.append("dev " + " ".join(sorted(os.listdir("/dev"))))
+out.append("netdevs " + " ".join(l.split(":")[0].strip() for l in open("/proc/net/dev").readlines()[2:]))
+open(sys.argv[1], "w").write("\n".join(out) + "\n")
+PYT
+cat > "$U/harden.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 $W/harden.py $R/harden.out $R
+RestrictAddressFamilies=AF_UNIX
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectHostname=yes
+ProtectClock=yes
+EOF
+
 cat > "$U/dep.service" <<EOF
 [Unit]
 Description=Depends on once.service

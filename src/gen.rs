@@ -122,6 +122,10 @@ const SERVICE_KEYS: &[&str] = &[
     "LimitNOFILE", "LimitAS", "LimitNPROC", "LimitMEMLOCK", "LimitLOCKS", "LimitSIGPENDING",
     "LimitMSGQUEUE", "LimitNICE", "LimitRTPRIO", "LimitRTTIME", "SendSIGHUP", "TimeoutAbortSec",
     "FileDescriptorStoreMax", "SystemCallFilter", "SystemCallErrorNumber", "SystemCallArchitectures",
+    "RestrictAddressFamilies", "RestrictNamespaces", "MemoryDenyWriteExecute", "LockPersonality",
+    "RestrictRealtime", "RestrictSUIDSGID", "ProtectClock", "ProtectKernelModules", "ProtectKernelLogs",
+    "ProtectKernelTunables", "ProtectControlGroups", "ProtectHostname", "ProtectProc", "ProcSubset",
+    "PrivateDevices", "PrivateNetwork", "PrivateIPC", "PrivateMounts",
 ];
 
 fn longrun_type(unit: &Unit) -> bool {

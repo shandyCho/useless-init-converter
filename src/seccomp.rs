@@ -235,6 +235,342 @@ impl Filter {
     }
 }
 
+// ---- other seccomp-based settings ----
+//
+// RestrictAddressFamilies=, RestrictNamespaces=, MemoryDenyWriteExecute=,
+// LockPersonality=, RestrictRealtime=, RestrictSUIDSGID= and the syscall
+// parts of ProtectClock=, ProtectKernelModules=, ProtectKernelLogs=,
+// ProtectHostname= and PrivateDevices=. Built like systemd's seccomp-util.c:
+// one allow-by-default filter per setting and architecture, with the same
+// rules and errnos.
+
+/// libseccomp's struct scmp_arg_cmp.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArgCmp {
+    arg: c_uint,
+    op: c_int,
+    a: u64,
+    b: u64,
+}
+
+const SCMP_CMP_NE: c_int = 1;
+const SCMP_CMP_GT: c_int = 6;
+const SCMP_CMP_EQ: c_int = 4;
+const SCMP_CMP_MASKED_EQ: c_int = 7;
+
+fn arg_eq(arg: c_uint, v: u64) -> ArgCmp {
+    ArgCmp { arg, op: SCMP_CMP_EQ, a: v, b: 0 }
+}
+fn arg_ne(arg: c_uint, v: u64) -> ArgCmp {
+    ArgCmp { arg, op: SCMP_CMP_NE, a: v, b: 0 }
+}
+fn arg_gt(arg: c_uint, v: u64) -> ArgCmp {
+    ArgCmp { arg, op: SCMP_CMP_GT, a: v, b: 0 }
+}
+/// (arg & bits) == bits.
+fn arg_has(arg: c_uint, bits: u64) -> ArgCmp {
+    ArgCmp { arg, op: SCMP_CMP_MASKED_EQ, a: bits, b: bits }
+}
+
+/// `syscall` fails with `errno` when all `args` comparisons match.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rule {
+    pub syscall: String,
+    pub errno: i32,
+    pub args: Vec<ArgCmp>,
+}
+
+fn rule(syscall: &str, errno: i32, args: Vec<ArgCmp>) -> Rule {
+    Rule { syscall: syscall.to_string(), errno, args }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Restriction {
+    /// The setting, for error messages.
+    pub what: &'static str,
+    pub rules: Vec<Rule>,
+    /// Native architecture only. systemd skips the ABIs whose socket() is
+    /// multiplexed through socketcall() (i386) for RestrictAddressFamilies=.
+    pub native_only: bool,
+}
+
+const ADDRESS_FAMILIES: &[(&str, u64)] = &[
+    ("AF_UNIX", 1), ("AF_LOCAL", 1), ("AF_INET", 2), ("AF_AX25", 3), ("AF_IPX", 4),
+    ("AF_APPLETALK", 5), ("AF_NETROM", 6), ("AF_BRIDGE", 7), ("AF_ATMPVC", 8), ("AF_X25", 9),
+    ("AF_INET6", 10), ("AF_ROSE", 11), ("AF_DECnet", 12), ("AF_NETBEUI", 13), ("AF_SECURITY", 14),
+    ("AF_KEY", 15), ("AF_NETLINK", 16), ("AF_ROUTE", 16), ("AF_PACKET", 17), ("AF_ASH", 18),
+    ("AF_ECONET", 19), ("AF_ATMSVC", 20), ("AF_RDS", 21), ("AF_SNA", 22), ("AF_IRDA", 23),
+    ("AF_PPPOX", 24), ("AF_WANPIPE", 25), ("AF_LLC", 26), ("AF_IB", 27), ("AF_MPLS", 28),
+    ("AF_CAN", 29), ("AF_TIPC", 30), ("AF_BLUETOOTH", 31), ("AF_IUCV", 32), ("AF_RXRPC", 33),
+    ("AF_ISDN", 34), ("AF_PHONET", 35), ("AF_IEEE802154", 36), ("AF_CAIF", 37), ("AF_ALG", 38),
+    ("AF_NFC", 39), ("AF_VSOCK", 40), ("AF_KCM", 41), ("AF_QIPCRTR", 42), ("AF_SMC", 43),
+    ("AF_XDP", 44), ("AF_MCTP", 45),
+];
+const AF_MAX: u64 = 46;
+
+/// RestrictAddressFamilies= lines, merged like SystemCallFilter=: the first
+/// decides between allow list and deny list (`~`), later lines of the other
+/// kind remove entries. "none" is an empty allow list. Unknown names are
+/// ignored. None: no restriction.
+pub fn parse_address_families(lines: &[String]) -> Option<(bool, std::collections::BTreeSet<u64>)> {
+    let mut out: Option<(bool, std::collections::BTreeSet<u64>)> = None;
+    for line in lines {
+        let (invert, rest) = match line.strip_prefix('~') {
+            Some(r) => (true, r),
+            None => (false, line.as_str()),
+        };
+        let (allow, set) = out.get_or_insert_with(|| (!invert, Default::default()));
+        let add = invert != *allow;
+        for w in rest.split_whitespace() {
+            if w == "none" {
+                if !invert {
+                    *allow = true;
+                    set.clear();
+                }
+                continue;
+            }
+            if let Some(&(_, n)) = ADDRESS_FAMILIES.iter().find(|(name, _)| *name == w) {
+                if add {
+                    set.insert(n);
+                } else {
+                    set.remove(&n);
+                }
+            }
+        }
+    }
+    out
+}
+
+const NAMESPACES: &[(&str, u64)] = &[
+    ("cgroup", libc::CLONE_NEWCGROUP as u64),
+    ("ipc", libc::CLONE_NEWIPC as u64),
+    ("net", libc::CLONE_NEWNET as u64),
+    ("mnt", libc::CLONE_NEWNS as u64),
+    ("pid", libc::CLONE_NEWPID as u64),
+    ("user", libc::CLONE_NEWUSER as u64),
+    ("uts", libc::CLONE_NEWUTS as u64),
+    ("time", 0x80), // CLONE_NEWTIME
+];
+
+fn all_namespaces() -> u64 {
+    NAMESPACES.iter().fold(0, |a, (_, f)| a | f)
+}
+
+/// RestrictNamespaces=: the namespace flags that stay allowed. A boolean
+/// (yes: none allowed), a list of allowed types or `~` and the denied ones.
+/// None: not set, or nothing restricted.
+pub fn parse_namespaces(lines: &[String]) -> Option<u64> {
+    let all = all_namespaces();
+    let mut retain: Option<u64> = None;
+    for line in lines {
+        if let Some(b) = crate::unit::parse_bool(line) {
+            retain = Some(if b { 0 } else { all });
+            continue;
+        }
+        let (invert, rest) = match line.strip_prefix('~') {
+            Some(r) => (true, r),
+            None => (false, line.as_str()),
+        };
+        let bits = rest
+            .split_whitespace()
+            .filter_map(|w| NAMESPACES.iter().find(|(n, _)| *n == w).map(|(_, f)| *f))
+            .fold(0, |a, f| a | f);
+        retain = Some(if invert { retain.unwrap_or(all) & !bits } else { retain.filter(|&r| r != all).unwrap_or(0) | bits });
+    }
+    retain.filter(|&r| r != all)
+}
+
+/// The restriction filters a unit asks for, in the order systemd loads them.
+pub fn restrictions(unit: &Unit) -> Vec<Restriction> {
+    let on = |key: &str| unit.get_bool("Service", key, false);
+    let mut out = Vec::new();
+    let groups = groups();
+    let deny_group = |what: &'static str, group: &str| -> Restriction {
+        let mut names = Vec::new();
+        let _ = expand(group, &groups, &mut names, 0);
+        Restriction { what, rules: names.iter().map(|n| rule(n, libc::EPERM, vec![])).collect(), native_only: false }
+    };
+
+    if let Some((allow, set)) = parse_address_families(&unit.get_all("Service", "RestrictAddressFamilies")) {
+        let rules = if allow {
+            (0..AF_MAX)
+                .filter(|f| !set.contains(f))
+                .map(|f| rule("socket", libc::EAFNOSUPPORT, vec![arg_eq(0, f)]))
+                .chain(std::iter::once(rule("socket", libc::EAFNOSUPPORT, vec![arg_gt(0, AF_MAX - 1)])))
+                .collect()
+        } else {
+            set.iter().map(|&f| rule("socket", libc::EAFNOSUPPORT, vec![arg_eq(0, f)])).collect()
+        };
+        out.push(Restriction { what: "RestrictAddressFamilies=", rules, native_only: true });
+    }
+    if let Some(retain) = parse_namespaces(&unit.get_all("Service", "RestrictNamespaces")) {
+        let mut rules = vec![
+            // Can't look into clone3()'s struct: make glibc fall back to clone().
+            rule("clone3", libc::ENOSYS, vec![]),
+            if retain == 0 { rule("setns", libc::EPERM, vec![]) } else { rule("setns", libc::EPERM, vec![arg_eq(1, 0)]) },
+        ];
+        let clone_arg = if cfg!(target_arch = "s390x") { 1 } else { 0 };
+        for &(_, f) in NAMESPACES.iter().filter(|(_, f)| retain & f == 0) {
+            rules.push(rule("unshare", libc::EPERM, vec![arg_has(0, f)]));
+            rules.push(rule("clone", libc::EPERM, vec![arg_has(clone_arg, f)]));
+            if retain != 0 {
+                rules.push(rule("setns", libc::EPERM, vec![arg_has(1, f)]));
+            }
+        }
+        out.push(Restriction { what: "RestrictNamespaces=", rules, native_only: false });
+    }
+    if on("MemoryDenyWriteExecute") {
+        let wx = (libc::PROT_WRITE | libc::PROT_EXEC) as u64;
+        let x = libc::PROT_EXEC as u64;
+        out.push(Restriction {
+            what: "MemoryDenyWriteExecute=",
+            rules: vec![
+                rule("mmap", libc::EPERM, vec![arg_has(2, wx)]),
+                rule("mmap2", libc::EPERM, vec![arg_has(2, wx)]),
+                rule("mprotect", libc::EPERM, vec![arg_has(2, x)]),
+                rule("pkey_mprotect", libc::EPERM, vec![arg_has(2, x)]),
+                rule("shmat", libc::EPERM, vec![arg_has(2, libc::SHM_EXEC as u64)]),
+            ],
+            native_only: false,
+        });
+    }
+    if on("RestrictRealtime") {
+        // Allowed: SCHED_OTHER (0), SCHED_BATCH (3), SCHED_IDLE (5).
+        let mut rules: Vec<Rule> =
+            [1u64, 2, 4].iter().map(|&p| rule("sched_setscheduler", libc::EPERM, vec![arg_eq(1, p)])).collect();
+        rules.push(rule("sched_setscheduler", libc::EPERM, vec![arg_gt(1, 5)]));
+        out.push(Restriction { what: "RestrictRealtime=", rules, native_only: false });
+    }
+    if on("LockPersonality") {
+        let current = unsafe { libc::personality(0xffff_ffff) } as u64;
+        out.push(Restriction {
+            what: "LockPersonality=",
+            rules: vec![rule("personality", libc::EPERM, vec![arg_ne(0, current)])],
+            native_only: false,
+        });
+    }
+    if on("RestrictSUIDSGID") {
+        let mut rules = vec![rule("openat2", libc::ENOSYS, vec![])];
+        for bit in [libc::S_ISUID as u64, libc::S_ISGID as u64] {
+            for (sc, mode_arg) in [("chmod", 1), ("fchmod", 1), ("fchmodat", 2), ("fchmodat2", 2), ("creat", 1)] {
+                rules.push(rule(sc, libc::EPERM, vec![arg_has(mode_arg, bit)]));
+            }
+            for flag in [libc::O_CREAT as u64, libc::O_TMPFILE as u64] {
+                rules.push(rule("open", libc::EPERM, vec![arg_has(1, flag), arg_has(2, bit)]));
+                rules.push(rule("openat", libc::EPERM, vec![arg_has(2, flag), arg_has(3, bit)]));
+            }
+        }
+        out.push(Restriction { what: "RestrictSUIDSGID=", rules, native_only: false });
+    }
+    if on("ProtectClock") {
+        out.push(deny_group("ProtectClock=", "@clock"));
+    }
+    if on("ProtectKernelModules") {
+        out.push(deny_group("ProtectKernelModules=", "@module"));
+    }
+    if on("ProtectKernelLogs") {
+        out.push(Restriction { what: "ProtectKernelLogs=", rules: vec![rule("syslog", libc::EPERM, vec![])], native_only: false });
+    }
+    // "private" allows changing the hostname inside the namespace.
+    if on("ProtectHostname") {
+        out.push(Restriction {
+            what: "ProtectHostname=",
+            rules: vec![rule("sethostname", libc::EPERM, vec![]), rule("setdomainname", libc::EPERM, vec![])],
+            native_only: false,
+        });
+    }
+    if on("PrivateDevices") {
+        out.push(deny_group("PrivateDevices=", "@raw-io"));
+    }
+    out
+}
+
+/// PR_SET_MDWE (Linux 6.3): MemoryDenyWriteExecute= without seccomp, as
+/// systemd uses it when the kernel has it. Inherited across execve().
+pub fn set_mdwe() -> bool {
+    const PR_SET_MDWE: libc::c_int = 65;
+    const PR_MDWE_REFUSE_EXEC_GAIN: libc::c_ulong = 1;
+    unsafe { libc::prctl(PR_SET_MDWE, PR_MDWE_REFUSE_EXEC_GAIN, 0, 0, 0) == 0 }
+}
+
+/// Load the unit's restriction filters into this process. Before
+/// SystemCallFilter=, whose allow list may not include seccomp() itself.
+pub fn apply_restrictions(unit: &Unit) -> Result<(), String> {
+    let mut list = restrictions(unit);
+    if list.iter().any(|r| r.what == "MemoryDenyWriteExecute=") && set_mdwe() {
+        list.retain(|r| r.what != "MemoryDenyWriteExecute=");
+    }
+    if list.is_empty() {
+        return Ok(());
+    }
+    let lib = match Lib::open() {
+        Ok(l) => l,
+        Err(e) => {
+            let names: Vec<&str> = list.iter().map(|r| r.what).collect();
+            eprintln!("sdcompat: {e}; {} skipped", names.join(" "));
+            return Ok(());
+        }
+    };
+    for r in &list {
+        r.apply(&lib)?;
+    }
+    Ok(())
+}
+
+impl Restriction {
+    fn apply(&self, lib: &Lib) -> Result<(), String> {
+        let native = unsafe { (lib.arch_native)() };
+        let mut archs = vec![native];
+        if !self.native_only {
+            let extra: &[&str] = match std::env::consts::ARCH {
+                "x86_64" => &["x86", "x32"],
+                "aarch64" => &["arm"],
+                _ => &[],
+            };
+            archs.extend(extra.iter().map(|a| lib.arch(a)).filter(|&t| t != 0 && t != native));
+        } else if std::env::consts::ARCH == "x86_64" {
+            // x32 has socket() of its own.
+            archs.extend([lib.arch("x32")].into_iter().filter(|&t| t != 0));
+        }
+        for arch in archs {
+            unsafe {
+                let ctx = (lib.init)(SCMP_ACT_ALLOW);
+                if ctx.is_null() {
+                    return Err(format!("{}: seccomp_init failed", self.what));
+                }
+                (lib.attr_set)(ctx, SCMP_FLTATR_CTL_NNP, u32::from(!have_sys_admin()));
+                // Other ABIs are left to their own filter.
+                (lib.attr_set)(ctx, SCMP_FLTATR_ACT_BADARCH, SCMP_ACT_ALLOW);
+                if arch != native {
+                    (lib.arch_add)(ctx, arch);
+                    (lib.arch_remove)(ctx, native);
+                }
+                let mut added = 0;
+                for r in &self.rules {
+                    let c = CString::new(r.syscall.as_str()).unwrap_or_default();
+                    let nr = (lib.resolve_name)(c.as_ptr());
+                    if nr == NR_SCMP_ERROR {
+                        continue;
+                    }
+                    let act = SCMP_ACT_ERRNO | (r.errno as u32 & 0xffff);
+                    let args = if r.args.is_empty() { std::ptr::null() } else { r.args.as_ptr() as *const c_void };
+                    // Like systemd: a syscall this ABI lacks is skipped.
+                    if (lib.rule_add_array)(ctx, act, nr, r.args.len() as c_uint, args) == 0 {
+                        added += 1;
+                    }
+                }
+                let res = if added > 0 { (lib.load)(ctx) } else { 0 };
+                (lib.release)(ctx);
+                if res < 0 {
+                    return Err(format!("{}: seccomp_load: {}", self.what, std::io::Error::from_raw_os_error(-res)));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 fn have_sys_admin() -> bool {
     const CAP_SYS_ADMIN: u32 = 21;
     std::fs::read_to_string("/proc/self/status")
@@ -357,6 +693,29 @@ mod tests {
     }
 
     #[test]
+    fn address_families() {
+        let (allow, set) = parse_address_families(&lines(&["AF_UNIX AF_INET AF_INET6"])).unwrap();
+        assert!(allow);
+        assert_eq!(set.into_iter().collect::<Vec<_>>(), vec![1, 2, 10]);
+        let (allow, set) = parse_address_families(&lines(&["~AF_PACKET AF_NETLINK", "AF_NETLINK"])).unwrap();
+        assert!(!allow);
+        assert_eq!(set.into_iter().collect::<Vec<_>>(), vec![17]);
+        let (allow, set) = parse_address_families(&lines(&["none"])).unwrap();
+        assert!(allow && set.is_empty());
+        assert_eq!(parse_address_families(&[]), None);
+    }
+
+    #[test]
+    fn namespaces() {
+        let all = all_namespaces();
+        assert_eq!(parse_namespaces(&lines(&["yes"])), Some(0));
+        assert_eq!(parse_namespaces(&lines(&["no"])), None);
+        assert_eq!(parse_namespaces(&lines(&["net mnt"])), Some((libc::CLONE_NEWNET | libc::CLONE_NEWNS) as u64));
+        assert_eq!(parse_namespaces(&lines(&["~user"])), Some(all & !(libc::CLONE_NEWUSER as u64)));
+        assert_eq!(parse_namespaces(&lines(&["~cgroup user pid net uts mnt ipc time"])), Some(0));
+    }
+
+    #[test]
     fn errors() {
         assert!(Filter::parse(&lines(&["@nope"]), None, &[]).is_err());
         assert!(parse_action("ENOTANERRNO").is_err());
@@ -368,6 +727,20 @@ mod tests {
 #[cfg(test)]
 mod load_tests {
     use super::*;
+
+    fn test_unit(text: &str) -> Unit {
+        let mut file = crate::unit::UnitFile::default();
+        file.parse_str(text);
+        Unit {
+            id: "t.service".into(),
+            names: vec!["t.service".into()],
+            fragment: None,
+            dropins: Vec::new(),
+            load_state: crate::loader::LoadState::Loaded,
+            load_error: None,
+            file,
+        }
+    }
 
     /// Load a deny list in a child and check that the syscall gets EPERM.
     #[test]
@@ -393,5 +766,44 @@ mod load_tests {
         unsafe { libc::waitpid(pid, &mut st, 0) };
         assert!(libc::WIFEXITED(st), "child died: {st}");
         assert_eq!(libc::WEXITSTATUS(st), 0, "1 = getppid not blocked, 2 = apply failed");
+    }
+
+    /// RestrictAddressFamilies=AF_UNIX and RestrictNamespaces=yes in a child.
+    #[test]
+    fn restrictions_take_effect() {
+        if unsafe { libc::dlopen(c"libseccomp.so.2".as_ptr(), libc::RTLD_NOW) }.is_null() {
+            eprintln!("libseccomp.so.2 not available, skipping");
+            return;
+        }
+        let unit = test_unit("[Service]\nRestrictAddressFamilies=AF_UNIX\nRestrictNamespaces=yes\nRestrictRealtime=yes\n");
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let code = (|| {
+                if apply_restrictions(&unit).is_err() {
+                    return 2;
+                }
+                let errno = || std::io::Error::last_os_error().raw_os_error();
+                let s = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+                if s >= 0 || errno() != Some(libc::EAFNOSUPPORT) {
+                    return 3;
+                }
+                if unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM, 0) } < 0 {
+                    return 4;
+                }
+                if unsafe { libc::unshare(libc::CLONE_NEWUSER) } == 0 || errno() != Some(libc::EPERM) {
+                    return 5;
+                }
+                let p = libc::sched_param { sched_priority: 1 };
+                if unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &p) } == 0 || errno() != Some(libc::EPERM) {
+                    return 6;
+                }
+                0
+            })();
+            unsafe { libc::_exit(code) };
+        }
+        let mut st = 0;
+        unsafe { libc::waitpid(pid, &mut st, 0) };
+        assert!(libc::WIFEXITED(st), "child died: {st}");
+        assert_eq!(libc::WEXITSTATUS(st), 0, "2 apply, 3 AF_INET, 4 AF_UNIX, 5 unshare, 6 SCHED_FIFO");
     }
 }

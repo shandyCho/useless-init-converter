@@ -348,12 +348,20 @@ impl Runner {
             return (EXIT_CHDIR, format!("chdir {wd}: {}", errno()));
         }
 
-        if self.unit.get_bool("Service", "NoNewPrivileges", false) {
+        // Root once exec()ed: the user switch below does not happen.
+        let switches_user = !cmd.privileged && !cmd.no_setuid && self.user.as_ref().map(|u| u.uid != 0).unwrap_or(false);
+        let stays_root = self.is_root && !switches_user;
+        let nnp = if cmd.privileged {
+            self.unit.get_bool("Service", "NoNewPrivileges", false)
+        } else {
+            sandbox::no_new_privileges(&self.unit, stays_root)
+        };
+        if nnp {
             unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
         }
 
-        if self.is_root {
-            if let Some(bset) = sandbox::parse_capset(&self.unit, "CapabilityBoundingSet") {
+        if self.is_root && !cmd.privileged {
+            if let Some(bset) = sandbox::bounding_set(&self.unit) {
                 if let Err(e) = sandbox::drop_bounding_set(bset) {
                     return (EXIT_CAPABILITIES, e);
                 }
@@ -431,6 +439,9 @@ impl Runner {
         p_env.push(std::ptr::null());
         // Last, as systemd does: from here on only execve() has to be allowed.
         if !cmd.privileged {
+            if let Err(e) = crate::seccomp::apply_restrictions(&self.unit) {
+                return (EXIT_SECCOMP, e);
+            }
             match crate::seccomp::Filter::from_unit(&self.unit) {
                 Ok(Some(f)) => {
                     if let Err(e) = f.apply() {

@@ -95,6 +95,24 @@ expect_eq "'+' command is not filtered" "$(cat "$R/scf-plus.out" 2>/dev/null)" "
 expect_state scf-allow.service inactive/dead
 expect_eq "fwupd's allow list: mlock fails with EPERM" "$(cat "$R/scf-allow.out" 2>/dev/null)" "errno 1"
 
+echo "== other sandboxing settings"
+call StartUnit ss harden.service replace
+expect_state harden.service inactive/dead
+h() { sed -n "s/^$1 //p" "$R/harden.out" 2>/dev/null; }
+expect_eq "RestrictAddressFamilies=AF_UNIX: AF_INET refused" "$(h inet)" "EAFNOSUPPORT"
+expect_eq "RestrictAddressFamilies=AF_UNIX: AF_UNIX allowed" "$(h unix)" "allowed"
+# PR_SET_MDWE gives EACCES, the seccomp fallback EPERM.
+case $(h mmap-wx) in EACCES|EPERM) ok "MemoryDenyWriteExecute=: W+X mmap refused" ;; *) bad "MemoryDenyWriteExecute=: mmap W+X $(h mmap-wx)" ;; esac
+expect_eq "RestrictSUIDSGID=: chmod u+s refused" "$(h chmod-suid)" "EPERM"
+expect_eq "RestrictNamespaces=yes: unshare refused" "$(h unshare-user)" "EPERM"
+if [ "$(id -u)" = 0 ]; then
+    expect_eq "ProtectKernelTunables=: /proc/sys read-only" "$(h procsys)" "EROFS"
+    expect_eq "PrivateDevices=: only pseudo devices" "$(h dev)" "fd full hugepages log mqueue null ptmx pts random shm stderr stdin stdout tty urandom zero"
+    expect_eq "PrivateNetwork=: only lo" "$(h netdevs)" "lo"
+else
+    echo "SKIP namespace and mount settings (need root)"
+fi
+
 echo "== system state"
 expect_eq "SystemState degraded" "$($B get-property $MGR SystemState | cut -d'"' -f2)" "degraded"
 # failing, flappy, and bad.service (fails at boot on purpose)
