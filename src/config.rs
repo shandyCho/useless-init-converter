@@ -249,6 +249,11 @@ impl Config {
             }
             // journalctl replaces the per-service s6-log directories.
             self.log_dir = None;
+            // The s6 "syslog" rsyslog has no config with journald; its
+            // sockets belong to journald's own translated units.
+            self.dep_map.retain(|(a, b)| {
+                !(b == "syslog" && (a == "systemd-journald.socket" || a == "syslog.socket"))
+            });
         }
         if !self.unit_path.contains(&self.transient_dir) {
             self.unit_path.insert(1.min(self.unit_path.len()), self.transient_dir.clone());
@@ -281,5 +286,22 @@ impl Config {
 
     pub fn mapped_dep(&self, unit: &str) -> Option<&str> {
         self.dep_map.iter().find(|(a, _)| a == unit).map(|(_, b)| b.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn journal_drops_syslog_map() {
+        let cfg = Config::defaults().finish();
+        assert_eq!(cfg.mapped_dep("systemd-journald.socket"), None);
+        assert_eq!(cfg.mapped_dep("syslog.socket"), None);
+        let mut cfg = Config::defaults();
+        cfg.journal = false;
+        let cfg = cfg.finish();
+        assert_eq!(cfg.mapped_dep("systemd-journald.socket"), Some("syslog"));
+        assert_eq!(cfg.mapped_dep("syslog.socket"), Some("syslog"));
     }
 }
