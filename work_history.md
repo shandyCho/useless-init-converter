@@ -743,6 +743,11 @@ What the diagnostics showed:
 - Git on the Fedora install has no identity; commits were made with
   `git -c user.name=shandy-c -c user.email=...` (config not changed).
 
+- Owner asked for a list of recommended dependencies in the READMEs: new
+  "Dependencies" section in README.md/README-us.md (required packages, the
+  dlopen()ed libpam/libselinux/libseccomp and what is lost without each,
+  recommended packages, build crates).
+
 ### Current state
 
 The s6 boot reaches GNOME with services in their own SELinux domains,

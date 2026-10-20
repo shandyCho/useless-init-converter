@@ -133,6 +133,33 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
   options from `/etc/sdcompat/boot-options`. The s6 entry follows kernel
   updates, and removed kernels lose theirs.
 
+## Dependencies
+
+**Required** (`dist/setup-fedora.sh` installs these):
+
+| Package | Used for |
+|---|---|
+| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, supervision, the service database. Fedora doesn't package them: `--rpms=DIR` or `--build-s6` |
+| systemd | Stays installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
+| dbus-daemon | The system bus (`--systemd-activation`); dbus-broker stays for the user bus |
+| util-linux | `mount`, `swapon`, `mountpoint` for mount units and early boot |
+| policycoreutils | `restorecon` and `semodule` for the SELinux module |
+
+**Libraries loaded at run time (recommended).** sdcompat `dlopen()`s them, so
+none is needed to build. Without one, the matching feature is missing:
+
+| Library (Fedora package) | Without it |
+|---|---|
+| `libpam.so.0` (pam) | Units with `PAMName=` fail (exit 224), so `user@.service` and GNOME do not start |
+| `libselinux.so.1` (libselinux) | No labelling of `RuntimeDirectory=` & co., socket files and socket-unit sockets; services may get wrong labels |
+| `libseccomp.so.2` (libseccomp) | `SystemCallFilter=` is skipped with a message, as in systemd without seccomp. fwupd refuses to start |
+
+**Recommended packages:** earlyoom (replaces systemd-oomd), chrony,
+NetworkManager, rsyslog (only with `JOURNAL=no`).
+
+**Build:** cargo and rust. The crates are zbus, tokio, futures-util, libc
+and serde (`Cargo.toml`).
+
 ## Testing on Fedora
 
 Step-by-step instructions from a fresh clone to a GNOME session on s6, with

@@ -122,6 +122,33 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
   만드는 BLS 항목을 복사하고 `/etc/sdcompat/boot-options`의 s6 옵션을 추가합니다. s6 항목은
   커널 업데이트를 따라가고, 제거된 커널의 항목은 함께 지워집니다.
 
+## 의존성
+
+**필수** (`dist/setup-fedora.sh`가 설치합니다):
+
+| 패키지 | 용도 |
+|---|---|
+| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, 서비스 감독, 서비스 데이터베이스. Fedora에 패키지가 없으므로 `--rpms=DIR` 또는 `--build-s6` |
+| systemd | 설치된 채로 둡니다: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
+| dbus-daemon | 시스템 버스(`--systemd-activation`). 사용자 버스는 dbus-broker가 계속 맡습니다 |
+| util-linux | 마운트 유닛과 초기 부팅의 `mount`, `swapon`, `mountpoint` |
+| policycoreutils | SELinux 모듈용 `restorecon`, `semodule` |
+
+**실행 중에 불러오는 라이브러리 (권장).** sdcompat이 `dlopen()`으로 불러오므로
+빌드에는 필요 없습니다. 없으면 해당 기능만 빠집니다:
+
+| 라이브러리 (Fedora 패키지) | 없을 때 |
+|---|---|
+| `libpam.so.0` (pam) | `PAMName=`이 있는 유닛이 실패(exit 224)하므로 `user@.service`와 GNOME이 시작되지 않습니다 |
+| `libselinux.so.1` (libselinux) | `RuntimeDirectory=` 등, 소켓 파일, 소켓 유닛의 소켓에 레이블을 붙이지 않습니다. 서비스가 잘못된 레이블을 받을 수 있습니다 |
+| `libseccomp.so.2` (libseccomp) | systemd가 seccomp 없이 빌드됐을 때처럼 `SystemCallFilter=`를 메시지와 함께 건너뜁니다. fwupd는 시작을 거부합니다 |
+
+**권장 패키지:** earlyoom(systemd-oomd 대신), chrony, NetworkManager,
+rsyslog(`JOURNAL=no`일 때만).
+
+**빌드:** cargo와 rust. 크레이트는 zbus, tokio, futures-util, libc, serde입니다
+(`Cargo.toml`).
+
 ## Fedora에서 시험하기
 
 새로 클론하는 것부터 s6 위의 GNOME 세션까지, 확인할 것과 문제를 보고하는 방법을 단계별로
