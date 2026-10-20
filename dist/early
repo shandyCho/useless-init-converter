@@ -96,8 +96,31 @@ vconsole)
     [ -x "$v" ] || exit 0
     "$v" || warn "systemd-vconsole-setup exited $?"
     ;;
+resolv)
+    # RESOLVED=no (setup-fedora.sh --no-resolved): systemd-resolved does not
+    # run on this boot. NetworkManager handles DNS itself, and the stub file
+    # /etc/resolv.conf links to points at NetworkManager's copy. All of it
+    # is in /run, so the systemd boot keeps using resolved.
+    nm=/run/NetworkManager
+    mkdir -p "$nm/conf.d"
+    cat >"$nm/conf.d/99-sdcompat-no-resolved.conf" <<'EOF'
+# Written at boot by sdcompat's "resolv" s6 service (RESOLVED=no).
+# rc-manager=symlink: Fedora's resolvconf is resolvectl, i.e. resolved.
+[main]
+dns=default
+rc-manager=symlink
+EOF
+    t=$(readlink -m /etc/resolv.conf)
+    case $t in
+    /run/systemd/resolve/*)
+        mkdir -p "${t%/*}"
+        ln -sfn "$nm/resolv.conf" "$t"
+        ;;
+    esac
+    command -v restorecon >/dev/null && restorecon -R "$nm" /run/systemd/resolve 2>/dev/null
+    ;;
 *)
-    echo "usage: $0 mount-api|mount-fs|umount-fs|udev-trigger|modules-load|hostname|tmpfiles|sysusers|sysctl|vconsole" >&2
+    echo "usage: $0 mount-api|mount-fs|umount-fs|udev-trigger|modules-load|hostname|tmpfiles|sysusers|sysctl|vconsole|resolv" >&2
     exit 2
     ;;
 esac

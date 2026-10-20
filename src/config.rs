@@ -59,6 +59,9 @@ pub struct Config {
     /// Run systemd-journald and send service output to it (journalctl works).
     /// When false, each service gets an s6-log directory under LOG_DIR.
     pub journal: bool,
+    /// When false, systemd-resolved is not translated (RESOLVED=no): the
+    /// s6 "resolv" oneshot makes NetworkManager handle DNS on that boot.
+    pub resolved: bool,
     /// journald's stdout stream socket.
     pub journal_stdout: PathBuf,
     /// Where StartTransientUnit writes unit files (systemd-run).
@@ -69,6 +72,13 @@ pub struct Config {
     /// Also follow udevd's netlink events (devices added after startup).
     pub udev_monitor: bool,
 }
+
+/// Units taken out of INCLUDE when RESOLVED=no.
+const RESOLVED_UNITS: &[&str] = &[
+    "systemd-resolved.service",
+    "systemd-resolved-varlink.socket",
+    "systemd-resolved-monitor.socket",
+];
 
 /// Units added to INCLUDE when JOURNAL=yes.
 const JOURNAL_UNITS: &[&str] = &[
@@ -183,6 +193,7 @@ impl Config {
             halt_cmd: "s6-linux-init-shutdown -h now".into(),
             allow_uids: Vec::new(),
             journal: true,
+            resolved: true,
             journal_stdout: PathBuf::from("/run/systemd/journal/stdout"),
             transient_dir: PathBuf::from("/run/systemd/transient"),
             udev_dir: Some(PathBuf::from("/run/udev")),
@@ -244,6 +255,7 @@ impl Config {
                 "REBOOT_CMD" => cfg.reboot_cmd = v,
                 "HALT_CMD" => cfg.halt_cmd = v,
                 "JOURNAL" => cfg.journal = crate::unit::parse_bool(&v).unwrap_or(true),
+                "RESOLVED" => cfg.resolved = crate::unit::parse_bool(&v).unwrap_or(true),
                 "TRANSIENT_DIR" => cfg.transient_dir = PathBuf::from(&v),
                 "JOURNAL_STDOUT" => cfg.journal_stdout = PathBuf::from(&v),
                 "UDEV_DIR" => cfg.udev_dir = opt(&v),
@@ -271,6 +283,9 @@ impl Config {
             self.dep_map.retain(|(a, b)| {
                 !(b == "syslog" && (a == "systemd-journald.socket" || a == "syslog.socket"))
             });
+        }
+        if !self.resolved {
+            self.include.retain(|u| !RESOLVED_UNITS.contains(&u.as_str()));
         }
         if !self.unit_path.contains(&self.transient_dir) {
             self.unit_path.insert(1.min(self.unit_path.len()), self.transient_dir.clone());
@@ -320,5 +335,17 @@ mod tests {
         let cfg = cfg.finish();
         assert_eq!(cfg.mapped_dep("systemd-journald.socket"), Some("syslog"));
         assert_eq!(cfg.mapped_dep("syslog.socket"), Some("syslog"));
+    }
+
+    #[test]
+    fn resolved_no_excludes_its_units() {
+        assert!(!Config::defaults().finish().is_excluded("systemd-resolved.service"));
+        let mut cfg = Config::defaults();
+        cfg.resolved = false;
+        let cfg = cfg.finish();
+        for u in RESOLVED_UNITS {
+            assert!(cfg.is_excluded(u), "{u}");
+        }
+        assert!(!cfg.is_excluded("systemd-logind.service"));
     }
 }

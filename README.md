@@ -227,10 +227,13 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 | `--rpms=DIR` | `dist/rpm/build-skarnet-rpms.sh`로 빌드한 RPM에서 skarnet 도구를 설치합니다 |
 | `--build-s6` | 대신 skarnet 도구를 소스에서 `/usr`로 빌드합니다(rpm이 관리하지 않음) |
 | `--rebuild` | `target/release/sdcompat`이 있어도 sdcompat을 다시 빌드합니다 |
-| `--no-journal` | systemd-journald 없이 rsyslog와 서비스별 s6-log 디렉터리를 씁니다 |
+| `--no-journal` / `--journal` | systemd-journald 없이 rsyslog와 서비스별 s6-log 디렉터리를 씁니다 / journald로 되돌립니다 |
+| `--no-resolved` / `--resolved` | s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / resolved로 되돌립니다 |
 | `--enforcing` | s6 부팅 항목에 `enforcing=0`을 추가하지 않습니다 |
 | `--no-grub` | 부팅 항목을 추가하지 않습니다 |
 | `--uninstall [--remove-s6]` | 부팅 항목과 설치된 파일(그리고 소스로 빌드한 skarnet 도구)을 제거합니다. 설정은 남깁니다 |
+
+journal과 resolved 옵션은 이미 설치된 시스템도 전환합니다(`/etc/sdcompat/sdcompat.conf`의 `JOURNAL=`/`RESOLVED=`를 설정). 옵션 없이 다시 실행하면 거기 설정된 대로 유지합니다. `--no-resolved`이면 s6 oneshot `resolv`가 부팅 때 `/run/NetworkManager/conf.d/99-sdcompat-no-resolved.conf`(`dns=default`, `rc-manager=symlink`)를 쓰고, `/etc/resolv.conf`가 가리키는 resolved의 stub 파일을 `/run/NetworkManager/resolv.conf`로 연결합니다. 모두 `/run`에 있으므로 systemd 부팅은 계속 resolved를 씁니다. `/etc/NetworkManager`에 `dns=` 설정이 있으면 그것이 우선합니다(NetworkManager는 `/run`을 먼저 읽습니다). `/etc/nsswitch.conf`의 nss-resolve는 resolved가 없으면 `dns`로 넘어갑니다.
 
 kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다.
 
@@ -242,7 +245,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다.
 | PID 1 / 서비스 | s6-linux-init, s6-rc, sdcompat |
 | 시스템 버스 | dbus-daemon (사용자 버스용으로 dbus-broker는 유지) |
 | 로그 | s6 서비스로 실행되는 systemd-journald (`--no-journal`: rsyslog + s6-log) |
-| 네트워크 / DNS / 시간 | NetworkManager, chrony |
+| 네트워크 / DNS / 시간 | NetworkManager, systemd-resolved(`--no-resolved`: NetworkManager만), chrony |
 | OOM 처리 | systemd-oomd 대신 earlyoom |
 | 장치 | 일반 서비스로 실행되는 systemd-udevd |
 | 로그인, 사용자 매니저 | 감독(supervised) 서비스로 실행되는 systemd-logind와 `systemd --user` |
@@ -344,6 +347,7 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 - `EXTRA_SOURCE`: 같은 데이터베이스로 함께 컴파일할 직접 작성한 s6-rc 소스.
 - `JOURNAL`: `yes`(기본값)이면 systemd-journald를 실행하고 서비스 출력을 보냅니다. `no`이면 `LOG_DIR` 아래 서비스별 s6-log 디렉터리를 씁니다.
 - `LOG_DIR`: `JOURNAL=no`일 때 s6-log 디렉터리가 들어갈 위치.
+- `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`setup-fedora.sh --no-resolved`처럼 `resolv` s6 서비스도 `sdcompat-sysinit`에 넣어야 DNS가 동작합니다).
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 원하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
 - `INCLUDE`: 기본값으로 sdcompat에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight와 rfkill(화면·키보드 밝기와 무선 상태를 부팅 사이에 유지), 절전 서비스)를 통과시킵니다.

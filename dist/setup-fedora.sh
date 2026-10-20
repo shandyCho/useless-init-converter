@@ -23,6 +23,12 @@
 #   --remove-s6     with --uninstall: also remove the skarnet tools this script built
 #   --no-journal    no systemd-journald: rsyslog + per-service s6-log directories
 #                   (journalctl and the log lines in systemctl status won't work)
+#   --journal       switch an install made with --no-journal back to journald
+#   --no-resolved   no systemd-resolved on the s6 boot: NetworkManager handles
+#                   DNS itself (the systemd boot keeps resolved)
+#   --resolved      switch back to systemd-resolved on the s6 boot
+#                   Without these four, a re-run keeps what the installed
+#                   /etc/sdcompat/sdcompat.conf says.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
@@ -50,7 +56,7 @@ SKARNET_MANIFEST=/var/lib/sdcompat/skarnet-files.txt
 S6_SUMS=/var/lib/sdcompat/s6-dist-sums.txt
 
 RPM_DIR=""
-DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0 JOURNAL=1 REMOVE_S6=0
+DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0 JOURNAL="" RESOLVED="" REMOVE_S6=0
 KI_PLUGIN=/etc/kernel/install.d/90-sdcompat.install
 for a in "$@"; do
     case $a in
@@ -63,11 +69,24 @@ for a in "$@"; do
         --rebuild) REBUILD=1 ;;
         --uninstall) UNINSTALL=1 ;;
         --no-journal) JOURNAL=0 ;;
+        --journal) JOURNAL=1 ;;
+        --no-resolved) RESOLVED=0 ;;
+        --resolved) RESOLVED=1 ;;
         --remove-s6) REMOVE_S6=1 ;;
-        -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
+
+SDC_CONF=/etc/sdcompat/sdcompat.conf
+# conf_bool KEY: 0 if the installed config sets KEY to a false value, else 1.
+conf_bool() {
+    local v
+    v=$(sed -n "s/^[[:space:]]*$1=[[:space:]]*//p" "$SDC_CONF" 2>/dev/null | tail -n 1)
+    case ${v,,} in no|false|0|off|n|f) echo 0 ;; *) echo 1 ;; esac
+}
+JOURNAL=${JOURNAL:-$(conf_bool JOURNAL)}
+RESOLVED=${RESOLVED:-$(conf_bool RESOLVED)}
 
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
@@ -348,15 +367,32 @@ install_sdcompat() {
     run install -Dm0644 "$DIST/selinux/sdcompat.cil" "$SHARE/selinux/sdcompat.cil"
 }
 
+# set_conf_key KEY yes|no: "no" sets KEY=no in sdcompat.conf, "yes" removes
+# the setting (both default to yes). Other lines are kept.
+set_conf_key() {
+    local key=$1 val=$2 flag text
+    flag="--no-$(echo "$key" | tr '[:upper:]' '[:lower:]')"
+    [ "$(conf_bool "$key")" = "$([ "$val" = no ] && echo 0 || echo 1)" ] && return 0
+    echo "  $key=$val in $SDC_CONF"
+    # Read it all before put truncates the file ($() also drops trailing blank lines).
+    text=$(grep -v -e "^[[:space:]]*$key=" -e "^# set by setup-fedora.sh $flag\$" "$SDC_CONF")
+    [ "$val" = no ] && text+=$'\n\n'"# set by setup-fedora.sh $flag"$'\n'"$key=no"
+    printf '%s\n' "$text" | put "$SDC_CONF"
+}
+
 configure_sdcompat() {
     say "Configuring /etc/sdcompat"
-    if [ -e /etc/sdcompat/sdcompat.conf ]; then
-        echo "  keeping existing /etc/sdcompat/sdcompat.conf"
-    elif [ "$JOURNAL" = 1 ]; then
-        put /etc/sdcompat/sdcompat.conf <"$DIST/sdcompat.conf"
+    if [ -e "$SDC_CONF" ]; then
+        echo "  keeping existing $SDC_CONF"
     else
-        { cat "$DIST/sdcompat.conf"; printf '\n# set by setup-fedora.sh --no-journal\nJOURNAL=no\n'; } |
-            put /etc/sdcompat/sdcompat.conf
+        put "$SDC_CONF" <"$DIST/sdcompat.conf"
+    fi
+    if [ "$DRY" = 1 ] && [ ! -e "$SDC_CONF" ]; then
+        [ "$JOURNAL" = 1 ] || printf '  + JOURNAL=no in %s\n' "$SDC_CONF"
+        [ "$RESOLVED" = 1 ] || printf '  + RESOLVED=no in %s\n' "$SDC_CONF"
+    else
+        set_conf_key JOURNAL "$([ "$JOURNAL" = 1 ] && echo yes || echo no)"
+        set_conf_key RESOLVED "$([ "$RESOLVED" = 1 ] && echo yes || echo no)"
     fi
     [ "$JOURNAL" = 1 ] || put /etc/sdcompat/rsyslog.conf <"$DIST/rsyslog.conf"
     # The s6 command: sdcompat's database instead of s6-rc's default bootdb.
@@ -368,23 +404,34 @@ configure_sdcompat() {
 
     install_s6_services
     # With journald, it owns /dev/log; the s6-only rsyslog is not started.
-    if [ "$JOURNAL" = 1 ]; then
-        run rm -f /etc/sdcompat/s6/sdcompat-sysinit/contents.d/syslog
-    elif [ ! -e /etc/sdcompat/s6/sdcompat-sysinit/contents.d/syslog ]; then
-        run touch /etc/sdcompat/s6/sdcompat-sysinit/contents.d/syslog
-    fi
+    sysinit_member syslog "$([ "$JOURNAL" = 1 ] && echo 0 || echo 1)"
+    # Without resolved, "resolv" hands DNS to NetworkManager at boot.
+    sysinit_member resolv "$([ "$RESOLVED" = 1 ] && echo 0 || echo 1)"
     run mkdir -p /var/lib/sdcompat /var/log/sdcompat /var/lib/rsyslog
+}
+
+# sysinit_member NAME 0|1: take the s6 service NAME out of, or put it into,
+# the sdcompat-sysinit bundle.
+sysinit_member() {
+    local f=/etc/sdcompat/s6/sdcompat-sysinit/contents.d/$1
+    if [ "$2" = 0 ]; then
+        [ -e "$f" ] && run rm -f "$f"
+    elif [ ! -e "$f" ]; then
+        run touch "$f"
+    fi
+    return 0
 }
 
 # Checksum of a hand-written s6 service directory: names, types, link targets,
 # the executable bit and file contents (not other mode bits, which depend on
-# the umask of the checkout). contents.d/syslog is left out: this script adds
-# or removes it itself.
+# the umask of the checkout). contents.d/syslog and contents.d/resolv are left
+# out: this script adds or removes them itself.
 s6_dir_sum() {
+    local skip=(! -path ./contents.d/syslog ! -path ./contents.d/resolv)
     (cd "$1" && {
-        find . -mindepth 1 ! -path ./contents.d/syslog -printf '%y %p %l\n'
-        find . -type f -perm -u+x ! -path ./contents.d/syslog -printf 'x %p\n'
-        find . -type f ! -path ./contents.d/syslog -print0 | xargs -0r sha256sum
+        find . -mindepth 1 "${skip[@]}" -printf '%y %p %l\n'
+        find . -type f -perm -u+x "${skip[@]}" -printf 'x %p\n'
+        find . -type f "${skip[@]}" -print0 | xargs -0r sha256sum
     } | LC_ALL=C sort) | sha256sum | cut -d' ' -f1
 }
 
@@ -584,6 +631,7 @@ This will set up booting Fedora with s6-linux-init + s6-rc + sdcompat:
              $SHARE/selinux/sdcompat.cil (s6 tools and sdcompat as init_exec_t,
              so services run in their own domains as under systemd)
   * logs:    $([ "$JOURNAL" = 1 ] && echo "systemd-journald as an s6 service (journalctl works)" || echo "rsyslog + s6-log directories, no journal")
+  * DNS:     $([ "$RESOLVED" = 1 ] && echo "systemd-resolved as on the systemd boot" || echo "NetworkManager without systemd-resolved (s6 boot only)")
   * GRUB:    add "$TITLE" with init=/usr/sbin/init-selinux, no splash$([ "$ENFORCING" = 1 ] || echo ", SELinux permissive"),
              and a kernel-install plugin that adds it for every new kernel
 

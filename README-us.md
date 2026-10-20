@@ -243,10 +243,13 @@ Other options:
 | `--rpms=DIR` | Install the skarnet tools from RPMs built with `dist/rpm/build-skarnet-rpms.sh` |
 | `--build-s6` | Build the skarnet tools from source into `/usr` instead (not tracked by rpm) |
 | `--rebuild` | Rebuild sdcompat even if `target/release/sdcompat` exists |
-| `--no-journal` | No systemd-journald: rsyslog plus one s6-log directory per service |
+| `--no-journal` / `--journal` | No systemd-journald: rsyslog plus one s6-log directory per service / back to journald |
+| `--no-resolved` / `--resolved` | No systemd-resolved on the s6 boot: NetworkManager handles DNS itself / back to resolved |
 | `--enforcing` | Don't add `enforcing=0` to the s6 boot entry |
 | `--no-grub` | Don't add the boot entry |
 | `--uninstall [--remove-s6]` | Remove the entry and installed files (and the source-built skarnet tools); keeps your config |
+
+The journal and resolved options also switch an existing install (they set `JOURNAL=`/`RESOLVED=` in `/etc/sdcompat/sdcompat.conf`); without them a re-run keeps what is set there. With `--no-resolved`, the s6 oneshot `resolv` writes `/run/NetworkManager/conf.d/99-sdcompat-no-resolved.conf` (`dns=default`, `rc-manager=symlink`) at boot and points the resolved stub file that `/etc/resolv.conf` links to at `/run/NetworkManager/resolv.conf`. Everything is in `/run`, so the systemd boot keeps using resolved. A `dns=` setting in `/etc/NetworkManager` overrides it (NetworkManager reads `/run` first). nss-resolve in `/etc/nsswitch.conf` finds no resolved and falls through to `dns`.
 
 A kernel-install plugin adds the s6 entry for every new kernel.
 
@@ -258,7 +261,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 | PID 1 / services | s6-linux-init, s6-rc, sdcompat |
 | System bus | dbus-daemon (dbus-broker stays for the user bus) |
 | Logging | systemd-journald as an s6 service (`--no-journal`: rsyslog + s6-log) |
-| Network / DNS / time | NetworkManager, chrony |
+| Network / DNS / time | NetworkManager, systemd-resolved (`--no-resolved`: NetworkManager alone), chrony |
 | OOM handling | earlyoom instead of systemd-oomd |
 | Devices | systemd-udevd as a plain service |
 | Login, user manager | systemd-logind and `systemd --user`, as supervised services |
@@ -365,6 +368,7 @@ and defaults). The most important keys:
 - `EXTRA_SOURCE`: hand-written s6-rc sources compiled into the same database.
 - `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR`.
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
+- `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `sdcompat-sysinit` too, as `setup-fedora.sh --no-resolved` does, or DNS breaks).
 - `ALLOW_UIDS`: non-root users allowed to manage units.
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
 - `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight and rfkill (screen/keyboard brightness and radio state kept across boots) and the sleep services.
