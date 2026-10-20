@@ -376,6 +376,8 @@ pub fn firewall_program(allow: &[Prefix], deny: &[Prefix], ingress: bool) -> Vec
         a.op(ALU64_MOV_K, 4, 0, 0, len);
         a.op(JMP_CALL, 0, 0, 0, FUNC_SKB_LOAD_BYTES);
         a.jump(JMP_JNE_K, 0, 0, accept); // short packet
+        // A /0 prefix matches every address, so it ends the family: the
+        // verifier refuses unreachable instructions after it.
         for (list, target) in [(allow, accept), (deny, drop)] {
             for p in list {
                 let (addr, plen): (&[u8], u8) = match p {
@@ -383,6 +385,10 @@ pub fn firewall_program(allow: &[Prefix], deny: &[Prefix], ingress: bool) -> Vec
                     Prefix::V6(b, l) if !want_v4 => (b, *l),
                     _ => continue,
                 };
+                if plen == 0 {
+                    a.jump(JMP_JA, 0, 0, target);
+                    return;
+                }
                 let mask: Vec<u8> = if want_v4 { mask_bytes::<4>(plen).to_vec() } else { mask_bytes::<16>(plen).to_vec() };
                 let next = a.label();
                 for w in 0..addr.len() / 4 {
@@ -414,8 +420,11 @@ pub fn firewall_program(allow: &[Prefix], deny: &[Prefix], ingress: bool) -> Vec
     } else {
         a.bind(v6);
     }
-    a.bind(drop);
-    a.ret(0);
+    // Nothing jumps to it when an allow-all prefix shadows the deny list.
+    if a.fixups.iter().any(|&(_, l)| l == drop) {
+        a.bind(drop);
+        a.ret(0);
+    }
     a.bind(accept);
     a.ret(1);
     a.finish()
@@ -678,6 +687,49 @@ mod tests {
             };
         }
         panic!("no exit");
+    }
+
+    /// The verifier refuses unreachable instructions and jumps out of range;
+    /// the interpreter only follows the paths a test takes.
+    fn assert_reachable(insns: &[Insn]) {
+        let mut seen = vec![false; insns.len()];
+        let mut todo = vec![0usize];
+        while let Some(pc) = todo.pop() {
+            assert!(pc < insns.len(), "jump out of range");
+            if std::mem::replace(&mut seen[pc], true) {
+                continue;
+            }
+            let i = insns[pc];
+            let target = (pc as isize + 1 + i.off as isize) as usize;
+            match i.code {
+                JMP_EXIT => {}
+                JMP_JA => todo.push(target),
+                JMP_CALL => todo.push(pc + 1),
+                c if c & 0x07 == 0x05 || c & 0x07 == 0x06 => todo.extend([pc + 1, target]),
+                _ => todo.push(pc + 1),
+            }
+        }
+        let dead: Vec<usize> = (0..insns.len()).filter(|&i| !seen[i]).collect();
+        assert!(dead.is_empty(), "unreachable insns {dead:?}");
+    }
+
+    #[test]
+    fn programs_have_no_dead_code() {
+        let mut msgs = Vec::new();
+        let lists = ["", "any", "localhost", "192.0.2.0/24 2001:db8::/32", "10.0.0.0/8 ::/0", "0.0.0.0/0"];
+        for allow in lists {
+            for deny in lists.iter().filter(|d| !d.is_empty()) {
+                let allow = parse_prefixes(&words(allow), "IPAddressAllow", &mut msgs);
+                let deny = parse_prefixes(&words(deny), "IPAddressDeny", &mut msgs);
+                for ingress in [true, false] {
+                    assert_reachable(&firewall_program(&allow, &deny, ingress));
+                }
+            }
+        }
+        assert!(msgs.is_empty(), "{msgs:?}");
+        let rule = DevRule { ty: DEV_CHAR, major: Some(1), minor: None, access: ACC_READ };
+        assert_reachable(&device_program(&[]));
+        assert_reachable(&device_program(&[rule, DevRule { minor: Some(3), access: ACC_ALL, ..rule }]));
     }
 
     fn dev_ctx(ty: u32, access: u32, major: u32, minor: u32) -> Vec<u8> {
