@@ -213,6 +213,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | Shared mount propagation | `findmnt -no PROPAGATION /` | `shared` (as systemd sets it; `private` means mounts made later, e.g. a USB stick, don't reach units, flatpak apps or containers) |
 | Runtime directory mounted once | `findmnt -n /run/user/$UID \| wc -l` | `1` (`2` means user-runtime-dir@UID ran twice) |
 | Stopped users are dropped | `loginctl list-users` a minute after logging in (and after a `sudo`) | no `root` or `gdm-greeter` left in `closing` (`closing` that stays means logind still thinks the stop job runs) |
+| /run mounted once | `findmnt -n /run \| wc -l` | `1` (the initramfs's /run, kept as systemd does; `2` means s6-linux-init stacked a second tmpfs on it) |
 | The `s6` command | `s6 live status \| head` | services with `up`, e.g. `NetworkManager.service/longrun//up/explicit` |
 | Bus and userdb labels | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t` and `systemd_userdbd_runtime_t` |
 | Overall state | `systemctl is-system-running` | `running` (`degraded` is OK; see next line) |

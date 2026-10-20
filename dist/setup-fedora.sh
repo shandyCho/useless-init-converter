@@ -547,7 +547,11 @@ setup_s6_linux_init() {
     say "Generating s6-linux-init in $S6LI_BASE"
     local tmp=/tmp/sdcompat-s6li
     [ "$DRY" = 1 ] || tmp=$(mktemp -d)
+    # -n: keep the initramfs's /run (remount it) as systemd does. Without
+    # it s6-linux-init's umount fails (credential mounts under it) and a
+    # second tmpfs hides the udev database, /run/log/journal, utab, utmp.
     run s6-linux-init-maker \
+        -n \
         -c "$S6LI_BASE" \
         -f "$SHARE/s6-linux-init/skel" \
         -p /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin \
