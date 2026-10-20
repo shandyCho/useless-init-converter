@@ -1,6 +1,10 @@
 //! File descriptor store (systemd's FDSTORE=1 / FileDescriptorStoreMax=),
-//! held by the daemon so descriptors survive service restarts. Also keeps a
-//! service's listening sockets open across restarts (key "<unit>#sockets").
+//! so descriptors survive service restarts. Also keeps a service's
+//! listening sockets open across restarts (key "<unit>#sockets").
+//!
+//! Served by `sdcompat fdstore`, its own s6 service, so the descriptors also
+//! survive a restart of sdcompatd; the daemon serves it itself when that
+//! service is not running.
 //!
 //! Protocol: SOCK_SEQPACKET at RUN_DIR/fdstore, one fd per message (SCM_RIGHTS).
 //!   PUT\0<key>\0<name>  +fd   -> "OK" | "ERR <msg>"
@@ -130,6 +134,45 @@ pub fn get(path: &Path, key: &str) -> Vec<(String, OwnedFd)> {
     out
 }
 
+/// Whether a store answers at `path`.
+pub fn is_served(path: &Path) -> bool {
+    connect(path).is_some()
+}
+
+/// FileDescriptorStoreMax= of the unit a key belongs to; held sockets (key
+/// "<unit>#sockets") are not limited by it.
+pub fn limit(cfg: &crate::config::Config, key: &str) -> usize {
+    if key.ends_with("#sockets") {
+        return 1024;
+    }
+    crate::loader::Loader::new(cfg)
+        .load(key)
+        .get("Service", "FileDescriptorStoreMax")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+/// `sdcompat fdstore`: serve the store until killed.
+pub fn serve_forever(cfg: crate::config::Config, ready_fd: Option<RawFd>) -> i32 {
+    let path = cfg.run_dir.join("fdstore");
+    let store = Store::default();
+    let c = cfg.clone();
+    if let Err(e) = store.serve(&path, move |key| limit(&c, key)) {
+        eprintln!("sdcompat fdstore: {e}");
+        return 1;
+    }
+    if let Some(fd) = ready_fd {
+        // s6 readiness notification (notification-fd).
+        unsafe {
+            libc::write(fd, b"\n".as_ptr() as *const libc::c_void, 1);
+            libc::close(fd);
+        }
+    }
+    loop {
+        std::thread::park();
+    }
+}
+
 pub fn del(path: &Path, key: &str, name: Option<&str>) {
     if let Some(s) = connect(path) {
         let msg = match name {
@@ -141,21 +184,13 @@ pub fn del(path: &Path, key: &str, name: Option<&str>) {
     }
 }
 
-/// The daemon side.
+/// The serving side.
 #[derive(Clone, Default)]
 pub struct Store {
     inner: Arc<Mutex<HashMap<String, Vec<(String, OwnedFd)>>>>,
 }
 
 impl Store {
-    pub fn drop_key(&self, key: &str) {
-        self.inner.lock().unwrap().remove(key);
-    }
-
-    pub fn count(&self, key: &str) -> usize {
-        self.inner.lock().unwrap().get(key).map(|v| v.len()).unwrap_or(0)
-    }
-
     /// Serve requests in a dedicated thread. `limit(key)` returns the maximum
     /// number of fds for a key (FileDescriptorStoreMax=); 0 rejects.
     pub fn serve(&self, path: &Path, limit: impl Fn(&str) -> usize + Send + 'static) -> Result<(), String> {

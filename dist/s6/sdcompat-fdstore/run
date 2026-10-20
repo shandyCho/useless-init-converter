@@ -1,0 +1,4 @@
+#!/bin/sh
+# Holds FDSTORE= fds and listening sockets apart from sdcompatd, so they
+# survive its restarts.
+exec /usr/libexec/sdcompat/sdcompat fdstore --ready-fd 3

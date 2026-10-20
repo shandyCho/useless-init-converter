@@ -299,8 +299,7 @@ impl Daemon {
         if let Ok(scan) = fs::canonicalize(self.cfg.live_dir.join("scandir")) {
             let _ = Command::new("s6-svunlink").arg(&scan).arg(id).status().await;
         }
-        self.fdstore.drop_key(id);
-        self.fdstore.drop_key(&format!("{id}#sockets"));
+        self.drop_stored_fds(id);
         // Give s6-supervise a moment to exit before removing its directory.
         tokio::time::sleep(Duration::from_millis(200)).await;
         let _ = fs::remove_dir_all(self.dyn_dir(id));

@@ -516,6 +516,11 @@ sleep 0.3
 "$BIN" $C preset notifier.service >/dev/null
 "$BIN" $C reload --no-update
 
+# The fd store runs apart from the daemon, like the sdcompat-fdstore service.
+"$BIN" $C fdstore >"$W/fdstore.log" 2>&1 &
+echo $! >> "$W/pids"
+sleep 0.3
+
 s6-svscan "$W/scan" >"$W/svscan.log" 2>&1 &
 echo $! >> "$W/pids"
 sleep 0.3

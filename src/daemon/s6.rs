@@ -214,6 +214,13 @@ impl Daemon {
         Some(v)
     }
 
+    /// A real stop discards the unit's stored fds and its held sockets.
+    pub(super) fn drop_stored_fds(&self, id: &str) {
+        let store = self.cfg.run_dir.join("fdstore");
+        crate::fdstore::del(&store, id, None);
+        crate::fdstore::del(&store, &format!("{id}#sockets"), None);
+    }
+
     pub(super) fn forget_unit_state(&self, id: &str) {
         self.svstat_cache.lock().unwrap().remove(id);
     }
@@ -848,8 +855,7 @@ impl Daemon {
                 };
                 // FileDescriptorStorePreserve=restart: a real stop discards
                 // stored fds and the held listening sockets.
-                self.fdstore.drop_key(id);
-                self.fdstore.drop_key(&format!("{id}#sockets"));
+                self.drop_stored_fds(id);
                 self.forget_unit_state(id);
                 r
             }

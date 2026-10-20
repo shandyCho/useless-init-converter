@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::exit;
 
 use sdcompat::config::Config;
-use sdcompat::{daemon, gen, install, runner, util};
+use sdcompat::{daemon, fdstore, gen, install, runner, util};
 
 const USAGE: &str = "\
 usage: sdcompat [--config PATH] COMMAND [ARGS]
@@ -16,6 +16,8 @@ Daemon:
   daemon [--system | --session | --address ADDR] [--ready-fd N]
                            serve org.freedesktop.systemd1 (default: system bus);
                            with --ready-fd, write a newline to fd N when ready
+  fdstore [--ready-fd N]   hold FDSTORE= fds and listening sockets, so they
+                           survive restarts of the daemon too
 
 Offline unit file management:
   enable|disable|mask|unmask|preset UNIT...
@@ -164,6 +166,14 @@ fn main() {
                 Ok(()) => 0,
                 Err(e) => die(&e),
             }
+        }
+        "fdstore" => {
+            let ready_fd = match rest {
+                [] => None,
+                [o, n] if o == "--ready-fd" => Some(n.parse().unwrap_or_else(|_| die("--ready-fd needs a number"))),
+                _ => die("usage: sdcompat fdstore [--ready-fd N]"),
+            };
+            fdstore::serve_forever(cfg, ready_fd)
         }
         "notify" => runner::cmd_notify(rest),
         "start" | "stop" | "restart" => {

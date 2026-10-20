@@ -1535,19 +1535,12 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         }
     }
 
-    {
+    // The sdcompat-fdstore service keeps the fds across our own restarts;
+    // without it, serve the store here (they then go with the daemon).
+    let store_path = daemon.cfg.run_dir.join("fdstore");
+    if !crate::fdstore::is_served(&store_path) {
         let cfg = daemon.cfg.clone();
-        let limit = move |key: &str| -> usize {
-            if key.ends_with("#sockets") {
-                return 1024;
-            }
-            Loader::new(&cfg)
-                .load(key)
-                .get("Service", "FileDescriptorStoreMax")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0)
-        };
-        if let Err(e) = daemon.fdstore.serve(&daemon.cfg.run_dir.join("fdstore"), limit) {
+        if let Err(e) = daemon.fdstore.serve(&store_path, move |key| crate::fdstore::limit(&cfg, key)) {
             eprintln!("sdcompatd: fd store unavailable: {e}");
         }
     }

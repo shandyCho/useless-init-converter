@@ -432,6 +432,13 @@ restart_daemon "$W/sdcompat.conf"
 # Stopping the oneshot stops the longrun bound to it: the daemon knows both.
 call StopUnit ss prep@b.service replace
 expect_state inst@b.service inactive/dead
+# The fd store is its own process: what units stored survived both daemon swaps.
+call RestartUnit ss fdkeep.service replace
+sleep 1
+expect_eq "FDSTORE=1 fd kept across daemon restarts" "$(tail -1 "$R/fdkeep.out" 2>/dev/null)" "start names=kept"
+call RestartUnit ss sock.service replace
+sleep 1
+expect_eq "listening socket kept across daemon restarts" "$(stat -c %i "$R/test.sock")" "$i1"
 expect_state prep@b.service inactive/dead
 [ ! -e "$R/run/dyn/inst@b.service" ] && ok "inst@b's service directory removed" || bad "inst@b's service directory left"
 
