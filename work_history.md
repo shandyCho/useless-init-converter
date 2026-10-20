@@ -847,3 +847,38 @@ userdb should carry their policy labels.
    set, reloads the module); `ls -Z /usr/bin/execline` should show
    init_exec_t. Then boot s6 and check `ps -eZ` (domains as before),
    `s6 live status`, `sudo s6 process status sshd.service`.
+
+## Session 10: 2026-10-20
+
+- **build-skarnet-rpms.sh failed at the first `sudo dnf install`** (owner's
+  run, Fedora 45, booted under systemd): skalibs-2.16.0.0 + -devel could not
+  replace 2.15.1.0 because the installed execline-2.9.9.2 and s6-2.15.1.0
+  require `libskarnet.so.2.15`. Installing each package as it is built can't
+  work across a soname bump. `--allowerasing` would have removed the whole
+  installed s6 set in the middle of the build, so it was not used.
+- Fix (`d9fb267`): the rpmbuild path unpacks each built RPM (rpm2cpio | cpio)
+  into `OUTDIR/sysroot`, cleared at the start, and builds the next with
+  `--nodeps --define "skarnet_sysroot OUTDIR/sysroot"`. The five dependent
+  specs pass `--with-sysdeps` under the sysroot and, only when it is defined,
+  `--with-include/--with-dynlib/--with-lib`. Without the macro they build as
+  before (mock path unchanged). The script no longer uses sudo; it checks
+  for rpm2cpio and cpio. TESTING/TESTING-us updated.
+- Verified: full `dist/rpm/build-skarnet-rpms.sh` run, all six built in
+  ~30 s; every package requires libskarnet.so.2.16 / libexecline.so.2.10
+  (nothing linked against the host's 2.15); `rpm -Uvh --test --nosignature`
+  of all eleven RPMs over the installed old set passes. `bash -n` ok;
+  shellcheck still not installed. Not run: the real install
+  (setup-fedora.sh --rpms), a boot.
+- Note: this machine has no git user.name/email; the commit used the
+  repo's existing author via `git -c` and the config was left unchanged.
+
+### Current state
+
+As in session 9. The new skarnet RPMs are built in
+`~/rpmbuild-skarnet/rpms` but not installed.
+
+### Next steps
+
+1. From the systemd boot: `sudo dist/setup-fedora.sh
+   --rpms=$HOME/rpmbuild-skarnet/rpms --yes`, then session 9's step 6 checks.
+2. Session 9's other next steps still apply.
