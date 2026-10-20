@@ -528,6 +528,21 @@ build_database() {
     echo "  $n warnings (mostly sandboxing directives that are not enforced)"
 }
 
+# When run on the s6 boot, restart sdcompatd so the binary just installed
+# takes over without a reboot. The daemon keeps dynamic units, the fd store
+# and device state across a restart. sdcompat-fdstore and journal-relay are
+# left alone: restarting them would drop held fds and log sockets, so they
+# keep the old binary until the next boot.
+restart_daemon() {
+    local svc=/run/s6-rc/servicedirs/sdcompatd
+    [ -d "$svc" ] || return 0
+    [ "$DRY" = 1 ] || s6-svok "$svc" 2>/dev/null || return 0
+    say "Restarting sdcompatd (running on the s6 boot)"
+    if ! run s6-svc -wR -T 30000 -r "$svc"; then
+        warn "sdcompatd was not ready within 30 s; check s6-svstat $svc"
+    fi
+}
+
 setup_s6_linux_init() {
     say "Generating s6-linux-init in $S6LI_BASE"
     local tmp=/tmp/sdcompat-s6li
@@ -678,6 +693,7 @@ main() {
     configure_sdcompat
     enable_units
     build_database
+    restart_daemon
     setup_s6_linux_init
     setup_selinux
     add_grub_entry

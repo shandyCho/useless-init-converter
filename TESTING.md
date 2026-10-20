@@ -256,7 +256,9 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms --yes
 바이너리를 설치하고, 데이터베이스와 부팅 항목을 다시 만들며, 바꾸는 파일은 백업합니다.
 `/etc/sdcompat/s6`의 s6 서비스는 직접 고치지 않았다면 새 버전으로 바뀝니다. 고친
 서비스는 "keeping your modified …"를 출력하고 그대로 두니, `dist/s6`의 새 버전을 직접
-합치세요. SELinux 정책 모듈도 다시 불러옵니다. 불러와졌는지 확인하세요.
+합치세요. s6로 부팅한 상태에서 실행하면 sdcompatd를 재시작해서 재부팅 없이 새
+바이너리가 동작합니다(sdcompat-fdstore와 journal-relay는 다음 부팅까지 이전 바이너리를
+씁니다). SELinux 정책 모듈도 다시 불러옵니다. 불러와졌는지 확인하세요.
 
 ```sh
 sudo semodule -l | grep -x sdcompat

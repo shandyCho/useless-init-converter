@@ -269,8 +269,10 @@ configuration, installs the new binary, regenerates the database and the
 boot entry, and backs up what it replaces. The s6 services in
 `/etc/sdcompat/s6` are updated to the new version unless you edited them;
 for an edited one it prints "keeping your modified …" and you merge the new
-version from `dist/s6` yourself. It also reloads the SELinux policy module;
-check that it is loaded:
+version from `dist/s6` yourself. Run on the s6 boot, it restarts sdcompatd
+so the new binary takes over without a reboot (sdcompat-fdstore and
+journal-relay keep the old one until the next boot). It also reloads the
+SELinux policy module; check that it is loaded:
 
 ```sh
 sudo semodule -l | grep -x sdcompat
