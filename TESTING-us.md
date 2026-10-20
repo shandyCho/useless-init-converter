@@ -122,7 +122,10 @@ sandbox. To run it again, recreate the sandbox:
 
 To test a `JOURNAL=no` install (per-service s6-log instead of journald), set up
 the sandbox with `SANDBOX_JOURNAL=no tests/sandbox.sh ~/sdc`. `check.sh` then
-looks for service output under `~/sdc/logs/` instead of the journal stream.
+looks for service output under `~/sdc/logs/` instead of the journal stream, and
+sends native and stream messages through `sdcompat journal-relay` (sockets in
+`$XDG_RUNTIME_DIR/sdc-test/jrelay`, forwarded to a stand-in `/dev/log` that
+writes `devlog.out` next to them).
 
 Then try Fedora's real `systemctl` against the sandbox:
 

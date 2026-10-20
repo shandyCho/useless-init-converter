@@ -531,6 +531,26 @@ if [ $kscope = yes ]; then
 fi
 kill $kpid 2>/dev/null
 
+if [ $journal = no ]; then
+    echo "== journal-relay"
+    # The native protocol (a text and a binary field), then a stdout stream
+    # with a level prefix, as systemd --user connects its units.
+    python3 -c '
+import socket, struct, sys, time
+d = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+d.sendto(b"SYSLOG_IDENTIFIER=nat\nPRIORITY=3\nMESSAGE\n" + struct.pack("<Q", 9) + b"two\nlines\n", sys.argv[1] + "/socket")
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(sys.argv[1] + "/stdout")
+s.sendall(b"strm\nstrm.service\n6\n1\n0\n0\n0\nplain line\n<4>warned\n")
+time.sleep(0.3)
+' "$R/jrelay"
+    tries=25
+    while [ $tries -gt 0 ] && ! grep -q 'warned' "$R/devlog.out" 2>/dev/null; do tries=$((tries - 1)); sleep 0.2; done
+    grep -q '^<11>nat\[[0-9]*\]: two$' "$R/devlog.out" && ok "native entry forwarded" || bad "native entry not in $R/devlog.out"
+    grep -q '^<14>strm\[[0-9]*\]: plain line$' "$R/devlog.out" && ok "stream line forwarded" || bad "stream line not in $R/devlog.out"
+    grep -q '^<12>strm\[[0-9]*\]: warned$' "$R/devlog.out" && ok "stream level prefix" || bad "stream <4> line not in $R/devlog.out"
+fi
+
 echo "== shutdown stops on-demand oneshots"
 # As rc.shutdown: the marker, then s6-rc takes sdcompatd down (SIGTERM).
 : > "$R/run/shutting-down"

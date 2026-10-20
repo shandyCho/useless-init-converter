@@ -32,6 +32,7 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
 | `sdcompat path-run` | `.path` 유닛 하나를 s6 longrun으로 실행하며 inotify로 감시합니다. |
 | `sdcompat start/stop/restart UNIT` | 데몬용 최소 클라이언트입니다(private 소켓 또는 버스). |
 | `sdcompat notify` | `systemd-notify` 대체입니다. |
+| `sdcompat journal-relay` | `JOURNAL=no`일 때 journald의 클라이언트 소켓(`/run/systemd/journal/socket`과 `stdout`)을 열고 받은 내용을 rsyslog로 넘깁니다. `systemd --user`의 세션 버스인 dbus-broker는 이 소켓이 없으면 시작하지 않습니다. |
 | `sdcompat log UNIT [-f]` | 서비스 로그를 보여줍니다(`journalctl -u`, `JOURNAL=no`이면 s6-log 디렉터리). |
 | `sdcompat enable/disable/mask/preset/is-enabled` | 오프라인 유닛 파일 관리입니다. |
 
@@ -203,7 +204,8 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 2. sdcompat을 빌드하고 설치합니다. `dist/sdcompat.spec`으로 만든 sdcompat RPM이 설치되어 있으면 그것을 씁니다.
 3. `/etc/sdcompat/`에 설정, s6 서비스(초기 부팅, dbus-daemon, 데몬, earlyoom), 부팅 옵션을
    쓰고, `s6` 명령용 `/etc/s6.conf`를 씁니다. systemd-journald는 s6 서비스로 실행됩니다. `--no-journal`을 주면 s6 전용 rsyslog
-   설정을 쓰므로, journald가 `/dev/log`를 쓰는 systemd 부팅에는 영향이 없습니다.
+   설정을 쓰므로, journald가 `/dev/log`를 쓰는 systemd 부팅에는 영향이 없습니다. 이때 s6 서비스
+   `journal-relay`가 journald의 클라이언트 소켓을 대신 열고 rsyslog로 넘깁니다(MESSAGE, 우선순위, 식별자만 남습니다).
 4. chronyd, NetworkManager, gdm을 활성화하고 `graphical.target`을 기본값으로 설정합니다.
 5. `sdcompat reload --no-update`를 실행하고 변환 요약을 출력합니다.
 6. tty9에 복구용 getty가 있는 `/etc/s6-linux-init/current`를 생성합니다.
@@ -373,6 +375,7 @@ src/mountunit.rs   .mount/.swap 유닛
 src/pam.rs         dlopen(libpam)을 이용한 PAMName=
 src/client.rs      데몬용 작은 클라이언트
 src/fdstore.rs     파일 디스크립터 저장소(FDSTORE=1, 보관 중인 리스닝 소켓)
+src/journal.rs     journal-relay: journald 클라이언트 소켓을 syslog로 전달(JOURNAL=no)
 src/daemon/        D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓,
                    요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs),
                    장치가 원하는 유닛(devices.rs)

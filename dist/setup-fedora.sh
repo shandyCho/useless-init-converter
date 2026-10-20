@@ -404,7 +404,9 @@ configure_sdcompat() {
 
     install_s6_services
     # With journald, it owns /dev/log; the s6-only rsyslog is not started.
+    # Without it, journal-relay serves journald's client sockets instead.
     sysinit_member syslog "$([ "$JOURNAL" = 1 ] && echo 0 || echo 1)"
+    sysinit_member journal-relay "$([ "$JOURNAL" = 1 ] && echo 0 || echo 1)"
     # Without resolved, "resolv" hands DNS to NetworkManager at boot.
     sysinit_member resolv "$([ "$RESOLVED" = 1 ] && echo 0 || echo 1)"
     run mkdir -p /var/lib/sdcompat /var/log/sdcompat /var/lib/rsyslog
@@ -424,10 +426,10 @@ sysinit_member() {
 
 # Checksum of a hand-written s6 service directory: names, types, link targets,
 # the executable bit and file contents (not other mode bits, which depend on
-# the umask of the checkout). contents.d/syslog and contents.d/resolv are left
-# out: this script adds or removes them itself.
+# the umask of the checkout). contents.d/syslog, contents.d/journal-relay and
+# contents.d/resolv are left out: this script adds or removes them itself.
 s6_dir_sum() {
-    local skip=(! -path ./contents.d/syslog ! -path ./contents.d/resolv)
+    local skip=(! -path ./contents.d/syslog ! -path ./contents.d/journal-relay ! -path ./contents.d/resolv)
     (cd "$1" && {
         find . -mindepth 1 "${skip[@]}" -printf '%y %p %l\n'
         find . -type f -perm -u+x "${skip[@]}" -printf 'x %p\n'

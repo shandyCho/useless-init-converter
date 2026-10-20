@@ -32,6 +32,7 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 | `sdcompat path-run` | Runs one `.path` unit as an s6 longrun, watching with inotify. |
 | `sdcompat start/stop/restart UNIT` | Minimal client for the daemon (private socket or bus). |
 | `sdcompat notify` | `systemd-notify` replacement. |
+| `sdcompat journal-relay` | With `JOURNAL=no`: listens on journald's client sockets (`/run/systemd/journal/socket` and `stdout`) and forwards to rsyslog. dbus-broker, the session bus of `systemd --user`, refuses to start without them. |
 | `sdcompat log UNIT [-f]` | Shows a service's log (`journalctl -u`, or the s6-log directory with `JOURNAL=no`). |
 | `sdcompat enable/disable/mask/preset/is-enabled` | Offline unit file management. |
 
@@ -219,7 +220,9 @@ entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
 3. Writes `/etc/sdcompat/`: the config, the s6 services (early boot, dbus-daemon,
    the daemon, earlyoom) and the boot options, and `/etc/s6.conf` for the `s6` command. systemd-journald runs as an s6
    service. With `--no-journal`, an s6-only rsyslog config is used instead, so the
-   systemd boot, where journald owns `/dev/log`, is unaffected.
+   systemd boot, where journald owns `/dev/log`, is unaffected; the s6 service
+   `journal-relay` then serves journald's client sockets and forwards to rsyslog
+   (only MESSAGE, priority and identifier are kept).
 4. Enables chronyd, NetworkManager and gdm, and sets `graphical.target` as the default.
 5. Runs `sdcompat reload --no-update` and prints the translation summary.
 6. Generates `/etc/s6-linux-init/current` with a rescue getty on tty9.
@@ -394,6 +397,7 @@ src/mountunit.rs   .mount/.swap units
 src/pam.rs         PAMName= via dlopen(libpam)
 src/client.rs      small client for the daemon
 src/fdstore.rs     file descriptor store (FDSTORE=1, held listening sockets)
+src/journal.rs     journal-relay: journald's client sockets to syslog (JOURNAL=no)
 src/daemon/        D-Bus API: dispatch, properties, s6 backend, private socket,
                    on-demand instances (dynamic.rs), systemd-run (transient.rs),
                    units wanted by devices (devices.rs)

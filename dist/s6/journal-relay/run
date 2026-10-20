@@ -1,0 +1,5 @@
+#!/bin/sh
+# Without journald (JOURNAL=no): listen on journald's client sockets in
+# /run/systemd/journal and forward to rsyslog. dbus-broker-launch, the
+# session bus of systemd --user, refuses to start without them.
+exec /usr/libexec/sdcompat/sdcompat journal-relay --ready-fd 3

@@ -11,6 +11,7 @@ pub mod execcmd;
 pub mod fdstore;
 pub mod gen;
 pub mod install;
+pub mod journal;
 pub mod loader;
 pub mod mountunit;
 pub mod pam;

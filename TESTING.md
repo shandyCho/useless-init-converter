@@ -117,7 +117,9 @@ tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 
 `JOURNAL=no` 설치(journald 대신 서비스별 s6-log)를 시험하려면 샌드박스를
 `SANDBOX_JOURNAL=no tests/sandbox.sh ~/sdc`로 띄우세요. 그러면 `check.sh`는 서비스 출력을
-journal 스트림 대신 `~/sdc/logs/` 아래에서 확인합니다.
+journal 스트림 대신 `~/sdc/logs/` 아래에서 확인하고, `sdcompat journal-relay`로 native 메시지와
+스트림 메시지를 보내 봅니다(소켓은 `$XDG_RUNTIME_DIR/sdc-test/jrelay`, 받은 내용은 대역 `/dev/log`가
+같은 곳의 `devlog.out`에 씁니다).
 
 이어서 Fedora의 진짜 `systemctl`로 샌드박스를 조작해 보세요.
 

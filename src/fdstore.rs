@@ -46,8 +46,13 @@ pub fn send(sock: RawFd, data: &[u8], fd: Option<RawFd>) -> std::io::Result<()> 
 /// Receive one message; returns (data, fds, sender credentials). The
 /// credentials are only present if the socket has SO_PASSCRED set.
 pub fn recv(sock: RawFd) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>, Option<libc::ucred>)> {
+    recv_max(sock, 8192)
+}
+
+/// `recv` with a receive buffer of `cap` bytes; a longer datagram is cut.
+pub fn recv_max(sock: RawFd, cap: usize) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>, Option<libc::ucred>)> {
     unsafe {
-        let mut buf = vec![0u8; 8192];
+        let mut buf = vec![0u8; cap];
         let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut libc::c_void, iov_len: buf.len() };
         let mut cbuf = [0u8; 1024];
         let mut msg: libc::msghdr = std::mem::zeroed();

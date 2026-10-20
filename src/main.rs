@@ -18,6 +18,9 @@ Daemon:
                            with --ready-fd, write a newline to fd N when ready
   fdstore [--ready-fd N]   hold FDSTORE= fds and listening sockets, so they
                            survive restarts of the daemon too
+  journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
+                           without journald: serve its client sockets in DIR
+                           (/run/systemd/journal) and forward to PATH (/dev/log)
 
 Offline unit file management:
   enable|disable|mask|unmask|preset UNIT...
@@ -174,6 +177,22 @@ fn main() {
                 _ => die("usage: sdcompat fdstore [--ready-fd N]"),
             };
             fdstore::serve_forever(cfg, ready_fd)
+        }
+        "journal-relay" => {
+            let mut dir = PathBuf::from("/run/systemd/journal");
+            let mut syslog = PathBuf::from("/dev/log");
+            let mut ready_fd = None;
+            let mut it = rest.iter();
+            while let Some(a) = it.next() {
+                let mut val = || it.next().cloned().unwrap_or_else(|| die(&format!("{a} needs a value")));
+                match a.as_str() {
+                    "--dir" => dir = PathBuf::from(val()),
+                    "--syslog" => syslog = PathBuf::from(val()),
+                    "--ready-fd" => ready_fd = Some(val().parse().unwrap_or_else(|_| die("--ready-fd needs a number"))),
+                    o => die(&format!("unknown journal-relay option {o}")),
+                }
+            }
+            sdcompat::journal::serve_forever(&dir, &syslog, ready_fd)
         }
         "notify" => runner::cmd_notify(rest),
         "start" | "stop" | "restart" => {

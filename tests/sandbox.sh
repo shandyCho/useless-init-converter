@@ -579,6 +579,23 @@ sleep 0.3
 echo $! >> "$W/pids"
 sleep 0.3
 
+# JOURNAL=no: the journal-relay service, forwarding to a stand-in /dev/log
+# that writes what it gets to $R/devlog.out.
+if [ "${SANDBOX_JOURNAL:-yes}" = no ]; then
+    python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+s.bind(sys.argv[1])
+with open(sys.argv[2], "ab", buffering=0) as f:
+    while True:
+        f.write(s.recv(65536) + b"\n")
+' "$R/devlog" "$R/devlog.out" >/dev/null 2>&1 &
+    echo $! >> "$W/pids"
+    "$BIN" journal-relay --dir "$R/jrelay" --syslog "$R/devlog" >"$W/jrelay.log" 2>&1 &
+    echo $! >> "$W/pids"
+    sleep 0.3
+fi
+
 s6-svscan "$W/scan" >"$W/svscan.log" 2>&1 &
 echo $! >> "$W/pids"
 sleep 0.3
