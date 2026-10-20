@@ -2708,3 +2708,97 @@ code but not yet on a boot.
 4. Still open: JOURNAL=no output loss; on-demand socket activation (the
    root cause of early starts and part of the RAM gap); beside3 sandbox
    flake; fd store limit changes.
+
+## Session: 2026-10-21: split by role (branch `split-projects`)
+
+Owner asked to split the project into smaller ones by role. Agreed with the
+owner in three rounds:
+1. Split by role, build/install-independent (no code sharing between them).
+2. Then: split so that each part runs on its own even when the others are
+   missing. Checked: generator, runner, timers and daemon cannot (run
+   scripts call the runner, timers ask the daemon, the daemon reads the
+   runner's state and runs the generator), so they stay one core. Runnable
+   alone: the fd store, journal-relay, notify, and the early-boot script.
+3. Owner: split the core into smaller modules that may depend on each other.
+
+Decision, not asked: `early` stays in the core (dist/early). It is plain
+shell and runs alone, but without it the core cannot boot Fedora
+(mount-api is the root of the sysinit bundle), so moving it out would
+break "the core runs without the others".
+
+Commit `23167f5` on branch `split-projects` (main untouched):
+
+- Core = Cargo workspace `crates/`:
+  - `sdcompat-base` (lib): unit, loader, config, envfile, util, state,
+    calendar, mountunit, fdstore (client + the daemon's fallback Store),
+    new `index.rs` (Kind/Index/unit_arg, moved out of gen), new
+    `timerspec.rs`/`pathspec.rs` (what .timer/.path units say, moved out of
+    timer.rs/pathunit.rs, used by gen and the daemon).
+  - `sdcompat-install` (lib), `sdcompat-exec` (lib: sandbox, seccomp,
+    bpf, cgroup, selinux, socket, pam, execcmd, conditions),
+    `sdcompat-client` (lib).
+  - Tools: `sdcompat-gen` (reload/plan/enable...), `sdcompat-runner`
+    (run/finish/up/down/stop-exec/reload-exec), `sdcompat-timers`
+    (timer-run/path-run), `sdcompatd` (daemon, start/stop/restart, log;
+    with no command it serves).
+  - `sdcompat`: the user command; execs the tool for a subcommand (next to
+    itself, else /usr/libexec/sdcompat). Keeps `/usr/bin/sdcompat`, docs
+    and databases generated before the split working (their run scripts
+    call /usr/libexec/sdcompat/sdcompat run|finish).
+  - Crate roots re-export base modules (`pub(crate) use sdcompat_base::...`)
+    so the moved code keeps its `crate::util` paths unchanged.
+- Standalone (each its own `[workspace]`, Cargo.lock, README pair, spec;
+  libc only): `standalone/sdcompat-fdstore`, `sdcompat-journal-relay`
+  (journal.rs + its own copy of recv_max), `sdcompat-notify` (cmd_notify).
+- fd store protocol: `PUT\0key\0name\0max`. Decision: the client sends
+  FileDescriptorStoreMax= so the standalone server needs no unit loader
+  (else it would have had to copy ~1200 lines). The base Store still
+  accepts the 3-part form (uses its own limit); the client retries the
+  3-part form on "ERR bad request", for an old `sdcompat fdstore` still
+  running until the next boot after an upgrade.
+- Config: RUNNER defaults to sdcompat-runner, new TIMER_RUNNER
+  (sdcompat-timers) used by gen and dynamic.rs for .timer/.path services.
+  Both default to the tool next to the running program, else
+  /usr/libexec/sdcompat.
+- dist: sdcompatd/run calls sdcompatd; sdcompat-fdstore/run and
+  journal-relay/run call the standalone tools and, when not installed,
+  report ready and `sleep infinity` (s6-pause does not exist in this s6),
+  so the boot goes on and sdcompatd holds the fds itself. rc.init calls
+  sdcompat-gen. setup-fedora.sh builds/installs the 5 core tools and the
+  standalone ones (`--without=LIST`; `--no-journal` requires the relay),
+  removes them on uninstall. Core spec installs 5 tools and Recommends the
+  standalone packages; each standalone project has its own spec.
+- tests: sandbox.sh builds the standalone tools and runs the split
+  binaries; `SANDBOX_FDSTORE=no` runs without the fd store, and check.sh
+  then expects the fds gone after the daemon swap. bpf-root.sh and
+  update-syscall-groups.sh paths; memcompare groups `sdcompat*`.
+- Docs: README/README-us components and source layout rewritten, plus the
+  missing BusName= implicit dependency from `c5f2e06`; TESTING pair;
+  CLAUDE.md (layout rule: standalone projects never depend on the core).
+- Mistake this session: ran tests/bpf-root.sh in the background to check
+  its paths; it ends in `exec sudo`. No sudo credentials here, so it
+  failed at once; no process was left. Checked the cargo part alone
+  afterwards.
+- Tests: core cargo test 45 + 2 ignored (the 2 relay tests moved; a new
+  fd store round-trip test in base); standalone fdstore 1, relay 2;
+  release builds clean; sandbox 187/187, SANDBOX_JOURNAL=no 192/192,
+  SANDBOX_FDSTORE=no 187/187; bash -n and shellcheck -S warning clean;
+  setup-fedora.sh --dry-run shows the new install steps. Not run on
+  Fedora or a real boot; the RPM specs were not built.
+
+### Current state
+
+The split is done and tested in the sandbox, on branch `split-projects`.
+main still has the single binary, with the enforcing fixes (`c5f2e06`).
+
+### Next steps
+
+1. Owner: review the branch; if it is wanted, merge it into main (or tell
+   me what to change), push.
+2. On Fedora: `sudo dist/setup-fedora.sh ...` (builds core + standalone),
+   reboot s6, check `systemctl --failed`, `ls /usr/libexec/sdcompat`,
+   `s6-svstat /run/service/sdcompat-fdstore`, a FDSTORE= user (journald,
+   logind) keeping fds across `s6-svc -r` of sdcompatd.
+3. Still open from before: the enforcing re-check of `c5f2e06`
+   (uncaught-logs label, Result=, BusName ordering); JOURNAL=no output
+   loss; on-demand socket activation; beside3 flake.
