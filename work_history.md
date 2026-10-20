@@ -1080,7 +1080,7 @@ No code changes.
    unprivileged (s6-svstat needs root, which this branch runs as). No doc
    change: TESTING doesn't list the archive's files.
 3. Done below (vconsole).
-4. Session 11's remaining next steps (backlight/rfkill) still apply.
+4. Done below (backlight and rfkill).
 
 ### vconsole setup (same day, `b45c28d`)
 
@@ -1115,3 +1115,93 @@ No code changes.
   sdcompatd is up, and the console font/keymap from /etc/vconsole.conf on
   Ctrl+Alt+F3. vtcon lines during udev-trigger still fail (harmless: the
   oneshot runs right after).
+
+### Backlight and rfkill under s6 (same day, `c3985c3`; path-run fix `aff676f`)
+
+Decision (owner chose it over an rfkill-only restart loop or backlight
+only): on-demand socket re-activation in the runner, because
+systemd-rfkill restores state at start, saves on every change, and exits
+after ~5 s idle; without re-activation it would restore the stale states
+saved by the last systemd boot and never save later toggles.
+
+- Backlight: `systemd-backlight@*.service` in the default INCLUDE. udev
+  wants `systemd-backlight@backlight:amdgpu_bl1` and
+  `@leds:tpacpi::kbd_backlight` on the owner's laptop; they run as dynamic
+  oneshot instances (load at start). New `stop_dynamic_oneshots()`: when
+  sdcompatd gets SIGTERM and RUN_DIR/shutting-down exists (rc.shutdown),
+  it stops the active dynamic oneshots so ExecStop= (`save`) runs.
+  sdcompatd depends on dbus -> sdcompat-sysinit, so it goes down before
+  mount-fs and /var is still there. Limitation: the dynamic map is in
+  memory, so after a daemon restart (not a reboot) the save is skipped.
+- rfkill: `systemd-rfkill.socket` and `.service` in the default INCLUDE.
+  - `ListenSpecial=` (src/socket.rs): opened O_RDWR with Writable=yes, else
+    O_RDONLY, plus O_NOCTTY|O_NONBLOCK|O_CLOEXEC|O_NOFOLLOW, as systemd.
+  - Starting a `.socket` (check_job: start/restart, not translated, not
+    excluded, Accept=no) records RUN_DIR/sockets/<name> and starts its
+    service (Service= or the stem). The runner's socket_units() also binds
+    sockets recorded there, so static sockets like systemd-rfkill.socket
+    are handed over. If the service already runs, it gets the socket only
+    at its next start.
+  - Re-activation (src/runner.rs): a clean exit with Restart= not
+    applying, while the daemon holds the service's sockets, sets
+    SOCKET_WAIT and returns 0 instead of 125, so s6 restarts the run
+    script; `run` then ppoll()s the held fds and starts the service on
+    activity. The unit is reported inactive/dead meanwhile (status,
+    try-restart does nothing, stop doesn't run ExecStop=). Finish after
+    a wait (stop, restart) returns 0 without touching the exec state.
+    Failed exits keep the old behaviour (down, failed).
+  - Explicit start while waiting: the daemon removes SOCKET_WAIT
+    (`UnitState::take`, so only one side wins) and sends SIGUSR1
+    (`s6-svc -1`), only to a run process up >= 1 s (one that just started
+    may not block SIGUSR1 yet; a down one starts without the key anyway).
+    The runner keeps SIGUSR1 blocked except inside ppoll() (no lost
+    wakeup) and, if the daemon took the key first, waits up to 2 s for
+    that signal before exec so it can't hit the service. `wait_ready`
+    counts "became active, now waiting again" as done.
+  - SELinux (loaded policy, sesearch): systemd-rfkill transitions to
+    systemd_rfkill_t; it may use inherited fds (domain_fd_use), rw
+    wireless_device_t (/dev/rfkill), write init_var_run_t sockets
+    (/run/sdcompat/notify) and its var_lib. systemd-backlight is
+    init_exec_t (init_t). No policy change.
+- Bug found while testing (pre-existing, on real boots too): path-run
+  talks to the daemon over the private socket on a current-thread runtime
+  and blocked in inotify's poll(), so zbus never read the daemon's
+  signals; once its socket buffer filled (38 KB queued seen), the daemon's
+  emit() blocked on that peer and every job stalled ("waiting" forever).
+  The new tests added enough signals to hit it. Fixes: path-run waits on
+  the blocking pool (src/pathunit.rs); emit() gives each private peer
+  500 ms and drops/closes one that doesn't read (systemd drops clients
+  whose queue overflows; peers reconnect). With the path-run fix the
+  guard never fired in the test runs.
+- Test flake fixed: the target test's cleanup `s6-rc -d change` now uses
+  -b (it failed with "unable to take locks" when the daemon was recording
+  beside3, leaving hold3/beside3 up).
+- Tests: sandbox `react.socket` (static, ListenSpecial= on a FIFO,
+  Writable=yes) + `react.service` (reads what is queued, exits): starting
+  the socket runs the service with LISTEN_FDS=1; inactive afterwards;
+  writes re-activate it twice; StartUnit right after an exit (inside s6's
+  1 s restart delay, the race that hung a job in a first version) runs it
+  once; stopped, a write doesn't re-activate. `cargo test` 27 passed + 1
+  ignored, sandbox 138/138 twice, shellcheck/bash -n pass, release build
+  ok. Not tested: the SIGUSR1 path against a runner already in ppoll()
+  in the suite (done by hand earlier), a real boot. Remaining
+  "unable to take locks" lines in check output come from `in_s6rc`
+  polling during a change (retried; pre-existing).
+- Mistake during testing: one suite run was started in the background
+  and its sandbox never stopped; the next run shared $R with it and hung.
+  Its processes were found by their scratchpad/sdc-test paths and killed
+  by PID (nothing of the system's s6 tree involved).
+- Docs: README/README-us (socket activation, templates at shutdown, not
+  implemented list, INCLUDE), dist/sdcompat.conf.
+
+### Next steps
+
+1. Owner: reinstall (`sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
+   --yes`), reboot into s6. Check: `systemctl status systemd-rfkill.service`
+   (ran at boot, then inactive), `ls /run/sdcompat/sockets`, toggle
+   Bluetooth/airplane mode then `journalctl -b -u systemd-rfkill` (it runs
+   again), brightness: change it, reboot, it comes back;
+   `ls -l /var/lib/systemd/backlight` mtime after a reboot. Then
+   collect diagnostics (covers the target delay and vconsole too).
+2. Persist dynamic oneshot state across daemon restarts (backlight save
+   after `sdcompatd` restarts).
