@@ -2234,3 +2234,47 @@ users once their units stop (unverified on a real boot).
 3. Then: cgroup-BPF settings, SELinux enforcing.
 4. Maybe: make the fd store not need a reboot for limit changes.
 5. Still open: beside3 sandbox flake.
+
+## Session: 2026-10-21: double /run
+
+- Cause: s6-linux-init (without -n/-N) unmounts /run "just in case",
+  then mounts a tmpfs on it. The unmount fails: the initramfs left
+  tmpfs mounts under it (/run/credentials/systemd-journald.service and
+  .../systemd-cryptsetup@luks-...). So s6's tmpfs (no size=) sat on the
+  initramfs's (size=20%, nr_inodes=819200).
+- Hidden /run, listed by the owner (`sudo unshare -m --propagation
+  private sh -c 'umount -l /run; ...'`): udev database for the LUKS dm
+  device, /run/log/journal (initramfs journal), /run/mount (utab),
+  /run/utmp, /run/varlink/registry, /run/initramfs, /run/cryptsetup,
+  /run/tpm2-tss, /run/tmpfiles.d/static-nodes.conf, the two credential
+  mounts, and /run/systemd.pre-switch-root. **No /run/systemd:** the
+  initramfs's systemd renames it before switch-root (v262 main.c:2325)
+  and never deletes the renamed one, so leaving it is systemd-like.
+  sdcompat creates no /run/credentials dirs (only expands %d); the early
+  script's /run steps are all idempotent; restorecon -R /run relabels
+  the leftovers.
+- **Fix** (`4564159`): setup passes `-n` to s6-linux-init-maker (keep /run,
+  just remount it, as systemd does). Checked: generated bin/init has
+  `-n`; `setup-fedora.sh --dry-run` shows it. bash -n, shellcheck -S
+  warning. TESTING/TESTING-us: real-boot row `findmnt -n /run | wc -l`
+  → 1. No Rust change, so cargo/sandbox not rerun (sandbox doesn't use
+  s6-linux-init). Possibly also clears the old "/run/varlink/registry
+  symlinks (directory missing)" item.
+- Not tested: a real boot with -n.
+
+### Current state
+
+Under s6, / is shared, user-runtime-dir runs once per login and its
+ExecStop succeeds (confirmed). Unverified on a real boot: logind drops
+stopped users; /run is the initramfs's, mounted once.
+
+### Next steps
+
+1. Owner: push, rerun setup (it regenerates /etc/s6-linux-init), reboot
+   into s6. Check: `findmnt -n /run | wc -l` → 1; after login and a
+   `sudo`, a minute later `loginctl list-users` shows only the user.
+   If boot breaks: the tty9 rescue getty, or the previous s6-linux-init
+   in /var/lib/sdcompat/setup-backup/.
+2. Then: cgroup-BPF settings, SELinux enforcing.
+3. Maybe: make the fd store not need a reboot for limit changes.
+4. Still open: beside3 sandbox flake.
