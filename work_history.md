@@ -1833,3 +1833,46 @@ owner's name/email via `git -c`.
    sdcompat.
 3. Then: mount propagation, cgroup-BPF settings, SELinux enforcing.
 4. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
+
+## Session: 2026-10-20 late night, part 3: cups left disabled after install
+
+Owner, on the s6 boot (`dnf install -y cups` at 22:58, then reboot):
+`systemctl status cups` shows inactive.
+
+- Checked on the machine: cups.service, cups.socket and cups.path are all
+  `disabled` with no links in /etc/systemd/system, although the preset
+  (90-default.preset) says `enable cups.socket`, `enable cups.path`, and
+  sdcompat reports `preset: enabled` for them. cups.service itself is
+  meant to stay disabled (socket/path activated), so "inactive" for the
+  service is normal on Fedora; the bug is that the socket and path were
+  not enabled.
+- **Bug: preset order.** cups' %post runs `systemctl --no-reload preset
+  cups.path cups.socket cups.service`. install::preset went through the
+  names in order: enabled path and socket, then disabled cups.service,
+  whose `Also=cups.socket cups.path` made disable() remove their links
+  again. systemd's execute_preset does all disables first, then all
+  enables.
+- **Fix (`36e443d`):** preset() collects the enable and disable lists,
+  disables first, then enables. Unit test
+  `install::tests::preset_disable_before_enable` (cups layout in a temp
+  dir). Tests: 36 + 1 ignored; sandbox JOURNAL=yes 173/173.
+- Other packages installed under s6 with the same pattern (a
+  preset-disabled unit with Also= to preset-enabled ones) were affected
+  the same way. Packages installed on the systemd boot were not.
+- Not tested: a real boot / real dnf install with the fix.
+
+### Current state
+
+As before; `systemctl preset` now matches systemd for units linked by
+Also=.
+
+### Next steps
+
+1. Owner: push, rerun setup, then fix this install with `sudo systemctl
+   preset cups.path cups.socket cups.service` (or reinstall cups).
+   Check: `systemctl is-enabled cups.socket cups.path` → enabled;
+   `systemctl status cups.socket` active (listening) after reboot or
+   `systemctl start cups.socket`; `lpstat -r` starts cups.service.
+2. The earlier steps still stand: chrony MainPID change on reinstall,
+   mount-rootfs/oo7-daemon, user-reload-restart, mount propagation,
+   cgroup-BPF, SELinux enforcing, beside3 flake, user-runtime-dir ExecStop.
