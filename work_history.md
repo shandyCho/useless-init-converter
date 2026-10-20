@@ -678,3 +678,87 @@ the s6 tree in init_t, services in their own domains. Still permissive.
 4. Other seccomp-based keys (RestrictAddressFamilies=, RestrictNamespaces=,
    MemoryDenyWriteExecute=, LockPersonality=, RestrictRealtime=) and
    FreezeUnit/ThawUnit are still not implemented.
+
+## Session 9: 2026-10-20
+
+Owner booted the s6 entry after session 8 (boot and GNOME login worked) and
+ran `sudo tests/collect-diagnostics.sh` (`/tmp/sdcompat-diag.1UI53N.tar.gz`).
+This session ran on that same boot (Fedora, PID 1 `s6-svscan`, permissive),
+without root. Commits `8e5ec0c`, `91b9336`.
+
+What the diagnostics showed:
+- **Session 8 verified on a boot:** `systemctl --failed` empty,
+  `is-system-running` = running; PID 1 and sdcompat in `init_t`, services in
+  their domains (chronyd_t, xdm_t, systemd_logind_t, system_dbusd_t,
+  fwupd_t, ...), `systemd --user` in unconfined_t. fwupd activated on
+  `fwupdmgr get-devices`. chronyd loaded its seccomp filter; no SIGSYS / 231
+  exits. Session 7 step 2 too: no rsyslogd lines in uncaught-logs, no
+  `syslog` s6 service.
+- **Bug, fixed (`8e5ec0c`):** every Type=notify helper (`sdcompat run --
+  X.service` left after the double fork) used 100% CPU: 8 processes, load
+  8.6, 6 min of CPU each after 6 min uptime (voluntary_ctxt_switches 1).
+  The poll timeout after READY=1 was `-1`, passed as `wait.max(0)` = 0.
+  Present since `dfea75e` (session 1). check.sh now measures the helper's
+  CPU ticks over 1 s ("notify helper idle"): old code 103 ticks (FAIL),
+  fixed code idle. The pgrep pattern must allow `--config` between `run`
+  and `--`.
+- **Bug, fixed (`91b9336`):** earlyoom restarted 159 times ("extra argument
+  not understood: 'Content|Isolated'"): `exec earlyoom $EARLYOOM_ARGS` does
+  not remove quotes, systemd does. Now `eval "set -- $EARLYOOM_ARGS"` (the
+  file is already sourced, so no new trust). Checked by running the script
+  against Fedora's /etc/default/earlyoom.
+- **AVCs (464 lines), by cause:**
+  - `/run/dbus` (and so `system_bus_socket`) was `var_run_t`: the s6 dbus
+    run script mkdirs it, no tmpfiles.d entry exists (systemd creates it
+    for dbus.socket). ~20 domains denied `write` on the socket: enforcing
+    would break the bus. Fix: restorecon in `dist/s6/dbus/run`.
+  - `/run/systemd/userdb` was `init_var_run_t` (gdm created it under
+    /run/systemd); policy: `systemd_userdbd_runtime_t`, gdm's socket
+    `xdm_var_run_t`. systemd's PID 1 creates the directory. Fix:
+    `early mount-api` creates it before its `restorecon -R /run`.
+  - init_t on s6 objects: read/write/ioctl the catch-all logger fifo
+    (`/run/service/s6-svscan-log/fifo`, var_run_t; also dbus-daemon and
+    hostname writing their stderr there), s6-svlink creating symlinks in
+    `/run/service`, s6-supervise executing `/run/sdcompat/dyn/user@*/run`
+    (init_var_run_t). Decision: allow rules in sdcompat.cil, not relabels,
+    because these are s6 behaviours with no systemd counterpart and the
+    generated files would otherwise need extra type transitions.
+  - Checked against the live policy with `selinux_check_access` (in
+    permissive it returns 0 but logs `avc: denied` for what enforcing would
+    deny): every added permission was denied, `unlink`/`map` were already
+    allowed (left out); with the new labels, dbus socket and userdb accesses
+    are allowed. CIL parses (`cil_add_file`); `semodule -i` not run (root).
+  - Left: systemd-hostnamed reading `/proc/pressure/*` (proc_psi_t),
+    firewalld creating `.cache` in a tmpfs_t dir. Probably the policy, not
+    sdcompat; not looked into.
+- Other log items, not fixed: journald's `FDSTORE: fd store not reachable`
+  (19 times, 11:02:40–42, before sdcompatd is up: those fds are lost if
+  journald restarts); `user-runtime-dir@60578` ExecStop exit 1;
+  homed is excluded by config (pam_systemd_home/accounts-daemon warnings,
+  expected). The rest is hardware/GNOME noise.
+- **Verified:** `cargo build`, `cargo test` (22 ok). Sandbox: 119/119 in 1
+  of 3 runs with the fix, the other 2 hit the session-7 reload flake (same
+  14 checks); the new check passed in all 3. `bash -n` / `sh -n` on the
+  changed scripts; shellcheck still not installed. Not verified on a boot.
+- Git on the Fedora install has no identity; commits were made with
+  `git -c user.name=shandy-c -c user.email=...` (config not changed).
+
+### Current state
+
+The s6 boot reaches GNOME with services in their own SELinux domains,
+fwupd and seccomp filters working. With `8e5ec0c` the notify helpers
+should be idle; with `91b9336` earlyoom should run and the bus socket and
+userdb should carry their policy labels.
+
+### Next steps
+
+1. Owner reinstalls (setup-fedora.sh / RPMs, so the new .cil is loaded and
+   dist files updated), reboots into s6, then: `top` (no busy `sdcompat
+   run`), `s6-svstat /run/service/earlyoom` (up, not restarting),
+   `ls -Z /run/dbus/system_bus_socket` (system_dbusd_var_run_t),
+   `ls -dZ /run/systemd/userdb` (systemd_userdbd_runtime_t), and
+   `sudo tests/collect-diagnostics.sh` for the remaining AVCs.
+2. If avc.txt is down to the policy-side leftovers, try `--enforcing`.
+3. Session 7's reload flake (s6-rc-update "Broken pipe") is still open.
+4. FDSTORE before sdcompatd is up: queue or retry in the runner.
+5. Session 8's step 4 (other seccomp-based keys, FreezeUnit/ThawUnit).
