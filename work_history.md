@@ -2087,3 +2087,21 @@ user managers on the real s6 boot.
 3. Maybe: make the fd store not need a reboot for limit changes (the
    PUTting client passes the limit).
 4. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
+
+## Session: 2026-10-20, part 3: mount-rootfs/oo7-daemon confirmed
+
+- Checked on the s6 boot of 23:47 (unprivileged): /run/systemd/mount-rootfs
+  exists (0555 root, created 23:48 by early mount-api, `f7b1bfa`);
+  `systemctl --user status oo7-daemon` → active (running) since 23:48:18;
+  `systemd-run --user --wait -p PrivateTmp=yes -p ProtectSystem=full -p
+  PrivateDevices=yes /bin/true` → exit 0. User units with mount
+  namespacing work on the real boot.
+- No code changes.
+
+### Next steps
+
+1. Mount propagation (/ is private; systemd makes it shared), cgroup-BPF
+   settings, SELinux enforcing.
+2. Maybe: make the fd store not need a reboot for limit changes (the
+   PUTting client passes the limit).
+3. Still open: beside3 sandbox flake; user-runtime-dir@UID ExecStop exit 1.
