@@ -1726,7 +1726,8 @@ unchanged.
 
 Owner: login succeeded on the s6 boot (22:23, `e554402`, `--no-journal
 --no-resolved`), and they installed the `@gnome-desktop` group with dnf
-(22:22, just before that boot).
+(22:22) on the systemd boot before it (21:47–22:22), not under s6;
+nothing was installed while booted into s6.
 
 - **`98ebe70` confirmed on a real boot:** /run/systemd/journal/{socket,
   stdout} are journal-relay's (mode 0666), the user bus (dbus-broker)
