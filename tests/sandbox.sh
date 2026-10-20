@@ -13,6 +13,7 @@ R=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sdc-test
 
 if [ "${2:-}" = stop ]; then
     # The daemon's PID is kept apart: tests/check.sh replaces the daemon.
+    # shellcheck disable=SC2046  # PID lists, split on purpose
     [ -f "$W/pids" ] && kill $(cat "$W/pids") $(cat "$W/daemon.pid" 2>/dev/null) 2>/dev/null || true
     sleep 0.5
     rm -rf "$W" "$R"

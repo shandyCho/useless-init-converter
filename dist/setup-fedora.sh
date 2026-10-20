@@ -265,13 +265,13 @@ install_skarnet() {
     [ "$DRY" = 1 ] || work=$(mktemp -d)
     local name
     for name in "${SKARNET[@]}"; do
-        local ver=${SKARNET_VER[$name]} want=${SKARNET_SHA256[$name]}
+        local ver=${SKARNET_VER[$name]} sum=${SKARNET_SHA256[$name]}
         echo "  building $name $ver"
         run curl -fsSL -o "$work/$name.tar.gz" "https://skarnet.org/software/$name/$name-$ver.tar.gz"
         if [ "$DRY" = 0 ]; then
-            echo "$want  $work/$name.tar.gz" | sha256sum -c --quiet - || die "checksum mismatch for $name-$ver"
+            echo "$sum  $work/$name.tar.gz" | sha256sum -c --quiet - || die "checksum mismatch for $name-$ver"
         else
-            printf '  + verify sha256 %s\n' "$want"
+            printf '  + verify sha256 %s\n' "$sum"
         fi
         run tar -xzf "$work/$name.tar.gz" -C "$work"
         for p in "$DIST/rpm/$name-$ver"-*.patch; do
