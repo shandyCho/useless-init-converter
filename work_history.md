@@ -1079,5 +1079,39 @@ No code changes.
    (devices.txt). bash -n/shellcheck pass; the commands were tried by hand
    unprivileged (s6-svstat needs root, which this branch runs as). No doc
    change: TESTING doesn't list the archive's files.
-3. vconsole setup under s6 (include systemd-vconsole-setup or an s6 oneshot).
+3. Done below (vconsole).
 4. Session 11's remaining next steps (backlight/rfkill) still apply.
+
+### vconsole setup (same day, `b45c28d`)
+
+- Both, because one alone doesn't cover it: udev's 90-vconsole.rules runs
+  `systemctl --no-block restart systemd-vconsole-setup.service` for each
+  vtcon, and at boot that happens during udev-trigger (14:35:12 on the
+  owner's laptop), before sdcompatd is up (14:35:14), so the call fails
+  whether or not the unit is translated. Fedora doesn't put the unit in
+  sysinit.target.wants; under systemd only udev starts it.
+  - New s6 oneshot `vconsole` (dist/s6/vconsole, in sdcompat-sysinit, after
+    udev-trigger, which settles udev) runs `early vconsole`:
+    /usr/lib/systemd/systemd-vconsole-setup if /dev/tty0 and the binary
+    exist; failure only warns (exit 0, like the other early steps).
+  - systemd-vconsole-setup.service added to the default INCLUDE
+    (src/config.rs, dist/sdcompat.conf, README/README-us), so consoles
+    added after boot (a late GPU driver) go through sdcompatd. `sdcompat
+    plan`: a standalone oneshot no bundle pulls in, warnings only for
+    ImportCredential= and TimeoutStopFailureMode=.
+- SELinux: the binary is init_exec_t, so it runs as init_t under s6, as
+  under systemd. No policy change.
+- setup-fedora: the new dir is added, and the owner's sdcompat-sysinit
+  (unedited, matches git history) is replaced with the one listing
+  vconsole, per Session 11's update logic. Not run here (needs root).
+- Tests: `sh -n`/shellcheck on dist/early; dist/s6 compiled with
+  s6-rc-compile (stub sdcompat-default and sdcompat-system-update bundles):
+  vconsole depends on udev-trigger, udevd, mount-api and is in
+  sdcompat-sysinit. `cargo test` 27 passed + 1 ignored, sandbox 129/129.
+  Not run: `early vconsole` itself (needs root and a real console), a real
+  boot.
+- Owner check after reinstall and reboot into s6: `s6-rc -a list | grep -x
+  vconsole`, no `vtcon… failed` lines in /run/uncaught-logs/current after
+  sdcompatd is up, and the console font/keymap from /etc/vconsole.conf on
+  Ctrl+Alt+F3. vtcon lines during udev-trigger still fail (harmless: the
+  oneshot runs right after).
