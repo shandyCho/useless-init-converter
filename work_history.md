@@ -1203,5 +1203,26 @@ saved by the last systemd boot and never save later toggles.
    again), brightness: change it, reboot, it comes back;
    `ls -l /var/lib/systemd/backlight` mtime after a reboot. Then
    collect diagnostics (covers the target delay and vconsole too).
-2. Persist dynamic oneshot state across daemon restarts (backlight save
-   after `sdcompatd` restarts).
+2. Done below (dynamic oneshots across daemon restarts).
+
+### Dynamic oneshots across daemon restarts (same day, `2d055f8`)
+
+- Active on-demand oneshot instances (RemainAfterExit=yes, e.g.
+  systemd-backlight@) are recorded as empty files in
+  RUN_DIR/dyn-oneshot/<id>: written when dyn_start succeeds, removed in
+  dyn_stop (also covers dyn_restart). `load_dynamic_oneshots()` at daemon
+  startup puts them back in the dynamic map as active, so a restarted
+  daemon reports them active/exited and stop_dynamic_oneshots() runs
+  their ExecStop= at shutdown. RUN_DIR is fresh at boot, like
+  RUN_DIR/devices. Files, not one list, so concurrent starts/stops don't
+  race on a shared file. Dynamic longruns (user@) are not covered: their
+  map entry is still lost on a daemon restart (they keep running under s6).
+- Tests: check.sh starts prep@b before the unprivileged-daemon swap and
+  expects active/exited after it; a new "shutdown stops on-demand
+  oneshots" section creates RUN_DIR/shutting-down, SIGTERMs the daemon and
+  expects prep@b's ExecStop= ("down b") and the marker gone, then restarts
+  the daemon (prep@b inactive/dead). This is also the first test of the
+  shutdown path from c3985c3. Without the change: 2 failures (state after
+  restart, ExecStop at shutdown); "marker gone" passes either way. With
+  it: sandbox 143/143 twice, `cargo test` 27 passed + 1 ignored,
+  shellcheck/bash -n pass, release build ok. Docs: README/README-us.
