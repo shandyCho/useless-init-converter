@@ -2278,3 +2278,29 @@ stopped users; /run is the initramfs's, mounted once.
 2. Then: cgroup-BPF settings, SELinux enforcing.
 3. Maybe: make the fd store not need a reboot for limit changes.
 4. Still open: beside3 sandbox flake.
+
+## Session: 2026-10-21: real boot with -n and the UnknownObject fix
+
+- s6 boot of 2026-10-21 00:33 (PID 1 `s6-svscan`, after `4564159`).
+- **/run mounted once:** `findmnt -n /run | wc -l` → `1`. Its options
+  are the initramfs's (`size=2785964k,nr_inodes=819200,mode=755`), so
+  s6-linux-init `-n` kept it, as intended. /run/varlink/registry exists
+  and holds its symlinks (Hostname, Journal, Login, Manager, Shutdown,
+  Unit), so the old "registry directory missing" item looks gone too.
+- **logind drops stopped users:** after `sudo dnf upgrade`,
+  `loginctl list-users` shows only 1000 (`active`); no root, no
+  gdm-greeter in `closing`. Confirms `bb74578`.
+- No code changed.
+
+### Current state
+
+Under s6, / is shared, /run is the initramfs's tmpfs mounted once,
+user-runtime-dir runs once per login and its ExecStop succeeds, and
+logind drops users whose units have stopped (all confirmed on a real
+boot).
+
+### Next steps
+
+1. Then: cgroup-BPF settings, SELinux enforcing.
+2. Maybe: make the fd store not need a reboot for limit changes.
+3. Still open: beside3 sandbox flake.
