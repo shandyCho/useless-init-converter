@@ -447,6 +447,16 @@ fn private_dev(staging: &str) -> Result<(), String> {
         let _ = fs::File::create(at("log"));
         let _ = bind("/dev/log", &at("log"));
     }
+    // The tmpfs and the links would be tmpfs_t, which confined services may
+    // not read through; label them as their /dev paths, as systemd does.
+    // Bind-mounted nodes keep their own labels.
+    let mut labels = vec![(staging.to_string(), "/dev".to_string())];
+    for n in ["ptmx", "fd", "stdin", "stdout", "stderr", "log"] {
+        if fs::symlink_metadata(at(n)).is_ok_and(|m| m.file_type().is_symlink()) {
+            labels.push((at(n), format!("/dev/{n}")));
+        }
+    }
+    crate::selinux::label_as(&labels);
     mount(staging, "/dev", None, libc::MS_MOVE, None)
 }
 
