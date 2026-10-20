@@ -586,3 +586,95 @@ no rsyslogd should run under s6 with journald.
 4. SELinux domain transitions for services and `systemd --user` before
    trying enforcing mode.
 5. Session 5's next steps 3–4 still apply.
+
+## Session 8: 2026-10-20
+
+Owner asked: make fwupd.service work, and fix SELinux. Commit `2d922a8`.
+Development happened on the owner's machine booted with s6 (PID 1
+`s6-svscan`, SELinux permissive); no privileged command was run.
+
+- **fwupd (`SystemCallFilter=`, done):** fwupd's unit sets
+  `FWUPD_SYSCALL_FILTER=systemd`; fwupd then probes `mlock` (outside its
+  allow list) and refuses to start if it does not fail. Decision: implement
+  `SystemCallFilter=`, `SystemCallErrorNumber=` and
+  `SystemCallArchitectures=` properly (`src/seccomp.rs`) instead of unsetting
+  the variable, because 52 Fedora units use these keys. Merge rules as
+  systemd's `config_parse_syscall_filter` (first line picks allow/deny list,
+  allow lists get `@default`, `~` lines remove from an allow list, `:ERRNO`
+  per entry, empty assignment resets via `get_all`). Groups are systemd's
+  own: `src/syscall-groups.txt` is `systemd-analyze syscall-filter` of
+  systemd 262 (`tests/update-syscall-groups.sh` regenerates it), embedded
+  with `include_str!`. libseccomp.so.2 is dlopen()ed (no -devel needed,
+  sandbox on Artix keeps working); if it is missing the filter is skipped
+  with a message, as systemd does without seccomp. The filter is loaded last
+  before `execve` in `exec_command`, not for `+` commands; no_new_privs is
+  set only without CAP_SYS_ADMIN (systemd's "implied NoNewPrivileges").
+  Secondary ABIs (x86, x32) are filtered too unless SystemCallArchitectures=
+  restricts them. Exit code 231 on failure.
+- **SELinux (done in code, not verified on a boot):** every process under
+  s6 ran as `unconfined_service_t`, PID 1 included: the stage-1 `init`
+  script is `init_exec_t` (→ init_t), but init_t executing `bin_t`
+  (s6-linux-init) becomes unconfined_service_t (checked with
+  `security_compute_create`). So no service entered its domain, and
+  `systemd --user` needed `transition` to unconfined_t (the session-7
+  AVCs). Decision: keep the whole s6 tree in init_t, as systemd is, so the
+  policy's own init_t transitions apply (computed: chronyd_exec_t →
+  chronyd_t, xdm_exec_t → xdm_t, fwupd_exec_t → fwupd_t,
+  systemd_logind_exec_t → systemd_logind_t; unconfined_t + init_exec_t stays
+  unconfined_t, so users are unaffected). `dist/selinux/sdcompat.cil`
+  labels s6-*, ucspilogd, all execline programs (s6-rc runs oneshots through
+  execlineb, the oneshot runner through fdmove), /usr/libexec/{s6,s6-rc,
+  execline,sdcompat}/* `init_exec_t`, and `/run/sdcompat` `init_var_run_t`
+  (+ a named type transition), like /run/systemd, for the notify sockets.
+  Generated run scripts live in /run (var_run_t) and stay init_t. Rejected:
+  setexeccon from unconfined_service_t (the policy forbids those
+  transitions) and a permissive local module (does not give services their
+  domains). `src/selinux.rs` (libselinux dlopen()ed, root + SELinux only)
+  does systemd's labelling: `selinux_restorecon` on RuntimeDirectory= & co.,
+  socket parents and socket files; socket-unit sockets created with
+  `setsockcreatecon(label of the service's exec)`
+  (mac_selinux_get_create_label_from_exe). setup-fedora.sh loads the module
+  with `semodule -i` and relabels (file list derived from the .cil);
+  `--uninstall` removes it; the spec does the same in %post/%postun.
+- CIL checked only partly: parsed by libsepol's `cil_add_file` (which does
+  reject a broken file), both contexts valid in the loaded policy, and the
+  regexes match exactly the installed skarnet/sdcompat binaries
+  (`/usr/libexec/execline/wait` was missing at first). Linking against the
+  full policy (`semodule -i`) needs root and has not been run.
+- Spec bug fixed: `%{_prefix}/lib/kernel/install.d/90-sdcompat.install` was in
+  %install (would run as a command) instead of %files.
+- **Verified:** `cargo build` with no warnings; `cargo test` 22 ok (new:
+  seccomp parse tests, a forked-child test that a loaded deny list returns
+  EPERM, a libselinux binding test). Sandbox: 5 new checks (deny list blocks
+  `kill` with EPERM, `+` command unfiltered, fwupd's exact filter makes
+  `mlock` fail with EPERM); 118/118 in 2 of 4 runs, the other 2 hit the
+  session-7 reload flake (new checks passed in all 4). `sdcompat plan` on
+  the owner's config: the 61 SystemCall* "ignored" warnings are gone, nothing
+  else changed. `bash -n` on changed scripts; `setup-fedora.sh --dry-run`
+  prints the new SELinux steps. shellcheck and clippy are not installed.
+  Not verified on a real boot.
+- Note for test writers: in unit files `$$` is a literal `$`; a shell's
+  `$$` needs `$$$$` (`\$\$\$\$` inside sandbox.sh's heredocs).
+
+### Current state
+
+As session 7, plus `2d922a8`. On the next s6 boot (after rerunning setup):
+fwupd should start; 52 units run with their seccomp filters; PID 1 and
+the s6 tree in init_t, services in their own domains. Still permissive.
+
+### Next steps
+
+1. Owner reruns `sudo dist/setup-fedora.sh --rpms=... --yes` (loads the
+   module; check that `semodule -i` succeeded), reboots into s6, then:
+   `ps -eZ | grep -E ' (s6-svscan|chronyd|gdm|systemd-logind)$'` (expect
+   init_t, chronyd_t, xdm_t, systemd_logind_t), `fwupdmgr get-devices`,
+   `systemctl --failed`, and `sudo tests/collect-diagnostics.sh` (the AVC
+   list is in avc.txt). If a service with SystemCallFilter= dies with
+   SIGSYS/EPERM, that is the first thing to look at.
+2. Work through the remaining AVCs (now from confined domains), then try
+   `--enforcing`.
+3. Session 7's step 1 (s6-rc-update "Broken pipe" on reload) is still open
+   and makes about half the sandbox runs fail 14 checks.
+4. Other seccomp-based keys (RestrictAddressFamilies=, RestrictNamespaces=,
+   MemoryDenyWriteExecute=, LockPersonality=, RestrictRealtime=) and
+   FreezeUnit/ThawUnit are still not implemented.
