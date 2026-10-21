@@ -54,7 +54,49 @@ expect_log() {
     grep -q "$text" "$W/logs/$unit/current" 2>/dev/null && ok "$unit output in its s6-log" || bad "no '$text' in $W/logs/$unit/current"
 }
 
-echo "== boot state"
+# Damage one failure leaves behind for everything after it. On the real
+# boot a failed s6-rc-update moved a service directory out of the live
+# directory: its scan-directory link dangled, s6-svscan aborted every
+# scan, stops waited for it forever, and so did sudo. Prints one line per
+# problem found.
+damage() {
+    live=$(readlink "$R/live")
+    for d in "$R"/live:*; do
+        [ -e "$d" ] && [ "${d##*/}" != "$live" ] && echo "s6-rc live directory left over: ${d##*/}"
+    done
+    [ "$(ls "$R/live/compiled/servicedirs")" = "$(ls "$R/live/servicedirs")" ] \
+        || echo "live service directories differ from the compiled database"
+    for l in "$(readlink -f "$R/live/scandir")"/*; do
+        [ -L "$l" ] && [ ! -e "$l" ] && echo "dangling scan directory entry: ${l##*/}"
+    done
+    # s6-rc's own services never stop by themselves (units may: s6-rc
+    # doesn't follow deaths, and a failed unit stays "up" for it). After
+    # a failed then retried s6-rc-update, s6rc-fdholder stayed down and
+    # every logger start failed. s6-rc doesn't wait for its lock here:
+    # while a section holds it, skip.
+    up=$(s6-rc -l "$R/live" -a list 2>/dev/null) || return 0
+    for s in $up; do
+        case $s in s6rc-*) ;; *) continue ;; esac
+        [ "$(s6-svstat -o up "$R/live/servicedirs/$s" 2>/dev/null)" = true ] \
+            || echo "s6-rc has $s up, but its supervisor doesn't run it"
+    done
+}
+# Each kind of damage fails once, at the first section boundary it shows at.
+: > "$W/damage.seen"
+report_damage() {
+    damage > "$W/damage.now"
+    while IFS= read -r line; do
+        grep -qxF "$line" "$W/damage.seen" && continue
+        echo "$line" >> "$W/damage.seen"
+        bad "damage before \"$1\": $line"
+    done < "$W/damage.now"
+}
+section() {
+    report_damage "$1"
+    echo "== $1"
+}
+
+section "boot state"
 expect_state hello.service active/running
 expect_state notifier.service active/running
 expect_eq "notify STATUS= relayed" "$(prop notifier.service Service StatusText)" "all good"
@@ -74,7 +116,7 @@ expect_eq "alias resolves" "$(upath hello-alias.service)" "/org/freedesktop/syst
 expect_eq "UnitFileState enabled" "$(prop hello.service Unit UnitFileState)" "enabled"
 expect_eq "preset disabled" "$(prop failing.service Unit UnitFilePreset)" "disabled"
 
-echo "== start jobs (in parallel)"
+section "start jobs (in parallel)"
 for u in dep.service failing.service flappy.service cond.service sock.service forking.service reloadable.service; do
     call StartUnit ss "$u" replace &
 done
@@ -102,7 +144,7 @@ esac
 expect_state forking.service active/running
 expect_eq "forking MainPID from PIDFile" "$(prop forking.service Service MainPID)" "$(cat "$R/fork.pid")"
 
-echo "== SystemCallFilter="
+section "SystemCallFilter="
 call StartUnit ss scf-deny.service replace
 call StartUnit ss scf-allow.service replace
 expect_state scf-deny.service inactive/dead
@@ -111,7 +153,7 @@ expect_eq "'+' command is not filtered" "$(cat "$R/scf-plus.out" 2>/dev/null)" "
 expect_state scf-allow.service inactive/dead
 expect_eq "fwupd's allow list: mlock fails with EPERM" "$(cat "$R/scf-allow.out" 2>/dev/null)" "errno 1"
 
-echo "== other sandboxing settings"
+section "other sandboxing settings"
 call StartUnit ss harden.service replace
 expect_state harden.service inactive/dead
 h() { sed -n "s/^$1 //p" "$R/harden.out" 2>/dev/null; }
@@ -129,12 +171,12 @@ else
     echo "SKIP namespace and mount settings (need root)"
 fi
 
-echo "== system state"
+section "system state"
 expect_eq "SystemState degraded" "$($B get-property $MGR SystemState | cut -d'"' -f2)" "degraded"
 # failing, flappy, and bad.service (fails at boot on purpose)
 expect_eq "NFailedUnits" "$($B get-property $MGR NFailedUnits | cut -d' ' -f2)" "3"
 
-echo "== reload / restart / stop"
+section "reload / restart / stop"
 call ReloadUnit ss reloadable.service replace && sleep 1.5
 expect_eq "ExecReload ran" "$(cat "$R/reload.out" 2>/dev/null)" "reloaded"
 call ReloadUnit ss hello.service replace 2>/dev/null && bad "reload without ExecReload accepted" || ok "reload without ExecReload rejected"
@@ -151,7 +193,7 @@ expect_state dep.service inactive/dead
 call ResetFailedUnit s failing.service
 expect_state failing.service inactive/dead
 
-echo "== markers (package updates)"
+section "markers (package updates)"
 # systemd-update-helper marks units at a package update and then enqueues
 # them: needs-restart try-restarts, needs-reload reloads if active.
 old=$(prop hello.service Service MainPID)
@@ -170,7 +212,7 @@ expect_eq "needs-reload ran ExecReload" "$(cat "$R/reload.out" 2>/dev/null)" "re
 expect_state once.service inactive/dead
 expect_eq "Markers cleared" "$(prop hello.service Unit Markers)" "0"
 
-echo "== errors"
+section "errors"
 $B call $MGR StartUnit ss nope.service replace 2>&1 | grep -q "not found" && ok "unknown unit error" || bad "unknown unit error"
 # Names that aren't unit names, "../../leak.service" here: the daemon used
 # them as the unit's id, i.e. its state directory RUN_DIR/units/ID, and any
@@ -193,7 +235,7 @@ $B call $MGR AttachProcessesToUnit ssau hello.service ../../x 1 $sp 2>&1 | grep 
     && ok "AttachProcessesToUnit refuses a subcgroup with .." || bad "AttachProcessesToUnit accepted a subcgroup with .."
 kill $sp 2>/dev/null
 
-echo "== unit files"
+section "unit files"
 out=$($B call $MGR EnableUnitFiles asbb 1 forking.service false false)
 expect_eq "enable without [Install]" "$out" "ba(sss) false 0"
 out=$($B call $MGR DisableUnitFiles asb 1 hello.service false)
@@ -204,7 +246,7 @@ case "$out" in *symlink*) ok "enable created links" ;; *) bad "enable: $out" ;; 
 call Reload && ok "daemon-reload"
 expect_state hello.service active/running
 
-echo "== timers"
+section "timers"
 expect_state tick.timer active/waiting
 sleep 6
 n=$(wc -l < "$R/tick.out" 2>/dev/null || echo 0)
@@ -219,7 +261,7 @@ expect_state later.timer active/waiting
 next=$(prop later.timer Timer NextElapseUSecRealtime)
 [ "$next" -ge 4070800000000000 ] && ok "far-future NextElapseUSecRealtime=$next" || bad "later.timer next=$next"
 
-echo "== on-demand instances"
+section "on-demand instances"
 call StartUnit ss inst@a.service replace
 expect_state inst@a.service active/running
 expect_state prep@a.service active/exited
@@ -263,7 +305,7 @@ tries=25
 while [ $tries -gt 0 ] && left; do tries=$((tries - 1)); sleep 0.2; done
 left && bad "inst@h's supervisor still runs after the scan directory was repaired" || ok "repaired scan directory ends the leftover supervisor"
 
-echo "== conflicts"
+section "conflicts"
 expect_state winner.service active/running
 expect_state loser.service inactive/dead
 call StartUnit ss loser.service replace
@@ -271,27 +313,27 @@ expect_state loser.service active/running
 call RestartUnit ss winner.service replace
 expect_state loser.service inactive/dead
 
-echo "== Service= sockets"
+section "Service= sockets"
 call StartUnit ss vl.service replace
 expect_state vl.service active/running
 expect_eq "socket found via Service=" "$(cat "$R/vl.out" 2>/dev/null)" "fds=1 names=varlink"
 
-echo "== logind shutdown request"
+section "logind shutdown request"
 call StartUnit ss poweroff.target replace-irreversibly
 sleep 0.5
 [ -e "$R/poweroff-requested" ] && ok "poweroff.target ran POWEROFF_CMD" || bad "poweroff.target did nothing"
 
-echo "== OnFailure= / FailureAction="
+section "OnFailure= / FailureAction="
 call StartUnit ss upd.service replace
 sleep 2
 expect_eq "OnFailure= unit ran" "$(cat "$R/cleanup.out" 2>/dev/null)" "cleaned"
 [ -e "$R/reboot-requested" ] && ok "FailureAction=reboot ran REBOOT_CMD" || bad "FailureAction did nothing"
 
 if [ $journal = no ]; then
-echo "== s6-log"
+section "s6-log"
 expect_log hello.service "hello from"
 else
-echo "== journal stream"
+section "journal stream"
 f=$(grep -l "^sh\$" "$R"/journal/*.log 2>/dev/null | xargs grep -l "hello.service" 2>/dev/null | head -1)
 if [ -n "$f" ] && head -7 "$f" | tr '\n' ' ' | grep -q "^sh hello.service 6 1 0 0 0 " && grep -q "hello from" "$f"; then
     ok "service output arrives on the journal stream with the stdout header"
@@ -300,7 +342,7 @@ else
 fi
 fi
 
-echo "== path units"
+section "path units"
 expect_state watch.path active/waiting
 touch "$R/flag"
 sleep 3
@@ -310,7 +352,7 @@ sleep 3
 [ -s "$R/chg.out" ] && ok "PathChanged= started the unit" || bad "PathChanged= did nothing"
 expect_eq "path Triggers" "$(prop chg.path Unit Triggers)" "1 chg.service"
 
-echo "== systemd-run"
+section "systemd-run"
 SR=""
 if [ -n "${SYSTEMD_ROOT:-}" ]; then SR=$SYSTEMD_ROOT/usr/bin/systemd-run; elif command -v systemd-run >/dev/null; then SR=$(command -v systemd-run); fi
 if [ -n "$SR" ]; then
@@ -359,7 +401,7 @@ else
     echo "SKIP systemd-run (set SYSTEMD_ROOT or install systemd-run)"
 fi
 
-echo "== failure propagation"
+section "failure propagation"
 expect_state bad.service failed/failed
 expect_state after-bad.service active/running
 call StartUnit ss consumer.service replace
@@ -372,14 +414,14 @@ call StartUnit ss needs-bad.service replace
 expect_state needs-bad.service active/running
 expect_state bad.service active/exited
 
-echo "== conditions are re-checked on start"
+section "conditions are re-checked on start"
 call StartUnit ss cond2.service replace
 expect_state cond2.service inactive/dead
 touch "$R/cond-flag"
 call StartUnit ss cond2.service replace
 expect_state cond2.service active/running
 
-echo "== job queue"
+section "job queue"
 call StartUnit ss slow.service replace &
 sleep 0.3
 job=$($B call $MGR RestartUnit ss slow.service replace | cut -d'"' -f2)
@@ -405,7 +447,7 @@ else
     echo "SKIP finished job's object (no dbus-send)"
 fi
 
-echo "== fd store"
+section "fd store"
 call StartUnit ss fdkeep.service replace
 expect_state fdkeep.service active/running
 call RestartUnit ss fdkeep.service replace
@@ -416,7 +458,7 @@ call RestartUnit ss sock.service replace
 sleep 1
 expect_eq "listening socket kept across restart" "$(stat -c %i "$R/test.sock")" "$i1"
 
-echo "== D-Bus activation"
+section "D-Bus activation"
 $B emit /org/freedesktop/DBus org.freedesktop.systemd1.Activator ActivationRequest s act.service
 sleep 1.5
 [ ! -e "$R/act.out" ] && ok "forged ActivationRequest ignored" || bad "forged ActivationRequest started act.service"
@@ -424,7 +466,7 @@ $B --timeout=3 call org.example.Act / org.example.Act Ping >/dev/null 2>&1
 sleep 1
 expect_eq "real activation via dbus-daemon" "$(cat "$R/act.out" 2>/dev/null)" "activated"
 
-echo "== start beside a busy s6-rc change"
+section "start beside a busy s6-rc change"
 L="s6-rc -l $R/live"
 in_s6rc() { $L -a list | grep -qx "$1"; }
 # Without this, beside1 waits for the lock, which hold1's change keeps
@@ -483,7 +525,7 @@ in_s6rc beside3.service && ok "beside3 recorded in s6-rc afterwards" || bad "bes
 # -b: the daemon may be recording beside3 in s6-rc right now.
 $L -b -d change hold1.service hold2.service hold3.service beside3.service
 
-echo "== socket started on its own, re-activated on activity"
+section "socket started on its own, re-activated on activity"
 call StartUnit ss react.socket replace
 tries=30
 while [ $tries -gt 0 ] && [ ! -s "$R/react.out" ]; do tries=$((tries - 1)); sleep 0.2; done
@@ -535,7 +577,7 @@ expect_state react2.service inactive/dead
 in_s6rc react2.service && bad "react2 still up in s6-rc after stop" || ok "react2 down in s6-rc after stop"
 $L -b -d change hold4.service
 
-echo "== transient scope"
+section "transient scope"
 sleep 1000 &
 spid=$!
 if call StartTransientUnit 'ssa(sv)a(sa(sv))' test-scope.scope fail 1 PIDs au 1 "$spid" 0 2>/dev/null; then
@@ -545,7 +587,7 @@ else
 fi
 kill $spid 2>/dev/null
 
-echo "== units wanted by devices"
+section "units wanted by devices"
 expect_state devwant.service active/running
 expect_state devnotready.service inactive/dead 1
 expect_state devuntagged.service inactive/dead 1
@@ -556,7 +598,7 @@ expect_state devwant.service inactive/dead
 touch "$W/udev/tags/systemd/+test:dev3"
 printf 'E:SYSTEMD_WANTS=devlater.service\nG:systemd\n' > "$W/udev/data/+test:dev3"
 
-echo "== unprivileged caller (ALLOW_UIDS empty, no polkit)"
+section "unprivileged caller (ALLOW_UIDS empty, no polkit)"
 # Swap the daemon for one with config $1; its PID goes to daemon.pid so that
 # tests/sandbox.sh stop finds it.
 restart_daemon() {
@@ -652,7 +694,7 @@ fi
 kill $kpid 2>/dev/null
 
 if [ $journal = no ]; then
-    echo "== journal-relay"
+    section "journal-relay"
     # The native protocol (a text and a binary field), then a stdout stream
     # with a level prefix, as systemd --user connects its units.
     python3 -c '
@@ -671,7 +713,7 @@ time.sleep(0.3)
     grep -q '^<12>strm\[[0-9]*\]: warned$' "$R/devlog.out" && ok "stream level prefix" || bad "stream <4> line not in $R/devlog.out"
 fi
 
-echo "== shutdown stops on-demand oneshots"
+section "shutdown stops on-demand oneshots"
 # As rc.shutdown: the marker, then s6-rc takes sdcompatd down (SIGTERM).
 : > "$R/run/shutting-down"
 # Starts are refused at once: rc.shutdown holds the s6-rc lock, and a D-Bus
@@ -704,6 +746,16 @@ grep -qx "down c" "$R/prep.out" && ok "prep@c's ExecStop= ran, started by an ear
 rm -f "$R/run/shutting-down"
 restart_daemon "$W/sdcompat.conf"
 expect_state prep@c.service inactive/dead
+
+section "end state"
+# A job that never finishes (logind's stop of user@0 did) holds everyone
+# waiting behind it.
+tries=50
+while [ $tries -gt 0 ] && ! $B call $MGR ListJobs | grep -qx 'a(usssoo) 0'; do tries=$((tries - 1)); sleep 0.2; done
+jobs=$($B call $MGR ListJobs)
+[ "$jobs" = "a(usssoo) 0" ] && ok "no job left" || bad "jobs left at the end: $jobs"
+report_damage "the end"
+[ -s "$W/damage.seen" ] && bad "damage seen: $(tr '\n' ';' < "$W/damage.seen")" || ok "no damage at any section boundary"
 
 echo
 echo "passed: $pass  failed: $fail"
