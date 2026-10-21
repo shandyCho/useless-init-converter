@@ -3098,3 +3098,32 @@ RPMs built from `341d610`. Checked from that boot, without root.
   (var_run_t); hostnamed searching /proc/pressure. No s6-log rename, no
   systemd_hostnamed_t dbus denial, nothing on /var/lib/sdcompat, nothing
   from sdcompat's own programs or the fd store.
+- Root checks (owner ran them): sdcompatd and sdcompat-fdstore up,
+  journal-relay running; fd store (pid 1777, up since boot) held 52 fds
+  before and after `s6-svc -r /run/service/sdcompatd` (sdcompatd got a new
+  pid); `systemctl --failed` empty and the GNOME session alive after it.
+  /run/uncaught-logs has only `current` (51650 bytes, under s6-log's
+  default 99999-byte rotation), so rotation itself was not seen yet; no
+  rename denial in the AVCs.
+- Note for check commands: `pgrep -x`/`ps -C sdcompat-fdstore` match
+  nothing (comm is truncated to 15 chars); use `pgrep -x sdcompat-fdstor`
+  or the pid from `s6-svstat`. s6-svstat takes one service dir.
+
+### Current state
+
+The s6 boot runs enforcing with the RPMs (`341d610`): checklist step 4
+passed. Steps 5 (dnf upgrade to a new release) and 6 (`setup-fedora.sh
+--enforcing`) not done yet.
+
+### Next steps
+
+1. Checklist step 5: `packages/build-rpms.sh`, `sudo dnf upgrade
+   ~/rpmbuild-sdcompat/rpms/*.rpm`, `sdcompat --version` exit 0 on the new
+   release, `sudo s6-svc -r /run/service/sdcompatd`, `systemctl --failed`.
+2. Step 6: `sudo dist/setup-fedora.sh --enforcing
+   --rpms=$HOME/rpmbuild-skarnet/rpms`, reboot, /proc/cmdline without
+   enforcing=0.
+3. Optional: once /run/uncaught-logs/current passes ~100 KB, confirm an
+   `@….s` file appears. Also an enforcing boot with JOURNAL=yes.
+4. Still open: JOURNAL=no output loss; on-demand socket activation;
+   beside3 sandbox flake.
