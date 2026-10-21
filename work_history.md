@@ -2906,3 +2906,40 @@ of changed code had the same NEVRA and dnf would not install it.
 
 As in the previous entry; on Fedora also try `dnf upgrade` with a second
 build.
+
+## Session: 2026-10-21: --version (branch `split-projects`)
+
+The owner asked for `sdcompat --version`, so an installed build can be
+identified (also for source installs, which have no rpm -q).
+
+### Changes
+
+- New crate `crates/sdcompat-version`: build.rs works out the version once:
+  `SDCOMPAT_BUILD` when set (the specs export `%{version}-%{release}`), else
+  `VERSION (git COMMIT[-dirty])`, dirty when Cargo.toml, Cargo.lock or
+  crates/ have uncommitted changes. It re-runs only when .git/HEAD, the
+  index, the branch ref or packed-refs change (`git --no-optional-locks`, so
+  `git status` does not rewrite the index and force a rerun). A separate
+  crate so a commit recompiles only it and the five binary crates, not
+  everything that depends on sdcompat-base.
+  Known limit: an unstaged edit after a clean build keeps the old "clean"
+  label until the index or HEAD changes (same as git-version/vergen).
+- Each of sdcompat-gen, sdcompat-runner, sdcompat-timers, sdcompatd answers
+  `--version`/`-V`/`version` in the command position with "NAME VERSION".
+- `sdcompat --version`: its own line, each core tool's (by running its
+  --version; "differs from sdcompat", "no --version: older than this
+  build", or "not installed"), and whether the standalone tools are present.
+  Exit 1 unless all four core tools match.
+- setup-fedora.sh: `check_versions` after install_sdcompat shows it and warns
+  on a mix.
+- Docs: README pair (components table, source layout), packages README pair.
+
+### Tests
+
+- cargo test: 45 passed, 2 ignored. Sandbox default 187/187.
+- Debug build: all tools print `0.1.0 (git c8aabf8-dirty)`; a second build is
+  Fresh (no rerun loop). A fake tool dir with an older runner and a timers
+  without --version: reported, exit 1.
+- RPMs rebuilt; unpacked, `sdcompat --version` printed
+  `0.1.0-1.20261021073517.gc8aabf8.dirty.fc45` for all five, exit 0.
+- bash -n and shellcheck -S warning clean; setup-fedora.sh --dry-run OK.

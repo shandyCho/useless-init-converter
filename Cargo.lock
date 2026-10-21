@@ -343,6 +343,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 [[package]]
 name = "sdcompat"
 version = "0.1.0"
+dependencies = [
+ "sdcompat-version",
+]
 
 [[package]]
 name = "sdcompat-base"
@@ -376,6 +379,7 @@ dependencies = [
  "libc",
  "sdcompat-base",
  "sdcompat-install",
+ "sdcompat-version",
 ]
 
 [[package]]
@@ -395,6 +399,7 @@ dependencies = [
  "sdcompat-client",
  "sdcompat-exec",
  "sdcompat-install",
+ "sdcompat-version",
  "tokio",
  "zbus",
 ]
@@ -406,9 +411,14 @@ dependencies = [
  "libc",
  "sdcompat-base",
  "sdcompat-client",
+ "sdcompat-version",
  "tokio",
  "zbus",
 ]
+
+[[package]]
+name = "sdcompat-version"
+version = "0.1.0"
 
 [[package]]
 name = "sdcompatd"
@@ -421,6 +431,7 @@ dependencies = [
  "sdcompat-exec",
  "sdcompat-gen",
  "sdcompat-install",
+ "sdcompat-version",
  "serde",
  "tokio",
  "zbus",

@@ -5,3 +5,4 @@ edition.workspace = true
 description = "The sdcompat command: runs the sdcompat tool that handles a subcommand"
 
 [dependencies]
+sdcompat-version.workspace = true

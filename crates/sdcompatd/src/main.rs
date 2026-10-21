@@ -17,6 +17,7 @@ use config::Config;
 
 const USAGE: &str = "\
 usage: sdcompatd [--config PATH] [COMMAND] [ARGS]
+       sdcompatd --version
 
   daemon [--system | --session | --address ADDR] [--ready-fd N]
                 serve org.freedesktop.systemd1 (default: system bus and
@@ -113,6 +114,10 @@ fn main() {
     let cmd = args.first().cloned().unwrap_or_else(|| "daemon".into());
     if matches!(cmd.as_str(), "help" | "--help" | "-h") || args.iter().any(|a| a == "--help" || a == "-h") {
         print!("{USAGE}");
+        exit(0);
+    }
+    if sdcompat_version::wanted(&cmd) {
+        sdcompat_version::print("sdcompatd");
         exit(0);
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));

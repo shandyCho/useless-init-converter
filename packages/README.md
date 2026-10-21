@@ -47,6 +47,9 @@ spec에는 버전을 적지 않습니다. 스크립트가 정해서 넘겨 주�
   새 빌드를 업그레이드로 봅니다.
 - 다섯 패키지는 같은 버전-릴리스끼리만 맞도록 묶여 있고, 스크립트는 언제나 다섯 개를
   함께 빌드합니다. `rpms/`에는 마지막 빌드의 다섯 개만 남습니다.
+- RPM으로 빌드한 도구의 `--version`은 패키지의 버전-릴리스를 보여 줍니다(예:
+  `sdcompat-gen 0.1.0-1.20261021073517.gc8aabf8.fc45`). 소스에서 빌드하면
+  `0.1.0 (git c8aabf8)`처럼 커밋을 보여 줍니다.
 - 공개 릴리스처럼 릴리스 번호를 직접 정하려면 `SDCOMPAT_RELEASE=1 packages/build-rpms.sh`.
 
 ## 설치
@@ -63,7 +66,7 @@ Rust 코드를 고친 뒤에는 다시 빌드하고 업그레이드합니다.
 git pull                                            # 또는 직접 고치고 커밋
 packages/build-rpms.sh
 sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm
-rpm -q sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd   # 설치된 빌드 확인
+sdcompat --version                                  # 설치된 빌드 확인
 ```
 
 s6로 부팅한 상태라면, 새 sdcompatd는 데몬을 다시 시작하면 쓰입니다(`s6-svc -r

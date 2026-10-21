@@ -1,0 +1,8 @@
+[package]
+name = "sdcompat-version"
+version.workspace = true
+edition.workspace = true
+description = "The build's version for the sdcompat tools' --version"
+build = "build.rs"
+
+[dependencies]

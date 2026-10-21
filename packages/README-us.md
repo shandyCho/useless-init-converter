@@ -50,6 +50,9 @@ this script (plain `rpmbuild` fails for lack of a version).
   still sees the new build as an upgrade.
 - The five packages are tied to one version-release, and the script always
   builds all five together. `rpms/` holds only the last build's five.
+- The tools built as RPMs print the package's version-release for
+  `--version` (e.g. `sdcompat-gen 0.1.0-1.20261021073517.gc8aabf8.fc45`);
+  built from source they print the commit, like `0.1.0 (git c8aabf8)`.
 - To set the release yourself, e.g. for a published release:
   `SDCOMPAT_RELEASE=1 packages/build-rpms.sh`.
 
@@ -67,7 +70,7 @@ After the Rust code changed, rebuild and upgrade:
 git pull                                            # or make your change and commit it
 packages/build-rpms.sh
 sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm
-rpm -q sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd   # which build is installed
+sdcompat --version                                  # which build is installed
 ```
 
 On a running s6 boot, the new sdcompatd is used once the daemon restarts

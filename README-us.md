@@ -40,6 +40,7 @@ on its own, and the core works without them.
 | `sdcompat-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. |
 | `sdcompat-timers` | `timer-run`, `path-run` | Runs one `.timer` (computes elapses) or `.path` unit (inotify) as an s6 longrun and asks the daemon to start the unit. |
 | `sdcompat` | any of the above | The command users know (`/usr/bin/sdcompat`): runs the tool that handles the command, so `sdcompat reload` still works. |
+| | `--version` | This build and each installed tool's build. Says so and exits 1 when the core tools are from different builds. Each tool also has `--version`. |
 
 Each core tool is its own RPM package, and the packages depend on each other
 with `Requires`. The source stays in the one workspace; the library crates
@@ -425,6 +426,7 @@ crates/                    the core (one Cargo workspace)
     socket.rs              socket units (sd_listen_fds)
     execcmd.rs, conditions.rs   Exec*= command lines, Condition*/Assert*
   sdcompat-client/         small D-Bus client for the daemon
+  sdcompat-version/        the build's version for --version (RPM version-release or git commit)
   sdcompat-gen/            plan → s6-rc source, compile, s6-rc-update, report (tool sdcompat-gen)
   sdcompat-runner/         exec environment, readiness, restart policy (tool sdcompat-runner)
   sdcompat-timers/         timer and path unit runners (tool sdcompat-timers)

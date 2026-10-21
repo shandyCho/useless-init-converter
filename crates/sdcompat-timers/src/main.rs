@@ -14,6 +14,7 @@ use config::Config;
 
 const USAGE: &str = "\
 usage: sdcompat-timers [--config PATH] COMMAND [--config PATH] (-- UNIT | --unit-hex HEX)
+       sdcompat-timers --version
 
   timer-run    compute the timer's next elapse, sleep, start its unit; repeat
   path-run     watch the .path unit's paths with inotify, start its unit
@@ -65,6 +66,10 @@ fn main() {
     };
     if matches!(cmd.as_str(), "help" | "--help" | "-h") {
         print!("{USAGE}");
+        exit(0);
+    }
+    if sdcompat_version::wanted(&cmd) {
+        sdcompat_version::print("sdcompat-timers");
         exit(0);
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));

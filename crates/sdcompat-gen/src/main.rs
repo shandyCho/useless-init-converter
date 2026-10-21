@@ -7,6 +7,7 @@ use sdcompat_install as install;
 
 const USAGE: &str = "\
 usage: sdcompat-gen [--config PATH] COMMAND [ARGS]
+       sdcompat-gen --version
 
 Database:
   reload [--no-update]     translate units, compile the s6-rc database and
@@ -47,6 +48,10 @@ fn main() {
         eprint!("{USAGE}");
         exit(1);
     };
+    if sdcompat_version::wanted(&cmd) {
+        sdcompat_version::print("sdcompat-gen");
+        exit(0);
+    }
     let rest = &args[1..];
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
 

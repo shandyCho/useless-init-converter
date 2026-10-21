@@ -15,6 +15,7 @@ use config::Config;
 
 const USAGE: &str = "\
 usage: sdcompat-runner [--config PATH] COMMAND [--config PATH] [--mainpid N] (-- UNIT | --unit-hex HEX) [ARGS]
+       sdcompat-runner --version
 
   run          longrun `run` script; ends by exec()ing the main process
   finish CODE SIG
@@ -96,6 +97,10 @@ fn main() {
     };
     if matches!(cmd.as_str(), "help" | "--help" | "-h") {
         print!("{USAGE}");
+        exit(0);
+    }
+    if sdcompat_version::wanted(&cmd) {
+        sdcompat_version::print("sdcompat-runner");
         exit(0);
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));

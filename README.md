@@ -39,6 +39,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 | `sdcompat-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. |
 | `sdcompat-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
 | `sdcompat` | 위의 모든 명령 | 사용자가 쓰는 명령(`/usr/bin/sdcompat`)입니다. 명령을 맡은 도구를 실행하므로 `sdcompat reload`도 그대로 동작합니다. |
+| | `--version` | 자기 빌드와 설치된 각 도구의 빌드를 보여 줍니다. 본체 도구가 서로 다른 빌드이면 그렇게 표시하고 1로 끝납니다. 도구마다 `--version`도 있습니다. |
 
 본체 도구는 각각 RPM 패키지가 되고, 패키지끼리 `Requires`로 의존합니다. 소스는 작업공간
 하나에 그대로 있으며, 라이브러리 크레이트(`sdcompat-base`, `-install`, `-exec`, `-client`)는
@@ -400,6 +401,7 @@ crates/                    본체 (Cargo 작업공간 하나)
     socket.rs              소켓 유닛(sd_listen_fds)
     execcmd.rs, conditions.rs   Exec*= 명령줄, Condition*/Assert*
   sdcompat-client/         데몬용 작은 D-Bus 클라이언트
+  sdcompat-version/        --version이 보여 주는 빌드 버전(RPM 버전-릴리스 또는 git 커밋)
   sdcompat-gen/            계획 → s6-rc 소스, 컴파일, s6-rc-update, 보고서 (도구 sdcompat-gen)
   sdcompat-runner/         실행 환경, 준비 완료 신호, 재시작 정책 (도구 sdcompat-runner)
   sdcompat-timers/         타이머와 path 유닛 러너 (도구 sdcompat-timers)

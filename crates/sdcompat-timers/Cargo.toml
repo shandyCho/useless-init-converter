@@ -5,6 +5,7 @@ edition.workspace = true
 description = "Run .timer and .path units under s6 (sdcompat-timers)"
 
 [dependencies]
+sdcompat-version.workspace = true
 sdcompat-base.workspace = true
 sdcompat-client.workspace = true
 zbus.workspace = true

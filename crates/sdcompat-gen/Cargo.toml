@@ -5,6 +5,7 @@ edition.workspace = true
 description = "Translate systemd units into an s6-rc database (sdcompat-gen)"
 
 [dependencies]
+sdcompat-version.workspace = true
 sdcompat-base.workspace = true
 sdcompat-install.workspace = true
 libc.workspace = true

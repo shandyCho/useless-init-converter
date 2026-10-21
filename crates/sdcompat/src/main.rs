@@ -9,6 +9,7 @@ use std::process::{exit, Command};
 
 const USAGE: &str = "\
 usage: sdcompat [--config PATH] COMMAND [ARGS]
+       sdcompat --version     this build and the installed tools' builds
 
 Each command is handled by one sdcompat tool (in /usr/libexec/sdcompat):
 
@@ -50,6 +51,48 @@ fn tool_path(name: &str) -> PathBuf {
     PathBuf::from("/usr/libexec/sdcompat").join(name)
 }
 
+/// The core tools, whose builds should match this one.
+const CORE_TOOLS: [&str; 4] = ["sdcompat-gen", "sdcompat-runner", "sdcompat-timers", "sdcompatd"];
+/// The standalone tools: separate projects with their own versions.
+const STANDALONE: [&str; 3] = ["sdcompat-fdstore", "sdcompat-journal-relay", "sdcompat-notify"];
+
+/// `sdcompat --version`: this build, each core tool's (from its own
+/// --version) and whether the standalone tools are installed. Exits 1 when a
+/// core tool is missing or from another build.
+fn version() -> ! {
+    sdcompat_version::print("sdcompat");
+    let mut ok = true;
+    for tool in CORE_TOOLS {
+        let path = tool_path(tool);
+        let out = Command::new(&path).arg("--version").output();
+        let line = match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            Ok(_) => format!("{tool} (no --version: older than this build)"),
+            Err(_) => format!("{tool} not installed ({})", path.display()),
+        };
+        let theirs = line.strip_prefix(tool).map(str::trim);
+        if theirs == Some(sdcompat_version::VERSION) {
+            println!("  {line}");
+        } else {
+            ok = false;
+            if theirs.is_some_and(|v| !v.starts_with('(') && !v.starts_with("not ")) {
+                println!("  {line}  (differs from sdcompat)");
+            } else {
+                println!("  {line}");
+            }
+        }
+    }
+    for tool in STANDALONE {
+        let path = tool_path(tool);
+        if path.is_file() {
+            println!("  {tool} installed (standalone)");
+        } else {
+            println!("  {tool} not installed (standalone, optional)");
+        }
+    }
+    exit(if ok { 0 } else { 1 })
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // --config PATH may come before the command; keep it for the tool.
@@ -64,6 +107,9 @@ fn main() {
     if matches!(cmd.as_str(), "help" | "--help" | "-h") {
         print!("{USAGE}");
         exit(0);
+    }
+    if sdcompat_version::wanted(cmd) {
+        version();
     }
     let Some((tool, with_cmd)) = tool_for(cmd) else {
         eprintln!("sdcompat: unknown command {cmd} (see sdcompat help)");

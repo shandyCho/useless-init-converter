@@ -29,9 +29,12 @@ and environment a unit asks for, then executes its commands.
 %autosetup -n sdcompat-%{version}
 
 %build
+# --version prints the package's version-release.
+export SDCOMPAT_BUILD=%{version}-%{release}
 cargo build --release --offline -p sdcompat-runner
 
 %check
+export SDCOMPAT_BUILD=%{version}-%{release}
 cargo test --release --offline -p sdcompat-runner
 
 %install

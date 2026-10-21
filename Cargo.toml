@@ -10,6 +10,7 @@ edition = "2021"
 
 [workspace.dependencies]
 sdcompat-base = { path = "crates/sdcompat-base" }
+sdcompat-version = { path = "crates/sdcompat-version" }
 sdcompat-install = { path = "crates/sdcompat-install" }
 sdcompat-exec = { path = "crates/sdcompat-exec" }
 sdcompat-client = { path = "crates/sdcompat-client" }

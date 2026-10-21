@@ -431,6 +431,14 @@ install_sdcompat() {
     run install -Dm0644 "$DIST/selinux/sdcompat.cil" "$SHARE/selinux/sdcompat.cil"
 }
 
+# Show which builds are installed; the core tools must be from one build
+# (sdcompat --version exits 1 otherwise).
+check_versions() {
+    [ "$DRY" = 1 ] && { echo "  + $LIBEXEC/sdcompat --version"; return; }
+    "$LIBEXEC/sdcompat" --version | sed 's/^/  /'
+    [ "${PIPESTATUS[0]}" = 0 ] || warn "the sdcompat tools are not all from one build (see above): rebuild them together (--rebuild, or packages/build-rpms.sh and dnf upgrade)"
+}
+
 # set_conf_key KEY yes|no: "no" sets KEY=no in sdcompat.conf, "yes" removes
 # the setting (both default to yes). Other lines are kept.
 set_conf_key() {
@@ -760,6 +768,7 @@ main() {
     install_packages
     install_skarnet
     install_sdcompat
+    check_versions
     configure_sdcompat
     enable_units
     build_database

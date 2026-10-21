@@ -30,9 +30,12 @@ to it (s6-rc-update). Also enable, disable, mask and preset units.
 %autosetup -n sdcompat-%{version}
 
 %build
+# --version prints the package's version-release.
+export SDCOMPAT_BUILD=%{version}-%{release}
 cargo build --release --offline -p sdcompat-gen
 
 %check
+export SDCOMPAT_BUILD=%{version}-%{release}
 cargo test --release --offline -p sdcompat-gen
 
 %install
