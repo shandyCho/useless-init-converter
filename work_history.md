@@ -2943,3 +2943,69 @@ identified (also for source installs, which have no rpm -q).
 - RPMs rebuilt; unpacked, `sdcompat --version` printed
   `0.1.0-1.20261021073517.gc8aabf8.dirty.fc45` for all five, exit 0.
 - bash -n and shellcheck -S warning clean; setup-fedora.sh --dry-run OK.
+
+## Session: 2026-10-21: merged into main; Fedora checklist
+
+`split-projects` fast-forwarded into main (`26a8bd2`). Not pushed (owner
+pushes; main was 67 commits ahead of origin/main at that point). The
+`split-projects` branch is kept.
+
+### Current state
+
+main has the split (core crates + standalone tools), one RPM per core tool,
+generated RPM releases and `sdcompat --version`. None of it has run on
+Fedora yet, and the `c5f2e06` enforcing fixes have not been on a boot.
+
+### Next steps: Fedora checklist (in order; stop at the first failure)
+
+0. Prepare (systemd boot): `git pull`, main at `26a8bd2`. Skarnet RPMs in
+   ~/rpmbuild-skarnet/rpms (else `dist/rpm/build-skarnet-rpms.sh`).
+1. Build: `packages/build-rpms.sh`; five RPMs named
+   `…-0.1.0-1.<time>.g26a8bd2.fc4x…`, no `.dirty`. On failure:
+   ~/rpmbuild-sdcompat/<package>.log.
+2. Install (still systemd): `sudo dnf install ~/rpmbuild-sdcompat/rpms/*.rpm`.
+   - dnf resolves the Requires (the first real test of them);
+   - `sdcompat --version; echo $?`: four core tools on one build, exit 0;
+   - `rpm -q sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd`;
+   - `semodule -l | grep sdcompat`; `ls -Z /usr/libexec/sdcompat/` all
+     init_exec_t;
+   - `ls /etc/sdcompat/*.rpmnew /etc/sdcompat/s6/*/*.rpmnew`: files from the
+     earlier source install stay, new ones land as .rpmnew; note which.
+3. `dist/setup-fedora.sh --dry-run --rpms=$HOME/rpmbuild-skarnet/rpms`, then
+   with sudo (journal/resolved choices are kept from sdcompat.conf). Output:
+   "sdcompat RPMs are installed, using them"; the `sdcompat --version`
+   lines with no mixed-build warning; standalone tools built and installed
+   from source; build_database without errors.
+4. Boot "Fedora (s6 + sdcompat)" enforcing (remove `enforcing=0` with `e`
+   in GRUB if the entry has it).
+   - `getenforce` Enforcing; `/proc/cmdline` without enforcing=0;
+     `sdcompat --version` exit 0; `systemctl --failed` empty.
+   - `c5f2e06` fixes: `hostnamectl` works, and after hostnamed's ~30 s idle
+     exit `systemctl status systemd-hostnamed` is not `failed (Result:
+     exit-code)`; `ls -Zd /run/uncaught-logs` init_var_run_t and
+     `sudo ls /run/uncaught-logs` shows rotated `@….s` files;
+     `sudo ausearch -m avc,user_avc,selinux_err -ts boot -i >
+     ~/avc-enforcing2.txt`: no s6-log `rename`, no systemd_hostnamed_t
+     dbus denial (send the file either way).
+   - Split parts: `s6-svstat /run/service/sdcompatd
+     /run/service/sdcompat-fdstore` both up (and journal-relay with
+     JOURNAL=no); `grep -l sdcompat-runner /run/s6-rc/servicedirs/*/run |
+     wc -l` > 0 (the new database calls the runner).
+   - fd store: count `sudo ls /proc/$(pgrep -x sdcompat-fdstore)/fd | wc -l`,
+     `sudo s6-svc -r /run/service/sdcompatd`, count again: same; `systemctl
+     --failed` and `loginctl list-sessions` unchanged, GNOME session alive.
+     (NFileDescriptorStore is always 0 over D-Bus, so count the fds.)
+5. Upgrade (on the s6 boot): `packages/build-rpms.sh` again (new release),
+   `sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm` must upgrade, not say
+   "already installed"; `sdcompat --version` shows the new release, exit 0;
+   `sudo s6-svc -r /run/service/sdcompatd`; `systemctl --failed` empty.
+6. All clean: `sudo dist/setup-fedora.sh --enforcing
+   --rpms=$HOME/rpmbuild-skarnet/rpms` to drop enforcing=0 from the entry.
+
+Fallbacks: the default GRUB entry is the untouched systemd boot;
+`sdcompat.db=previous` on the s6 entry boots the previous database. Useful
+to collect on a failure: that step's output, ~/avc-enforcing2.txt,
+`sudo tail -50 /run/uncaught-logs/current`.
+
+Still open from before: JOURNAL=no output loss; on-demand socket
+activation; beside3 sandbox flake.
