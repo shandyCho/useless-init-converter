@@ -3722,3 +3722,61 @@ still has the var_run_t live dir.
    s6; `ls -dZ /run/s6-rc:*` must show init_var_run_t; daemon-reload
    must work; then the power-off retest of `ebcebda`/`526d60d`.
 3. Earlier next steps unchanged.
+
+## Session: 2026-10-21: secilc check; sudo slow (stuck logind user 0)
+
+### secilc
+
+The owner installed secilc. The installed modules are root-only, so
+sdcompat.cil was compiled against a stub policy declaring its types and
+classes (scratchpad, not committed): compiles; the generated
+file_contexts has `/run/s6-rc(:[^/]+)?(/.*)?  ...init_var_run_t:s0`.
+
+### sudo slow on the s6 boot
+
+Read as the user (no root), 22:18:
+- sudo before authentication is fast (`sudo -n true` 6 ms, NSS lookups
+  1-4 ms). sudo's PAM session includes pam_systemd (system-auth), which
+  asks logind for a session for root; logind starts user-runtime-dir@0
+  and user@0 and replies once their jobs finish.
+- logind: user 0 `State=opening` since 21:52:55 (the owner's `sudo
+  systemctl daemon-reload`), RUNTIME_DIR_JOB=job/71, SERVICE_JOB=job/72.
+- sdcompatd `systemctl list-jobs`: 68 user-runtime-dir@0 stop running
+  (since 21:52:52), 71 user-runtime-dir@0 start waiting, 72 user@0 start
+  running. Nothing has finished since.
+- Job 68 is blocked in dyn_stop on `s6-svunlink /run/service
+  user@0.service` (pid 50082, child of sdcompatd, since 21:53:08). That
+  waits with no timeout for user@0's s6-supervise to exit; it only sends
+  `x` (no `d`). The supervisor alive is pid 49208, started 21:52:55, i.e.
+  the user@0 instance started for the second sudo, not the one being
+  stopped. The /run/service link is gone; /run/sdcompat/dyn/user@0.service
+  is still there; no user@0 runner or systemd --user process is left.
+- user@0's log: starts/stops with each sudo until 21:52:55 (start) and
+  21:53:09 (exit.target); no start since, although the owner ran sudo
+  several times (logind won't start a user that is still "opening").
+- Inference: every sudo since 21:52:55 waits for logind's CreateSession
+  reply, which waits for jobs 71/72 → until pam_systemd's call times out.
+  Not measured (needs `sudo -v; time sudo true`).
+- Not explained: job 72 got user@0 running at 21:52:55.96 although its
+  dyn_start first calls start_any(user-runtime-dir@0), which takes that
+  unit's lock, held by job 68 since 21:52:52. Either the lock wasn't held
+  then or user@0 was started by another path. Needs sdcompatd's log
+  (/run/uncaught-logs, root).
+- Pattern: logind stops user@0 + user-runtime-dir@0 10 s after a sudo
+  session ends; a new sudo during that stop (two sudo ~10-13 s apart)
+  overlaps a stop and a start of the same instances. dyn_stop stops
+  dependents without their unit lock, and s6-svunlink without -t can wait
+  forever on an instance it didn't create.
+
+### Next steps
+
+1. Owner: `sudo -v; time sudo true`; `sudo s6-svstat
+   /run/sdcompat/dyn/user@0.service /run/sdcompat/dyn/user@0.service/log`;
+   `sudo sh -c 'grep -h "21:5[23]:" /run/uncaught-logs/@*
+   /run/uncaught-logs/current | grep -v dbus-daemon'`.
+2. Unstick: `sudo s6-svc -dx /run/sdcompat/dyn/user@0.service` (the
+   supervisor exits, s6-svunlink returns, job 68 then 71/72 finish).
+3. Fix in sdcompatd once the order is known: serialize a dependent's stop
+   with its own jobs (lock order!), give s6-svunlink a timeout, and don't
+   unlink an instance a later start created. Reproduce in the sandbox
+   (inst@/prep@ with a slow stop and a start during it).
