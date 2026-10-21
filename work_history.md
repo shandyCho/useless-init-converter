@@ -3912,3 +3912,53 @@ that error comes, so the retry starts from a half-updated state.
 3. Reproduce the s6rc-fdholder left down after a failed-then-retried
    s6-rc-update (sandbox daemon-reload); sdcompat-gen's retry may need to
    check s6rc-fdholder (and s6rc-oneshot-runner) afterwards.
+
+## Session: 2026-10-22: D-Bus unit path traversal fixed
+
+From the whole-project security review (2026-10-21): the only candidate,
+filtered out at confidence 5/10 because nothing sensitive was found to
+read, but a real missing check. The owner asked to fix it.
+
+### Finding
+
+unit_from_path checked for '/' before bus_label_unescape, so `_2e_2e_2f`
+decoded to "../". Loader::load keeps an invalid name as unit.id (load
+state bad-setting), and state::for_unit = RUN_DIR/units/ID, so
+Properties.Get/GetAll (unauthenticated, as in systemd) made the root
+daemon read the state-key files (status as StatusText for a .service id,
+result, mainpid, nrestarts, exec-main-*, *-enter, invocation, cgroup) of
+any directory, following symlinks (/tmp/x.service -> /root/dir works).
+GetUnit returned a path for such names, ListUnitsByNames listed them,
+GetUnitProcesses read their cgroup. Read-only; no root-only file with
+those names that matters was found. Confirmed in the sandbox: with the
+old daemon the planted $R/leak.service/status came back over D-Bus.
+
+### Changes (`5ab3304`)
+
+- unit_from_path: decoded name must pass loader::parse_name.
+- GetUnit, GetUnitProcesses: NoSuchUnit "Unit X not loaded." (systemd);
+  ListUnitsByNames drops invalid names (systemd skips them); job methods,
+  KillUnit, ResetFailedUnit, AttachProcessesToUnit, SetUnitProperties:
+  InvalidArgs "Unit name X is not valid." (LoadUnit already did).
+- util::path_component (sdcompat-base): bus-label escapes a name that is
+  empty, ".", "..", or contains '/' or NUL; state::for_unit and
+  cgroup::unit_cgroup_dir use it, so even an unchecked caller stays
+  inside RUN_DIR/units and the slice's cgroup.
+- Unit test util::one_component; sandbox "errors" section: object path,
+  GetUnit, ListUnitsByNames, GetUnitProcesses, StartUnit with
+  "../../leak.service".
+- Not changed: AttachProcessesToUnit's subcgroup argument may contain
+  ".." (privileged callers only; systemd requires a normalized path).
+
+### Tests
+
+cargo build, cargo test, standalone tests pass. Sandbox 203/203,
+SANDBOX_JOURNAL=no 208/208, SANDBOX_FDSTORE=no 203/203. With the crates/
+changes stashed: 5 failures (the object path returned the planted
+StatusText). bash -n and shellcheck -S warning on check.sh.
+
+### Current state / Next steps
+
+Unchanged from the 2026-10-21 entries (owner: live s6-rc repair, label
+check, RPMs, reboot, power-off retest; reload flake; the "Not changed"
+dyn_stop items).
