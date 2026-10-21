@@ -3661,3 +3661,64 @@ reload. Avoid daemon-reload and dnf transactions until fixed.
    off, send the logs listed in the earlier entry). Needs a working
    live update or a fresh boot after the RPM upgrade.
 4. Earlier next steps unchanged.
+
+## Session: 2026-10-21: s6-rc-update cause found (SELinux labels)
+
+The owner sent the catch-all log and AVCs (taken before the repair).
+
+### Findings
+
+- First error at both reloads (21:34:37, 21:52:56): `s6-rc-update:
+  fatal: unable to rollback /run/s6-rc/compiled/servicedirs/
+  s6rc-oneshot-runner into /run/s6-rc:s6-rc-update:XXX/servicedirs/
+  s6rc-oneshot-runner: Permission denied`. AVC: `denied { rename }
+  comm="s6-rc-update" name="run" scontext=init_t tcontext=var_run_t
+  tclass=file`, twice (copy_online, then its rollback).
+- supervise/control exists (the ENOENT guess in the previous entry was
+  wrong: block() worked; the first file rename was denied, errno EACCES).
+- Labels: the boot's live dir and everything in it is var_run_t (state is
+  init_var_run_t, rewritten since); the runtime-created update dir is
+  init_var_run_t. init_t's unnamed dir/file transitions give
+  init_var_run_t in /run, but `early` runs `restorecon -R /dev /run`
+  after s6-rc-init, and /run/s6-rc* had no filecon, so it became
+  var_run_t. sesearch: init_t on var_run_t:file has no create/rename/
+  setattr; on init_var_run_t it has all of them (as for /run/systemd).
+- Every live update on an enforcing s6 boot hit this; it had never been
+  exercised under enforcing (earlier RPM upgrades didn't reach
+  s6-rc-update or ran permissive).
+- After each failure s6-svscan warned every 4 s `unable to stat
+  s6rc-oneshot-runner` (the dangling /run/service link).
+
+### Changes (`a1eb405`)
+
+- sdcompat.cil: `(filecon "/run/s6-rc(:[^/]+)?(/.*)?" any ...
+  init_var_run_t)`; the regex was checked against sample paths (matches
+  /run/s6-rc, the init/update dirs and their contents, not /run/s6-rcx or
+  /run/service). Not compiled here (no secilc, needs root to load).
+- setup-fedora.sh setup_selinux: restorecon -R /run/s6-rc and
+  /run/s6-rc:* on a running boot.
+- sdcompat-gen: the error returned is the first s6-rc-update error (with
+  the last one appended when different); no retry after `unable to
+  rollback`.
+
+### Tests
+
+cargo build, cargo test pass; sandbox 192/192. bash -n and shellcheck
+-S warning on setup-fedora.sh. The sandbox doesn't use SELinux, so the
+policy change is untested.
+
+### Current state
+
+Cause known and fixed in the policy, not yet loaded. The running boot
+still has the var_run_t live dir.
+
+### Next steps
+
+1. Owner, on the running boot: repair (mv s6rc-oneshot-runner back, rm
+   the leftover update dir), `sudo chcon -R -t init_var_run_t
+   /run/s6-rc:s6-rc-init:WvK3XB`, then `sudo systemctl daemon-reload`:
+   must succeed (confirms the diagnosis without new RPMs).
+2. Then RPMs, dnf upgrade, rerun setup (loads the module), reboot into
+   s6; `ls -dZ /run/s6-rc:*` must show init_var_run_t; daemon-reload
+   must work; then the power-off retest of `ebcebda`/`526d60d`.
+3. Earlier next steps unchanged.
