@@ -222,6 +222,7 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | 거부된 BPF 프로그램 | `journalctl -b -g 'not enforced'`(`JOURNAL=no`이면 `sudo grep 'not enforced' /var/log/messages`) | 아무것도 없음 |
 | `DevicePolicy=strict`인 polkit | `pkaction \| head -3` | 액션 ID 세 개(polkitd가 응답함) |
 | `s6` 명령 | `s6 live status \| head` | `up`인 서비스들, 예: `NetworkManager.service/longrun//up/explicit` |
+| 이전 종료 | s6에서 전원을 끄고 다시 s6로 부팅한 뒤 `sudo ls -l /var/log/sdcompat/last-shutdown-*.log; sudo grep -ci denied /var/log/sdcompat/last-shutdown-*.log` | 두 파일 모두 전원을 끈 시각의 것이고 거부(denied)는 `0`입니다(아니면 파일을 보내 주세요). 전원 끄기가 25초 이상이 아니라 몇 초 걸렸습니다 |
 | 버스와 userdb 레이블 | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t`와 `systemd_userdbd_runtime_t` |
 | 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |
 | 실패한 유닛 | `systemctl --failed` | 없는 것이 좋습니다. 있으면 적어 두세요 |

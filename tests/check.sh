@@ -632,6 +632,19 @@ fi
 echo "== shutdown stops on-demand oneshots"
 # As rc.shutdown: the marker, then s6-rc takes sdcompatd down (SIGTERM).
 : > "$R/run/shutting-down"
+# Starts are refused at once: rc.shutdown holds the s6-rc lock, and a D-Bus
+# caller would otherwise wait for the bus's activation timeout.
+t0=$(date +%s)
+$B --timeout=10 call org.example.Late / org.example.Late Ping >/dev/null 2>&1
+t1=$(date +%s)
+[ $((t1 - t0)) -lt 5 ] && ok "activation during shutdown fails at once" || bad "activation during shutdown took $((t1 - t0)) s"
+if call StartUnit ss late.service replace >/dev/null; then
+    bad "StartUnit accepted during shutdown"
+else
+    grep -q "is destructive" "$W/last-error" && ok "StartUnit refused during shutdown" || bad "StartUnit failed otherwise: $(cat "$W/last-error")"
+fi
+sleep 0.5
+[ ! -e "$R/late.out" ] && ok "nothing started during shutdown" || bad "late.service started during shutdown"
 kill "$(cat "$W/daemon.pid")"
 tries=30
 while [ $tries -gt 0 ] && ! grep -qx "down c" "$R/prep.out"; do tries=$((tries - 1)); sleep 0.2; done

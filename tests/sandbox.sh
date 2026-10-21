@@ -450,6 +450,17 @@ cat > "$U/act.service" <<EOF
 [Service]
 ExecStart=/bin/sh -c 'echo activated >> $R/act.out; exec sleep 1000'
 EOF
+# Activated only during check.sh's shutdown phase, where it must be refused.
+cat > "$W/dbus-services/org.example.Late.service" <<EOF
+[D-BUS Service]
+Name=org.example.Late
+Exec=/bin/false
+SystemdService=late.service
+EOF
+cat > "$U/late.service" <<EOF
+[Service]
+ExecStart=/bin/sh -c 'echo started >> $R/late.out; exec sleep 1000'
+EOF
 
 # --- units wanted by devices (udev SYSTEMD_WANTS), from a fake udev database ---
 mkdir -p "$W/udev/tags/systemd" "$W/udev/data"

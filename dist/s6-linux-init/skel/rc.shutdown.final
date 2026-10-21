@@ -1,4 +1,16 @@
 #!/bin/sh
 # Runs after all processes are killed, right before filesystems are
-# unmounted and the machine halts. Nothing to do by default.
+# unmounted and the machine halts.
+# Keep what this shutdown printed on the console: s6's catch-all log
+# (copied to the console) is on tmpfs, and SELinux denials go only to the
+# kernel log once auditd is down. Root-only: they hold every service's
+# stderr.
+d=/var/log/sdcompat
+if [ -d "$d" ]; then
+    umask 077
+    last=$(ls /run/uncaught-logs/@*.s 2>/dev/null | tail -n 1)
+    cat $last /run/uncaught-logs/current > "$d/last-shutdown-console.log" 2>/dev/null
+    dmesg > "$d/last-shutdown-kernel.log" 2>/dev/null
+    sync
+fi
 exit 0

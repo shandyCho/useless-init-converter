@@ -49,6 +49,7 @@ const E_NOT_APPLICABLE: &str = "org.freedesktop.systemd1.JobTypeNotApplicable";
 const E_INACTIVE: &str = "org.freedesktop.systemd1.UnitInactive";
 const E_ONLY_BY_DEP: &str = "org.freedesktop.systemd1.OnlyByDependency";
 const E_NO_UNIT_FOR_PID: &str = "org.freedesktop.systemd1.NoUnitForPID";
+const E_DESTRUCTIVE: &str = "org.freedesktop.systemd1.TransactionIsDestructive";
 const E_ACCESS: &str = "org.freedesktop.DBus.Error.AccessDenied";
 const E_UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
 const E_UNKNOWN_OBJECT: &str = "org.freedesktop.DBus.Error.UnknownObject";
@@ -456,6 +457,16 @@ impl Daemon {
             LoadState::Loaded => {}
         }
         let starts = matches!(jtype, "start" | "restart" | "reload-or-restart");
+        // rc.shutdown's `s6-rc change` holds the s6-rc lock until everything
+        // is down, so a start would wait for it; a D-Bus caller (wireplumber
+        // stopping in the user manager) then hung for the bus's 25 s
+        // activation timeout and delayed the shutdown. systemd refuses here.
+        if starts && self.cfg.run_dir.join("shutting-down").exists() {
+            return Err(err(
+                E_DESTRUCTIVE,
+                format!("Transaction for {id}/{jtype} is destructive (the system is shutting down)."),
+            ));
+        }
         if starts && self.kind_of(&id).is_none() && !self.cfg.is_excluded(&id) {
             if let Some(svc) = socket_service(&id, &unit) {
                 // Sockets are bound by their service's runner: record this
