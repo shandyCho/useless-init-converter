@@ -34,6 +34,12 @@
 ; logger retries forever under enforcing and stops reading its fifo.
 (filecon "/run/uncaught-logs(/.*)?" any (system_u object_r init_var_run_t ((s0) (s0))))
 (typetransition init_t var_run_t dir "uncaught-logs" init_var_run_t)
+;
+; /var/lib/sdcompat holds the s6-rc databases, which rc.init regenerates at
+; boot (sdcompat-gen, init_t) and then swaps in by renaming symlinks. init_t
+; may create symlinks in var_lib_t but not rename or unlink them, nor remove
+; old database directories; label it like systemd's /var/lib/systemd.
+(filecon "/var/lib/sdcompat(/.*)?" any (system_u object_r init_var_lib_t ((s0) (s0))))
 
 ; What the s6 tree does that systemd does not, so the policy has no rule for
 ; it: s6-linux-init's catch-all logger reads a fifo in /run/service, and the

@@ -85,12 +85,14 @@ if [ -x /usr/sbin/semodule ]; then
     semodule -i %{_datadir}/sdcompat/selinux/sdcompat.cil || :
     restorecon $(rpm -ql execline s6 s6-rc s6-linux-init 2>/dev/null | grep '^/usr/') \
         %{_libexecdir}/sdcompat/* 2>/dev/null || :
+    [ -d /var/lib/sdcompat ] && restorecon -R /var/lib/sdcompat || :
 fi
 
 %postun
 if [ "$1" -eq 0 ] && [ -x /usr/sbin/semodule ]; then
     semodule -r sdcompat 2>/dev/null || :
     restorecon $(rpm -ql execline s6 s6-rc s6-linux-init 2>/dev/null | grep '^/usr/') 2>/dev/null || :
+    [ -d /var/lib/sdcompat ] && restorecon -R /var/lib/sdcompat || :
 fi
 
 %files

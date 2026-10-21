@@ -3009,3 +3009,53 @@ to collect on a failure: that step's output, ~/avc-enforcing2.txt,
 
 Still open from before: JOURNAL=no output loss; on-demand socket
 activation; beside3 sandbox flake.
+
+## Session: 2026-10-21: failed s6 boot after the RPM install; /var/lib/sdcompat label
+
+The owner reported the s6 boot failing after installing the new RPMs and
+suspected SELinux. Investigated from the systemd boot, without root.
+
+### Findings
+
+- RPMs installed (13:13), skarnet RPMs reinstalled and setup-fedora.sh run
+  (13:15); `sdcompat --version` exit 0, all on `g018a2df`. Labels correct:
+  /usr/libexec/sdcompat/* and the skarnet programs init_exec_t, module loaded
+  (its filecons are in file_contexts).
+- The failed boot (~13:17:56, PID 1072) wrote nothing to disk except in
+  /var/lib/sdcompat: rc.init's `sdcompat-gen reload` built a new database,
+  created `.previous.tmp`, `.compiled.previous.tmp`, `.current.tmp`, and none
+  were renamed. No journal, no /var/log/sdcompat or audit writes from that
+  boot, so its denials are lost (/run/uncaught-logs is tmpfs).
+- Cause of the failed swap (sesearch on the loaded policy): init_t has only
+  `{ create write }` on var_lib_t lnk_file (no rename/unlink) and no rmdir
+  on var_lib_t dirs, so under enforcing the symlink swap and the database GC
+  fail. New dirs init_t makes there get init_var_lib_t by the default
+  type_transition, hence the mixed labels. init_t fully manages
+  init_var_lib_t (systemd's /var/lib/systemd). /var/log/sdcompat is fine
+  (var_log_t files managed, dirs via the mountpoint attribute).
+- This is probably not what stopped the boot: rc.init carries on with the
+  existing `compiled` link (a valid, identical database), and the 01:57
+  enforcing boot most likely hit the same failure silently and came up. The
+  real cause of this failure is still unknown.
+
+### Changes
+
+- sdcompat.cil: `/var/lib/sdcompat(/.*)?` init_var_lib_t.
+- sdcompat.spec %post/%postun: `restorecon -R /var/lib/sdcompat`.
+  setup-fedora.sh already restorecons it.
+
+### Tests
+
+Not loaded (no root here): paren balance checked, init_var_lib_t exists in
+the loaded policy.
+
+### Next steps
+
+1. Rebuild and install the RPMs, then `ls -Zd /var/lib/sdcompat
+   /var/lib/sdcompat/*`: init_var_lib_t. The leftover `.*.tmp` links are
+   harmless (removed on the next swap).
+2. Find out what the screen showed, and whether enforcing=0 was removed.
+   Boot the s6 entry permissive (boot-options still has enforcing=0): if it
+   comes up, collect `sudo ausearch -m avc,user_avc,selinux_err -ts boot -i`;
+   if not, tty9 and `/run/uncaught-logs/current`. Also try
+   `sdcompat.db=previous`.
