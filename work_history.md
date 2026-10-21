@@ -3135,3 +3135,45 @@ already accepted.
    `@….s` file appears. Also an enforcing boot with JOURNAL=yes.
 3. Still open: JOURNAL=no output loss; on-demand socket activation;
    beside3 sandbox flake.
+
+## Session: 2026-10-21: memcompare results, s6 vs systemd
+
+Owner ran `sudo tests/memcompare.sh snap` on both boots (s6 15:56, 414 s
+up, JOURNAL=no; systemd 17:13, 419 s up). Files in ~/sdcompat-mem. No
+code changed.
+
+- used (as free): s6 1280 MiB, systemd 1069 MiB, so s6 uses ~211 MiB
+  more; total-available differs by 243 MiB. PSS of all processes: 1086
+  vs 913 (464 vs 114 user processes).
+- Where it goes (PSS):
+  - The s6 stack: 258 s6-supervise 32.5, 26 sdcompat-runner 31.9,
+    sdcompatd 7.4, 9 sdcompat-timers 3.9, 51 s6-log 6.2, journal relay
+    2.0: ~84 MiB, against systemd PID 1 11.0 + journald 25.7 + resolved,
+    userdbd, oomd, homed, machined, userwork ~11. Net ~35-40 MiB.
+  - Plus the kernel cost of ~350 extra processes: PageTables +19,
+    SUnreclaim +22, KernelStack +7 MiB.
+  - Socket-activated daemons started at boot (no on-demand activation):
+    iscsid, iscsiuio, virtnetworkd, virtlogd, virtlockd, dmeventd,
+    2 dnsmasq: ~36 MiB, and iscsid/iscsiuio's mlockall is the whole
+    Mlocked 22.6 MiB (Unevictable +22.6).
+  - packagekitd 100 MiB ran only in the s6 snapshot: GNOME Software's
+    refresh timing, not the init.
+  - 12 of the runners hold ~1.9 MiB anon each, the rest ~0.2 MiB; not
+    looked into.
+- Found:
+  - **No swap on the s6 boot**: systemd has zram0 (8 GiB, from
+    zram-generator); s6 has none. Not a RAM cost but a missing feature.
+  - **Two rsyslogd on the s6 boot** (PIDs 1985 and 6079, the second late):
+    probably the s6 `syslog` service plus Fedora's enabled
+    rsyslog.service from the unit db. Not checked (now on systemd).
+  - Shmem +17 MiB (tmpfs) on s6 is not explained.
+- The logging rows are not like for like: s6 was JOURNAL=no.
+
+### Next steps
+
+1. On the next s6 boot: `ps -o pid,ppid,lstart,args -C rsyslogd`,
+   `systemctl status rsyslog.service`, `df -m /run /dev/shm /tmp`,
+   `swapon`; then decide whether to EXCLUDE rsyslog.service under
+   JOURNAL=no and to support zram-generator's config.
+2. If the gap matters: on-demand socket activation (Accept=no), or
+   EXCLUDE iscsid/iscsiuio/virt*.
