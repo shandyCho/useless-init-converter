@@ -3109,21 +3109,24 @@ RPMs built from `341d610`. Checked from that boot, without root.
   nothing (comm is truncated to 15 chars); use `pgrep -x sdcompat-fdstor`
   or the pid from `s6-svstat`. s6-svstat takes one service dir.
 
+- Step 5 (upgrade): done on the systemd boot before this one. dnf history
+  (times UTC) has two `dnf upgrade` transactions, 13:55 and 14:13 KST, each
+  altering 10 packages (5 out, 5 in); the second installed
+  `…20261021140308.g341d610`, which this boot runs. Not done: an upgrade
+  while running under s6 (scriptlets do not depend on the init, so low
+  risk; it will happen on the next upgrade from the s6 boot).
+
 ### Current state
 
-The s6 boot runs enforcing with the RPMs (`341d610`): checklist step 4
-passed. Steps 5 (dnf upgrade to a new release) and 6 (`setup-fedora.sh
---enforcing`) not done yet.
+The s6 boot runs enforcing with the RPMs (`341d610`): checklist steps 4 and
+5 passed. Step 6 (`setup-fedora.sh --enforcing`) not done yet.
 
 ### Next steps
 
-1. Checklist step 5: `packages/build-rpms.sh`, `sudo dnf upgrade
-   ~/rpmbuild-sdcompat/rpms/*.rpm`, `sdcompat --version` exit 0 on the new
-   release, `sudo s6-svc -r /run/service/sdcompatd`, `systemctl --failed`.
-2. Step 6: `sudo dist/setup-fedora.sh --enforcing
+1. Step 6: `sudo dist/setup-fedora.sh --enforcing
    --rpms=$HOME/rpmbuild-skarnet/rpms`, reboot, /proc/cmdline without
    enforcing=0.
-3. Optional: once /run/uncaught-logs/current passes ~100 KB, confirm an
+2. Optional: once /run/uncaught-logs/current passes ~100 KB, confirm an
    `@….s` file appears. Also an enforcing boot with JOURNAL=yes.
-4. Still open: JOURNAL=no output loss; on-demand socket activation;
+3. Still open: JOURNAL=no output loss; on-demand socket activation;
    beside3 sandbox flake.
