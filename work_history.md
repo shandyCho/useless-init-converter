@@ -3947,8 +3947,12 @@ old daemon the planted $R/leak.service/status came back over D-Bus.
 - Unit test util::one_component; sandbox "errors" section: object path,
   GetUnit, ListUnitsByNames, GetUnitProcesses, StartUnit with
   "../../leak.service".
-- Not changed: AttachProcessesToUnit's subcgroup argument may contain
-  ".." (privileged callers only; systemd requires a normalized path).
+- AttachProcessesToUnit's subcgroup (privileged callers only) could
+  contain ".." and leave the unit's cgroup; fixed afterwards in `0240e02`
+  at the owner's request: InvalidArgs "Control group path is not
+  normalized" for any ".", ".." or empty component, as systemd's
+  path_is_normalized(); a leading or trailing '/' is accepted. Unit test
+  subcgroup_normalized; sandbox check (fails without the fix).
 
 ### Tests
 
@@ -3956,6 +3960,8 @@ cargo build, cargo test, standalone tests pass. Sandbox 203/203,
 SANDBOX_JOURNAL=no 208/208, SANDBOX_FDSTORE=no 203/203. With the crates/
 changes stashed: 5 failures (the object path returned the planted
 StatusText). bash -n and shellcheck -S warning on check.sh.
+With `0240e02`: cargo test passes; sandbox 204/204, SANDBOX_JOURNAL=no
+209/209, SANDBOX_FDSTORE=no 204/204; without it the new check fails.
 
 ### Current state / Next steps
 
