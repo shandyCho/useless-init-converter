@@ -3116,16 +3116,21 @@ RPMs built from `341d610`. Checked from that boot, without root.
   while running under s6 (scriptlets do not depend on the init, so low
   risk; it will happen on the next upgrade from the s6 boot).
 
+- Step 6: the owner ran `setup-fedora.sh --enforcing` before this boot
+  (newest setup-backup 20261021-141441, /boot/loader/entries changed
+  14:14, boot 14:16 with no enforcing=0 on the cmdline). The entry itself
+  is root-only and was not read.
+
 ### Current state
 
-The s6 boot runs enforcing with the RPMs (`341d610`): checklist steps 4 and
-5 passed. Step 6 (`setup-fedora.sh --enforcing`) not done yet.
+The Fedora checklist is done: the s6 boot runs SELinux enforcing from the
+RPMs (`341d610`) with a permanent boot entry, and every AVC left is one
+already accepted.
 
 ### Next steps
 
-1. Step 6: `sudo dist/setup-fedora.sh --enforcing
-   --rpms=$HOME/rpmbuild-skarnet/rpms`, reboot, /proc/cmdline without
-   enforcing=0.
+1. If unsure the entry is permanent: on the next s6 boot without editing
+   in GRUB, `/proc/cmdline` must still lack enforcing=0.
 2. Optional: once /run/uncaught-logs/current passes ~100 KB, confirm an
    `@….s` file appears. Also an enforcing boot with JOURNAL=yes.
 3. Still open: JOURNAL=no output loss; on-demand socket activation;
