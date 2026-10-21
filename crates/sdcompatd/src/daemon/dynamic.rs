@@ -337,11 +337,16 @@ impl Daemon {
             .collect();
         for id in ids {
             let (_, unit) = self.load_unit(&id);
+            // The bus is still served: a StopUnit for the same unit must not
+            // run its ExecStop= a second time beside us.
+            let lock = self.unit_lock(&id);
+            let _guard = lock.lock().await;
             let t = std::time::Instant::now();
             self.dyn_stop(&id, &unit).await;
             // Says where a slow power-off waited (dependents like user@ included).
-            if t.elapsed() >= Duration::from_secs(2) {
-                eprintln!("sdcompatd: stopping {id} took {:.1} s", t.elapsed().as_secs_f64());
+            let took = t.elapsed();
+            if took >= Duration::from_secs(2) {
+                eprintln!("sdcompatd: stopping {id} took {:.1} s", took.as_secs_f64());
             }
         }
     }
