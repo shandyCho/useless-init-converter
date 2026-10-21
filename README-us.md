@@ -303,8 +303,8 @@ regenerating it at boot, add `sdcompat.reload=0`.
 
 What an s6 shutdown printed on the console is kept for the next boot in
 `/var/log/sdcompat/last-shutdown-console.log` (s6's catch-all log) and
-`last-shutdown-kernel.log` (the kernel log, including SELinux denials after
-auditd stops); both are root-only. Once shutdown begins, sdcompatd refuses
+`last-shutdown-kernel.log` (the kernel log from the start of the shutdown,
+including SELinux denials after auditd stops); both are root-only. Once shutdown begins, sdcompatd refuses
 new unit starts and D-Bus activations at once, as systemd does.
 
 The skarnet tarballs are verified against pinned SHA-256 sums (taken from the

@@ -46,9 +46,11 @@
 ; s6 services log to it (dbus-daemon and hostname enter their own domains);
 ; s6-svlink links dynamic service directories into /run/service; the run
 ; and finish scripts of dynamic services (user@UID.service) live in
-; /run/sdcompat/dyn.
+; /run/sdcompat/dyn. At power-off, s6-linux-init-shutdownd renames every
+; link in /run/service to a dot name so s6-svscan stops supervising it;
+; denied, it prints "unable to rename ...: Permission denied" for each one.
 (allow init_t var_run_t (fifo_file (read write ioctl)))
 (allow system_dbusd_t var_run_t (fifo_file (write ioctl getattr)))
 (allow hostname_t var_run_t (fifo_file (write ioctl getattr)))
-(allow init_t var_run_t (lnk_file (create)))
+(allow init_t var_run_t (lnk_file (create rename)))
 (allow init_t init_var_run_t (file (execute execute_no_trans)))

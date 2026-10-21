@@ -1,16 +1,23 @@
 #!/bin/sh
-# Runs after all processes are killed, right before filesystems are
-# unmounted and the machine halts.
+# Runs after all processes are killed and s6-linux-init-umountall has
+# unmounted what it could (the root filesystem is usually still busy, so
+# it stays writable), right before the machine halts.
 # Keep what this shutdown printed on the console: s6's catch-all log
 # (copied to the console) is on tmpfs, and SELinux denials go only to the
 # kernel log once auditd is down. Root-only: they hold every service's
 # stderr.
+# All archives, not only the newest: the kill also hits the catch-all
+# s6-log, and the restarted one archives the interrupted "current" as @*.u
+# and starts an empty one. The archives sort by time (TAI64N names).
 d=/var/log/sdcompat
 if [ -d "$d" ]; then
     umask 077
-    last=$(ls /run/uncaught-logs/@*.s 2>/dev/null | tail -n 1)
-    cat $last /run/uncaught-logs/current > "$d/last-shutdown-console.log" 2>/dev/null
+    cat /run/uncaught-logs/@* /run/uncaught-logs/current > "$d/last-shutdown-console.log" 2>/dev/null
+    # From rc.shutdown's marker on; the whole log if it is missing.
     dmesg > "$d/last-shutdown-kernel.log" 2>/dev/null
+    if grep -q 'sdcompat: shutdown starts' "$d/last-shutdown-kernel.log"; then
+        dmesg | sed -n '/sdcompat: shutdown starts/,$p' > "$d/last-shutdown-kernel.log" 2>/dev/null
+    fi
     sync
 fi
 exit 0

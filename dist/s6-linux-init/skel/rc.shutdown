@@ -1,6 +1,8 @@
 #!/bin/sh
 # Shutdown: bring every s6-rc service down (dependencies respected).
 # The marker stops sdcompatd from starting units beside this change
-# (D-Bus activations during shutdown).
+# (D-Bus activations during shutdown). The kernel log line marks where this
+# shutdown starts for rc.shutdown.final.
 mkdir -p /run/sdcompat && : > /run/sdcompat/shutting-down
+echo "sdcompat: shutdown starts" > /dev/kmsg 2>/dev/null
 exec s6-rc -v2 -bDa change
