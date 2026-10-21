@@ -3583,3 +3583,81 @@ such file or directory`.
    not the last; don't retry once s6-rc-update died in its rollback (a
    retry can't succeed); possibly detect and repair a moved servicedir.
 4. Earlier next steps unchanged (power-off retest of `ebcebda`).
+
+## Session: 2026-10-21: review fixes for `ebcebda`; s6-rc-update fails again
+
+### Reviews of `ebcebda`
+
+- Security review: no findings (authorization in handle_call/authorize
+  and the shutting-down refusal in check_job are unchanged and still
+  apply while the stop task runs).
+- Code review, two correctness issues, fixed in `526d60d`:
+  1. stop_dynamic_oneshots didn't take `unit_lock(id)`; with the bus now
+     served during the stop, a StopUnit for the same unit could run
+     beside it and run ExecStop= twice (seen in the sandbox: `down c`
+     twice).
+  2. A stream end while the stop task ran returned from run() and the
+     runtime cancelled the task; a stream end before SIGTERM with the
+     marker no longer ran the stop. Now the task is awaited after the
+     loop (a `stopped` flag avoids awaiting a finished JoinHandle), or
+     the stop runs there if it never started.
+- Sandbox: StopUnit prep@c right after the daemon's SIGTERM; check.sh
+  requires `down c` once.
+
+### Tests
+
+cargo build, cargo test pass. Sandbox 192/192 (three runs),
+SANDBOX_JOURNAL=no 197/197, SANDBOX_FDSTORE=no 192/192. bash -n and
+shellcheck -S warning on check.sh. With the lock removed: one run passed
+(the race wasn't hit), one failed `ExecStop= ran once` (got 2) plus 16
+unrelated early failures (hello.service, tick.timer, ... inactive) that
+didn't recur in the two runs afterwards; not investigated, possibly the
+beside3-style flake.
+
+### s6-rc-update, second occurrence
+
+The owner repaired the live dir (mv back + rm the leftover), svstat
+showed s6rc-oneshot-runner up, then `systemctl daemon-reload` failed the
+same way and moved s6rc-oneshot-runner into a new leftover,
+/run/s6-rc:s6-rc-update:yVJ5yc. So it is deterministic, not leftover
+damage.
+
+- The moved copy keeps its boot-time files (run, data, notification-fd
+  21:28); only the dir and its supervise/ changed (21:52:56). So
+  s6rc_servicedir_copy_online failed before touching files, i.e. in
+  s6rc_servicedir_block (s6_svstatus_read of supervise/status, or writing
+  `Q` to supervise/control) or in mkdir old; the rollback's copy_online
+  then failed the same way and died (`unable to rollback`), and the
+  retries fail at rename() with ENOENT. ENOENT fits supervise/control
+  being absent (s6_svc_writectl returns -2 with the open's errno).
+  **Inferred, not seen.** supervise/ is 0700 root.
+- The owner's `sudo grep ... /run/uncaught-logs/*` failed because their
+  non-root shell expanded the glob; use `sudo sh -c '...'`.
+- The sandbox's s6-rc-update path passes, so the difference is on the
+  real system (s6-linux-init's tree, SELinux, the s6-rc 0.8.0.2 /
+  s6 2.15.1.1 / skalibs 2.16 builds from today 11:16).
+
+### Current state
+
+`526d60d` on top of `ebcebda`, neither tested on a real power-off.
+s6-rc-update fails on every live update on the real s6 boot and leaves
+s6rc-oneshot-runner's service directory moved; repair by hand after each
+reload. Avoid daemon-reload and dnf transactions until fixed.
+
+### Next steps
+
+1. Owner, before the repair: `sudo sh -c 'grep -h -B2 -A3
+   "s6-rc-update\|rollback" /run/uncaught-logs/@* /run/uncaught-logs/current
+   | tail -60'`, `sudo ausearch -m avc -ts 21:50 | tail -20`,
+   `sudo ls -la /run/s6-rc:s6-rc-update:yVJ5yc/servicedirs/s6rc-oneshot-runner/supervise/`.
+   Then repair: `sudo mv /run/s6-rc:s6-rc-update:yVJ5yc/servicedirs/
+   s6rc-oneshot-runner /run/s6-rc:s6-rc-init:WvK3XB/servicedirs/ && sudo
+   rm -r /run/s6-rc:s6-rc-update:yVJ5yc`.
+2. With the first error: fix on sdcompat's side (SELinux, setup, or
+   sdcompat-gen); sdcompat-gen should report the first error and stop
+   retrying after a died rollback. If it's s6-rc's own behaviour,
+   describe it and leave the decision to the owner.
+3. Power-off retest of `ebcebda`/`526d60d` (RPMs, reboot into s6, power
+   off, send the logs listed in the earlier entry). Needs a working
+   live update or a fresh boot after the RPM upgrade.
+4. Earlier next steps unchanged.
