@@ -3256,3 +3256,93 @@ The Fedora checklist is done. JOURNAL=no runs a single rsyslogd (the s6
 2. Shmem: `df -m /run` and `du -xm -d1 /run` on both boots.
 3. Still open: on-demand socket activation (or EXCLUDE iscsid/iscsiuio/
    virt*), JOURNAL=no output loss, beside3 sandbox flake.
+
+## Session: 2026-10-21: slow power-off and "Permission denied" at shutdown
+
+The owner reported that powering off the s6 boot takes over 30 s and
+prints "Permission denied" for several services on the console.
+Investigated on the s6 boot (20:04, JOURNAL=no), mostly without root.
+
+### Findings
+
+- **Slow power-off, cause found.** user@1000's s6-log shows the same gap
+  at every s6 shutdown today: `exit.target` at 14:39:38, 17:42:07,
+  17:56:40, then `session.slice: Consumed …` exactly 25 s later
+  (14:40:03, 17:42:32, 17:57:05). At 15:56 wireplumber instead hit its
+  45 s stop timeout and was aborted (`State 'stop-sigterm' timed out`).
+  logind logged the poweroff request at 17:56:40.20. 25 s is
+  dbus-daemon's activation timeout. Mechanism, read in the code:
+  check_job had no shutdown check. start_beside() returns early once
+  `shutting-down` exists, so the start fell through to `s6-rc -u change`,
+  which waits for the s6-rc lock held by rc.shutdown's `s6-rc -bDa
+  change` until everything is down, including user@1000, which was
+  waiting on the D-Bus caller. **Inferred, not seen:** which name was
+  activated (dbus-daemon and sdcompatd log only to /run/uncaught-logs,
+  lost at power-off; most likely something wireplumber calls while
+  stopping, e.g. bluez or rtkit).
+- An activation that sdcompatd refuses does fail at once (dbus-daemon
+  logs `Activation via systemd failed` for the excluded home1), so
+  refusing is enough to remove the wait.
+- **"Permission denied": not found yet.** No AVCs for 17:56–17:58
+  (ausearch), nothing in /var/log/messages, and no "denied" in the current
+  boot's /run/uncaught-logs, so it happens only at shutdown. The console
+  shows it because setup runs s6-linux-init-maker with `-1`: the
+  catch-all log (sdcompatd, dbus-daemon, runner errors, services' stderr)
+  is copied to the console. Two candidates: lines in the catch-all log,
+  or kernel `avc: denied` lines once s6-rc has stopped auditd (those
+  never reach audit.log, which would explain the empty ausearch).
+  Neither survives a power-off today.
+- Seen in passing, not looked into: accounts-daemon retries activating
+  home1 (excluded) several times a second at login; `sdcompatd: stopping
+  shutdown.target (conflicts with systemd-hostnamed.service)` on hostnamed
+  activation; s6 boots write no wtmp boot/shutdown records (`last -x`
+  shows only systemd boots).
+
+### Changes (`688ed2b`)
+
+- sdcompatd check_job: once `RUN_DIR/shutting-down` exists, start,
+  restart and reload-or-restart fail with
+  `org.freedesktop.systemd1.TransactionIsDestructive`, as in systemd. The
+  shutdown targets are still accepted (checked before). D-Bus activation
+  goes through check_job, so the caller gets ActivationFailure at once.
+  sdcompatd does not create the marker itself: rc.shutdown does it first
+  thing, and the sandbox's poweroff.target test would leave it behind.
+- rc.shutdown.final (runs after the kill, before unmounting) saves the
+  newest rotated catch-all archive plus `current` to
+  `/var/log/sdcompat/last-shutdown-console.log` and `dmesg` to
+  `last-shutdown-kernel.log`, umask 077 (they hold every service's
+  stderr). Becomes active only after setup reruns s6-linux-init-maker.
+- Sandbox: new `org.example.Late` → late.service; in the shutdown phase,
+  with the marker present: the activation fails in < 5 s, StartUnit says
+  "is destructive", late.service never starts.
+- README/README-us (where the shutdown logs are), TESTING/TESTING-us
+  (real-boot row "Previous shutdown").
+
+### Tests
+
+cargo build, cargo test pass. Sandbox 190/190, SANDBOX_JOURNAL=no
+195/195. With the check_job change reverted: 3 failures (activation took
+10 s, StartUnit accepted, late.service started). bash -n and shellcheck
+-S warning on check.sh, sandbox.sh, rc.shutdown.final. Not tested: a real
+power-off; whether init_t may run `dmesg` (syslog_read) and create files
+in /var/log/sdcompat from rc.shutdown.final under enforcing.
+
+### Current state
+
+The Fedora checklist is done; s6 boots enforcing with JOURNAL=no.
+`688ed2b` should remove the 25 s wait at power-off (unverified on the
+real boot). The "Permission denied" lines are not identified yet.
+
+### Next steps
+
+1. Owner: `packages/build-rpms.sh`, `sudo dnf upgrade
+   ~/rpmbuild-sdcompat/rpms/*.rpm`, rerun `sudo dist/setup-fedora.sh
+   --rpms=$HOME/rpmbuild-skarnet/rpms` (regenerates rc.shutdown.final),
+   boot s6, power off, boot s6 again. Then time the power-off and read
+   `sudo grep -i -B3 denied /var/log/sdcompat/last-shutdown-*.log`;
+   fix whatever prints "Permission denied". If the files are missing,
+   look for an AVC on rc.shutdown.final/dmesg in the next boot's ausearch.
+2. user@1000's log: confirm no 25 s gap between exit.target and
+   session.slice, and no wireplumber stop timeout.
+3. Earlier next steps unchanged (zram swap, /run Shmem, on-demand socket
+   activation, JOURNAL=no output loss, beside3 sandbox flake).
