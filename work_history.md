@@ -3429,3 +3429,30 @@ power-off yet: the daemon running now (booted 20:57) is the new one.
 4. Earlier next steps unchanged (zram swap, /run Shmem, on-demand socket
    activation, JOURNAL=no output loss, beside3 sandbox flake; boot-time
    agetty denials before restorecon).
+
+## Session: 2026-10-21: skarnet sources used as released
+
+The owner wants skarnet's sources (skalibs, execline, s6, s6-rc,
+s6-linux-init, s6-frontend) used exactly as upstream releases them.
+
+### Changes
+
+- `3726fb4` CLAUDE.md: never modify skarnet's sources or add patches for
+  them; fix things on sdcompat's side, otherwise describe the upstream
+  behaviour and leave the decision to the owner.
+- `fa7adaf` skarnet.versions: the note on dist/rpm/NAME-VERSION-*.patch
+  removed.
+- `15cda23` The patch mechanism removed: build-skarnet-rpms.sh no longer
+  copies patches or adds Patch lines, setup-fedora.sh --build-s6 no longer
+  runs `patch` (and no longer installs it), the six specs use plain
+  `%autosetup`. No patch files existed, so the packages don't change.
+
+### Tests
+
+bash -n and shellcheck -S warning on build-skarnet-rpms.sh and
+setup-fedora.sh. The six specs, generated as the script does, parse with
+`rpmspec -q --srpm`. No full RPM build.
+
+### Current state / Next steps
+
+Unchanged from the previous entry.
