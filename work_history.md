@@ -3210,7 +3210,8 @@ JOURNAL=no).
 ### Tests
 
 cargo build, cargo test (new `journal_no_excludes_rsyslog`) pass; sandbox
-187/0, SANDBOX_JOURNAL=no 192/0. Not yet on the real s6 boot.
+187/0, SANDBOX_JOURNAL=no 192/0. Not yet on the real s6 boot (verified
+later the same day, see the next entry).
 
 ### Current state
 
@@ -3226,4 +3227,32 @@ starts a second rsyslogd once the RPMs from `44b8b51` are installed.
    zramctl + mkswap + swapon itself.
 3. Shmem: `df -m /run` and `du -xm -d1 /run` on both boots.
 4. Still open: on-demand socket activation (or EXCLUDE iscsid/iscsiuio/
+   virt*), JOURNAL=no output loss, beside3 sandbox flake.
+
+## Session: 2026-10-21: single rsyslogd verified on the s6 boot
+
+The owner installed the RPMs from `44b8b51` and booted s6 (JOURNAL=no).
+
+### Verified
+
+- `ps -C rsyslogd` shows one process (PID 1807), down from two. Next
+  step 1 of the previous entry is done. (`systemctl status
+  rsyslog.service` output was not shown.)
+
+### Changes
+
+None to code; this entry only.
+
+### Current state
+
+The Fedora checklist is done. JOURNAL=no runs a single rsyslogd (the s6
+`syslog` service) on the real boot.
+
+### Next steps
+
+1. Swap: support zram-generator's config (/usr/lib/systemd/zram-generator.conf)
+   under s6, e.g. an s6 oneshot that runs the generator's setup or does
+   zramctl + mkswap + swapon itself.
+2. Shmem: `df -m /run` and `du -xm -d1 /run` on both boots.
+3. Still open: on-demand socket activation (or EXCLUDE iscsid/iscsiuio/
    virt*), JOURNAL=no output loss, beside3 sandbox flake.
