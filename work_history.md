@@ -3177,3 +3177,53 @@ code changed.
    JOURNAL=no and to support zram-generator's config.
 2. If the gap matters: on-demand socket activation (Accept=no), or
    EXCLUDE iscsid/iscsiuio/virt*.
+
+## Session: 2026-10-21: two rsyslogd under JOURNAL=no, fixed
+
+The owner ran the memcompare follow-up checks on the s6 boot (17:23,
+JOURNAL=no).
+
+### Verified
+
+- Two rsyslogd: PID 1956 (17:23:55) `rsyslogd -n -iNONE -f
+  /etc/sdcompat/rsyslog.conf`, the s6 `syslog` service; PID 6398
+  (17:24:21) `/usr/sbin/rsyslogd -n`, Fedora's rsyslog.service translated
+  from the unit db (enabled, WantedBy=multi-user.target), with its
+  sdcompat-runner in the cgroup. cgroup memory 91.9M (includes page cache).
+  The second one loads imjournal with no journal and writes the same
+  /var/log files as the first.
+- `swapon` prints nothing: no swap on the s6 boot, as suspected.
+- `df -m`: /run 20 MiB used, /dev/shm and /tmp 1 MiB. So the unexplained
+  Shmem +17 MiB is almost all /run; the systemd boot's /run usage was not
+  measured, so the split is unknown.
+
+### Changes (`44b8b51`)
+
+- Config::finish: with JOURNAL=no, rsyslog.service and syslog.service are
+  appended to EXCLUDE and mapped (DEP_MAP) to the s6 `syslog` service,
+  unless the user already mapped them; INCLUDE still overrides. Decision:
+  exclude rather than drop the s6 `syslog` service, because Fedora's config
+  depends on imjournal and the s6 one owns /dev/log. With JOURNAL=yes
+  nothing changes (rsyslog.service reads the journal as on systemd).
+- dist/sdcompat.conf comment, README/README-us `JOURNAL` key.
+
+### Tests
+
+cargo build, cargo test (new `journal_no_excludes_rsyslog`) pass; sandbox
+187/0, SANDBOX_JOURNAL=no 192/0. Not yet on the real s6 boot.
+
+### Current state
+
+The Fedora checklist is done (previous sessions). JOURNAL=no no longer
+starts a second rsyslogd once the RPMs from `44b8b51` are installed.
+
+### Next steps
+
+1. Rebuild/install the RPMs, boot s6: `ps -C rsyslogd` shows one, and
+   `systemctl status rsyslog.service` says excluded/not found.
+2. Swap: support zram-generator's config (/usr/lib/systemd/zram-generator.conf)
+   under s6, e.g. an s6 oneshot that runs the generator's setup or does
+   zramctl + mkswap + swapon itself.
+3. Shmem: `df -m /run` and `du -xm -d1 /run` on both boots.
+4. Still open: on-demand socket activation (or EXCLUDE iscsid/iscsiuio/
+   virt*), JOURNAL=no output loss, beside3 sandbox flake.
