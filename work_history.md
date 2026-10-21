@@ -3780,3 +3780,135 @@ Read as the user (no root), 22:18:
    with its own jobs (lock order!), give s6-svunlink a timeout, and don't
    unlink an instance a later start created. Reproduce in the sandbox
    (inst@/prep@ with a slow stop and a start during it).
+
+## Session: 2026-10-21: sudo 2 min explained (s6-svscan scans abort)
+
+The owner sent: `time sudo true` → real 2m0.016s; `s6-svstat
+/run/sdcompat/dyn/user@0.service` → `down (exitcode 0) 2134 seconds,
+normally up` (the supervisor alive); the catch-all log for 21:52-21:53
+(only the s6-rc-update errors and s6-svscan's `unable to stat
+s6rc-oneshot-runner` every 4 s; sdcompatd logs nothing per job).
+
+### Findings
+
+- 2 min = pam_systemd's timeout for logind's CreateSession, which waits
+  for the user's start jobs (71/72), which wait for job 68.
+- s6-svunlink (s6 2.15.1.1, s6_supervise_unlink_names) does not send `x`:
+  it subscribes to `x` in the service's and the logger's event/, removes
+  the link, sends s6-svscan `an`, and waits (no -t: forever) for both
+  supervisors to announce their exit.
+- s6-svscan's scan() aborts at the first entry check() can't stat that
+  isn't a logger (`unable to stat NAME`, retried every 4 s). Only a
+  completed scan updates the active set, and killthem (the `n` prune)
+  only ends supervisors of inactive services, and not while a scan is
+  pending (what & 16). The failed s6-rc-update at 21:52:56 left
+  /run/service/s6rc-oneshot-runner dangling, so from then on no scan
+  completed and no removed service's supervisor was ended. user@0's stop
+  removed its link at 21:53:08 and has waited since.
+- So the root cause is again the var_run_t labels (`a1eb405`); the
+  repair (moving s6rc-oneshot-runner back) should let the next scan
+  complete, s6-svscan TERM user@0's supervisor (HUP its logger, which
+  exits at EOF), s6-svunlink return, and jobs 68/71/72 finish.
+- Earlier sandbox experiment (scratchpad logind-race.sh: stop user@-like
+  + runtime-dir-like, then start both 0.2 s later, with a 2 s stop): the
+  jobs overlap but finish within ~6-20 s; no permanent hang without a
+  broken scan directory. The previous entry's "lock order" and "unlink an
+  instance a later start created" suspicions are not needed to explain
+  the hang; how the 21:52:55 user@0 instance came up beside job 68 is
+  still not reconstructed (no per-job logging).
+- Side effect while scans abort: s6-svlink can't get new dynamic
+  instances supervised either (5 s timeout, "s6-svlink failed").
+
+### Changes
+
+- dyn_stop: `s6-svunlink -t 5000`, and `sdcompatd: ID: s6-svscan did not
+  release its supervisor (look for its warnings)` when it takes ≥ 5 s.
+- Sandbox: inst@h running, a dangling link in the scan directory, then
+  StopUnit prep@h: must end within 12 s and log the warning. Without the
+  `-t`: prep@h stays deactivating/stop (3 failures).
+
+### Review of the change (xhigh), fixes
+
+- s6-svunlink's exit status was ignored. It fails *before* removing the
+  link when it can't check the supervisors (s6_svc_ok error other than
+  ENOENT, e.g. an EACCES denial on supervise/lock; service and logger
+  supervision differ, EINVAL; s6-ftrigrd not spawned). dyn_stop then
+  removed the directory and left a dangling link: the same aborted scans.
+  Fixed: if it failed and the link is still there, remove it and
+  `s6-svscanctl -an`; if even that fails, keep the service directory and
+  the unit (link and directory stay consistent; load_dynamic takes it
+  over).
+- The warning came from the elapsed time and always blamed s6-svscan
+  (s6-svunlink exits 0 when its limit passes, too). Now, after the 200 ms
+  pause, sdcompatd looks at supervise/lock of the service, then of log/
+  (fcntl F_GETLK; `s6::lock_held`, now shared with s6rc_lock_held):
+  `s6-svscan did not release its supervisor (look for its warnings)`, or
+  `its logger is still running (a leftover process may hold its output)`
+  (JOURNAL=no: a KillMode=process/none leftover keeps s6-log from EOF).
+- Test: inst@h must also end inactive/dead; after the dangling link is
+  removed, `s6-svscanctl -an`, and the supervisor left behind must exit
+  within 5 s (it does: s6-svscan's completed scan ends it).
+
+Not changed (owner's decision, or larger than this fix):
+- After a timed-out release dyn_stop still removes the service directory
+  under the live supervisor(s) (svscan.log of a JOURNAL=no run:
+  `s6-supervise inst@h.service/log: warning: unable to write status
+  file`). Harmless while the service is down; but if `s6-svc -wD -d -T
+  120000` timed out (service still up), the supervisor can't run ./finish
+  when s6-svscan ends it, and under JOURNAL=no the old s6-log keeps
+  LOGDIR/ID locked against a new instance's logger until then.
+- dyn_stop stops dependents without their unit lock (previous entry,
+  step 3). After a timed-out release the teardown now runs even if a
+  concurrent job reused the instance.
+- While scans abort, every longrun stop costs 5 s, one after another:
+  dependents, a slice stop, the shutdown stop, and watch_dynamic's
+  collection of inactive transient units (blocks the watcher 5 s each).
+- s6-svlink in dyn_start fails for the same reason with only
+  `s6-svlink failed`; no hint at s6-svscan.
+
+### Seen in the sandbox: s6rc-fdholder down after an s6-rc-update retry
+
+This session's own earlier `SANDBOX_JOURNAL=no` check.sh (pid 111007,
+orphaned when its scratchpad went away; stopped afterwards with
+sandbox.sh stop) hung in `s6-rc -u change hold2.service`. Its daemon-reload's
+s6-rc-update failed once (`unable to manage new service directories ...:
+Broken pipe`) and the retry succeeded, but s6rc-fdholder's new supervisor
+(22:46:35) stayed `down (not started yet)`, no s6-fdholderd runs, and
+every logger start after it fails (`s6-fdholder-retrieve: unable to
+connect ... Connection refused`, `logger X.log did not come up`). It
+happened before the inst@h scenario, so not caused by it. One of my
+`SANDBOX_FDSTORE=no` runs also broke right after `call Reload`
+(hello.service inactive, 16 failures cascading); the re-run passed, the
+first run's logs were gone (sandbox stop removes them). The run without
+the unit lock earlier today (16 unrelated failures from hello.service on)
+looks the same. This is most likely the reload flake open since session 7
+(s6-rc-update "unable to manage new service directories ... Broken
+pipe", step 1 there): the switch to the new live dir has happened when
+that error comes, so the retry starts from a half-updated state.
+
+### Tests
+
+- `cargo build`, `cargo test` (46 passed); standalone: fdstore 1,
+  journal-relay 2, notify 0 passed. `bash -n`, `shellcheck -S warning`
+  on tests/check.sh: clean.
+- Sandbox, run with `XDG_RUNTIME_DIR=/tmp/claude-1000/sdcr` (the
+  orphaned run above held /run/user/1000/sdc-test): default 198/0,
+  `SANDBOX_JOURNAL=no` 203/0, `SANDBOX_FDSTORE=no` 198/0 (first run 182/16,
+  above).
+
+### Current state
+
+- Committed as `4f60b5b` (dynamic.rs, s6.rs, tests/check.sh). My own default
+  sandbox run on it: 198/198.
+- The owner's machine still needs the live s6-rc repair (move
+  s6rc-oneshot-runner back) for the stuck user@0 stop to finish; the new
+  sdcompatd then bounds such stops at ~5 s.
+
+### Next steps
+
+1. Owner installs and repairs the live s6-rc state.
+2. Owner: decide on the "Not changed" items above (keep the directory of
+   an unreleased supervisor? lock dependents in dyn_stop?).
+3. Reproduce the s6rc-fdholder left down after a failed-then-retried
+   s6-rc-update (sandbox daemon-reload); sdcompat-gen's retry may need to
+   check s6rc-fdholder (and s6rc-oneshot-runner) afterwards.
