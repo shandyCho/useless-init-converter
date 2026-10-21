@@ -172,6 +172,19 @@ expect_eq "Markers cleared" "$(prop hello.service Unit Markers)" "0"
 
 echo "== errors"
 $B call $MGR StartUnit ss nope.service replace 2>&1 | grep -q "not found" && ok "unknown unit error" || bad "unknown unit error"
+# Names that aren't unit names, "../../leak.service" here: the daemon used
+# them as the unit's id, i.e. its state directory RUN_DIR/units/ID, and any
+# caller could read files elsewhere as properties (status -> StatusText).
+mkdir -p "$R/leak.service" && echo leak-secret > "$R/leak.service/status"
+out=$($B call $DEST /org/freedesktop/systemd1/unit/_2e_2e_2f_2e_2e_2fleak_2eservice \
+    org.freedesktop.DBus.Properties GetAll s "" 2>&1)
+case "$out" in *leak-secret*) bad "unit object path left RUN_DIR: $out" ;;
+    *"Unknown object"*) ok "unit object path with ../ refused" ;; *) bad "unit object path with ../: $out" ;; esac
+$B call $MGR GetUnit s ../../leak.service 2>&1 | grep -q "not loaded" && ok "GetUnit refuses ../" || bad "GetUnit accepted ../"
+expect_eq "ListUnitsByNames skips ../" "$($B call $MGR ListUnitsByNames as 1 ../../leak.service)" "a(ssssssouso) 0"
+$B call $MGR GetUnitProcesses s ../../leak.service 2>&1 | grep -q "not loaded" && ok "GetUnitProcesses refuses ../" || bad "GetUnitProcesses accepted ../"
+$B call $MGR StartUnit ss ../../leak.service replace 2>&1 | grep -q "is not valid" && ok "StartUnit refuses ../" || bad "StartUnit accepted ../"
+rm -rf "$R/leak.service"
 
 echo "== unit files"
 out=$($B call $MGR EnableUnitFiles asbb 1 forking.service false false)

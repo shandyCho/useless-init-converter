@@ -53,7 +53,7 @@ pub fn unit_cgroup_rel(unit_id: &str, slice: &str) -> String {
 }
 
 pub fn unit_cgroup_dir(unit_id: &str, slice: &str) -> PathBuf {
-    Path::new(CGROUP_ROOT).join(slice_path(slice)).join(unit_id)
+    Path::new(CGROUP_ROOT).join(slice_path(slice)).join(&*crate::util::path_component(unit_id))
 }
 
 /// Enable the controllers we may need along the path from the root.

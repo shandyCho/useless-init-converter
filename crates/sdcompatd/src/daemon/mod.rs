@@ -376,12 +376,27 @@ impl Daemon {
         self.svstat_cache.lock().unwrap().clear();
     }
 
+    /// The unit an object path names. Checked after unescaping: `_2e_2e_2f`
+    /// decodes to "../", and an invalid name stays the unit's id, which
+    /// names its state directory (RUN_DIR/units/ID): any caller could have
+    /// made the daemon read files from other directories and return them
+    /// as properties.
     fn unit_from_path(&self, path: &str) -> Option<String> {
         let label = path.strip_prefix(UNIT_PREFIX)?;
         if label.contains('/') {
             return None;
         }
-        Some(util::bus_label_unescape(label))
+        let name = util::bus_label_unescape(label);
+        crate::loader::parse_name(&name)?;
+        Some(name)
+    }
+
+    /// For methods that take a unit name, as systemd answers them.
+    fn valid_name(name: &str) -> R<()> {
+        match crate::loader::parse_name(name) {
+            Some(_) => Ok(()),
+            None => Err(err(E_INVALID_ARGS, format!("Unit name {name} is not valid."))),
+        }
     }
 
     async fn emit(&self, path: &str, iface: &str, member: &str, body: &(impl serde::Serialize + zbus::zvariant::DynamicType)) {
@@ -649,6 +664,7 @@ impl Daemon {
 
     async fn job_method(&self, c: &Peer, msg: &Message, name: &str, mode: &str, jtype: &str) -> R<()> {
         self.require_privileged(c, msg).await?;
+        Self::valid_name(name)?;
         let (id, unit) = self.check_job(name, jtype, true, true).await?;
         let job = self.new_job(&id, jtype);
         self.reply_job(c, msg, job).await?;
@@ -661,6 +677,7 @@ impl Daemon {
     /// mark units for EnqueueMarkedJobs); the others are accepted and ignored.
     async fn set_unit_properties(&self, c: &Peer, msg: &Message, name: &str, props: &[(String, OwnedValue)]) -> R<()> {
         self.require_privileged(c, msg).await?;
+        Self::valid_name(name)?;
         for (key, v) in props {
             if key != "Markers" {
                 continue;
@@ -950,6 +967,7 @@ impl Daemon {
     async fn attach_processes(&self, c: &Peer, msg: &Message) -> R<()> {
         self.require_privileged(c, msg).await?;
         let (name, sub, pids): (String, String, Vec<u32>) = Self::args(msg)?;
+        Self::valid_name(&name)?;
         let (id, unit) = self.load_unit(&name);
         let mut dir = self.cgroup_dir_of(&id, &unit);
         if !sub.is_empty() {
@@ -1240,6 +1258,7 @@ impl Daemon {
 
     async fn kill_unit(&self, c: &Peer, msg: &Message, name: &str, whom: &str, sig: i32) -> R<()> {
         self.require_privileged(c, msg).await?;
+        Self::valid_name(name)?;
         let (id, unit) = self.load_unit(name);
         let main = if self.kind_of(&id) == Some(Kind::Longrun) {
             self.svstat(&id).await.map(|s| s.pid).filter(|&p| p > 0)
@@ -1288,16 +1307,14 @@ impl Daemon {
                 let (name,): (String,) = Self::args(msg)?;
                 let (id, unit) = self.load_unit(&name);
                 let known = self.kind_of(&id).is_some() || self.transient.lock().unwrap().contains_key(&id);
-                if !known && unit.load_state == LoadState::NotFound {
+                if !known && (unit.load_state == LoadState::NotFound || crate::loader::parse_name(&name).is_none()) {
                     return Err(err(E_NO_UNIT, format!("Unit {name} not loaded.")));
                 }
                 self.reply(c, msg, &(op(unit_path(&id)),)).await
             }
             "LoadUnit" => {
                 let (name,): (String,) = Self::args(msg)?;
-                if crate::loader::parse_name(&name).is_none() {
-                    return Err(err(E_INVALID_ARGS, format!("Unit name {name} is not valid.")));
-                }
+                Self::valid_name(&name)?;
                 let (id, _) = self.load_unit(&name);
                 self.reply(c, msg, &(op(unit_path(&id)),)).await
             }
@@ -1337,6 +1354,7 @@ impl Daemon {
             "ResetFailedUnit" => {
                 self.require_privileged(c, msg).await?;
                 let (name,): (String,) = Self::args(msg)?;
+                Self::valid_name(&name)?;
                 self.reset_failed(&name);
                 self.reply(c, msg, &()).await
             }
@@ -1349,6 +1367,9 @@ impl Daemon {
             }
             "GetUnitProcesses" => {
                 let (name,): (String,) = Self::args(msg)?;
+                if crate::loader::parse_name(&name).is_none() {
+                    return Err(err(E_NO_UNIT, format!("Unit {name} not loaded.")));
+                }
                 let (id, unit) = self.load_unit(&name);
                 let dir = self.cgroup_dir_of(&id, &unit);
                 let procs: Vec<(String, u32, String)> = util::cgroup_pids(&dir)
@@ -1409,7 +1430,9 @@ impl Daemon {
                 self.reply(c, msg, &(v,)).await
             }
             "ListUnitsByNames" => {
-                let (names,): (Vec<String>,) = Self::args(msg)?;
+                let (mut names,): (Vec<String>,) = Self::args(msg)?;
+                // systemd skips names that aren't unit names.
+                names.retain(|n| crate::loader::parse_name(n).is_some());
                 let v = self.list_units(&[], &[], Some(&names)).await;
                 self.reply(c, msg, &(v,)).await
             }

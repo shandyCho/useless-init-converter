@@ -125,6 +125,18 @@ pub fn bus_label_escape(s: &str) -> String {
     out
 }
 
+/// `s` as one path component: unchanged if it is one, else bus-label
+/// escaped (letters, digits and `_` only), so it can never be "..", an
+/// absolute path or a subdirectory. Unit ids name directories (state,
+/// cgroups); an invalid name from the bus must not leave them.
+pub fn path_component(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.is_empty() || s == "." || s == ".." || s.contains('/') || s.contains('\0') {
+        bus_label_escape(s).into()
+    } else {
+        s.into()
+    }
+}
+
 pub fn bus_label_unescape(s: &str) -> String {
     if s == "_" {
         return String::new();
@@ -284,6 +296,19 @@ mod tests {
         assert_eq!(bus_label_unescape("sshd_2eservice"), "sshd.service");
         assert_eq!(unit_name_unescape("dev-sda1"), "dev/sda1");
         assert_eq!(unit_name_unescape("a\\x2db"), "a-b");
+    }
+
+    #[test]
+    fn one_component() {
+        assert_eq!(path_component("user@0.service"), "user@0.service");
+        assert_eq!(path_component("-.mount"), "-.mount");
+        assert_eq!(path_component("...service"), "...service");
+        for bad in ["../../etc/x.service", "/etc", "a/b.service", "..", ".", ""] {
+            let c = path_component(bad);
+            assert!(!c.contains('/') && c != ".." && c != "." && !c.is_empty(), "{bad} -> {c}");
+        }
+        let st = crate::state::for_unit(Path::new("/run/x"), "../../../etc/y.service");
+        assert_eq!(st.dir.parent(), Some(Path::new("/run/x/units")));
     }
 }
 

@@ -97,5 +97,5 @@ pub mod keys {
 }
 
 pub fn for_unit(run_dir: &Path, unit: &str) -> UnitState {
-    UnitState::new(run_dir.join("units").join(unit))
+    UnitState::new(run_dir.join("units").join(&*util::path_component(unit)))
 }
