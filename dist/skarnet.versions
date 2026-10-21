@@ -5,8 +5,6 @@
 # To move to new releases, change the versions and checksums here. The
 # checksum is skarnet.org's published one:
 #   curl https://skarnet.org/software/NAME/NAME-VERSION.tar.gz.sha256
-# Patches for one release go in dist/rpm/NAME-VERSION-*.patch; they stop
-# applying by themselves when the version changes.
 #
 # name          version     sha256 of NAME-VERSION.tar.gz
 skalibs         2.16.0.0    90a3deda94a40d7d6a4495fe6feaf91c0185e0428d59cbd150a1a468741269aa
