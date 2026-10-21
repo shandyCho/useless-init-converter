@@ -3346,3 +3346,86 @@ real boot). The "Permission denied" lines are not identified yet.
    session.slice, and no wireplumber stop timeout.
 3. Earlier next steps unchanged (zram swap, /run Shmem, on-demand socket
    activation, JOURNAL=no output loss, beside3 sandbox flake).
+
+## Session: 2026-10-21: shutdown logs read, rename denial fixed
+
+The owner installed the RPMs from `724be75` (20:44), reran setup, powered
+off the s6 boot at 20:46 (took 1 min 4 s) and booted s6 again. They sent
+`grep -i -B3 denied /var/log/sdcompat/last-shutdown-*.log`.
+
+### Findings
+
+- **The 20:46 power-off still ran the old sdcompatd.** That boot started
+  ~20:04 (uptime 2556 s at stage 4); the RPMs went in at 20:44 without a
+  reboot, so the daemon in memory had no shutdown refusal. The 25 s gap is
+  still in user@1000's log (exit.target 20:46:08.59, session.slice
+  20:46:33.57), as expected. `688ed2b` remains untested on the real boot.
+  (Not a stale run script: `/etc/sdcompat/s6/*/run` are pre-split
+  %config files with `.rpmnew` beside them, but `sdcompat daemon` execs
+  the new sdcompatd. The `.rpmnew` differ only in `#!/usr/bin/sh` and,
+  for journal-relay/fdstore, the not-installed fallback.)
+- Timeline (kernel/audit times mapped to wall clock): poweroff requested
+  20:46:08.39 (logind); NetworkManager/auditd stop 20:46:08; user manager
+  done 20:46:33 (25 s, the old activation wait); gdm-session-worker PAM
+  session_close 20:46:53 (+20 s); systemd-user-runtime-dir stop 20:47:08
+  (+15 s); shutdownd stage 4 at 20:47:08.9; then the 3 s kill grace.
+  60.5 s + 3 s = the 1 min 4 s. The 20 s and 15 s gaps are not explained
+  yet (needs the console log).
+- **"Permission denied" found.** Kernel log at stage 4: `avc: denied {
+  rename } comm="s6-linux-init-s" name="<service>" ... tcontext=var_run_t
+  tclass=lnk_file`. s6-linux-init-shutdownd's unsupervise_tree renames
+  every /run/service link to a dot name and warns `unable to rename ...`
+  on failure, once per service (~200; the kernel shows only a few because
+  of kauditd rate limiting). It then falls back to unlink (allowed), but
+  the "d" command goes to the renamed path and is lost.
+- **Console log was empty** (0 bytes). rc.shutdown.final runs after the
+  kill: the catch-all s6-log (run with -p, so it ignores TERM) is killed
+  by SIGKILL, s6-svscan restarts it, and the new one archives the
+  interrupted `current` as `@*.u` and starts empty. The script took only
+  `@*.s`. Inferred from s6-log behaviour, not observed (uncaught-logs is
+  not readable without root).
+- Also in the kernel log, not fixed: at boot (17.4 s) agetty (getty_t) is
+  denied /dev/null, /dev/tty9 (device_t) and utmp (tmpfs_t) before
+  `early` runs `restorecon -R /dev /run` (18.0 s); restorecon is denied
+  /dev/console. At shutdown, iscsiadm and systemd-user-runtime-dir may
+  not write the catch-all fifo (var_run_t): their stderr is lost (part
+  of the JOURNAL=no output loss item). Stage 4 order is umountall, then
+  rc.shutdown.final (the old comment said the reverse); / stays writable
+  because it is busy.
+
+### Changes (`52071ed`)
+
+- sdcompat.cil: `allow init_t var_run_t (lnk_file (create rename))`.
+- rc.shutdown writes `sdcompat: shutdown starts` to /dev/kmsg;
+  rc.shutdown.final saves `@*` (all archives, any suffix) + `current`,
+  and the kernel log from the marker on (whole log if missing).
+- README/README-us (kernel log is from the start of the shutdown),
+  TESTING/TESTING-us "Previous shutdown" row (console log not empty, no
+  `unable to rename`).
+
+### Tests
+
+bash -n and shellcheck -S warning on rc.shutdown and rc.shutdown.final;
+the sed range checked on sample input. No Rust changes, and the sandbox
+doesn't use these files or the policy, so cargo test and the sandbox
+suite weren't rerun. The policy change hasn't been loaded (needs root).
+
+### Current state
+
+The rename fix and log capture are committed but not on the real boot.
+`688ed2b` (refusing starts during shutdown) has not been tested on a
+power-off yet: the daemon running now (booted 20:57) is the new one.
+
+### Next steps
+
+1. Owner: build/upgrade RPMs, rerun setup (reloads sdcompat.cil,
+   regenerates the scripts), **reboot into s6 before the test
+   power-off** so the new sdcompatd runs, power off, boot s6, then time
+   it and send `sudo cat /var/log/sdcompat/last-shutdown-console.log`
+   and `sudo grep -i denied /var/log/sdcompat/last-shutdown-kernel.log`.
+2. With the console log: explain the 20 s (to gdm session close) and
+   15 s (to user-runtime-dir stop) gaps if they remain.
+3. Optional: replace `/etc/sdcompat/s6/*/run` with their `.rpmnew`.
+4. Earlier next steps unchanged (zram swap, /run Shmem, on-demand socket
+   activation, JOURNAL=no output loss, beside3 sandbox flake; boot-time
+   agetty denials before restorecon).
