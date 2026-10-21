@@ -25,7 +25,7 @@ Headers, the libskarnet.so link, the pkg-config file and the sysdeps
 directory needed to build skarnet.org software.
 
 %prep
-%autosetup -p1
+%autosetup
 
 %build
 %set_build_flags

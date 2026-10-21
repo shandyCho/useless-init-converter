@@ -269,7 +269,7 @@ check_luks() {
 install_packages() {
     say "Installing Fedora packages"
     local pkgs=(dbus-daemon earlyoom chrony NetworkManager
-                policycoreutils-python-utils grubby curl tar gcc make patch)
+                policycoreutils-python-utils grubby curl tar gcc make)
     [ "$JOURNAL" = 1 ] || pkgs+=(rsyslog)
     [ -x "$REPO/target/release/sdcompatd" ] && [ "$REBUILD" = 0 ] || pkgs+=(cargo rust)
     if ! rpm -q gdm gnome-shell >/dev/null 2>&1; then
@@ -336,9 +336,6 @@ install_skarnet() {
             printf '  + verify sha256 %s\n' "$sum"
         fi
         run tar -xzf "$work/$name.tar.gz" -C "$work"
-        for p in "$DIST/rpm/$name-$ver"-*.patch; do
-            if [ -e "$p" ]; then run patch -d "$work/$name-$ver" -p1 -i "$p"; fi
-        done
         # As in the RPM specs: execline as one multicall binary (the SELinux
         # module labels /usr/bin/execline); s6-frontend reads /etc/s6.conf
         # (not PREFIX/etc) and aligns its tables with util-linux's column.

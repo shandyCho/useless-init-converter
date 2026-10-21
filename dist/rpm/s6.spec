@@ -25,7 +25,7 @@ Requires:       %{name}%{?_isa} = %{version}-%{release}
 Headers, shared library links and pkg-config files for s6.
 
 %prep
-%autosetup -p1
+%autosetup
 
 %build
 %set_build_flags

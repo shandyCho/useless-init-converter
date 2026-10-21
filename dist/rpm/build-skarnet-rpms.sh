@@ -44,23 +44,13 @@ for name in "${ORDER[@]}"; do
     tarball="$OUT/SOURCES/$name-$ver.tar.gz"
     [ -s "$tarball" ] || curl -fsSL -o "$tarball" "https://skarnet.org/software/$name/$name-$ver.tar.gz"
     echo "${SHA256[$name]}  $tarball" | sha256sum -c --quiet - || die "checksum mismatch for $tarball"
-    # The spec takes its version from skarnet.versions, and the patches
-    # made for this release.
-    patches=()
-    for p in "$HERE/$name-$ver"-*.patch; do
-        if [ -e "$p" ]; then
-            cp "$p" "$OUT/SOURCES/"
-            patches+=("$(basename "$p")")
-        fi
-    done
+    # The spec takes its version from skarnet.versions. The sources are
+    # built as released, unpatched.
     {
         printf '%%global skarnet_version %s\n%%global skarnet_release %s\n' "$ver" "$RELEASE"
-        awk -v list="${patches[*]}" '
-            { print }
-            /^Source0:/ { n = split(list, p, " "); for (i = 1; i <= n; i++) printf "Patch%d: %s\n", i - 1, p[i] }
-        ' "$HERE/$name.spec"
+        cat "$HERE/$name.spec"
     } >"$OUT/SPECS/$name.spec"
-    echo "  $name-$ver ok${patches[*]:+ (patches: ${patches[*]})}"
+    echo "  $name-$ver ok"
 done
 
 if command -v mock >/dev/null && id -nG | grep -qw mock; then

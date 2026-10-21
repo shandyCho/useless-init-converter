@@ -20,7 +20,7 @@ subcommands (s6 live status, s6 process restart, ...) and runs the matching
 s6, s6-rc and s6-linux-init programs with the right directories.
 
 %prep
-%autosetup -p1
+%autosetup
 
 %build
 %set_build_flags
