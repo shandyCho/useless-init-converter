@@ -3456,3 +3456,89 @@ setup-fedora.sh. The six specs, generated as the script does, parse with
 ### Current state / Next steps
 
 Unchanged from the previous entry.
+
+## Session: 2026-10-21: power-off 50 s, sdcompatd deaf to the bus while stopping
+
+The owner booted s6 at 20:57 (new sdcompatd), upgraded the RPMs at 21:23
+(sdcompatd restarted twice, at 21:24:06 and 21:26:21), powered off at
+21:27:16 and booted s6 again. Power-off took ~50 s (was 1 min 4 s). They
+sent the console log and the kernel log's denials.
+
+### Findings
+
+- **`688ed2b` works.** user@1000's log (/var/log/sdcompat/user@1000.service)
+  has exit.target at 21:27:16.24 and the last slice at 16.43: no 25 s gap.
+  wireplumber's late bluez activation was refused at once ("is
+  destructive"). The `52071ed` log capture works: console log 89 KB, no
+  `unable to rename`.
+- **sdcompatd's own stop took 45 s** (stopping 21:27:16.20, stopped
+  21:28:01.73). On SIGTERM the daemon broke out of its D-Bus loop and only
+  then ran stop_dynamic_oneshots (the backlight oneshots, then
+  user-runtime-dir@1000 with user@1000 as its dependent). From then on
+  nothing read the bus: activations sent at 16.25 (nm-dispatcher, by
+  NetworkManager while stopping) and 16.36 (colord, by gnome-shell) got no
+  answer and timed out at 41.27/41.36 (25 s); NetworkManager stopped only
+  at 41.63. systemd-user-runtime-dir's stop ran at 21:28:01.72 (its AVC
+  timestamp), right before sdcompatd exited, so user@1000's stop took
+  ~45 s after the user manager had finished at 16.43. **Not identified:**
+  what inside that stop waited. The runner after the manager exits closes
+  the PAM session (systemd-user: pam_systemd, pam_systemd_home, ...) and
+  cleans the cgroup (≤ 2 s); no dbus-daemon "Activating" line from the
+  runner in that window, so if it waited on the bus it was a method call
+  (not logged by dbus-daemon) or something outside D-Bus. The timeline
+  (41.70 fdholder down, then exactly 20 s to 01.72) is suggestive but not
+  explained.
+- Still in the kernel log: iscsiadm (iscsid_t) and systemd-user-runtime-dir
+  (systemd_user_runtimedir_t) denied write on the catch-all fifo
+  (/run/service/s6-svscan-log/fifo, var_run_t); only their output is lost.
+  Known item (JOURNAL=no output loss).
+- Also seen, not acted on: `sdcompat[cups.path]: starting cups.service:
+  I/O error: Broken pipe` right after each sdcompatd restart during the
+  RPM upgrade (the path runner's connection was to the old daemon);
+  `sdcompat-runner: user 60578 does not exist` at 20:57:58 (gdm's dynamic
+  greeter user gone).
+
+### Changes (`ebcebda`)
+
+- sdcompatd: on SIGTERM with the `shutting-down` marker, stop_dynamic_
+  oneshots runs as a task and the main loop keeps serving calls and
+  activations until it finishes; starts are refused by check_job's
+  shutdown check. Without the marker it exits at once as before.
+- Diagnostics: `sdcompatd: stopping ID took N s` when a oneshot stop
+  (with its dependents) takes ≥ 2 s; the runner logs `closing the PAM
+  session took N s` (to the unit's log, e.g. user@1000's) when ≥ 2 s.
+- Sandbox: prep@c's ExecStop= activates org.example.Late during the
+  shutdown phase; check.sh requires prep@c's stop within 5 s.
+- TESTING/TESTING-us "Previous shutdown" row: no `Failed to activate
+  service ... timed out`, no `sdcompatd: stopping ... took`.
+
+### Tests
+
+cargo build, cargo test, standalone tests pass. Sandbox 191/191,
+SANDBOX_JOURNAL=no 196/196, SANDBOX_FDSTORE=no 191/191. With the mod.rs
+change reverted: 1 failure, `prep@c's stop took 10 s`. bash -n and
+shellcheck -S warning on check.sh and sandbox.sh. Not tested: a real
+power-off.
+
+### Current state
+
+Power-off ~50 s. `ebcebda` should remove the 25 s waits of bus callers
+during sdcompatd's stop (NetworkManager's among them); whether it also
+removes the 45 s in user@1000's stop depends on what that waited on,
+which the new log lines will show.
+
+### Next steps
+
+1. Owner: build/upgrade RPMs, **reboot into s6** (so the new sdcompatd
+   runs), power off, boot s6, time it, and send
+   `sudo cat /var/log/sdcompat/last-shutdown-console.log`,
+   `sudo grep -i denied /var/log/sdcompat/last-shutdown-kernel.log` and
+   `sudo tail -n 30 /var/log/sdcompat/user@1000.service/current`.
+2. If `stopping user-runtime-dir@1000.service took` remains large, read
+   the runner's `closing the PAM session took` line: if PAM, find which
+   module waits (pam_systemd ReleaseSession to a stopped logind is the
+   first suspect); otherwise it's s6-supervise/the runner's finish.
+3. cups.path runner losing its connection across a daemon restart.
+4. Earlier next steps unchanged (zram swap, /run Shmem, on-demand socket
+   activation, JOURNAL=no output loss incl. the fifo denials, beside3
+   sandbox flake; boot-time agetty denials before restorecon).
