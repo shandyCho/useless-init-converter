@@ -371,7 +371,7 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 - `EXCLUDE`, `EXCLUDE_ADD`, `INCLUDE`: 어떤 유닛을 변환할지 정합니다.
 - `DEP_MAP`, `DEP_MAP_ADD`: systemd 유닛 → `EXTRA_SOURCE`의 s6 서비스 대응.
 - `EXTRA_SOURCE`: 같은 데이터베이스로 함께 컴파일할 직접 작성한 s6-rc 소스.
-- `JOURNAL`: `yes`(기본값)이면 systemd-journald를 실행하고 서비스 출력을 보냅니다. `no`이면 `LOG_DIR` 아래 서비스별 s6-log 디렉터리를 씁니다.
+- `JOURNAL`: `yes`(기본값)이면 systemd-journald를 실행하고 서비스 출력을 보냅니다. `no`이면 `LOG_DIR` 아래 서비스별 s6-log 디렉터리를 쓰고, s6 `syslog` 서비스가 rsyslogd이므로 배포판의 `rsyslog.service`는 제외합니다(`INCLUDE`로 되살릴 수 있습니다).
 - `LOG_DIR`: `JOURNAL=no`일 때 s6-log 디렉터리가 들어갈 위치.
 - `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`setup-fedora.sh --no-resolved`처럼 `resolv` s6 서비스도 `sdcompat-sysinit`에 넣어야 DNS가 동작합니다).
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.

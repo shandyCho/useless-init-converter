@@ -102,6 +102,9 @@ const JOURNAL_UNITS: &[&str] = &[
     "systemd-journal-flush.service",
 ];
 
+/// Units added to EXCLUDE and mapped to the s6 "syslog" service when JOURNAL=no.
+const SYSLOG_UNITS: &[&str] = &["rsyslog.service", "syslog.service"];
+
 impl Config {
     pub fn defaults() -> Config {
         let runner = tool_path("sdcompat-runner");
@@ -299,6 +302,18 @@ impl Config {
             self.dep_map.retain(|(a, b)| {
                 !(b == "syslog" && (a == "systemd-journald.socket" || a == "syslog.socket"))
             });
+        } else {
+            // The s6 "syslog" service is the rsyslogd; the distribution's
+            // rsyslog.service would start a second one (reading a journal
+            // that does not exist) and write the same files.
+            for u in SYSLOG_UNITS {
+                if !self.exclude.iter().any(|e| e == u) {
+                    self.exclude.push(u.to_string());
+                }
+                if self.mapped_dep(u).is_none() {
+                    self.dep_map.push((u.to_string(), "syslog".to_string()));
+                }
+            }
         }
         if !self.resolved {
             self.include.retain(|u| !RESOLVED_UNITS.contains(&u.as_str()));
@@ -351,6 +366,23 @@ mod tests {
         let cfg = cfg.finish();
         assert_eq!(cfg.mapped_dep("systemd-journald.socket"), Some("syslog"));
         assert_eq!(cfg.mapped_dep("syslog.socket"), Some("syslog"));
+    }
+
+    #[test]
+    fn journal_no_excludes_rsyslog() {
+        let cfg = Config::defaults().finish();
+        assert!(!cfg.is_excluded("rsyslog.service"));
+        assert_eq!(cfg.mapped_dep("rsyslog.service"), None);
+        let mut cfg = Config::defaults();
+        cfg.journal = false;
+        let cfg = cfg.finish();
+        assert!(cfg.is_excluded("rsyslog.service"));
+        assert_eq!(cfg.mapped_dep("rsyslog.service"), Some("syslog"));
+        assert_eq!(cfg.mapped_dep("syslog.service"), Some("syslog"));
+        let mut cfg = Config::defaults();
+        cfg.journal = false;
+        cfg.include.push("rsyslog.service".into());
+        assert!(!cfg.finish().is_excluded("rsyslog.service"));
     }
 
     #[test]

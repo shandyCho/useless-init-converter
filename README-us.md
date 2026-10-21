@@ -396,7 +396,7 @@ and defaults). The most important keys:
 - `EXCLUDE`, `EXCLUDE_ADD`, `INCLUDE`: which units are translated.
 - `DEP_MAP`, `DEP_MAP_ADD`: systemd unit → s6 service from `EXTRA_SOURCE`.
 - `EXTRA_SOURCE`: hand-written s6-rc sources compiled into the same database.
-- `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR`.
+- `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR` and excludes the distribution's `rsyslog.service`, since the s6 `syslog` service is the rsyslogd (`INCLUDE` brings it back).
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
 - `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `sdcompat-sysinit` too, as `setup-fedora.sh --no-resolved` does, or DNS breaks).
 - `ALLOW_UIDS`: non-root users allowed to manage units.
