@@ -803,19 +803,31 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
         let abs = fs::canonicalize(&compiled).map_err(|e| e.to_string())?;
         // s6-rc-update can race s6-svscan's rescan of the service directories
         // ("unable to manage new service directories"); rescan and retry.
+        // Report the first error: later attempts may only fail because of
+        // what the first one left behind.
         let mut attempt = 0;
+        let mut first: Option<String> = None;
         loop {
             match run(Command::new("s6-rc-update").arg("-l").arg(&cfg.live_dir).arg(&abs)) {
                 Ok(()) => break,
-                Err(e) if attempt < 3 => {
+                // A failed rollback leaves a running service's directory in
+                // the new live directory: every retry fails on the rename.
+                Err(e) if attempt < 3 && !e.contains("unable to rollback") => {
                     attempt += 1;
                     eprintln!("sdcompat: s6-rc-update failed, retrying: {}", e.trim());
+                    first.get_or_insert(e);
                     if let Ok(scan) = fs::canonicalize(cfg.live_dir.join("scandir")) {
                         let _ = Command::new("s6-svscanctl").arg("-an").arg(scan).status();
                     }
                     std::thread::sleep(std::time::Duration::from_millis(500 * attempt));
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    let e = match first {
+                        Some(f) if f != e => format!("{}\n(last attempt: {})", f.trim(), e.trim()),
+                        _ => e,
+                    };
+                    return Err(e);
+                }
             }
         }
         updated_live = true;

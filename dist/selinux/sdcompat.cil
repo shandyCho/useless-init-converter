@@ -35,6 +35,14 @@
 (filecon "/run/uncaught-logs(/.*)?" any (system_u object_r init_var_run_t ((s0) (s0))))
 (typetransition init_t var_run_t dir "uncaught-logs" init_var_run_t)
 ;
+; s6-rc's live directories (/run/s6-rc -> s6-rc:s6-rc-init:XXXXXX, and the
+; s6-rc:s6-rc-update:XXXXXX that replace it). init_t creates them as
+; init_var_run_t, but `early` runs restorecon -R /run after s6-rc-init, which
+; made them var_run_t. s6-rc-update (daemon-reload) renames each running
+; service's files aside before copying the new ones in; denied, it failed,
+; could not roll back, and left that service directory in the new live dir.
+(filecon "/run/s6-rc(:[^/]+)?(/.*)?" any (system_u object_r init_var_run_t ((s0) (s0))))
+;
 ; /var/lib/sdcompat holds the s6-rc databases, which rc.init regenerates at
 ; boot (sdcompat-gen, init_t) and then swaps in by renaming symlinks. init_t
 ; may create symlinks in var_lib_t but not rename or unlink them, nor remove

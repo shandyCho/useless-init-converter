@@ -657,6 +657,10 @@ setup_selinux() {
     [ -d /run/sdcompat ] && run restorecon -R /run/sdcompat
     # On a running s6 boot this lets a stuck catch-all logger rotate again.
     [ -d /run/uncaught-logs ] && run restorecon -R /run/uncaught-logs
+    # ... and lets s6-rc-update (daemon-reload) rename in the live directory.
+    local live
+    mapfile -t live < <(compgen -G '/run/s6-rc:*'; [ -L /run/s6-rc ] && echo /run/s6-rc)
+    [ "${#live[@]}" -gt 0 ] && run restorecon -R "${live[@]}"
     return 0
 }
 
