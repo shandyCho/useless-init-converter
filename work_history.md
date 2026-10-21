@@ -3542,3 +3542,44 @@ which the new log lines will show.
 4. Earlier next steps unchanged (zram swap, /run Shmem, on-demand socket
    activation, JOURNAL=no output loss incl. the fifo denials, beside3
    sandbox flake; boot-time agetty denials before restorecon).
+
+## Session: 2026-10-21: s6-rc-update fails after `dnf remove zram`
+
+`sudo dnf remove zram` (21:34, s6 boot of 21:28) ran systemd's
+%triggerpostun daemon-reload; sdcompat-gen's s6-rc-update failed with
+`unable to make new live directory in /run/s6-rc:s6-rc-init:WvK3XB: No
+such file or directory`.
+
+### Findings (read-only, no root)
+
+- The message is from the **last of 4 attempts**: sdcompat-gen retries
+  s6-rc-update 3 times and only returns the last error; the first one is
+  in sdcompatd's stderr (`sdcompat: s6-rc-update failed, retrying:`, in
+  /run/uncaught-logs, root only). Not read yet.
+- Live state is damaged: `s6rc-oneshot-runner`'s service directory is no
+  longer in /run/s6-rc:s6-rc-init:WvK3XB/servicedirs/ but in a leftover
+  /run/s6-rc:s6-rc-update:aUJIXV/servicedirs/ (21:34). /run/service/
+  s6rc-oneshot-runner now dangles, so oneshot transitions (and the
+  power-off's) can't reach the runner's socket. The symlink /run/s6-rc
+  still points at the init dir, compiled -> /var/lib/sdcompat/compiled
+  (db 1051); new db 1792586077652732-2012 was compiled.
+- s6-rc-0.8.0.2 make_new_livedir: for each up longrun it renames the old
+  live servicedir into the new live dir, then s6rc_servicedir_copy_online;
+  on failure it rolls back (copy + rename back) or dies with `unable to
+  rollback ...`. The printed path after a rollback is the old live dir
+  (sa->s), not the failing file. Inference: the first attempt failed and
+  its rollback died on s6rc-oneshot-runner (the first longrun), leaving it
+  moved; retries 2-4 then fail at rename() with ENOENT. What failed first
+  is unknown until the log is read.
+
+### Current state / Next steps
+
+1. Owner: send `sudo grep -h -A3 's6-rc-update\|rollback' /run/uncaught-logs/*`.
+2. Repair by hand (moves the dir back, s6-supervise follows it):
+   `sudo mv /run/s6-rc:s6-rc-update:aUJIXV/servicedirs/s6rc-oneshot-runner
+   /run/s6-rc:s6-rc-init:WvK3XB/servicedirs/ && sudo rm -r
+   /run/s6-rc:s6-rc-update:aUJIXV`, then `sudo systemctl daemon-reload`.
+3. sdcompat side, depending on the first error: report the first error,
+   not the last; don't retry once s6-rc-update died in its rollback (a
+   retry can't succeed); possibly detect and repair a moved servicedir.
+4. Earlier next steps unchanged (power-off retest of `ebcebda`).
