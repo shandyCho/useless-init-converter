@@ -312,12 +312,36 @@ impl Daemon {
         }
         let _ = Command::new("s6-svc").args(["-wD", "-d", "-T", "120000"]).arg(self.scandir(id)).status().await;
         if let Ok(scan) = fs::canonicalize(self.cfg.live_dir.join("scandir")) {
-            let _ = Command::new("s6-svunlink").arg(&scan).arg(id).status().await;
+            // s6-svunlink waits for s6-svscan to end the supervisors, which
+            // it doesn't while any entry in the scan directory can't be
+            // stat'ed (it aborts the scan). Without a limit this stop, and
+            // every job behind it, hung: logind's user@0 stop, then sudo.
+            // It exits 0 when the limit passes, too.
+            let st = Command::new("s6-svunlink").args(["-t", "5000"]).arg(&scan).arg(id).status().await;
+            let link = scan.join(id);
+            if !st.map(|s| s.success()).unwrap_or(false) && fs::symlink_metadata(&link).is_ok() {
+                // It failed before removing the link (it couldn't check the
+                // supervisors). Removing the directory under it would leave
+                // a dangling entry, on which s6-svscan aborts every scan.
+                eprintln!("sdcompatd: {id}: s6-svunlink failed, removing {}", link.display());
+                if let Err(e) = fs::remove_file(&link) {
+                    eprintln!("sdcompatd: {id}: {}: {e}; keeping its service directory", link.display());
+                    self.drop_stored_fds(id);
+                    return "done";
+                }
+                let _ = Command::new("s6-svscanctl").arg("-an").arg(&scan).status().await;
+            }
         }
         self.drop_stored_fds(id);
         // Give s6-supervise a moment to exit before removing its directory.
         tokio::time::sleep(Duration::from_millis(200)).await;
-        let _ = fs::remove_dir_all(self.dyn_dir(id));
+        let dir = self.dyn_dir(id);
+        if super::s6::lock_held(&dir.join("supervise/lock")) {
+            eprintln!("sdcompatd: {id}: s6-svscan did not release its supervisor (look for its warnings)");
+        } else if super::s6::lock_held(&dir.join("log/supervise/lock")) {
+            eprintln!("sdcompatd: {id}: its logger is still running (a leftover process may hold its output)");
+        }
+        let _ = fs::remove_dir_all(&dir);
         self.dynamic.lock().unwrap().remove(id);
         "done"
     }

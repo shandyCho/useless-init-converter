@@ -220,6 +220,28 @@ expect_state inst@d.service active/running
 expect_eq "concurrent starts ran prep@d once" "$(grep -cx "up d" "$R/prep.out")" "1"
 call StopUnit ss prep@d.service replace
 expect_state inst@d.service inactive/dead
+# While s6-svscan can't stat an entry of the scan directory (a failed
+# s6-rc-update left one dangling) it aborts every scan and ends no
+# supervisor: the stop must not wait for that forever (logind's stop of
+# user@0 did, and every sudo after it waited for logind).
+call StartUnit ss inst@h.service replace
+expect_state inst@h.service active/running
+scan=$(readlink -f "$R/live/scandir")
+ln -s "$R/no-such-service" "$scan/dangling"
+t0=$(date +%s)
+call StopUnit ss prep@h.service replace
+expect_state prep@h.service inactive/dead 75
+t1=$(date +%s)
+[ $((t1 - t0)) -lt 12 ] && ok "stop ends while s6-svscan can't scan" || bad "stop with a broken scan directory took $((t1 - t0)) s"
+expect_state inst@h.service inactive/dead
+grep -q "inst@h.service: s6-svscan did not release" "$W/daemon.log" && ok "the stuck release is logged" || bad "no warning for the stuck release"
+# Repaired, the next scan completes and ends the supervisor left behind.
+rm -f "$scan/dangling"
+s6-svscanctl -an "$scan"
+left() { pgrep -u "$(id -u)" -f '^s6-supervise inst@h\.service(/log)?$' >/dev/null; }
+tries=25
+while [ $tries -gt 0 ] && left; do tries=$((tries - 1)); sleep 0.2; done
+left && bad "inst@h's supervisor still runs after the scan directory was repaired" || ok "repaired scan directory ends the leftover supervisor"
 
 echo "== conflicts"
 expect_state winner.service active/running

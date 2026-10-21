@@ -1,7 +1,7 @@
 //! s6 / s6-rc backend: unit state queries and job execution.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tokio::process::Command;
@@ -27,6 +27,19 @@ pub struct Status {
     pub main_pid: u32,
     pub result: String,
     pub condition_ok: bool,
+}
+
+/// Whether another process holds a lock on `path`, as skalibs' fd_islocked()
+/// asks (s6-rc's change lock, s6-supervise's supervise/lock). skalibs locks
+/// with fcntl(); F_GETLK only looks.
+pub(super) fn lock_held(path: &Path) -> bool {
+    use std::os::fd::AsRawFd;
+    let Ok(f) = std::fs::File::open(path) else { return false };
+    let mut fl: libc::flock = unsafe { std::mem::zeroed() };
+    fl.l_type = libc::F_RDLCK as libc::c_short;
+    fl.l_whence = libc::SEEK_SET as libc::c_short;
+    let r = unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GETLK, &mut fl) };
+    r == 0 && fl.l_type != libc::F_UNLCK as libc::c_short
 }
 
 impl Daemon {
@@ -438,15 +451,9 @@ impl Daemon {
     }
 
     /// Whether some process (the boot's `s6-rc change`, or one of ours) holds
-    /// s6-rc's change lock. skalibs locks with fcntl(); F_GETLK only looks.
+    /// s6-rc's change lock.
     fn s6rc_lock_held(&self) -> bool {
-        use std::os::fd::AsRawFd;
-        let Ok(f) = std::fs::File::open(self.cfg.live_dir.join("lock")) else { return false };
-        let mut fl: libc::flock = unsafe { std::mem::zeroed() };
-        fl.l_type = libc::F_RDLCK as libc::c_short;
-        fl.l_whence = libc::SEEK_SET as libc::c_short;
-        let r = unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GETLK, &mut fl) };
-        r == 0 && fl.l_type != libc::F_UNLCK as libc::c_short
+        lock_held(&self.cfg.live_dir.join("lock"))
     }
 
     async fn all_dependencies(&self, id: &str) -> Option<Vec<String>> {
