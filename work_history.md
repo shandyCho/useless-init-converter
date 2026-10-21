@@ -3059,3 +3059,35 @@ the loaded policy.
    comes up, collect `sudo ausearch -m avc,user_avc,selinux_err -ts boot -i`;
    if not, tty9 and `/run/uncaught-logs/current`. Also try
    `sdcompat.db=previous`.
+
+## Session: 2026-10-21: first enforcing s6 boot with the RPMs, checked
+
+The owner booted "Fedora (s6 + sdcompat)" enforcing after installing the
+RPMs built from `341d610`. Checked from that boot, without root.
+
+### Verified (14:16 boot)
+
+- `getenforce` Enforcing, /proc/cmdline without enforcing=0, PID 1
+  s6-svscan; `sdcompat --version` all five on
+  `0.1.0-1.20261021140308.g341d610.fc45`, exit 0; `systemctl --failed`
+  empty; `loginctl` shows the tty2 GNOME session.
+- `341d610` fix works: /var/lib/sdcompat and everything in it
+  init_var_lib_t; rc.init's regeneration swapped the links at 14:16
+  (current = db/…-1159, previous = the 14:14 one), the `.*.tmp` links from
+  the failed boot are gone and the database GC left only those two dirs.
+- `c5f2e06` fixes: /run/uncaught-logs init_var_run_t; `hostnamectl` works
+  and after hostnamed's idle exit it is `inactive (dead)`, not failed.
+- journald running (journalctl -b works); 5 servicedirs call
+  sdcompat-runner.
+- ~/avc-enforcing2.txt is from a 13:56 boot, not this one. It has only
+  denials already listed as accepted: early oneshots/getty/rsyslogd on the
+  s6-svscan-log fifo (var_run_t), NM dispatcher scripts on an init_t
+  pipe, hostnamed on /proc/pressure. No s6-log rename, no
+  systemd_hostnamed_t dbus denial.
+
+### Not yet checked (needs root)
+
+- AVCs of this boot (`ausearch -ts boot`), rotated files in
+  /run/uncaught-logs, `s6-svstat` of sdcompatd/sdcompat-fdstore, the fd
+  store count across `s6-svc -r /run/service/sdcompatd`; then checklist
+  steps 5 (upgrade) and 6 (`setup-fedora.sh --enforcing`).
