@@ -645,9 +645,13 @@ else
 fi
 sleep 0.5
 [ ! -e "$R/late.out" ] && ok "nothing started during shutdown" || bad "late.service started during shutdown"
+t0=$(date +%s)
 kill "$(cat "$W/daemon.pid")"
-tries=30
+tries=60
 while [ $tries -gt 0 ] && ! grep -qx "down c" "$R/prep.out"; do tries=$((tries - 1)); sleep 0.2; done
+t1=$(date +%s)
+# Its ExecStop= made an activation: answered while the daemon stops units.
+[ $((t1 - t0)) -lt 5 ] && ok "bus answered while stopping at shutdown" || bad "prep@c's stop took $((t1 - t0)) s"
 grep -qx "down c" "$R/prep.out" && ok "prep@c's ExecStop= ran, started by an earlier daemon" || bad "prep@c not stopped at shutdown"
 [ ! -e "$R/run/dyn-oneshot/prep@c.service" ] && ok "its marker is gone" || bad "prep@c marker left"
 rm -f "$R/run/shutting-down"

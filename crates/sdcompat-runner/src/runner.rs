@@ -1237,7 +1237,11 @@ impl Runner {
             }
         }
         let status = Status::from_wait(wait_pid(child));
+        let t = std::time::Instant::now();
         session.close();
+        if t.elapsed() >= std::time::Duration::from_secs(2) {
+            log(self.id(), &format!("closing the PAM session took {:.1} s", t.elapsed().as_secs_f64()));
+        }
         match status {
             Status::Exited(c) => c,
             Status::Killed(sig) => {

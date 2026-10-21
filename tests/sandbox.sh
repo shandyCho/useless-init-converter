@@ -301,7 +301,9 @@ Description=Prepare %i (like user-runtime-dir@)
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/sh -c 'echo up %i >> $R/prep.out; [ %i != d ] || sleep 1'
-ExecStop=/bin/sh -c 'echo down %i >> $R/prep.out'
+# c is stopped at shutdown, where it asks the bus first (as a PAM close or
+# NetworkManager did): the daemon must still answer then.
+ExecStop=/bin/sh -c '[ %i != c ] || busctl --address=unix:path=$R/bus --timeout=10 call org.example.Late / org.example.Late Ping >/dev/null 2>&1; echo down %i >> $R/prep.out'
 EOF
 cat > "$U/inst@.service" <<EOF
 [Unit]

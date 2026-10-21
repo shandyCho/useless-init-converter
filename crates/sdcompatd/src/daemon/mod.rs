@@ -1700,9 +1700,21 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
 
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|e| e.to_string())?;
+    let mut stopping: Option<tokio::task::JoinHandle<()>> = None;
     loop {
         tokio::select! {
-            _ = term.recv() => break,
+            _ = term.recv(), if stopping.is_none() => {
+                if !daemon.cfg.run_dir.join("shutting-down").exists() {
+                    break;
+                }
+                // Keep answering the bus while the oneshots stop: their
+                // ExecStop=, a PAM session close or a daemon stopping beside
+                // them may call us, and the bus would hold such a caller
+                // for its 25 s timeout (NetworkManager did, at power-off).
+                let d = daemon.clone();
+                stopping = Some(tokio::spawn(async move { d.stop_dynamic_oneshots().await }));
+            }
+            _ = async { stopping.as_mut().unwrap().await }, if stopping.is_some() => break,
             m = stream.next() => {
                 let Some(m) = m else { break };
                 let Ok(msg) = m else { continue };
@@ -1731,9 +1743,6 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
                 }
             }
         }
-    }
-    if daemon.cfg.run_dir.join("shutting-down").exists() {
-        daemon.stop_dynamic_oneshots().await;
     }
     if let Some(flag) = &daemon.cfg.booted_flag {
         let _ = std::fs::remove_dir(flag);

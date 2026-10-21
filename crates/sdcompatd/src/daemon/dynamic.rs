@@ -337,7 +337,12 @@ impl Daemon {
             .collect();
         for id in ids {
             let (_, unit) = self.load_unit(&id);
+            let t = std::time::Instant::now();
             self.dyn_stop(&id, &unit).await;
+            // Says where a slow power-off waited (dependents like user@ included).
+            if t.elapsed() >= Duration::from_secs(2) {
+                eprintln!("sdcompatd: stopping {id} took {:.1} s", t.elapsed().as_secs_f64());
+            }
         }
     }
 
