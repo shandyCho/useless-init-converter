@@ -34,6 +34,12 @@ if they turned out to be wrong.
   (it builds the standalone tools), also with `SANDBOX_JOURNAL=no` and
   `SANDBOX_FDSTORE=no` in front of both scripts when touching those parts.
   Everything runs unprivileged and never touches the host's init system.
+- Never modify skarnet's sources (skalibs, execline, s6, s6-rc,
+  s6-linux-init, s6-frontend), and don't add patches for them in
+  `dist/rpm/`. Reading the tarballs to understand their behaviour is fine.
+  Fix things on sdcompat's side (SELinux module, skel scripts, setup,
+  crates); if that isn't possible, describe the upstream behaviour and
+  leave the decision to the owner.
 - Shell scripts must pass `bash -n` and `shellcheck -S warning`.
 - Docs exist in Korean and English: `README.md`/`README-us.md`,
   `TESTING.md`/`TESTING-us.md`, and each standalone project's README pair.
