@@ -3968,3 +3968,58 @@ With `0240e02`: cargo test passes; sandbox 204/204, SANDBOX_JOURNAL=no
 Unchanged from the 2026-10-21 entries (owner: live s6-rc repair, label
 check, RPMs, reboot, power-off retest; reload flake; the "Not changed"
 dyn_stop items).
+
+## Session: 2026-10-22: damage checker in check.sh
+
+Owner asked for the damage checker from the test plan (step 2a).
+
+### Changes (`1b5e391`)
+
+- check.sh: `section NAME` replaces every `echo "== NAME"` (31) and
+  first runs damage(): a leftover s6-rc live directory, live
+  servicedirs differing from the compiled db, a dangling scan-directory
+  entry, an s6rc-* service that s6-rc lists up but whose supervisor
+  doesn't run it. Each kind fails once ($W/damage.seen). New final
+  section "end state": no job left after up to 10 s, no damage seen.
+- First version checked every longrun s6-rc lists as up: false alarms
+  for failing.service, flappy.service, second.service (s6-rc doesn't
+  follow deaths; a failed unit stays "up" for it, sdcompat reports it
+  failed from its own state), so only s6rc-* are checked.
+- s6-rc list takes its lock without waiting (EBUSY while a section holds
+  it), so that check is skipped then instead of hanging.
+
+### Findings
+
+- The reload flake (open since session 7) is frequent: 3 of 7 runs
+  today (2 default, 1 FDSTORE=no). Every time: daemon.log `s6-rc-update
+  failed, retrying: ... unable to manage new service directories in
+  .../live: Broken pipe`, the retry "succeeds", and the checker reports
+  before "timers" (the section after "unit files", which reloads):
+  `s6-rc live directory left over: live:s6-rc-init:*` and `s6-rc has
+  s6rc-oneshot-runner up, but its supervisor doesn't run it`. Twice it
+  cascaded into 16 functional failures (hello.service inactive, timers,
+  path units, job queue, ...); once only the leftover dir showed.
+- Five Reload calls on a fresh sandbox: one live dir each time, no
+  retry, so a leftover dir is never normal.
+- "unable to manage new service directories" comes after s6-rc-update
+  has switched the live symlink (s6-rc-update.c, after make_new_livedir),
+  so sdcompat-gen's retry runs against a half-finished update.
+
+### Tests
+
+bash -n and shellcheck -S warning on check.sh. Sandbox default 206/206
+(three runs), SANDBOX_JOURNAL=no 211/211; the flaky runs above fail only
+by the flake (189/208 with its cascade).
+
+### Current state
+
+The suite now fails visibly whenever the reload flake hits, with the
+cause named first.
+
+### Next steps
+
+1. Fix the reload flake: find what the "Broken pipe" is (s6-svscan's
+   control fifo? s6-ftrigrd?) and what sdcompat-gen should do after a
+   post-switch failure (not retry s6-rc-update; restart the s6rc-*
+   services / rescan instead?). Never patch skarnet's sources.
+2. Earlier next steps unchanged.
