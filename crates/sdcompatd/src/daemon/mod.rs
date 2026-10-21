@@ -194,6 +194,18 @@ fn shutdown_action(id: &str) -> Option<&'static str> {
     }
 }
 
+/// AttachProcessesToUnit's subcgroup, relative to the unit's cgroup, as
+/// systemd's path_is_normalized() takes it: a leading or trailing '/' is
+/// fine, but no ".", ".." or empty component, which could leave the unit's
+/// cgroup. None if it isn't normalized.
+fn subcgroup(sub: &str) -> Option<&str> {
+    let rel = sub.trim_start_matches('/').trim_end_matches('/');
+    if rel.is_empty() {
+        return Some("");
+    }
+    rel.split('/').all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains('\0')).then_some(rel)
+}
+
 /// PIDs behind the pidfds of a PIDFDs (ah) property.
 fn pids_from_pidfds(v: &OwnedValue) -> Vec<u32> {
     use std::os::fd::AsRawFd;
@@ -968,10 +980,13 @@ impl Daemon {
         self.require_privileged(c, msg).await?;
         let (name, sub, pids): (String, String, Vec<u32>) = Self::args(msg)?;
         Self::valid_name(&name)?;
+        let Some(sub) = subcgroup(&sub) else {
+            return Err(err(E_INVALID_ARGS, format!("Control group path is not normalized: {sub}")));
+        };
         let (id, unit) = self.load_unit(&name);
         let mut dir = self.cgroup_dir_of(&id, &unit);
         if !sub.is_empty() {
-            dir = dir.join(sub.trim_start_matches('/'));
+            dir = dir.join(sub);
         }
         std::fs::create_dir_all(&dir).map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
         for p in pids {
@@ -1808,5 +1823,17 @@ mod tests {
         assert_eq!(apply_markers(m, &[]).unwrap(), set(&[]));
         assert!(apply_markers(set(&[]), &words(&["+needs-restart", "needs-reload"])).is_err());
         assert!(apply_markers(set(&[]), &words(&["+bogus"])).is_err());
+    }
+
+    #[test]
+    fn subcgroup_normalized() {
+        assert_eq!(subcgroup(""), Some(""));
+        assert_eq!(subcgroup("/"), Some(""));
+        assert_eq!(subcgroup("payload"), Some("payload"));
+        assert_eq!(subcgroup("/a/b/"), Some("a/b"));
+        assert_eq!(subcgroup("a..b/.c"), Some("a..b/.c"));
+        for bad in ["..", "../x", "a/../../b", "a/./b", "a//b", "/.", "x/.."] {
+            assert_eq!(subcgroup(bad), None, "{bad}");
+        }
     }
 }

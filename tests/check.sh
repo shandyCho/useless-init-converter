@@ -185,6 +185,13 @@ expect_eq "ListUnitsByNames skips ../" "$($B call $MGR ListUnitsByNames as 1 ../
 $B call $MGR GetUnitProcesses s ../../leak.service 2>&1 | grep -q "not loaded" && ok "GetUnitProcesses refuses ../" || bad "GetUnitProcesses accepted ../"
 $B call $MGR StartUnit ss ../../leak.service replace 2>&1 | grep -q "is not valid" && ok "StartUnit refuses ../" || bad "StartUnit accepted ../"
 rm -rf "$R/leak.service"
+# AttachProcessesToUnit's subcgroup is joined onto the unit's cgroup: no
+# ".." out of it (systemd: "not normalized").
+sleep 30 &
+sp=$!
+$B call $MGR AttachProcessesToUnit ssau hello.service ../../x 1 $sp 2>&1 | grep -q "not normalized" \
+    && ok "AttachProcessesToUnit refuses a subcgroup with .." || bad "AttachProcessesToUnit accepted a subcgroup with .."
+kill $sp 2>/dev/null
 
 echo "== unit files"
 out=$($B call $MGR EnableUnitFiles asbb 1 forking.service false false)
