@@ -3091,3 +3091,10 @@ RPMs built from `341d610`. Checked from that boot, without root.
   /run/uncaught-logs, `s6-svstat` of sdcompatd/sdcompat-fdstore, the fd
   store count across `s6-svc -r /run/service/sdcompatd`; then checklist
   steps 5 (upgrade) and 6 (`setup-fedora.sh --enforcing`).
+- AVCs of this boot (~/avc-enforcing3.txt, 65 records, JOURNAL=no from
+  sdcompat.conf): only the accepted ones. NM dispatcher scripts on the
+  service's s6-log pipe (init_t, JOURNAL=no only); systemd-user-runtime-dir,
+  rsyslogd, loadkeys, agetty, restorecon on the s6-svscan-log fifo
+  (var_run_t); hostnamed searching /proc/pressure. No s6-log rename, no
+  systemd_hostnamed_t dbus denial, nothing on /var/lib/sdcompat, nothing
+  from sdcompat's own programs or the fd store.
