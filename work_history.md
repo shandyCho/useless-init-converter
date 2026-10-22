@@ -4023,3 +4023,224 @@ cause named first.
    post-switch failure (not retry s6-rc-update; restart the s6rc-*
    services / rescan instead?). Never patch skarnet's sources.
 2. Earlier next steps unchanged.
+
+## Session: 2026-10-22: s6 boot on the old build; RPMs at HEAD
+
+The owner rebooted into s6 (09:05) and asked what to do next.
+
+### Findings (read-only, no root)
+
+- PID 1 s6-svscan, enforcing, `is-system-running` running, nothing
+  failed, one live dir (/run/s6-rc:s6-rc-init:HNM796), no leftover,
+  /run/service/s6rc-oneshot-runner resolves.
+- Installed sdcompat RPMs are `g06585e6` (2026-10-21 21:14): none of
+  `ebcebda` onward, so neither the label fix `a1eb405` nor the later
+  sdcompatd fixes. /run/s6-rc and the live dir are var_run_t and
+  `matchpathcon` gives var_run_t: the next daemon-reload (or dnf
+  transaction) would fail as on 2026-10-21.
+- Since `06585e6`, dist/ and packages/ changed only in sdcompat.cil and
+  setup's restorecon of the live dirs; sdcompat.spec %post loads the
+  module, so `dnf upgrade` is enough (no setup rerun) once the live dir
+  is relabelled.
+- /var/log/sdcompat/last-shutdown-*.log are from 2026-10-21 21:28: no s6
+  power-off recorded since.
+
+### Changes
+
+None to the repo. RPMs built at `7f64963`:
+~/rpmbuild-sdcompat/rpms/*-0.1.0-1.20261022090953.g7f64963.fc45; the
+packaged sdcompat.cil has the /run/s6-rc filecon.
+
+### Next steps (given to the owner)
+
+1. On this boot: `chcon -h -t init_var_run_t /run/s6-rc`, `chcon -R -t
+   init_var_run_t /run/s6-rc:s6-rc-init:HNM796`, `systemctl
+   daemon-reload` must succeed with one s6-rc-update:* live dir left
+   (confirms the diagnosis on the old build).
+2. `dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm`; `matchpathcon
+   /run/s6-rc` must then give init_var_run_t.
+3. Reboot into s6: labels init_var_run_t without chcon; daemon-reload
+   works.
+4. Power-off retest of `ebcebda`/`526d60d` (logs as listed earlier).
+5. Earlier next steps unchanged (reload flake, dyn_stop "Not changed").
+
+## Session: 2026-10-22: first s6 boot on `7f64963`
+
+The owner upgraded the RPMs, rebooted into s6 and asked what to do next.
+
+### Findings (read-only, no root)
+
+- Installed: sdcompat* 0.1.0-1.20261022091359.g7f64963 (installed
+  09:23:14; a rebuild of the same commit, not the 090953 build named
+  above). Boot 09:49:37, PID 1 s6-svscan, enforcing, is-system-running
+  running, nothing failed.
+- **`a1eb405` works at boot:** /run/s6-rc, /run/s6-rc:s6-rc-init:GDGg97
+  and its contents are init_var_run_t without chcon; `matchpathcon
+  /run/s6-rc` gives init_var_run_t. No daemon-reload yet on this boot, so
+  s6-rc-update under enforcing is still untested.
+- The previous boot shut down right after the RPM transaction:
+  user@1000's log has SELinux load_policy at 09:26:32.97, exit.target at
+  33.23, the last slice at 33.67; last-shutdown-*.log are from 09:27:22,
+  so ~49 s again. That user@1000's runner was the old binary (started
+  09:05), so no `closing the PAM session took` line could appear; whether
+  sdcompatd was already the new one depends on the transaction's
+  restart. The console log is root-only and not read yet.
+
+### Changes
+
+None to the repo.
+
+### Current state
+
+`7f64963` installed and booted; the label fix holds at boot. Not yet
+seen: a live update and a power-off with the new sdcompatd and runner.
+
+### Next steps (given to the owner)
+
+1. Copy the 09:26 shutdown logs before the next power-off overwrites
+   them: `mkdir -p ~/sdcompat-logs/0926 && sudo install -m 644 -o
+   "$USER" /var/log/sdcompat/last-shutdown-*.log ~/sdcompat-logs/0926/`.
+2. `sudo systemctl daemon-reload; echo rc=$?`; `ls -dZ /run/s6-rc:*`
+   must show one s6-rc-update:* dir, init_var_run_t; the catch-all grep
+   for `s6-rc-update|rollback|unable to stat` must print nothing.
+3. If 2 is clean: power off from this boot, time it, boot s6, copy the
+   logs to ~/sdcompat-logs/retest the same way; read them with
+   user@1000's log (world-readable).
+4. Earlier next steps unchanged (reload flake, dyn_stop "Not changed").
+
+## Session: 2026-10-22: live update OK; shutdown logs lost on a read-only root
+
+The owner ran next steps 1-3 of the previous entry and pasted the
+terminal output without comment.
+
+### Findings (read-only, no root)
+
+- Step 1: ~/sdcompat-logs/0926 holds the 09:27:22 logs (the 09:26
+  shutdown, run by the old runner): `sdcompat: shutdown starts` at
+  1293.56, the runner's PAM session_close (res=failed) at 1339.28, i.e.
+  ~46 s; iscsiadm and systemd-user-runtime-dir denied writing to
+  /run/service/s6-svscan-log/fifo (var_run_t).
+- **Step 2 passed: s6-rc-update works under enforcing.** `systemctl
+  daemon-reload` rc=0, one live dir `s6-rc-update:PokOrA`,
+  init_var_run_t; the catch-all grep printed nothing. This confirms
+  `a1eb405` for live updates, not only at boot.
+- **Step 3: the 09:56 shutdown wrote no logs.** ~/sdcompat-logs/retest
+  is byte-identical to 0926; /var/log/sdcompat/last-shutdown-*.log are
+  still from 09:27:22. So rc.shutdown.final either didn't run (shutdown
+  hung, or the machine was switched off by hand) or couldn't write.
+  It ran for the 09:26 shutdown with the same installed scripts (09:23,
+  same as dist/ except the `/usr/bin/sh` shebang) and the same policy.
+- What the 09:56 shutdown did leave: user@1000's log runs to exit.target
+  at 09:56:34.44 and app.slice at 34.69, the same sequence as at 09:26,
+  and its logger exited cleanly (no new @*.u in any service log dir).
+  iscsid's last write was 09:56:34.70. Nothing in /var/log/sdcompat was
+  written after that. The next kernel started 10:03:41 (btime), 7 min
+  later. There's no `closing the PAM session took` line: either the PAM
+  close took < 2 s or the runner never got that far.
+- The owner started the 09:56 shutdown from the GNOME menu, as at 09:26
+  (the 09:26 log has `poweroff.target requested, running:
+  s6-linux-init-shutdown -p now` at 09:26:32.965).
+- The 09:26 console log (readable in ~/sdcompat-logs/0926) shows the dnf
+  transaction restarted sdcompatd (`ready` at 09:23:54.90) and reloaded
+  it (`reloaded: 294 units` at 09:24:52). So the 09:26 shutdown already
+  ran the new sdcompatd after a reload, and it finished. Neither the new
+  sdcompatd nor a reload alone explains 09:56. What was new at 09:56:
+  user@1000's runner (the 09:26 one dated from 09:05).
+- **At 09:26 the 45 s was user@1000's PAM close.** `sdcompatd: stopping
+  user-runtime-dir@1000.service took 45.7 s` at 09:27:18.93, the same
+  moment as the runner's session_close audit (res=failed). systemd
+  --user had exited at 09:26:33.67, and the runner closes PAM right
+  after its child exits (runner.rs exec_with_pam), so ~45 s were inside
+  pam_close_session. The systemd-user stack's close: pam_systemd_home,
+  pam_systemd (ReleaseSession to logind, which s6-rc stopped at
+  09:26:33.20; a failure returns PAM_SESSION_ERR, matching res=failed),
+  pam_keyinit, pam_namespace, pam_selinux, pam_unix. sdcompatd logged no
+  login1 or home1 activation during that time. Which module waited isn't
+  settled.
+- user@1000's dynamic servicedir has timeout-kill 60000, so s6-supervise
+  SIGKILLs the runner 60 s after the SIGTERM: a PAM close that hangs
+  can't stop the shutdown for more than ~60 s, but a killed runner never
+  logs `closing the PAM session took`.
+- The owner: the 09:56 power-off **turned the machine off by itself**,
+  slowly (over a minute). So it wasn't a hang: stage 4 ran.
+- **Cause: rc.shutdown.final writes to a read-only root.** Read in
+  skarnet's sources (not modified): shutdownd, after rc.shutdown exits,
+  unsupervises the tree, sync, SIGTERM to all, waits the grace time
+  (-g 3000), sync, SIGKILL; the stage 4 script is `foreground {
+  s6-linux-init-umountall }`, `foreground { tryexec { .../scripts/
+  rc.shutdown.final } }`, `s6-linux-init-hpr -f -p` (hpr -f syncs, then
+  reboot(2)). s6-linux-init-umountall (src/misc) calls umount() on every
+  /proc/mounts entry in reverse order, except the first devtmpfs, proc
+  and sysfs, and on EBUSY remounts the filesystem MS_RDONLY. The root is
+  always busy, so it is remounted read-only, which only fails while some
+  process still has a file open for writing. rc.shutdown.final's
+  comment ("the root filesystem is usually still busy, so it stays
+  writable") was wrong: the logs survived only messy shutdowns (09:27,
+  2026-10-21 21:28) and were lost at 09:56, presumably a cleaner one.
+  That fits: same scripts (old and new basedir identical, checked
+  against setup-backup/20261022-092350), same policy, labels fine,
+  /var/log on /, and no sdcompat path powers off except through
+  s6-linux-init-shutdown.
+- No time limit on rc.shutdown either: shutdownd waits for it without
+  one (wait_pid, no timeout), rc.shutdown's `s6-rc -bDa change` had no
+  `-t`, and sdcompatd's s6-rc service has neither timeout-down nor
+  timeout-kill. A stop that never finishes would keep the machine up for
+  good with no logs. Not what happened at 09:56, but possible.
+- Current boot (10:03): `7f64963`, enforcing, is-system-running running,
+  nothing failed, one live dir s6-rc-init:WqOjWA, init_var_run_t.
+
+### Changes (`d0f29da`)
+
+- rc.shutdown.final: if /var/log/sdcompat isn't writable, remount its
+  filesystem (findmnt -T, else /) read-write, write both files, sync,
+  remount it read-only again. If it is still not writable, print
+  `sdcompat: /var/log/sdcompat is read-only, the shutdown logs are not
+  kept` to /dev/console and exit 0. `mount` runs as mount_t (init_t
+  domain transition); not verified under enforcing.
+- rc.shutdown: `s6-rc -v2 -t 180000 -bDa change` (owner chose 3 min);
+  exit 2 logs `sdcompat: services still not down after 180 s, killing
+  the rest` to /dev/kmsg, other failures `s6-rc change exited N`; the
+  script exits with s6-rc's code (shutdownd only warns). Per the s6-rc
+  doc, -t leaves the live state as it is and doesn't kill children;
+  whether -t also covers the -b lock wait isn't documented.
+- README/README-us: the 3-minute limit. TESTING/TESTING-us "Previous
+  shutdown": the kernel log has no `services still not down after
+  180 s`.
+
+### Tests
+
+bash -n and shellcheck -S warning on both scripts. rc.shutdown.final
+in `unshare -rm` with a ramfs over /var/log/sdcompat (tmpfs remount
+fails in a user namespace: util-linux passes uid=1000): read-only ->
+remounted rw, both files rewritten, read-only again; already writable
+-> left rw; read-only locked by a nested user namespace -> message,
+files untouched. rc.shutdown in `unshare -rm` with tmpfs over
+/run/sdcompat and a fake s6-rc in PATH: marker written, `-t 180000`
+passed, exits 0/2/1 as s6-rc did. cargo and the sandbox suite not run:
+no Rust changed and the sandbox doesn't use the skel.
+
+### Current state
+
+Label fix confirmed for boot and live update. The shutdown logs should
+now survive a clean shutdown; untested on a real one. The scripts reach
+/etc/s6-linux-init/current only when setup reruns s6-linux-init-maker
+(the RPM's %post doesn't). The power-off retest of `ebcebda`/`526d60d`
+is still open: the 09:56 power-off left no data.
+
+### Next steps
+
+1. Owner: `packages/build-rpms.sh`, `sudo dnf upgrade
+   ~/rpmbuild-sdcompat/rpms/*.rpm`, rerun setup (`sudo
+   dist/setup-fedora.sh --enforcing`, as at 09:23) so it regenerates
+   /etc/s6-linux-init/current; check `grep remount,rw
+   /etc/s6-linux-init/current/scripts/rc.shutdown.final` prints a line. Then boot
+   s6, power off from GNOME, time it, boot s6, copy the logs to a new
+   directory and read them with user@1000's log.
+2. If the logs are still old: look for the console message and an AVC
+   on mount (mount_t remount of /) in the kernel log's tail, which needs
+   the screen or a photo.
+3. With the logs: the runner's `closing the PAM session took` line, or
+   its absence with `stopping user-runtime-dir@1000.service took` ≈ 60 s
+   (SIGKILL), shows whether the 45 s PAM close remains; then find the
+   module (pam_systemd's ReleaseSession to the stopped logind first).
+4. Earlier next steps unchanged (reload flake, dyn_stop "Not changed").
