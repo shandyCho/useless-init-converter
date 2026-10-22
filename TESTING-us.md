@@ -234,7 +234,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | BPF programs refused | `journalctl -b -g 'not enforced'` (with `JOURNAL=no`: `sudo grep 'not enforced' /var/log/messages`) | nothing |
 | polkit under `DevicePolicy=strict` | `pkaction \| head -3` | three action IDs (polkitd answers) |
 | The `s6` command | `s6 live status \| head` | services with `up`, e.g. `NetworkManager.service/longrun//up/explicit` |
-| Previous shutdown | after an s6 power-off and the next s6 boot: `sudo ls -l /var/log/sdcompat/last-shutdown-*.log; sudo grep -ci denied /var/log/sdcompat/last-shutdown-*.log` | both files from the power-off time, and `0` denials (send the files otherwise); the power-off took a few seconds, not 25 s or more; the console log is not empty and has no `unable to rename`, no `Failed to activate service ... timed out` and no `sdcompatd: stopping ... took` |
+| Previous shutdown | after an s6 power-off and the next s6 boot: `sudo ls -l /var/log/sdcompat/last-shutdown-*.log; sudo grep -ci denied /var/log/sdcompat/last-shutdown-*.log` | both files from the power-off time, and `0` denials (send the files otherwise); the power-off took a few seconds, not 25 s or more; the console log is not empty and has no `unable to rename`, no `Failed to activate service ... timed out` and no `sdcompatd: stopping ... took`; the kernel log has no `services still not down after 180 s` |
 | Bus and userdb labels | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t` and `systemd_userdbd_runtime_t` |
 | Overall state | `systemctl is-system-running` | `running` (`degraded` is OK; see next line) |
 | Failed units | `systemctl --failed` | ideally none; note any that are listed |

@@ -284,7 +284,8 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다.
 s6 종료 때 콘솔에 나온 내용은 다음 부팅에서 `/var/log/sdcompat/last-shutdown-console.log`
 (s6의 catch-all 로그)와 `last-shutdown-kernel.log`(종료가 시작된 뒤의 커널 로그, auditd가 멈춘 뒤의
 SELinux 거부 포함)로 볼 수 있습니다(root 전용). 종료가 시작되면 sdcompatd는 새 유닛 시작과 D-Bus
-활성화를 systemd처럼 바로 거부합니다.
+활성화를 systemd처럼 바로 거부합니다. 종료가 시작되고 3분이 지나도 멈추지 않은 서비스는 강제로
+종료되므로, 끝나지 않는 정지 때문에 기계가 꺼지지 않는 일은 없습니다.
 
 skarnet 타르볼은 RPM 빌드 스크립트와 `--build-s6` 모두에서 고정된 SHA-256 값(2026-10-18
 릴리스 기준)으로 검증합니다. 소스로 빌드한 경우 설치된 파일은 `--uninstall --remove-s6`을
