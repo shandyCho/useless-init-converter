@@ -4226,6 +4226,9 @@ now survive a clean shutdown; untested on a real one. The scripts reach
 /etc/s6-linux-init/current only when setup reruns s6-linux-init-maker
 (the RPM's %post doesn't). The power-off retest of `ebcebda`/`526d60d`
 is still open: the 09:56 power-off left no data.
+RPMs built at `99e077e` (owner's request):
+~/rpmbuild-sdcompat/rpms/*-0.1.0-1.20261022103911.g99e077e.fc45; the
+packaged skel has both new scripts.
 
 ### Next steps
 
