@@ -4445,3 +4445,154 @@ setup reruns s6-linux-init-maker.
 3. Then the power-off retest from the previous entry.
 4. Decide on the "Reported, not fixed" list; EXTEND_TIMEOUT_USEC= and the
    oneshot SuccessExitStatus= are the next most likely to bite.
+
+## Session: 2026-10-23: review committed; the "reported, not fixed" list
+
+The owner asked to commit the previous session's review fixes and to fix
+the "Reported, not fixed" list of that entry.
+
+### Commits
+
+- `24e6b57` the review fixes (unchanged from the working tree; cargo test
+  passed before committing), `64de578` its work_history entry.
+- `761d2e0` the list below.
+
+### Fixed, by group (the list's order)
+
+- EXTEND_TIMEOUT_USEC=: the notify helper moves its deadline to now+N
+  (never earlier) and records it as the `extend-until` state key, which
+  the daemon's wait_ready()/wait_woken() honour. gen writes no s6-rc
+  timeout-up for Type=notify/notify-reload: s6-rc would bring the service
+  down at a fixed backstop, and the helper releases s6-rc at the
+  (extended) timeout anyway. Only the start timeout is extended, not the
+  stop or reload ones.
+- Runner: SuccessExitStatus= on a oneshot's ExecStart= (systemd: main
+  processes only, not Pre/Post) and exit status names; EXIT_SECCOMP was
+  231 (APPARMOR_PROFILE), now 228. Restart=: a helper's "timeout" result
+  makes the exit unclean (on-failure, on-abnormal restart; on-abort does
+  not). Environment order as exec_invoke(): our_env, PassEnvironment=,
+  Environment=, EnvironmentFile=, then UnsetEnvironment=; the files are
+  read per command (a missing one: exit 204 as systemd's EXIT_MEMORY there),
+  Runner::new still checks them so a missing file fails the start early.
+  PIDFile=: up to TimeoutStartSec= ("timeout"), or "protocol" once no
+  process is left. ExecStopPost= after the cgroup kill and before a final
+  one. '+' commands: no NNP. MAINPID=: systemd's
+  service_is_suitable_main_pid() (in the unit's cgroup, subgroups too, or
+  a root sender). PAM wrapper: signals blocked and handlers set before
+  fork; exec_command() resets dispositions before unmasking. KillUnit
+  whom=main uses the recorded MAINPID (the supervised pid is the wrapper
+  for PAMName=/forking). RESTART_TIMES not kept without a start limit.
+- Daemon: AttachProcessesToUnit("") = caller's unit; unprivileged callers
+  pass without polkit when the unit is their own, Delegate=yes, and every
+  pid is theirs and in it. GetUnitByPID: outermost .service/.scope, else
+  the innermost slice. polkit details unit/verb/polkit.message for
+  job, kill, reset-failed and set-property calls. `s6-svc -r`:
+  restart_longrun() kills (s6-svc -k) after TimeoutStopSec= and clears
+  RESTART_REQUESTED if even that fails; checked in s6-supervise.c that -r
+  is killr() only and timeout-kill is armed by up_d (-d) alone.
+  ResetFailed turns START_FAILED into a new `parked` key (inactive, still
+  restarted by the next start; clearing START_FAILED alone would have
+  shown the waiting run process as active). SetProperties/Ref/Unref moved
+  into unit_method (they were only reached with a non-Unit interface).
+  ReloadUnit is accepted behind a non-stop job; at its turn
+  reload_if_active() returns "invalid" if that job left the unit
+  inactive. transient render(): structs shorter than 2 fields are an
+  error. "dynamic/index lock order": no place takes them in the opposite
+  order; known_units() now takes one lock at a time.
+- Parsing: comments are skipped before continuation handling; envfile
+  follows parse_env_file_internal() (quotes only in PRE_VALUE);
+  drop-ins for each dash prefix (`user-.slice.d`); `M`/month and
+  `y`/year (30.44 / 365.25 days) and `µs`/`μs` (the unit scan was
+  ASCII-only, so µs never parsed); mountinfo read as bytes and octal
+  escapes decoded from bytes (a str slice could panic); path units keep
+  one inotify instance, re-add watches each round and remove the stale
+  ones; `~07/1`-style repetitions count towards the month's end (test:
+  `Mon *-05~07/1` is 2027-05-31); the daemon no longer calls next_after()
+  for a named zone (switches_tz(); it uses the runner's next elapse).
+- Sandbox: rw paths below a ReadOnlyPaths= entry are bound rw again after
+  it; inaccessible files get `<unit state dir>/inaccessible` (empty,
+  mode 0000, bound read-only); SystemCallFilter=: unknown groups ignored
+  with a warning, `~name:errno` in an allow list kept with that errno
+  (seccomp_parse_syscall_filter()).
+- Standalone: journal-relay stream `<N>` is a level 0-7 only, facility
+  LOG_USER (journald's syslog_parse_priority(with_facility=false)); at
+  most 4096 stream threads, 128 KiB stacks. fd stores (standalone and the
+  daemon's fallback): same open file stored once (kcmp, else inode and
+  flags), 2 s SO_RCVTIMEO/SO_SNDTIMEO per client, u64 cmsg buffers.
+  sdcompat-notify rewritten: credentials with the caller's PID (falls back
+  to its own on EPERM), BARRIER=1 wait (5 s, a timeout only warns),
+  options of systemd-notify 254; README pair updated.
+- dist/packages: kernel-install entry `<id>-<kver>~sdcompat.conf`
+  (grubby-bls lists with `ls -vr`, where `x86_64-sdcompat` sorted above
+  `x86_64` and `grubby --set-default KERNEL` on kernel updates would have
+  picked the s6 entry); the old name is removed on add and remove.
+  rc.shutdown.final: mounts /var/log or /var from fstab if umountall
+  unmounted it, and when / is still writable (umountall's MAXLINES is 99:
+  it dies "too many mount points" without unmounting anything, read in
+  its source) runs `umount -a -r` and remounts / ro. packages/README pair:
+  skeleton changes need a setup rerun. early mount-api: restorecon -R
+  /dev, /run itself, and each /run entry except service, uncaught-logs,
+  s6-rc, s6-rc:* and s6-linux-init* (the root of the earlier label fixes);
+  mount-fs: `mount -o remount /` with fstab's options when / is in fstab.
+  gen: down-signal as a number when there is no name (skalibs' sig0_scan
+  takes numbers); util::signal_name knows all standard signals. JOURNAL=no:
+  INCLUDE of rsyslog.service or syslog.service leaves both unmapped. The
+  fdstore run script sources sdcompat.conf for RUN_DIR. gen and sdcompatd
+  take --config anywhere before `--`. Each spec's %check tests its crate
+  and the library crates it is built from. sdcompat.spec scriptlets use
+  xargs (SC2046). %changelog lines carry no EVR (the release is generated).
+- setup/early: check_versions captures the exit code instead of a pipeline
+  under pipefail; add_grub_entry re-creates the entry of every kernel in
+  /lib/modules with a /boot/vmlinuz; port-only Listen*= bind 0.0.0.0
+  without /proc/net/if_inet6, explicit IPv6 addresses are skipped with a
+  warning (socket_address_parse()); resolve_conflicts keeps the first of
+  a mutual pair; SYSTEMD_WANTS templates get the escaped sysfs path
+  (util::unit_name_path_escape, syspath from DEVPATH or the db id).
+- tests: last_new() makes the fdkeep checks require a new line;
+  `sandbox.sh stop` kills only PIDs whose command line names $W or $R;
+  new "start timeout" section (extend.service, noextend.service).
+- Cleanup notes: Unit::stop_timeout_usec() replaces four copies;
+  gen::Timings and gen::longrun_files() are shared with the daemon's
+  write_servicedir() (its down-signal and timeouts had drifted);
+  list_unit_files() reads the links once (Links index; a test compares it
+  with unit_file_state()); Properties.Get/GetAll build only the asked
+  interface; svstat_cached() keeps an answer while supervise/status has
+  the same device/inode/mtime (s6_svstatus_write() renames a new file in,
+  checked in the source).
+
+### Tests
+
+- `cargo build` (no warnings), `cargo test`: all pass (new: envfile
+  quotes, unit comments, timespans µs/M/y, octal, calendar `~` repetition,
+  seccomp allow-list errno and unknown group, fdstore dedup in both
+  stores, notify options and barrier, install list vs state, devices
+  templates, util path_escape, relay stream prefix). Standalone: fdstore
+  2, journal-relay 3, notify 2.
+- Sandbox (XDG_RUNTIME_DIR=/tmp/claude-1000/sdcr-fix): default 209/209,
+  SANDBOX_JOURNAL=no 214/214, SANDBOX_FDSTORE=no 209/209; no processes
+  left after `stop`.
+- bash -n / sh -n and shellcheck -S warning on every changed script.
+- Not tested: anything needing root or a real boot (AttachProcessesToUnit
+  from systemd --user, polkit rules on unit/verb, the sandbox mounts,
+  rc.shutdown.final with a separate /var or 99+ mounts, early's restorecon,
+  the kernel-install name with grubby, SYSTEMD_WANTS templates from real
+  udev events, IPv6-less sockets); the specs were not built (no rpmbuild
+  here), so the %changelog without EVR and the %check lists are unchecked.
+
+### Current state
+
+All of the previous entry's list is done in `761d2e0` on top of
+`64de578`; nothing uncommitted. Old `-sdcompat.conf` boot entries go away
+on the next kernel add/remove or setup rerun.
+
+### Next steps
+
+1. Owner: build RPMs, upgrade, rerun setup (new skeleton, kernel-install
+   entries renamed), reboot into s6.
+2. On that boot: the checks from the previous entry; `ls
+   /boot/loader/entries` shows `~sdcompat.conf` names and `grubby
+   --default-kernel` is unchanged after a kernel update; `ls -Z -d
+   /run/service /run/s6-rc` shows init_var_run_t; a `sdcompat reload`
+   (s6-rc-update) works under enforcing.
+3. Power-off retest; then rc.shutdown.final's logs with a separate /var if
+   such a machine is available.
