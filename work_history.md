@@ -4247,3 +4247,201 @@ packaged skel has both new scripts.
    (SIGKILL), shows whether the 45 s PAM close remains; then find the
    module (pam_systemd's ReleaseSession to the stopped logind first).
 4. Earlier next steps unchanged (reload flake, dyn_stop "Not changed").
+
+## Session: 2026-10-22: whole-project review (code-review max), fixes
+
+The owner ran `/code-review max --fix --comment main all`: a review of the
+whole main branch at `e2b754c` (not a PR, so `--comment` did not apply; this
+machine has no GitHub credentials anyway). Twelve finder angles ran as
+subagents (line scans of every crate, dist/ and tests/, a history audit, a
+cross-file contract tracer, Rust/shell pitfalls, wrappers, cleanup, altitude,
+CLAUDE.md conventions), then verification and a gap sweep. The session was
+cut by the usage limit several times. The fixes are in the working tree, not
+committed.
+
+### Findings fixed (the reported top 15, most severe first)
+
+1. Start timeouts unlike systemd: a Type=oneshot service got the 90 s
+   default (systemd: none unless set; 150 of the 175 oneshots on this host,
+   e.g. fstrim, man-db-cache-update, dnf-makecache, raid-check, would be
+   killed and marked failed after 90 s), and TimeoutStartSec=0 was not "no
+   timeout": the notify helper's deadline was "now" (docker.service,
+   Type=notify + TimeoutStartSec=0, SIGTERMed at once), the daemon waited
+   1 s, gen wrote a 15 s s6-rc timeout-up. Now one helper,
+   `Unit::start_timeout_usec()` (loader.rs), used by runner, gen, daemon and
+   the TimeoutStartUSec property; `unit::parse_timeout_usec()` maps 0 to
+   infinity for the stop timeouts too; gen clamps s6-rc timeouts to 32 bits
+   (s6-rc-compile rejects larger ones).
+2. Timers with OnUnitInactiveSec= fired once per boot. Seen live:
+   dnf-makecache.timer (OnBootSec=10min, OnUnitInactiveSec=3h,
+   Unit=dnf5-makecache.service) fired at 10:13 and then had `elapsed` 1 and
+   next-monotonic 0. Three causes in timer.rs: the target's state was read
+   under the Unit= alias (dnf5-makecache.service; the runner writes
+   dnf-makecache.service), the base ignored the timer's last trigger (as
+   systemd's MAX(inactive_enter, last_trigger)), and "nothing left" was
+   final although OnUnit*Sec= can arm later. Without the last-trigger base a
+   resolved alias would have re-triggered in a tight loop while the oneshot
+   ran. Also: OnBootSec=/OnStartupSec= fired again after a restart of the
+   timer longrun (now skipped when past at start and the timer triggered).
+3. The s6 boot never created kmod's static device nodes: the default
+   EXCLUDE drops kmod-static-nodes.service and systemd-*, and early's
+   tmpfiles step skips /dev. Seen live: /dev/net/tun, /dev/uinput,
+   /dev/vhost-net and /dev/cuse missing, /run/tmpfiles.d/static-nodes.conf
+   holding only the initramfs's three lines. Opening such a node fails with
+   ENOENT and the module never loads (rootless podman/pasta, VPNs, uinput,
+   libvirt's vhost-net). early mount-api now runs `kmod static-nodes` and
+   `systemd-tmpfiles --prefix=/dev --create --boot --graceful`, as those two
+   units do, before udevd and before its restorecon.
+4. The fd stores (standalone sdcompat-fdstore and the daemon's fallback)
+   never dropped fds whose peer hung up. systemd drops FDSTORE= fds on
+   POLLHUP/POLLERR and journald relies on it: one fd per stdout stream, so
+   with JOURNAL=yes the store would reach RLIMIT_NOFILE and every PUT would
+   fail (held sockets included). Now pruned on PUT/GET for unit keys ("#"
+   keys stay); the accept loops no longer spin on EMFILE.
+5. A lone `CapabilityBoundingSet=` (empty set: drop everything) was read as
+   "never set": upower, systemd-localed, chrony-wait, malcontent-* and 16
+   more units on this host ran as root with every capability. Fixed in
+   sandbox::bounding_set; AmbientCapabilities= outside the bounding set are
+   now left out as systemd does (capset() would fail with 218).
+6. After a rollback boot (sdcompat.db=previous) the first reload set
+   "previous" from "current" (the broken database) and garbage-collected the
+   running, good one. "previous" is now the database live at the time of the
+   update (gen regenerate()).
+7. The stderr-to-syslog thread of sdcompatd ended on the first line that
+   wasn't UTF-8 (lines()); fd 2 then had no reader, every eprintln! panicked
+   and children died of SIGPIPE. It reads bytes now.
+8. ProtectSystem=strict left /home, /root and /run/user read-only (systemd
+   leaves them to ProtectHome=; accounts-daemon creates home directories with
+   ProtectHome=false), and PrivateTmp= dirs under it were read-only too (they
+   live in RUN_DIR and a bind keeps the read-only flag).
+9. The service of a transient timer or path unit (systemd-run
+   --on-calendar) was unloaded 10 s after its first run, so later elapses
+   failed with NoSuchUnit. watch_dynamic keeps units a loaded transient
+   timer/path triggers.
+10. journal-relay read a memfd-passed entry from its current offset (the
+   sender's writev leaves it at the end: entries lost) and read any fd type
+   on its only thread (a pipe kept open by any user blocked all native
+   logging, then every sender). Now regular files only, from the start.
+11. The fd store limit could be bypassed with a NUL in FDNAME= (the client's
+    3-field retry then sent the attacker's <max>). The runner validates
+    FDNAME= as systemd's fdname_is_valid(); put() refuses NUL.
+12. When the runner could not set a unit up (missing User=/Group=/
+    EnvironmentFile=, unit gone), run/up/finish exited 1: no readiness, s6
+    restarting every second, the boot's change waiting timeout-up. Now run
+    records the failure (START_FAILED, result resources), reports ready and
+    waits; finish exits 125; up exits 0.
+13. rc.shutdown: s6-rc's -t starts counting only after -b got the lock
+    (s6-rc.c: lock at 619, deadline at 741), so a change holding the lock
+    kept the machine up for good, against the README's 3 minutes. timeout(1)
+    now bounds the whole call (`timeout -s KILL 180`; exit 137 logs the same
+    kernel line as exit 2).
+14. try-restart of an inactive on-demand instance started it (unit_status
+    saw the job itself and said "activating"), and reload-or-try-restart of a
+    stopped database unit ran ExecReload=. Both now check the unit's state.
+15. Restart jobs (do_restart, dyn_restart) reported "done" when the new run
+    failed (cmd_up exits 0, soft-failed longruns report ready); they now go
+    through job_outcome() like starts.
+Also fixed in passing: `systemctl is-enabled gdm.service` said "disabled"
+(seen live): a unit enabled only by an Alias= link in /etc
+(display-manager.service) now counts as enabled, vendor alias links still
+don't. RestrictSUIDSGID= now covers mkdir/mkdirat/mknod/
+mknodat (systemd's seccomp_restrict_sxid); Config::unit_run_dir escapes like
+state::for_unit and StartTransientUnit validates scope/slice names (a
+privileged "../x.scope" made gc_scopes remove_dir_all outside RUN_DIR);
+rc.shutdown.final remounts read-only again when the directory stays
+unwritable after its remount.
+
+### Reported, not fixed (owner to decide or later sessions)
+
+- EXTEND_TIMEOUT_USEC= is ignored (MariaDB recovery killed at
+  TimeoutStartSec); a fix needs the runner, the daemon's wait and gen's s6-rc
+  backstop together.
+- Runner: SuccessExitStatus= not applied to oneshots and only numbers match
+  (DATAERR etc.); Restart=on-failure/on-abnormal ignore a helper's timeout
+  (SIGTERM counts clean); EnvironmentFile= read once before ExecStartPre=;
+  environment order (PassEnvironment= over Environment=); forking PIDFile=
+  waits 5 s; ExecStopPost= before the cgroup kill; NNP for '+' commands;
+  MAINPID= taken from any accepted sender; PAM wrapper's fork/handler window
+  and kill-whom=main hitting the parent; RESTART_TIMES unbounded with
+  StartLimitIntervalSec=0.
+- Daemon: AttachProcessesToUnit("" , ...) from systemd --user rejected;
+  GetUnitByPID picks the innermost .service/.scope; polkit details empty;
+  `s6-svc -r` restarts never escalate to SIGKILL and leave
+  RESTART_REQUESTED; ResetFailed keeps START_FAILED; Unit.SetProperties/
+  Ref/Unref unreachable; dynamic/index lock order; ReloadUnit refused while
+  another job runs; f[1] index in transient render().
+- Parsing/loading: a comment line ending in '\' swallows the next line;
+  EnvironmentFile= quotes inside values; prefix drop-ins (user-.slice.d);
+  month/year time units; mountinfo with non-UTF-8 bytes; path units
+  re-creating inotify every round; calendar `~` with a repetition runs
+  backwards; TzGuard's set_var in the multi-threaded daemon.
+- Sandbox: ReadOnlyPaths= over a nested ReadWritePaths=; /dev/null (rw) for
+  inaccessible files; SystemCallFilter= `~name:errno` in allow lists and
+  unknown @groups.
+- Standalone: journal-relay stream priority (facility|level) and unbounded
+  threads; fd store duplicate suppression, single blocking thread, cmsg
+  buffer alignment; sdcompat-notify sends its own PID and lacks options.
+- dist/packages: kernel-install's <id>-<kver>-sdcompat.conf sorts before the
+  systemd entry for grubby --set-default; rc.shutdown.final with a separate
+  /var or 99+ mounts; skel changes reach /etc/s6-linux-init/current only by
+  rerunning setup (packages/README doesn't say so); early's restorecon of
+  /run as the root of the repeated label fixes; gen drops KillSignal= names
+  it can only print as numbers (httpd's SIGWINCH); JOURNAL=no maps
+  rsyslog.service to the s6 syslog even when INCLUDEd; fdstore run script
+  hardcodes /run/sdcompat; `--config` after the command is ignored by gen
+  and sdcompatd; specs' %check skips the library crates; SC2046 in
+  sdcompat.spec scriptlets; %changelog carries 0.1.0-1.
+- setup/early (from the gap sweep): check_versions exits setup halfway
+  under `set -euo pipefail` when the tools are from different builds (the
+  PIPESTATUS warning never runs); a setup rerun deletes the s6 entries of
+  all kernels and recreates only the default kernel's; mount-fs remounts /
+  rw whatever fstab says; port-only/[::] Listen*= fail the start with
+  ipv6.disable=1 (systemd falls back to IPv4); gen drops both units of a
+  mutual Conflicts=; SYSTEMD_WANTS templates get no instance.
+- tests: check.sh's fdkeep check can pass on a stale line; sandbox.sh stop
+  kills PIDs from files without checking them.
+- Cleanup notes: timeouts and service-type defaults were computed in many
+  places (now one helper for the start timeout); write_servicedir duplicates
+  gen's service files; list_unit_files is O(files x links) (0.85 s here);
+  Properties.Get builds every interface; watch_dynamic spawns s6-svstat
+  every second per instance.
+
+### Tests
+
+- `cargo build` (no warnings), `cargo test`: 52 passed (new: unit
+  parse_timeout, loader start_timeouts, sandbox empty_bounding_set, fdstore
+  hung_up_fds_go and the NUL name, install enabled_through_alias).
+  Standalone: sdcompat-fdstore 2 (new hung_up_fds_go), journal-relay 3 (new
+  memfd_from_start), notify 0.
+- Sandbox on the working tree (XDG_RUNTIME_DIR=/tmp/claude-1000/sdcr-rev):
+  default 206/206, SANDBOX_JOURNAL=no 211/211, SANDBOX_FDSTORE=no 206/206
+  (the same in a scratch copy before applying). The dist/early change came
+  after those runs; the sandbox doesn't use early.
+- bash -n, sh -n and shellcheck -S warning on rc.shutdown,
+  rc.shutdown.final and early. rc.shutdown with a fake s6-rc and a shortened
+  timeout: exits 0, 2 and 137 (s6-rc hung) with the expected kernel lines.
+  kmod static-nodes run as the user lists /dev/net/tun, /dev/uinput and
+  /dev/vhost-net among 13 nodes.
+- Not tested: anything needing root or a real boot (capabilities, the
+  ProtectSystem=strict mounts, the static nodes at boot, rc.shutdown under
+  shutdownd, the rollback path).
+
+### Current state
+
+All fixes above are uncommitted in the working tree on top of `e2b754c`.
+early reaches /usr/libexec/sdcompat with the sdcompat RPM; the skel scripts
+(rc.shutdown, rc.shutdown.final) reach /etc/s6-linux-init/current only when
+setup reruns s6-linux-init-maker.
+
+### Next steps
+
+1. Owner: review and commit the working tree; build RPMs, upgrade, rerun
+   setup (regenerates /etc/s6-linux-init/current), reboot into s6.
+2. On that boot: `ls -l /dev/net/tun /dev/uinput`; dnf-makecache.timer
+   should show a next elapse (`systemctl list-timers dnf-makecache.timer`)
+   about 3 h after dnf-makecache.service last ran; `systemctl is-enabled
+   gdm` prints enabled; `systemctl show -p CapabilityBoundingSet upower`
+   and `grep Cap /proc/$(pidof upowerd)/status` show an empty set.
+3. Then the power-off retest from the previous entry.
+4. Decide on the "Reported, not fixed" list; EXTEND_TIMEOUT_USEC= and the
+   oneshot SuccessExitStatus= are the next most likely to bite.
