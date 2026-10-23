@@ -4596,3 +4596,72 @@ on the next kernel add/remove or setup rerun.
    (s6-rc-update) works under enforcing.
 3. Power-off retest; then rc.shutdown.final's logs with a separate /var if
    such a machine is available.
+
+## Session: 2026-10-23: `sudo sdcompat reload` hung on the s6 boot
+
+The owner, on an enforcing s6 boot, ran `sudo sdcompat reload`; it hung,
+with AVCs: init_t (s6-svc, s6-svstat, sdcompatd) denied `read` on
+lnk_file `cups.service`, user_tmp_t, unconfined_u.
+
+### Findings
+
+- sdcompat-gen ran s6-rc-update itself, in the shell's domain
+  (unconfined_t). /run/service is its own tmpfs (tmpfs_t), and Fedora's
+  policy labels what unconfined_t creates there user_tmp_t: every scan
+  directory link (249) and the new live directory's service files became
+  user_tmp_t; the live directory itself var_run_t (the a1eb405 filecon
+  only acts through restorecon / init_t's transitions).
+- init_t can't read those links, so s6-svscan started no s6-supervise for
+  the new service directories, and s6-rc-update waits for them with no
+  deadline (s6rc_servicedir_manage_g, s6-rc-update.c:791; we pass no -t).
+- The owner then interrupted it and ran `systemctl daemon-reload`
+  (sdcompatd, init_t): it moved s6rc-oneshot-runner into its new live dir,
+  failed, and could not roll back into the var_run_t live dir ("unable to
+  rollback ... Permission denied"): the 2026-10-21 state again, with
+  /run/service/s6rc-oneshot-runner dangling (aborts every scan).
+- Repair, done by the owner: mv the runner's directory back into the live
+  dir, rm -r the leftover update dir, `restorecon -R /run/s6-rc
+  /run/s6-rc:*`, chcon -h init_var_run_t on the /run/service links,
+  `s6-svscanctl -an /run/service`; then `systemctl daemon-reload`
+  succeeded. Checked afterwards: one live dir (init_var_run_t), 253 links
+  tmpfs_t from system_u (init_t's own), none dangling, is-system-running
+  `running`, nothing failed.
+
+### Changes (`885df66`)
+
+- sdcompat-gen `reload`: when the live state exists (LIVE_DIR/compiled)
+  and neither --no-update nor --direct is given, it calls Manager.Reload on
+  sdcompatd (sdcompat-client: private socket, else the bus), after checking
+  the manager's Version contains "sdcompat" (on a systemd boot the private
+  socket is systemd's). On failure it exits 1 and names --direct, which
+  keeps the old in-process update (only safe from init_t under SELinux).
+  rc.init and setup use --no-update, unchanged. Usage text, README pair
+  (tool table), sdcompat-gen.spec %check (+ sdcompat-client).
+- tests/check.sh: `sdcompat-gen reload` after the daemon-reload check must
+  print "reloaded by sdcompatd", and hello.service stays up.
+- Not done: a -t for s6-rc-update. Its deadline also covers the s6-rc
+  change it runs (stopping services), and dying in the middle leaves a
+  worse state than waiting; with the update in init_t the label hang
+  can't happen.
+
+### Tests
+
+- cargo build (no warnings), cargo test: all pass.
+- Sandbox (XDG_RUNTIME_DIR=/tmp/claude-1000/sdcr-rl), default: 211/211.
+  JOURNAL/FDSTORE variants not rerun (not touched).
+- bash -n, sh -n, shellcheck -S warning on tests/check.sh.
+- Not tested: the real s6 boot (needs RPMs), the "not sdcompatd" refusal,
+  --direct.
+
+### Current state
+
+The owner's s6 boot is repaired. The fix is committed in `885df66`.
+
+### Next steps
+
+1. Owner: build RPMs, upgrade.
+2. On the s6 boot: `sudo sdcompat reload` prints "reloaded by sdcompatd",
+   `ls -Z /run/service` stays tmpfs_t/system_u, no AVCs.
+3. On a systemd boot (no /run/s6-rc): `sudo sdcompat reload` compiles
+   only, as before (the Version check is a guard, not the usual path).
+4. Earlier next steps (power-off retest, rc.shutdown.final with /var).
