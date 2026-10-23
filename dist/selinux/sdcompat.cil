@@ -10,7 +10,8 @@
 ; (unconfined_t stays unconfined_t).
 ;
 ; /run/sdcompat holds the notify sockets services write to and is labelled
-; like systemd's /run/systemd.
+; like systemd's /run/systemd. s6-rc-update, run from a shell, enters init_t
+; (below).
 ;
 ; Load:   semodule -i sdcompat.cil, then restorecon the files below
 ; Remove: semodule -r sdcompat
@@ -62,3 +63,33 @@
 (allow hostname_t var_run_t (fifo_file (write ioctl getattr)))
 (allow init_t var_run_t (lnk_file (create rename)))
 (allow init_t init_var_run_t (file (execute execute_no_trans)))
+
+; s6-rc-update and s6-rc-format-upgrade switch the live database: they
+; create the scan directory's links and the live directory's service
+; directories, which s6-svscan and s6-supervise (init_t) must read. Run
+; from an admin's shell (`s6 live install`, `s6 set apply`,
+; s6-rc-set-install), unconfined_t created them as user_tmp_t in the
+; /run/service tmpfs and var_run_t in /run: init_t could not follow the
+; links, s6-rc-update waited forever for supervisors that never started,
+; and a later update in init_t could not roll back. Like a SysV init
+; script run by root (initrc_exec_t -> initrc_t), these two enter init_t,
+; the domain sdcompatd's own updates run in.
+(type sdcompat_live_exec_t)
+(roletype object_r sdcompat_live_exec_t)
+(typeattributeset file_type (sdcompat_live_exec_t))
+(typeattributeset exec_type (sdcompat_live_exec_t))
+(typeattributeset entry_type (sdcompat_live_exec_t))
+(typeattributeset non_security_file_type (sdcompat_live_exec_t))
+(typeattributeset non_auth_file_type (sdcompat_live_exec_t))
+(filecon "/usr/bin/s6-rc-update" file (system_u object_r sdcompat_live_exec_t ((s0) (s0))))
+(filecon "/usr/bin/s6-rc-format-upgrade" file (system_u object_r sdcompat_live_exec_t ((s0) (s0))))
+(allow init_t sdcompat_live_exec_t (file (entrypoint execute execute_no_trans getattr ioctl lock map open read)))
+(typetransition unconfined_t sdcompat_live_exec_t process init_t)
+(roletransition unconfined_r sdcompat_live_exec_t process system_r)
+;
+; The s6-rc repository (s6-rc-repo-init, `s6 set`), which sdcompatd syncs,
+; commits and installs on daemon-reload: like /var/lib/sdcompat, init_t must
+; rename and remove its symlinks and directories.
+(filecon "/var/lib/s6-rc(/.*)?" any (system_u object_r init_var_lib_t ((s0) (s0))))
+(typetransition init_t var_lib_t dir "s6-rc" init_var_lib_t)
+(typetransition unconfined_t var_lib_t dir "s6-rc" init_var_lib_t)

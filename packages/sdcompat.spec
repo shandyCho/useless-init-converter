@@ -88,6 +88,7 @@ if [ -x /usr/sbin/semodule ]; then
         xargs -r -d '\n' restorecon 2>/dev/null || :
     restorecon %{_libexecdir}/sdcompat/* 2>/dev/null || :
     [ -d /var/lib/sdcompat ] && restorecon -R /var/lib/sdcompat || :
+    [ -d /var/lib/s6-rc ] && restorecon -R /var/lib/s6-rc || :
 fi
 
 %postun
@@ -96,6 +97,7 @@ if [ "$1" -eq 0 ] && [ -x /usr/sbin/semodule ]; then
     rpm -ql execline s6 s6-rc s6-linux-init 2>/dev/null | grep '^/usr/' |
         xargs -r -d '\n' restorecon 2>/dev/null || :
     [ -d /var/lib/sdcompat ] && restorecon -R /var/lib/sdcompat || :
+    [ -d /var/lib/s6-rc ] && restorecon -R /var/lib/s6-rc || :
 fi
 
 %files

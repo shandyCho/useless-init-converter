@@ -222,6 +222,9 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | 거부된 BPF 프로그램 | `journalctl -b -g 'not enforced'`(`JOURNAL=no`이면 `sudo grep 'not enforced' /var/log/messages`) | 아무것도 없음 |
 | `DevicePolicy=strict`인 polkit | `pkaction \| head -3` | 액션 ID 세 개(polkitd가 응답함) |
 | `s6` 명령 | `s6 live status \| head` | `up`인 서비스들, 예: `NetworkManager.service/longrun//up/explicit` |
+| s6 세트 | `s6 set status gdm.service sshd.service dbus` | `gdm.service/active`, `sshd.service/usable`(sshd를 활성화하지 않았다면), `dbus/always` |
+| 부팅할 것은 s6 세트가 정함 | `sudo s6 set disable -p cups.service`, `sudo systemctl daemon-reload`, `s6 set status cups.service`, s6로 재부팅, `systemctl is-active cups.service`. 그다음 `sudo s6 set enable cups.service`, `sudo systemctl daemon-reload` | reload 후 `cups.service/usable`, 재부팅 후 `inactive` |
+| 셸에서 `s6 live install` | `sudo s6 set commit --no-snapshot && sudo s6 live install --no-snapshot`, 그다음 `ls -Z /run/service \| awk '{print $1}' \| sort \| uniq -c`와 `sudo ausearch -m AVC -ts recent` | 명령이 끝나고, 링크는 `tmpfs_t` 또는 `init_var_run_t`이며 `user_tmp_t`는 없고, 거부(denial)도 없음 |
 | 이전 종료 | s6에서 전원을 끄고 다시 s6로 부팅한 뒤 `sudo ls -l /var/log/sdcompat/last-shutdown-*.log; sudo grep -ci denied /var/log/sdcompat/last-shutdown-*.log` | 두 파일 모두 전원을 끈 시각의 것이고 거부(denied)는 `0`입니다(아니면 파일을 보내 주세요). 전원 끄기가 25초 이상이 아니라 몇 초 걸렸고, 콘솔 로그가 비어 있지 않으며 `unable to rename`, `Failed to activate service ... timed out`, `sdcompatd: stopping ... took`이 없고, 커널 로그에 `services still not down after 180 s`가 없습니다 |
 | 버스와 userdb 레이블 | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t`와 `systemd_userdbd_runtime_t` |
 | 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |
@@ -275,8 +278,7 @@ PSS(공유 페이지를 쓰는 프로세스들에 나눠 계산한 값)를 비�
    ```
 2. 최신 s6 데이터베이스가 문제라면, 재부팅해서 GRUB의 s6 항목에서 **e**를 누르고
    `linux` 줄에 다음 중 하나를 추가하세요.
-   - `sdcompat.db=previous`는 마지막 변경 이전의 데이터베이스로 부팅합니다.
-   - `sdcompat.reload=0`은 부팅 시 데이터베이스 재생성을 건너뜁니다.
+   - `sdcompat.db=previous`는 마지막 것 이전에 설치된 데이터베이스로 부팅합니다.
 3. 빠져나오려면 재부팅해서 일반 Fedora 항목을 고르세요. journald가 실행됐었다면 실패한
    s6 부팅의 로그를 `journalctl -b -1`로 볼 수 있습니다. sdcompat 자신의 메시지(데몬,
    그리고 PAM 세션이나 exec 실패 같은 러너의 오류)도 그곳에 남습니다:

@@ -52,6 +52,7 @@ RUNTIME_UNIT_DIR=$R/units
 PRESET_PATH=$W/presets
 EXTRA_SOURCE=
 STATE_DIR=$W/state
+REPO_DIR=$W/repo
 LIVE_DIR=$R/live
 RUN_DIR=$R/run
 LOG_DIR=$W/logs
@@ -672,7 +673,7 @@ s6-svscan "$W/scan" >"$W/svscan.log" 2>&1 &
 echo $! >> "$W/pids"
 sleep 0.3
 s6-rc-init -c "$W/state/compiled" -l "$R/live" "$W/scan"
-s6-rc -l "$R/live" -u change sdcompat-default || true
+s6-rc -l "$R/live" -u change default || true
 
 cat > "$W/bus.conf" <<EOF
 <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"

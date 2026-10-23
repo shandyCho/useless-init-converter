@@ -31,10 +31,17 @@ pub struct Config {
     pub runtime_unit_dir: PathBuf,
     /// Preset directories, highest priority first.
     pub preset_path: Vec<PathBuf>,
-    /// Hand-written s6-rc source directories compiled together with generated ones.
+    /// Hand-written s6-rc service stores, used beside the generated one.
     pub extra_source: Vec<PathBuf>,
-    /// Generated sources and compiled databases live here.
+    /// Generated stores, the index and the boot databases live here.
     pub state_dir: PathBuf,
+    /// The s6-rc repository (s6-rc-repo-init), shared with the `s6` command.
+    pub repo_dir: PathBuf,
+    /// The generated store as the repository sees it: a symlink to the
+    /// newest generated source (default STATE_DIR/store).
+    pub store_dir: Option<PathBuf>,
+    /// The repository's service set that is committed and installed.
+    pub set_name: String,
     /// s6-rc live directory.
     pub live_dir: PathBuf,
     /// Per-unit runtime state (notify sockets, results, status text).
@@ -50,7 +57,8 @@ pub struct Config {
     pub dep_map: Vec<(String, String)>,
     /// Extra s6-rc service/bundle added to sysinit.target (udev, mounts, ...).
     pub sysinit_bundle: String,
-    /// Bundle generated for default.target; include it in your boot bundle.
+    /// The bundle s6-rc-set-commit makes of the set's active and always
+    /// services: what boots (s6-linux-init's runlevel).
     pub default_bundle: String,
     /// s6 service running sdcompatd; timers depend on it.
     pub daemon_service: String,
@@ -131,8 +139,11 @@ impl Config {
             .iter()
             .map(PathBuf::from)
             .collect(),
-            extra_source: vec![PathBuf::from("/etc/sdcompat/s6")],
+            extra_source: vec![PathBuf::from("/etc/sdcompat/s6"), PathBuf::from("/etc/s6/sources")],
             state_dir: PathBuf::from("/var/lib/sdcompat"),
+            repo_dir: PathBuf::from("/var/lib/s6-rc/repository"),
+            store_dir: None,
+            set_name: "current".into(),
             live_dir: PathBuf::from("/run/s6-rc"),
             run_dir: PathBuf::from("/run/sdcompat"),
             log_dir: Some(PathBuf::from("/var/log/sdcompat")),
@@ -199,7 +210,7 @@ impl Config {
             .map(|(a, b)| (a.to_string(), b.to_string()))
             .collect(),
             sysinit_bundle: "sdcompat-sysinit".into(),
-            default_bundle: "sdcompat-default".into(),
+            default_bundle: "default".into(),
             daemon_service: "sdcompatd".into(),
             booted_flag: Some(PathBuf::from("/run/systemd/system")),
             private_socket: Some(PathBuf::from("/run/systemd/private")),
@@ -245,6 +256,9 @@ impl Config {
                 "PRESET_PATH" => cfg.preset_path = paths(&v),
                 "EXTRA_SOURCE" => cfg.extra_source = paths(&v),
                 "STATE_DIR" => cfg.state_dir = PathBuf::from(&v),
+                "REPO_DIR" => cfg.repo_dir = PathBuf::from(&v),
+                "STORE_DIR" => cfg.store_dir = opt(&v),
+                "SET" => cfg.set_name = v,
                 "LIVE_DIR" => cfg.live_dir = PathBuf::from(&v),
                 "RUN_DIR" => cfg.run_dir = PathBuf::from(&v),
                 "LOG_DIR" => cfg.log_dir = opt(&v),
@@ -331,6 +345,16 @@ impl Config {
     /// Writable unit directory for enable/disable/mask.
     pub fn config_unit_dir(&self) -> &Path {
         &self.unit_path[0]
+    }
+
+    pub fn store_dir(&self) -> PathBuf {
+        self.store_dir.clone().unwrap_or_else(|| self.state_dir.join("store"))
+    }
+
+    /// The boot database: a symlink s6-rc-set-install replaces, which
+    /// rc.init gives to s6-rc-init (s6.conf's bootdb).
+    pub fn boot_db(&self) -> PathBuf {
+        self.state_dir.join("compiled")
     }
 
     /// RUN_DIR/units/<unit>, as state::for_unit names it: a name that is

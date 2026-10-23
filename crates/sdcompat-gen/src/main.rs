@@ -12,10 +12,12 @@ usage: sdcompat-gen [--config PATH] COMMAND [ARGS]
 
 Database:
   reload [--no-update] [--direct]
-                           translate units, compile the s6-rc database and
-                           switch the live state to it (s6-rc-update); on a
-                           running s6 boot sdcompatd does it (daemon-reload),
-                           --direct does it here (only from init_t on SELinux)
+                           translate units into the generated store, sync the
+                           s6-rc repository, commit its set and install it as
+                           the boot and live database (s6-rc-set-install);
+                           --no-update: the boot database only. On a running
+                           s6 boot sdcompatd does it (daemon-reload); --direct
+                           does it here
   plan                     print the translation report without writing anything
 
 Offline unit file management:
@@ -71,7 +73,6 @@ fn reload_via_daemon(cfg: &Config) -> i32 {
         Err(e) => {
             eprintln!("sdcompat-gen: reload through sdcompatd failed: {e}");
             eprintln!("sdcompat-gen: `reload --direct` updates the live state from this process instead");
-            eprintln!("sdcompat-gen: (only from init_t on an SELinux system: a login shell's labels break it)");
             1
         }
     }
@@ -135,6 +136,9 @@ fn main() {
                         if r.updated_live { " (live state updated)" } else { "" }
                     );
                     println!("report:   {}", r.db_dir.join("report.txt").display());
+                    for c in &r.set_changes {
+                        println!("set {}: {c}", cfg.set_name);
+                    }
                     0
                 }
                 Err(e) => die(&e),

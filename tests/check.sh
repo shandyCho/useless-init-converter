@@ -770,6 +770,41 @@ rm -f "$R/run/shutting-down"
 restart_daemon "$W/sdcompat.conf"
 expect_state prep@c.service inactive/dead
 
+section "s6-rc repository"
+# The translated units are a store in an s6-rc repository; the set
+# "current" decides what boots. systemd's enable state only gives a new
+# service its first prescription; after that the set decides.
+GEN="$(dirname "$0")/../target/debug/sdcompat-gen"
+rx() { s6-rc-set-status -r "$W/repo" current "$1" 2>/dev/null | cut -d/ -f2; }
+in_default() { s6-rc-db -l "$R/live" contents default 2>/dev/null | grep -qx "$1"; }
+expect_eq "enabled unit starts active in the set" "$(rx hello.service)" "active"
+printf '[Service]\nExecStart=/bin/sleep 1000\n' > "$W/units/repo-helper.service"
+call Reload && expect_eq "a new unit not enabled starts usable" "$(rx repo-helper.service)" "usable"
+cat > "$W/units/repo-new.service" <<EOF
+[Unit]
+Requires=repo-helper.service
+After=repo-helper.service
+[Service]
+ExecStart=/bin/sleep 1000
+[Install]
+WantedBy=multi-user.target
+EOF
+"$GEN" --config "$W/sdcompat.conf" enable repo-new.service >/dev/null
+call Reload && expect_eq "a new enabled unit starts active" "$(rx repo-new.service)" "active"
+expect_eq "what an active service needs is made active (s6-rc-set-fix -u)" "$(rx repo-helper.service)" "active"
+in_default repo-new.service && ok "the default bundle has it" || bad "repo-new.service not in the default bundle"
+s6-rc-set-change -r "$W/repo" current usable hello.service 2>/dev/null
+call Reload
+expect_eq "a reload keeps the set's choice" "$(rx hello.service)" "usable"
+in_default hello.service && bad "a usable service is still in the default bundle" || ok "a usable service is not in the default bundle"
+"$GEN" --config "$W/sdcompat.conf" disable repo-new.service >/dev/null
+call Reload && expect_eq "systemctl disable leaves the set alone" "$(rx repo-new.service)" "active"
+prev=$(readlink -f "$W/state/compiled.previous")
+[ -d "$prev" ] && [ "$prev" != "$(readlink -f "$W/state/compiled")" ] && ok "the replaced database is kept as compiled.previous" || bad "compiled.previous: '$prev'"
+expect_eq "older boot databases are removed" "$(find "$W/state" -maxdepth 1 -name '.current:*' | wc -l)" "2"
+s6-rc-set-change -r "$W/repo" current active hello.service 2>/dev/null
+call Reload
+
 section "end state"
 # A job that never finishes (logind's stop of user@0 did) holds everyone
 # waiting behind it.

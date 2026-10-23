@@ -71,7 +71,15 @@ sdcompat --version                                  # 설치된 빌드 확인
 
 s6로 부팅한 상태라면, 새 sdcompatd는 데몬을 다시 시작하면 쓰입니다(`s6-svc -r
 /run/service/sdcompatd`). runner와 timers는 서비스가 다음에 시작될 때 쓰이고,
-sdcompat-gen은 다음 `sdcompat reload`나 부팅 때 쓰입니다.
+sdcompat-gen은 다음 `sdcompat reload` 때 쓰입니다(`systemctl daemon-reload`는 sdcompatd에
+들어 있는 사본을 쓰므로, 데몬이 다시 시작된 뒤에 바뀝니다). 부팅 때는 아무것도 다시 만들지
+않습니다.
+
+s6-rc 저장소가 없던 버전(`s6 set` 변경 이전)에서 옮겨 올 때는 `dist/setup-fedora.sh`를 다시
+실행하세요. `/etc/sdcompat/s6/default`를 지우고(이제 세트의 커밋이 `default` 번들을 만듭니다.
+이것이 있으면 reload가 실행을 거부합니다), 새 `/etc/s6.conf`를 쓰고, `/etc/s6/sources`를
+만들고, 새 SELinux 모듈을 불러오고, systemd의 활성화 상태에서 시작하는 세트 `current`와 함께
+저장소를 만듭니다.
 
 s6-linux-init 스켈레톤(`rc.init`, `rc.shutdown`, `rc.shutdown.final`)은
 다릅니다. 패키지는 setup이 쓰는 원본을 설치할 뿐이고, 부팅에 쓰이는 것은

@@ -2,8 +2,11 @@
 
 **English** | [한국어](README.md)
 
-A systemd compatibility layer for s6. Fedora keeps its unit files, `systemctl`,
-libsystemd and D-Bus clients, while **s6-linux-init + s6-rc** run the system.
+A systemd compatibility layer for s6. **s6-linux-init + s6-rc** run Fedora,
+and you manage it with s6's own tools (`s6`, s6-rc's repository and sets);
+sdcompat translates Fedora's unit files into s6-rc services and keeps
+`systemctl`, libsystemd and D-Bus clients working for the programs that need
+them.
 
 ```
  systemctl / dnf scriptlets / libsystemd clients / dbus-daemon activation
@@ -12,7 +15,8 @@ libsystemd and D-Bus clients, while **s6-linux-init + s6-rc** run the system.
    sdcompatd ── jobs, unit state, enable/disable/preset, scopes
               │ s6-rc -u/-d, s6-svc, s6-svstat
               ▼
-   s6-rc database  ◄── sdcompat-gen reload: unit files → s6-rc source → compile
+   s6-rc database  ◄── sdcompat-gen reload: unit files → s6-rc store →
+              │          repository set "current" (s6 set ...) → commit, install
               │
    s6-supervise ── run/finish scripts call `sdcompat-runner run|finish|up|down`
                    (User=, Environment=, sockets, NOTIFY_SOCKET, Restart=, ...)
@@ -33,7 +37,7 @@ on its own, and the core works without them.
 
 | Tool | Commands | Role |
 |---|---|---|
-| `sdcompat-gen` | `reload`, `plan` | Translates every unit into an s6-rc source tree, compiles it together with your hand-written s6 services (`EXTRA_SOURCE`) and switches the live state (`s6-rc-update`). Writes a coverage report. On a running s6 boot `reload` asks sdcompatd to do it (like `systemctl daemon-reload`): run from a login shell, s6-rc-update would give the scan directory SELinux labels init_t can't read and hang. |
+| `sdcompat-gen` | `reload`, `plan` | Translates every unit into an s6-rc store, syncs the s6-rc repository with it and the hand-written stores (`EXTRA_SOURCE`), then commits the set `current` and installs it as the boot and live database (`s6-rc-set-install`). Writes a coverage report. On a running s6 boot `reload` asks sdcompatd to do it, as `systemctl daemon-reload` does. See [The `s6` command](#the-s6-command-s6-frontend). |
 | | `enable/disable/mask/unmask/preset/is-enabled` | Offline unit file management. |
 | `sdcompatd` | `daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | Minimal client for the daemon (private socket or bus); a service's log (`journalctl -u`, or the s6-log directory with `JOURNAL=no`). |
@@ -126,7 +130,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 - Queries: `GetUnit`, `LoadUnit`, `GetUnitByPID`, `ListUnits*`, `ListJobs`, `GetUnitProcesses`. Unit, Service, Target, Scope and Job properties are available, including `GetAll("")`.
 - Unit files: `Enable/Disable/Reenable/Mask/Unmask/Preset*UnitFiles`, `GetUnitFileState`, `ListUnitFiles*`, `Get/SetDefaultTarget`.
 - Manager: `Reload`/`Reexecute` (regenerate and update the s6 database), `KillUnit`, `ResetFailed*`, `Set/UnsetEnvironment`, `PowerOff/Reboot/Halt`.
-- Package installs and updates: the systemd RPM's file triggers run `systemctl daemon-reload`, which regenerates the s6 database, so a newly installed unit gets its s6 service right away (with dnf, GNOME Software or PackageKit alike; the database is also regenerated at every boot). On an update, the package's scriptlets mark its units with `Markers=+needs-restart`/`+needs-reload` (`SetUnitProperties`), and `systemctl enqueue-marked` (`EnqueueMarkedJobs`) then restarts the running ones or reloads them, as with systemd. For user units, the file trigger reloads `user@*.service` (the user manager re-executes on `ReloadSignal=`; the reload waits for its `RELOADING=1`/`READY=1`, as with `Type=notify-reload` everywhere) and runs `systemctl --user -M UID@ enqueue-marked` in each user manager, which goes through `systemd-run --pipe` (stdio passed as file descriptors) and `systemd-stdio-bridge`.
+- Package installs and updates: the systemd RPM's file triggers run `systemctl daemon-reload`, which regenerates the s6 database, so a newly installed unit gets its s6 service right away (with dnf, GNOME Software or PackageKit alike); the new service starts as enabled or disabled in the s6 set as systemd's preset made it. On an update, the package's scriptlets mark its units with `Markers=+needs-restart`/`+needs-reload` (`SetUnitProperties`), and `systemctl enqueue-marked` (`EnqueueMarkedJobs`) then restarts the running ones or reloads them, as with systemd. For user units, the file trigger reloads `user@*.service` (the user manager re-executes on `ReloadSignal=`; the reload waits for its `RELOADING=1`/`READY=1`, as with `Type=notify-reload` everywhere) and runs `systemctl --user -M UID@ enqueue-marked` in each user manager, which goes through `systemd-run --pipe` (stdio passed as file descriptors) and `systemd-stdio-bridge`.
 - Transient units: `StartTransientUnit` for `.scope` and `.slice` units, with `PIDs` or `PIDFDs` (used by logind, podman and flatpak). Also `AttachProcessesToUnit`, `Scope.Abandon`, and the reference-counting calls (accepted). Scopes and slices are recorded in `/run/sdcompat/units`, so a restarted daemon takes them over (session scopes keep working).
 - **`systemd-run`**: transient `.service`, `.timer` and `.path` units, including auxiliary units (`--on-calendar`/`--on-active` send a timer and its service). Properties become a unit file in `/run/systemd/transient/`. `systemd-run --wait` gets `PropertiesChanged` and the exit status. Finished transient units are unloaded.
 - Template instances are created on demand without recompiling the database, for example `user@1000.service` and `user-runtime-dir@1000.service`. Their dependencies start first, and units that require a stopped unit are stopped with it. At shutdown, the active oneshot instances are stopped, so their `ExecStop=` runs (systemd-backlight@ saves the brightness); they are recorded in `/run/sdcompat/dyn-oneshot`, so this also holds after the daemon was restarted. A restarted daemon also takes over the running instances (their service directories in `/run/sdcompat/dyn`), so it reports and stops them as before.
@@ -255,7 +259,7 @@ entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
    `journal-relay` then serves journald's client sockets and forwards to rsyslog
    (only MESSAGE, priority and identifier are kept).
 4. Enables chronyd, NetworkManager and gdm, and sets `graphical.target` as the default.
-5. Runs `sdcompat reload --no-update` and prints the translation summary.
+5. Runs `sdcompat reload --no-update`, which creates the s6-rc repository and its set `current` (from systemd's enable state) and installs the boot database, and prints the translation summary. It also creates `/etc/s6/sources` for your own s6-rc services.
 6. Generates `/etc/s6-linux-init/current` with a rescue getty on tty9.
 7. SELinux: labels `bin/init` as `init_exec_t` and loads the policy module
    `dist/selinux/sdcompat.cil`, which labels the s6, s6-rc, s6-linux-init and
@@ -303,8 +307,8 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 
 If stage 2 fails, log in on tty9 (Ctrl+Alt+F9) and read
 `/run/uncaught-logs/current`. To boot the s6 database from before the last
-change, add `sdcompat.db=previous` to the kernel command line; to skip
-regenerating it at boot, add `sdcompat.reload=0`.
+install, add `sdcompat.db=previous` to the kernel command line. Nothing is
+regenerated at boot.
 
 What an s6 shutdown printed on the console is kept for the next boot in
 `/var/log/sdcompat/last-shutdown-console.log` (s6's catch-all log) and
@@ -374,32 +378,76 @@ check `journalctl -u systemd-logind` and `journalctl -u user@1000.service`
 
 ## The `s6` command (s6-frontend)
 
-The setup script installs [s6-frontend](https://skarnet.org/software/s6-frontend/)
-(version in `dist/skarnet.versions`), which provides the `s6` command, and
-writes `/etc/s6.conf` (`dist/s6.conf`) so that it uses sdcompat's database
-(`bootdb = /var/lib/sdcompat/compiled`). Service names
-are the s6-rc names: `sshd.service`, `gdm.service`, … and sdcompat's own s6
-services (`dbus`, `sdcompatd`, `earlyoom`, `udevd`, …).
+The system is managed with s6's own tools. The setup script installs
+[s6-frontend](https://skarnet.org/software/s6-frontend/) (version in
+`dist/skarnet.versions`), which provides the `s6` command, and writes
+`/etc/s6.conf` (`dist/s6.conf`) with sdcompat's repository, stores and boot
+database. Service names are the s6-rc names: `sshd.service`, `gdm.service`,
+… and sdcompat's own s6 services (`dbus`, `sdcompatd`, `earlyoom`, `udevd`, …).
+
+How it fits together:
+
+- sdcompat-gen translates the unit files into an s6-rc **store**
+  (`/var/lib/sdcompat/store`). The s6-rc **repository**
+  (`/var/lib/s6-rc/repository`) links three stores, in this order: the
+  translated units, sdcompat's early-boot services (`/etc/sdcompat/s6`) and
+  your own s6-rc services (`/etc/s6/sources`; a service there overrides one
+  of the same name in the earlier stores).
+- The repository's set **`current`** decides what boots: every service is
+  `always` (early boot, can't be stopped by `s6 live stop`), `active`
+  (enabled: in the `default` bundle the boot starts), `usable` (disabled) or
+  `masked` (not in the database at all).
+- A service seen for the first time starts from systemd's state: what
+  `default.target` pulls in (the units systemd enables) becomes `active`, the
+  rest `usable`. **From then on the set decides**: `systemctl
+  enable/disable` still writes systemd's symlinks (`systemctl is-enabled`
+  reports them) but no longer changes what boots.
+- `systemctl daemon-reload` and `sdcompat reload` (also run by dnf's file
+  triggers when packages change) regenerate the store, sync the repository,
+  then commit `current` and install it as the boot and live database. Before
+  committing they run `s6-rc-set-fix -u`, which enables what an `active`
+  service depends on (the commit refuses an inconsistent set), and print
+  what they moved.
+- The boot starts the installed database's `default` bundle as it is;
+  nothing is regenerated at boot. Units changed from a systemd boot are
+  picked up by the next reload.
 
 | Command | What it does |
 |---|---|
-| `s6 live status` | every service with its type and state (no root needed) |
-| `s6 live status sshd.service` | the state of the listed services |
-| `sudo s6 process status sshd.service` | the supervised process (`s6-svstat`) |
-| `sudo s6 process restart sshd.service` | restart the process only, not what depends on it (`s6-svc -r`) |
-| `sudo s6 process kill -s HUP sshd.service` | send a signal to the process |
-| `sudo s6 live start\|stop X` | `s6-rc -u\|-d change X`; for units, prefer `systemctl` (see below) |
+| `s6 set status [NAME...]` | each service's prescription in `current` (`always`, `active`, `usable`, `masked`) |
+| `sudo s6 set enable\|disable -p NAME...` | change what boots; `-p` also moves what depends on it (without it the set stays inconsistent and the next reload's fix undoes a `disable`) |
+| `sudo s6 set mask -p NAME...` | leave a service out of the database; a target (bundle) containing it disappears too, so prefer `disable` |
+| `sudo s6 set commit --no-snapshot` then `sudo s6 live install --no-snapshot` | compile `current` and make it the boot and live database |
+| `sudo s6 set apply --no-snapshot` | commit, install and bring the live state to the set at once |
+| `s6 live status [NAME...]` | every (or the listed) service with its type and state (no root needed) |
+| `sudo s6 live start\|stop NAME` | `s6-rc -u\|-d change NAME` |
+| `sudo s6 process status\|restart NAME` | the supervised process (`s6-svstat`, `s6-svc -r`: the process only, not what depends on it) |
+| `sudo s6 process kill -s HUP NAME` | send a signal to the process |
 | `sudo s6 system reboot\|poweroff` | the same s6-linux-init shutdown as `systemctl reboot\|poweroff` |
 
-`s6 live start/stop` and `s6 process restart` act below sdcompat: there is no
-systemd job, and `ExecStop=` does not run (as with `s6-rc` itself), so use
-`systemctl` to start, stop and restart units.
+Notes:
 
-**Do not use** `s6 repository …`, `s6 set …`, `s6 live install`,
-`s6 live start-everything`/`stop-everything` or `s6 system boot`. They manage
-s6-rc repositories and replace or restart the live database, while sdcompat
-compiles that database from unit files itself (`systemctl daemon-reload`,
-`sdcompat reload`).
+- **`--no-snapshot`**: s6-rc 0.8.0.2's `s6-rc-set-install` checks the
+  set's snapshot through a path with one uninitialized byte at its end
+  (`s6rc_repo_setuptodate()` terminates it one byte too late), so without
+  the option it randomly refuses a just-committed set as "not up-to-date".
+  sdcompat always passes it. This is an upstream bug; sdcompat doesn't patch
+  skarnet's sources.
+- **Early-boot services** are `always` exactly when their store says so
+  (`flag-essential`, or membership in `sdcompat-sysinit`, which
+  `setup-fedora.sh` changes for syslog, journal-relay and resolv); a reload
+  puts them back if a set moves them.
+- `s6 live start/stop` and `s6 process restart` act below sdcompat: there is
+  no systemd job, and `ExecStop=` does not run (as with `s6-rc` itself), so
+  units are better started and stopped with `systemctl`.
+- Starting a target (a bundle) starts all of it, `usable` members included,
+  as `s6-rc` does; udev's device targets (`bluetooth.target`, …) rely on it.
+- SELinux: `s6-rc-update` and `s6-rc-format-upgrade` enter `init_t` when run
+  from an admin's shell (`dist/selinux/sdcompat.cil`), so `s6 live install`
+  and `s6 set apply` work under enforcing. Without that, the scan directory
+  got labels `init_t` can't read and the install hung.
+- To roll back, boot with `sdcompat.db=previous` (the database installed
+  before the last one).
 
 ## Configuration
 
@@ -408,7 +456,8 @@ and defaults). The most important keys:
 
 - `EXCLUDE`, `EXCLUDE_ADD`, `INCLUDE`: which units are translated.
 - `DEP_MAP`, `DEP_MAP_ADD`: systemd unit → s6 service from `EXTRA_SOURCE`.
-- `EXTRA_SOURCE`: hand-written s6-rc sources compiled into the same database.
+- `EXTRA_SOURCE`: hand-written s6-rc stores linked into the repository after the generated one (default `/etc/sdcompat/s6:/etc/s6/sources`).
+- `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: the repository (s6.conf's `repodir`), the generated store, the set a reload commits and installs, and the bundle its commit makes for the boot (`default`).
 - `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR` and excludes the distribution's `rsyslog.service`, since the s6 `syslog` service is the rsyslogd (`INCLUDE` brings it back).
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
 - `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `sdcompat-sysinit` too, as `setup-fedora.sh --no-resolved` does, or DNS breaks).

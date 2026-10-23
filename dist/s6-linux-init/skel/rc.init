@@ -7,22 +7,18 @@ shift
 # The initramfs mounts / read-only; the database lives in /var/lib/sdcompat.
 mount -o remount,rw / || true
 
-# Kernel command line options:
-#   sdcompat.db=previous   boot the database from before the last change
-#   sdcompat.reload=0      do not regenerate the database at boot
+# The boot database is the set sdcompat (or `s6 live install`) installed
+# last; nothing is regenerated here. Unit files changed while the system
+# was down (e.g. from a systemd boot) are picked up by the next
+# `systemctl daemon-reload` or `sdcompat reload`.
+# Kernel command line option:
+#   sdcompat.db=previous   boot the database installed before the last one
 db=/var/lib/sdcompat/compiled
-reload=1
 for opt in $(cat /proc/cmdline); do
     case $opt in
-        sdcompat.db=previous) db=/var/lib/sdcompat/compiled.previous; reload=0 ;;
-        sdcompat.reload=0) reload=0 ;;
+        sdcompat.db=previous) db=/var/lib/sdcompat/compiled.previous ;;
     esac
 done
-
-# Pick up unit files installed or enabled while the system was down.
-if [ "$reload" = 1 ] && ! /usr/libexec/sdcompat/sdcompat-gen reload --no-update; then
-    echo "rc.init: sdcompat-gen reload failed, booting the previous database" >&2
-fi
 [ -e "$db" ] || db=/var/lib/sdcompat/compiled
 
 s6-rc-init -c "$db" -l /run/s6-rc /run/service

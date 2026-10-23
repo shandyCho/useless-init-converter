@@ -75,7 +75,16 @@ sdcompat --version                                  # which build is installed
 
 On a running s6 boot, the new sdcompatd is used once the daemon restarts
 (`s6-svc -r /run/service/sdcompatd`). The runner and timers are used the next
-time a service starts, and sdcompat-gen at the next `sdcompat reload` or boot.
+time a service starts, and sdcompat-gen at the next `sdcompat reload`
+(`systemctl daemon-reload` runs sdcompatd's copy, so it changes once the
+daemon restarts). Nothing is regenerated at boot.
+
+Moving from a version without the s6-rc repository (before the `s6 set`
+change): rerun `dist/setup-fedora.sh`. It removes `/etc/sdcompat/s6/default`
+(the set's commit makes the `default` bundle now; a reload refuses to run
+while it exists), writes the new `/etc/s6.conf`, creates `/etc/s6/sources`,
+loads the new SELinux module and creates the repository with the set
+`current` from systemd's enable state.
 
 The s6-linux-init skeleton (`rc.init`, `rc.shutdown`, `rc.shutdown.final`)
 is different: the package installs the copy setup works from, but the boot

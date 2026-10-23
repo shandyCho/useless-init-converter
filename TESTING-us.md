@@ -234,6 +234,9 @@ After logging in to GNOME, open a terminal and go through this list:
 | BPF programs refused | `journalctl -b -g 'not enforced'` (with `JOURNAL=no`: `sudo grep 'not enforced' /var/log/messages`) | nothing |
 | polkit under `DevicePolicy=strict` | `pkaction \| head -3` | three action IDs (polkitd answers) |
 | The `s6` command | `s6 live status \| head` | services with `up`, e.g. `NetworkManager.service/longrun//up/explicit` |
+| s6 set | `s6 set status gdm.service sshd.service dbus` | `gdm.service/active`, `sshd.service/usable` (unless you enabled sshd), `dbus/always` |
+| s6 set decides what boots | `sudo s6 set disable -p cups.service`, `sudo systemctl daemon-reload`, `s6 set status cups.service`, reboot into s6, `systemctl is-active cups.service`; then `sudo s6 set enable cups.service` and `sudo systemctl daemon-reload` | `cups.service/usable` after the reload, `inactive` after the reboot |
+| `s6 live install` from a shell | `sudo s6 set commit --no-snapshot && sudo s6 live install --no-snapshot`, then `ls -Z /run/service \| awk '{print $1}' \| sort \| uniq -c` and `sudo ausearch -m AVC -ts recent` | it returns; the links are `tmpfs_t` or `init_var_run_t`, no `user_tmp_t`; no denials |
 | Previous shutdown | after an s6 power-off and the next s6 boot: `sudo ls -l /var/log/sdcompat/last-shutdown-*.log; sudo grep -ci denied /var/log/sdcompat/last-shutdown-*.log` | both files from the power-off time, and `0` denials (send the files otherwise); the power-off took a few seconds, not 25 s or more; the console log is not empty and has no `unable to rename`, no `Failed to activate service ... timed out` and no `sdcompatd: stopping ... took`; the kernel log has no `services still not down after 180 s` |
 | Bus and userdb labels | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t` and `systemd_userdbd_runtime_t` |
 | Overall state | `systemctl is-system-running` | `running` (`degraded` is OK; see next line) |
@@ -288,8 +291,7 @@ anonymous memory.
    ```
 2. If the newest s6 database is the problem, reboot, press **e** on the s6
    entry in GRUB and add one of these to the `linux` line:
-   - `sdcompat.db=previous` boots the database from before the last change.
-   - `sdcompat.reload=0` skips regenerating the database at boot.
+   - `sdcompat.db=previous` boots the database installed before the last one.
 3. To get out, reboot and choose the normal Fedora entry. Logs from the failed
    s6 boot are then visible with `journalctl -b -1`, if journald was running.
    sdcompat's own messages (the daemon, and the runner's errors such as a

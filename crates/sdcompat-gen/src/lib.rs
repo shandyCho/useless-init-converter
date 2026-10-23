@@ -118,6 +118,10 @@ pub struct Plan {
     pub broken_cycles: Vec<String>,
     /// timer -> unit it triggers
     pub triggers: BTreeMap<String, String>,
+    /// What systemd would start at boot: default.target and everything it
+    /// pulls in. These get flag-recommended, so a repository set first
+    /// sees them as active; after that the set decides.
+    pub boot: BTreeSet<String>,
 }
 
 /// The s6 service (dist/s6) that serves the fd store.
@@ -524,7 +528,26 @@ pub fn plan(cfg: &Config) -> Plan {
     break_cycles(&mut plan);
     let aliases = plan.aliases.clone();
     resolve_conflicts(&mut plan, &loaded, &aliases);
+    plan.boot = boot_closure(&plan);
     plan
+}
+
+/// default.target and everything it reaches through bundle contents and
+/// dependencies, with their loggers.
+fn boot_closure(plan: &Plan) -> BTreeSet<String> {
+    let mut seen = BTreeSet::new();
+    let mut stack: Vec<String> = plan.default_target.iter().cloned().collect();
+    while let Some(n) = stack.pop() {
+        let Some(p) = plan.units.get(&n) else { continue };
+        if !seen.insert(n) {
+            continue;
+        }
+        stack.extend(p.deps.iter().cloned());
+        if let Some(log) = &p.log_atom {
+            seen.insert(log.clone());
+        }
+    }
+    seen
 }
 
 /// Conflicts=: if both units would start at boot, keep the one declaring the
@@ -655,6 +678,10 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
             fs::write(sdir.join(list_dir).join(d), "")?;
         }
 
+        if p.kind != Kind::Bundle && plan.boot.contains(&p.id) {
+            fs::write(sdir.join("flag-recommended"), "")?;
+        }
+
         match p.kind {
             Kind::Bundle => {}
             Kind::Oneshot => {
@@ -675,6 +702,9 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
                     write_file(&ldir.join("type"), "longrun\n", false)?;
                     write_file(&ldir.join("consumer-for"), &format!("{}\n", p.id), false)?;
                     write_file(&ldir.join("notification-fd"), "3\n", false)?;
+                    if plan.boot.contains(log) {
+                        fs::write(ldir.join("flag-recommended"), "")?;
+                    }
                     let logdir = util::sh_quote(&log_dir.join(&p.id).display().to_string());
                     write_file(
                         &ldir.join("run"),
@@ -685,16 +715,6 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
                     )?;
                 }
             }
-        }
-    }
-
-    // default.target gets a stable bundle name for the boot bundle to include.
-    if let Some(def) = &plan.default_target {
-        if plan.units.contains_key(def) {
-            let b = dir.join(&cfg.default_bundle);
-            fs::create_dir_all(b.join("contents.d"))?;
-            write_file(&b.join("type"), "bundle\n", false)?;
-            fs::write(b.join("contents.d").join(def), "")?;
         }
     }
 
@@ -773,10 +793,10 @@ pub fn report(plan: &Plan) -> String {
     s
 }
 
-fn run(cmd: &mut Command) -> Result<(), String> {
+fn run(cmd: &mut Command) -> Result<String, String> {
     let out = cmd.output().map_err(|e| format!("{cmd:?}: {e}"))?;
     if out.status.success() {
-        Ok(())
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr))
     } else {
         Err(format!(
             "{:?} failed: {}{}",
@@ -791,9 +811,223 @@ pub struct GenResult {
     pub db_dir: PathBuf,
     pub plan: Plan,
     pub updated_live: bool,
+    /// What the repository commands changed in the set on their own
+    /// (s6-rc-set-fix moving services, essentials following their flag).
+    pub set_changes: Vec<String>,
 }
 
-/// Plan, write, compile, and (if a live s6-rc state exists) switch to the new database.
+/// Replace the symlink `link` with one to `target`, atomically.
+fn swap_symlink(target: &Path, link: &Path) -> Result<(), String> {
+    let name = link.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = link.with_file_name(format!(".{name}.tmp"));
+    let _ = fs::remove_file(&tmp);
+    std::os::unix::fs::symlink(target, &tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    fs::rename(&tmp, link).map_err(|e| format!("{}: {e}", link.display()))
+}
+
+/// The stores the repository links, in s6-rc's order (a later store's
+/// service overrides an earlier one's): the generated one, then the
+/// hand-written ones that exist.
+pub fn stores(cfg: &Config) -> Vec<PathBuf> {
+    let mut v = vec![cfg.store_dir()];
+    v.extend(cfg.extra_source.iter().filter(|d| d.is_dir()).cloned());
+    v
+}
+
+/// The stores an existing repository links (REPO/stores/NNNN), or None
+/// when there is no repository.
+fn repo_stores(cfg: &Config) -> Option<Vec<PathBuf>> {
+    let dir = cfg.repo_dir.join("stores");
+    let mut names: Vec<String> = fs::read_dir(&dir).ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    Some(names.iter().filter_map(|n| fs::read_link(dir.join(n)).ok()).collect())
+}
+
+/// Create the repository, change its stores, or sync it with them.
+fn repo_sync(cfg: &Config) -> Result<(), String> {
+    let want = stores(cfg);
+    // s6-rc-set-commit makes this bundle itself and refuses a store that
+    // defines one (sdcompat shipped /etc/sdcompat/s6/default before).
+    if let Some(d) = want.iter().map(|s| s.join(&cfg.default_bundle)).find(|d| d.exists()) {
+        return Err(format!(
+            "{}: s6-rc-set-commit makes the {} bundle from the set; remove this one",
+            d.display(),
+            cfg.default_bundle
+        ));
+    }
+    let repo = cfg.repo_dir.as_os_str();
+    match repo_stores(cfg) {
+        None => {
+            if let Some(parent) = cfg.repo_dir.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            run(Command::new("s6-rc-repo-init").arg("-r").arg(repo).args(&want))?;
+        }
+        Some(have) if have != want => {
+            run(Command::new("s6-rc-repo-init").arg("-r").arg(repo).arg("-U").args(&want))?;
+        }
+        Some(_) => {
+            run(Command::new("s6-rc-repo-sync").arg("-r").arg(repo))?;
+        }
+    }
+    if !cfg.repo_dir.join("sources").join(&cfg.set_name).is_dir() {
+        run(Command::new("s6-rc-set-new").arg("-r").arg(repo).arg(&cfg.set_name))?;
+    }
+    Ok(())
+}
+
+/// The prescription a set gives a service, from the set's rx directories.
+fn set_rx(cfg: &Config, name: &str) -> Option<&'static str> {
+    let set = cfg.repo_dir.join("sources").join(&cfg.set_name);
+    ["always", "active", "usable", "masked"]
+        .into_iter()
+        .find(|rx| fs::symlink_metadata(set.join(rx).join(name)).is_ok())
+}
+
+/// The early services are `always`: those with flag-essential, and the
+/// members of SYSINIT_BUNDLE (setup-fedora.sh adds or removes syslog,
+/// journal-relay and resolv there, so they carry no flag of their own).
+/// A repository sync reads flags only for services it hasn't seen before,
+/// so this keeps the set in step when they change; a service that is no
+/// longer either goes back to `active`.
+fn sync_essentials(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
+    let sources = cfg.repo_dir.join("sources");
+    let atomics = sources.join(".atomics");
+    let Ok(rd) = fs::read_dir(&atomics) else { return Ok(()) };
+    let members: BTreeSet<String> = fs::read_dir(sources.join(".bundles").join(&cfg.sysinit_bundle).join("contents.d"))
+        .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    let mut up = Vec::new();
+    let mut down = Vec::new();
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let flagged = atomics.join(&name).join("flag-essential").exists() || members.contains(&name);
+        match (flagged, set_rx(cfg, &name)) {
+            (true, Some(rx)) if rx != "always" => up.push(name),
+            (false, Some("always")) => down.push(name),
+            _ => {}
+        }
+    }
+    for (rx, names) in [("always", up), ("active", down)] {
+        if names.is_empty() {
+            continue;
+        }
+        run(Command::new("s6-rc-set-change")
+            .arg("-r")
+            .arg(&cfg.repo_dir)
+            .arg("-e")
+            .arg(&cfg.set_name)
+            .arg(rx)
+            .args(&names))?;
+        changes.push(format!("{} -> {rx} (early boot service)", names.join(" ")));
+    }
+    Ok(())
+}
+
+/// Commit the set and install it: as the boot database, and (with a live
+/// state) as the live one. s6-rc-set-fix -u first enables what active
+/// services depend on: a new package's service may need one the set has
+/// as usable, and the commit refuses an inconsistent set.
+fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>) -> Result<bool, String> {
+    let repo = cfg.repo_dir.as_os_str();
+    let out = run(Command::new("s6-rc-set-fix").arg("-r").arg(repo).arg("-v2").arg("-u").arg(&cfg.set_name))?;
+    changes.extend(
+        out.lines()
+            .filter_map(|l| l.split_once("moving service ").map(|(_, r)| r.to_string())),
+    );
+    // --no-snapshot for both: s6-rc 0.8.0.2's s6rc_repo_setuptodate()
+    // terminates the snapshot's path one byte too late (an uninitialized
+    // byte is left in it), so with snapshots set-install randomly finds a
+    // just-committed set "not up-to-date".
+    run(Command::new("s6-rc-set-commit")
+        .arg("-r")
+        .arg(repo)
+        .arg("--no-snapshot")
+        .arg("-f")
+        .arg("-D")
+        .arg(&cfg.default_bundle)
+        .arg(&cfg.set_name))?;
+
+    let live = update_live && fs::symlink_metadata(cfg.live_dir.join("compiled")).is_ok();
+    let install = |extra: &[&str]| -> Result<String, String> {
+        run(Command::new("s6-rc-set-install")
+            .arg("-r")
+            .arg(repo)
+            .arg("-c")
+            .arg(cfg.boot_db())
+            .arg("-l")
+            .arg(&cfg.live_dir)
+            // -K: the replaced database stays, as compiled.previous.
+            .arg("-K")
+            .arg("--no-snapshot")
+            .args(extra)
+            .arg(&cfg.set_name))
+    };
+    if !live {
+        return install(&["--no-update"]).map(|_| false);
+    }
+    // s6-rc-update can race s6-svscan's rescan of the service directories
+    // ("unable to manage new service directories"); rescan and retry.
+    // Report the first error: later attempts may only fail because of
+    // what the first one left behind.
+    //
+    // When s6-rc-update fails, set-install has copied the database beside
+    // the boot link but not switched the link. With the copy there, running
+    // set-install again says "already installed" and exits 0 without
+    // updating anything. So: if the live state already runs on the copy
+    // (s6-rc-update failed after its switch, starting the new
+    // supervisors), run s6-rc-update on it again and switch the boot link
+    // here; otherwise remove the copy and run set-install again.
+    let copy = fs::read_link(cfg.repo_dir.join("compiled").join(&cfg.set_name))
+        .ok()
+        .zip(cfg.boot_db().parent().map(Path::to_path_buf))
+        .map(|(name, dir)| (name.clone(), dir.join(name)));
+    let mut attempt = 0;
+    let mut first: Option<String> = None;
+    let mut res = install(&[]).map(|_| ());
+    loop {
+        let e = match res {
+            Ok(()) => return Ok(true),
+            Err(e) => e,
+        };
+        // A failed rollback leaves a running service's directory in the
+        // new live directory: every retry fails on the rename.
+        if attempt >= 3 || e.contains("unable to rollback") {
+            return Err(match first {
+                Some(f) if f != e => format!("{}\n(last attempt: {})", f.trim(), e.trim()),
+                _ => e,
+            });
+        }
+        attempt += 1;
+        eprintln!("sdcompat: installing the set failed, retrying: {}", e.trim());
+        first.get_or_insert(e);
+        if let Ok(scan) = fs::canonicalize(cfg.live_dir.join("scandir")) {
+            let _ = Command::new("s6-svscanctl").arg("-an").arg(scan).status();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500 * attempt));
+        let live_db = fs::canonicalize(cfg.live_dir.join("compiled")).ok();
+        res = match &copy {
+            Some((name, path)) if live_db.is_some() && live_db == fs::canonicalize(path).ok() => {
+                run(Command::new("s6-rc-update").arg("-e").arg("-l").arg(&cfg.live_dir).arg(path))
+                    .and_then(|_| swap_symlink(name, &cfg.boot_db()))
+            }
+            Some((_, path)) => {
+                if fs::canonicalize(cfg.boot_db()).ok() != fs::canonicalize(path).ok() {
+                    let _ = fs::remove_dir_all(path);
+                }
+                install(&[]).map(|_| ())
+            }
+            None => install(&[]).map(|_| ()),
+        };
+    }
+}
+
+/// Plan and write the generated store, sync the repository with it, then
+/// commit the set and install it (as the live database too when
+/// `update_live` and a live s6-rc state exists).
 pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> {
     let plan = plan(cfg);
     let stamp = format!("{}-{}", util::now_realtime_usec(), std::process::id());
@@ -801,100 +1035,97 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
     let db_dir = db_root.join(&stamp);
     let source = db_dir.join("source");
     write_source(cfg, &plan, &source).map_err(|e| format!("{}: {e}", source.display()))?;
+    let source_abs = fs::canonicalize(&source).map_err(|e| e.to_string())?;
 
-    let compiled = db_dir.join("compiled");
-    let mut cmd = Command::new("s6-rc-compile");
-    cmd.arg(&compiled).arg(&source);
-    for extra in &cfg.extra_source {
-        if extra.is_dir() {
-            cmd.arg(extra);
-        }
-    }
-    run(&mut cmd)?;
-
-    let live_compiled = cfg.live_dir.join("compiled");
-    // The database running now. After a rollback boot (sdcompat.db=previous)
-    // it is "previous", not "current", and it has to stay the one to roll
-    // back to: taking "current" would make the database the user fled from
-    // "previous" and delete the good one below.
-    let db_root_abs = fs::canonicalize(&db_root).unwrap_or_else(|_| db_root.clone());
-    let running = fs::canonicalize(&live_compiled)
-        .ok()
-        .and_then(|c| c.parent().map(Path::to_path_buf))
-        .filter(|d| d.parent() == Some(db_root_abs.as_path()) && d != &db_dir)
-        .and_then(|d| d.file_name().map(|n| PathBuf::from("db").join(n)));
-    let mut updated_live = false;
-    if update_live && fs::symlink_metadata(&live_compiled).is_ok() {
-        let abs = fs::canonicalize(&compiled).map_err(|e| e.to_string())?;
-        // s6-rc-update can race s6-svscan's rescan of the service directories
-        // ("unable to manage new service directories"); rescan and retry.
-        // Report the first error: later attempts may only fail because of
-        // what the first one left behind.
-        let mut attempt = 0;
-        let mut first: Option<String> = None;
-        loop {
-            match run(Command::new("s6-rc-update").arg("-l").arg(&cfg.live_dir).arg(&abs)) {
-                Ok(()) => break,
-                // A failed rollback leaves a running service's directory in
-                // the new live directory: every retry fails on the rename.
-                Err(e) if attempt < 3 && !e.contains("unable to rollback") => {
-                    attempt += 1;
-                    eprintln!("sdcompat: s6-rc-update failed, retrying: {}", e.trim());
-                    first.get_or_insert(e);
-                    if let Ok(scan) = fs::canonicalize(cfg.live_dir.join("scandir")) {
-                        let _ = Command::new("s6-svscanctl").arg("-an").arg(scan).status();
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(500 * attempt));
+    // The repository links the store by STORE_DIR, a symlink to the newest
+    // source. If anything below fails, it goes back to the old one.
+    let store = cfg.store_dir();
+    let old_store = fs::read_link(&store).ok();
+    let old_boot = fs::canonicalize(cfg.boot_db()).ok();
+    swap_symlink(&source_abs, &store)?;
+    let mut set_changes = Vec::new();
+    let res = repo_sync(cfg)
+        .and_then(|_| sync_essentials(cfg, &mut set_changes))
+        .and_then(|_| commit_and_install(cfg, update_live, &mut set_changes));
+    let updated_live = match res {
+        Ok(r) => r,
+        Err(e) => {
+            match &old_store {
+                Some(old) => {
+                    let _ = swap_symlink(old, &store);
+                    let _ = repo_sync(cfg);
                 }
-                Err(e) => {
-                    let e = match first {
-                        Some(f) if f != e => format!("{}\n(last attempt: {})", f.trim(), e.trim()),
-                        _ => e,
-                    };
-                    return Err(e);
+                None => {
+                    let _ = fs::remove_file(&store);
                 }
             }
+            let _ = fs::remove_dir_all(&db_dir);
+            return Err(e);
         }
-        updated_live = true;
-    }
+    };
 
-    // Keep the database we are replacing as "previous" (rollback with
-    // sdcompat.db=previous on the kernel command line).
-    if let Some(prev) = running.or_else(|| fs::read_link(cfg.state_dir.join("current")).ok()) {
-        for (link, target) in [("previous", prev.clone()), ("compiled.previous", prev.join("compiled"))] {
-            let tmp = cfg.state_dir.join(format!(".{link}.tmp"));
-            let _ = fs::remove_file(&tmp);
-            if std::os::unix::fs::symlink(&target, &tmp).is_ok() {
-                let _ = fs::rename(&tmp, cfg.state_dir.join(link));
+    // The database installed before is the one to roll back to
+    // (sdcompat.db=previous on the kernel command line); the one before
+    // that goes. After a rollback boot the live database is the previous
+    // one: it stays "previous" rather than the database the user fled from.
+    let previous = cfg.state_dir.join("compiled.previous");
+    let old_previous = fs::canonicalize(&previous).ok();
+    let booted_previous = old_previous.is_some()
+        && fs::canonicalize(cfg.live_dir.join("compiled")).ok() == old_previous;
+    let state_abs = fs::canonicalize(&cfg.state_dir).unwrap_or_else(|_| cfg.state_dir.clone());
+    let replaced = old_boot.filter(|o| fs::canonicalize(cfg.boot_db()).ok().as_ref() != Some(o));
+    match replaced {
+        Some(old) if booted_previous => {
+            if old.starts_with(&state_abs) && Some(&old) != old_previous.as_ref() {
+                let _ = fs::remove_dir_all(old);
             }
         }
-    }
-    // Point "current" and "compiled" (used by s6-rc-init at boot) at the new db.
-    for (link, target) in [("current", PathBuf::from("db").join(&stamp)), ("compiled", PathBuf::from("db").join(&stamp).join("compiled"))] {
-        let tmp = cfg.state_dir.join(format!(".{link}.tmp"));
-        let _ = fs::remove_file(&tmp);
-        std::os::unix::fs::symlink(&target, &tmp).map_err(|e| e.to_string())?;
-        fs::rename(&tmp, cfg.state_dir.join(link)).map_err(|e| e.to_string())?;
+        Some(old) => {
+            swap_symlink(&old, &previous)?;
+            if let Some(p) = old_previous.filter(|p| *p != old && p.starts_with(&state_abs)) {
+                let _ = fs::remove_dir_all(p);
+            }
+        }
+        None => {}
     }
 
-    // Garbage-collect databases that are neither current, previous nor live.
-    let live_target = fs::canonicalize(&live_compiled).ok();
-    let previous = fs::canonicalize(cfg.state_dir.join("previous")).ok();
+    // "current" (index and report for the daemon) and "previous" (the
+    // index of the database to roll back to).
+    if let Ok(cur) = fs::read_link(cfg.state_dir.join("current")) {
+        if !booted_previous {
+            swap_symlink(&cur, &cfg.state_dir.join("previous"))?;
+        }
+    }
+    swap_symlink(&PathBuf::from("db").join(&stamp), &cfg.state_dir.join("current"))?;
+
+    // Garbage-collect generated sources that are neither current nor
+    // previous, keeping any that still hold a database in use (databases
+    // compiled before the repository existed lived in db/<stamp>/compiled).
+    let keep: Vec<PathBuf> = ["current", "previous", "compiled", "compiled.previous"]
+        .iter()
+        .filter_map(|l| fs::canonicalize(cfg.state_dir.join(l)).ok())
+        .chain(fs::canonicalize(cfg.live_dir.join("compiled")).ok())
+        .collect();
     if let Ok(rd) = fs::read_dir(&db_root) {
         for e in rd.flatten() {
-            let p = e.path();
-            if p == db_dir || fs::canonicalize(&p).ok() == previous {
-                continue;
+            let p = fs::canonicalize(e.path()).unwrap_or_else(|_| e.path());
+            if !keep.iter().any(|k| k.starts_with(&p)) {
+                let _ = fs::remove_dir_all(&p);
             }
-            let pc = fs::canonicalize(p.join("compiled")).ok();
-            if pc.is_some() && pc == live_target {
-                continue;
+        }
+    }
+    // ... and the copies s6-rc-set-install made (STATE_DIR/.SET:...) that
+    // are no longer the boot, previous or live database.
+    let copy_prefix = format!(".{}:", cfg.set_name);
+    if let Ok(rd) = fs::read_dir(&state_abs) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&copy_prefix) && !keep.contains(&e.path()) {
+                let _ = fs::remove_dir_all(e.path());
             }
-            let _ = fs::remove_dir_all(&p);
         }
     }
 
-    Ok(GenResult { db_dir, plan, updated_live })
+    Ok(GenResult { db_dir, plan, updated_live, set_changes })
 }
 
 #[cfg(test)]
@@ -920,6 +1151,40 @@ mod tests {
         let plan = plan(&cfg);
         assert!(plan.units["named.service"].deps.contains("dbus"));
         assert!(!plan.units["plain.service"].deps.contains("dbus"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// flag-recommended goes to what default.target reaches (enabled
+    /// units and what they pull in), not to units nothing at boot wants.
+    #[test]
+    fn boot_closure_marks_recommended() {
+        let tmp = std::env::temp_dir().join(format!("sdcompat-gen-boot-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let units = tmp.join("units");
+        fs::create_dir_all(units.join("multi-user.target.wants")).unwrap();
+        let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
+        write("multi-user.target", "[Unit]\nDescription=m\n");
+        std::os::unix::fs::symlink("multi-user.target", units.join("default.target")).unwrap();
+        write("on.service", "[Unit]\nDefaultDependencies=no\nRequires=helper.service\nAfter=helper.service\n[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n");
+        write("helper.service", "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n");
+        write("off.service", "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n");
+        std::os::unix::fs::symlink("../on.service", units.join("multi-user.target.wants/on.service")).unwrap();
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![units];
+        cfg.extra_source = vec![];
+
+        let plan = plan(&cfg);
+        for u in ["multi-user.target", "on.service", "helper.service"] {
+            assert!(plan.boot.contains(u), "{u} not in the boot closure");
+        }
+        assert!(!plan.boot.contains("off.service"));
+        let src = tmp.join("source");
+        write_source(&cfg, &plan, &src).unwrap();
+        assert!(src.join("on.service/flag-recommended").exists());
+        assert!(src.join("helper.service/flag-recommended").exists());
+        assert!(!src.join("off.service/flag-recommended").exists());
+        assert!(!src.join("multi-user.target/flag-recommended").exists());
+        assert!(!src.join(&cfg.default_bundle).exists());
         let _ = fs::remove_dir_all(&tmp);
     }
 }

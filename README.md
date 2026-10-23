@@ -2,8 +2,10 @@
 
 [English](README-us.md) | **한국어**
 
-s6를 위한 systemd 호환 계층입니다. Fedora의 유닛 파일, `systemctl`, libsystemd,
-D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc**가 실행합니다.
+s6를 위한 systemd 호환 계층입니다. Fedora는 **s6-linux-init + s6-rc**가 실행하고,
+관리는 s6 자체의 도구(`s6`, s6-rc의 저장소와 세트)로 합니다. sdcompat은 Fedora의 유닛
+파일을 s6-rc 서비스로 변환하고, 그것이 필요한 프로그램을 위해 `systemctl`, libsystemd,
+D-Bus 클라이언트가 계속 동작하게 합니다.
 
 ```
  systemctl / dnf 스크립틀릿 / libsystemd 클라이언트 / dbus-daemon 활성화
@@ -12,7 +14,8 @@ D-Bus 클라이언트는 그대로 두고, 시스템은 **s6-linux-init + s6-rc*
    sdcompatd ── 작업(job), 유닛 상태, enable/disable/preset, scope
               │ s6-rc -u/-d, s6-svc, s6-svstat
               ▼
-   s6-rc 데이터베이스  ◄── sdcompat-gen reload: 유닛 파일 → s6-rc 소스 → 컴파일
+   s6-rc 데이터베이스  ◄── sdcompat-gen reload: 유닛 파일 → s6-rc 스토어 →
+              │          저장소 세트 "current" (s6 set ...) → 커밋, 설치
               │
    s6-supervise ── run/finish 스크립트가 `sdcompat-runner run|finish|up|down`,
                    `sdcompat-timers timer-run|path-run` 호출
@@ -32,7 +35,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 
 | 도구 | 명령 | 역할 |
 |---|---|---|
-| `sdcompat-gen` | `reload`, `plan` | 모든 유닛을 s6-rc 소스 트리로 변환하고, 직접 작성한 s6 서비스(`EXTRA_SOURCE`)와 함께 컴파일한 뒤 라이브 상태를 전환합니다(`s6-rc-update`). 변환 보고서를 남깁니다. s6로 부팅된 상태에서는 `reload`가 sdcompatd에 맡깁니다(`systemctl daemon-reload`와 같음). 로그인 셸에서 s6-rc-update를 직접 돌리면 스캔 디렉터리에 init_t가 읽을 수 없는 SELinux 레이블이 붙어 멈추기 때문입니다. |
+| `sdcompat-gen` | `reload`, `plan` | 모든 유닛을 s6-rc 스토어로 변환하고, 그것과 직접 작성한 스토어(`EXTRA_SOURCE`)로 s6-rc 저장소를 동기화한 뒤, 세트 `current`를 커밋해 부팅 및 live 데이터베이스로 설치합니다(`s6-rc-set-install`). 변환 보고서를 남깁니다. s6로 부팅된 상태에서는 `systemctl daemon-reload`처럼 `reload`가 sdcompatd에 맡깁니다. [`s6` 명령](#s6-명령-s6-frontend) 참고. |
 | | `enable/disable/mask/unmask/preset/is-enabled` | 오프라인 유닛 파일 관리입니다. |
 | `sdcompatd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | 데몬용 최소 클라이언트(private 소켓 또는 버스)와, 서비스 로그 보기(`journalctl -u`, `JOURNAL=no`이면 s6-log 디렉터리)입니다. |
@@ -115,7 +118,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 - 조회: `GetUnit`, `LoadUnit`, `GetUnitByPID`, `ListUnits*`, `ListJobs`, `GetUnitProcesses`. Unit, Service, Target, Scope, Job 속성을 제공하며 `GetAll("")`도 지원합니다.
 - 유닛 파일: `Enable/Disable/Reenable/Mask/Unmask/Preset*UnitFiles`, `GetUnitFileState`, `ListUnitFiles*`, `Get/SetDefaultTarget`.
 - 매니저: `Reload`/`Reexecute`(s6 데이터베이스 재생성 및 갱신), `KillUnit`, `ResetFailed*`, `Set/UnsetEnvironment`, `PowerOff/Reboot/Halt`.
-- 패키지 설치와 업데이트: systemd RPM의 파일 트리거가 `systemctl daemon-reload`를 실행하고, 이것이 s6 데이터베이스를 재생성하므로 새로 설치된 유닛은 바로 s6 서비스가 됩니다(dnf, GNOME 소프트웨어, PackageKit 모두 같습니다. 데이터베이스는 부팅할 때마다 재생성되기도 합니다). 업데이트 때는 패키지 스크립트렛이 유닛에 `Markers=+needs-restart`/`+needs-reload`를 표시하고(`SetUnitProperties`), 이어서 `systemctl enqueue-marked`(`EnqueueMarkedJobs`)가 실행 중인 유닛을 systemd처럼 재시작하거나 다시 읽게 합니다. 사용자 유닛의 경우 파일 트리거가 `user@*.service`를 reload하고(사용자 매니저가 `ReloadSignal=`을 받아 다시 실행됩니다. 모든 `Type=notify-reload`와 마찬가지로 reload는 `RELOADING=1`/`READY=1`을 기다립니다), 각 사용자 매니저에서 `systemctl --user -M UID@ enqueue-marked`를 실행합니다. 이것은 `systemd-run --pipe`(표준 입출력을 파일 디스크립터로 전달)와 `systemd-stdio-bridge`를 거칩니다.
+- 패키지 설치와 업데이트: systemd RPM의 파일 트리거가 `systemctl daemon-reload`를 실행하고, 이것이 s6 데이터베이스를 재생성하므로 새로 설치된 유닛은 바로 s6 서비스가 됩니다(dnf, GNOME 소프트웨어, PackageKit 모두 같습니다). 새 서비스는 systemd의 preset이 정한 대로 s6 세트에서 활성 또는 비활성으로 시작합니다. 업데이트 때는 패키지 스크립트렛이 유닛에 `Markers=+needs-restart`/`+needs-reload`를 표시하고(`SetUnitProperties`), 이어서 `systemctl enqueue-marked`(`EnqueueMarkedJobs`)가 실행 중인 유닛을 systemd처럼 재시작하거나 다시 읽게 합니다. 사용자 유닛의 경우 파일 트리거가 `user@*.service`를 reload하고(사용자 매니저가 `ReloadSignal=`을 받아 다시 실행됩니다. 모든 `Type=notify-reload`와 마찬가지로 reload는 `RELOADING=1`/`READY=1`을 기다립니다), 각 사용자 매니저에서 `systemctl --user -M UID@ enqueue-marked`를 실행합니다. 이것은 `systemd-run --pipe`(표준 입출력을 파일 디스크립터로 전달)와 `systemd-stdio-bridge`를 거칩니다.
 - 임시(transient) 유닛: `.scope`와 `.slice` 유닛에 대한 `StartTransientUnit`(`PIDs` 또는 `PIDFDs`; logind, podman, flatpak이 사용). `AttachProcessesToUnit`, `Scope.Abandon`, 참조 카운트 호출(수락만 함)도 지원합니다. scope와 slice는 `/run/sdcompat/units`에 기록되므로 다시 시작한 데몬이 넘겨받습니다(세션 scope가 계속 동작합니다).
 - **`systemd-run`**: 보조 유닛을 포함한 임시 `.service`, `.timer`, `.path` 유닛(`--on-calendar`/`--on-active`는 타이머와 서비스를 함께 보냅니다). 속성은 `/run/systemd/transient/`의 유닛 파일이 됩니다. `systemd-run --wait`는 `PropertiesChanged`와 종료 상태를 받습니다. 끝난 임시 유닛은 언로드됩니다.
 - 템플릿 인스턴스는 데이터베이스를 다시 컴파일하지 않고 필요할 때 만들어집니다(예: `user@1000.service`, `user-runtime-dir@1000.service`). 의존성이 먼저 시작되고, 멈춘 유닛을 필요로 하는 유닛은 함께 멈춥니다. 종료할 때 활성 상태인 oneshot 인스턴스를 멈춰 `ExecStop=`이 실행됩니다(systemd-backlight@가 밝기를 저장합니다). 이 인스턴스는 `/run/sdcompat/dyn-oneshot`에 기록되므로 데몬을 다시 시작한 뒤에도 마찬가지입니다. 다시 시작한 데몬은 실행 중인 인스턴스(`/run/sdcompat/dyn`의 서비스 디렉터리)도 넘겨받아 이전처럼 상태를 보고하고 멈춥니다.
@@ -230,7 +233,7 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
    설정을 쓰므로, journald가 `/dev/log`를 쓰는 systemd 부팅에는 영향이 없습니다. 이때 s6 서비스
    `journal-relay`가 journald의 클라이언트 소켓을 대신 열고 rsyslog로 넘깁니다(MESSAGE, 우선순위, 식별자만 남습니다).
 4. chronyd, NetworkManager, gdm을 활성화하고 `graphical.target`을 기본값으로 설정합니다.
-5. `sdcompat reload --no-update`를 실행하고 변환 요약을 출력합니다.
+5. `sdcompat reload --no-update`를 실행해 s6-rc 저장소와 세트 `current`(systemd의 활성화 상태에서 시작)를 만들고 부팅 데이터베이스를 설치한 뒤, 변환 요약을 출력합니다. 직접 작성할 s6-rc 서비스용 `/etc/s6/sources`도 만듭니다.
 6. tty9에 복구용 getty가 있는 `/etc/s6-linux-init/current`를 생성합니다.
 7. SELinux: `bin/init`에 `init_exec_t` 레이블을 붙이고 정책 모듈
    `dist/selinux/sdcompat.cil`을 불러옵니다. 이 모듈은 s6, s6-rc, s6-linux-init,
@@ -277,9 +280,8 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다.
 | 로그인, 사용자 매니저 | 감독(supervised) 서비스로 실행되는 systemd-logind와 `systemd --user` |
 
 2단계(stage 2)가 실패하면 tty9(Ctrl+Alt+F9)에서 로그인해 `/run/uncaught-logs/current`를
-읽으세요. 마지막 변경 이전의 s6 데이터베이스로 부팅하려면 커널 명령줄에
-`sdcompat.db=previous`를, 부팅 시 데이터베이스 재생성을 건너뛰려면 `sdcompat.reload=0`을
-추가하세요.
+읽으세요. 마지막 설치 이전의 s6 데이터베이스로 부팅하려면 커널 명령줄에
+`sdcompat.db=previous`를 추가하세요. 부팅 때는 아무것도 다시 만들지 않습니다.
 
 s6 종료 때 콘솔에 나온 내용은 다음 부팅에서 `/var/log/sdcompat/last-shutdown-console.log`
 (s6의 catch-all 로그)와 `last-shutdown-kernel.log`(종료가 시작된 뒤의 커널 로그, auditd가 멈춘 뒤의
@@ -343,31 +345,66 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 
 ## `s6` 명령 (s6-frontend)
 
-설정 스크립트는 `s6` 명령을 제공하는 [s6-frontend](https://skarnet.org/software/s6-frontend/)
-(버전은 `dist/skarnet.versions`)를 설치하고, sdcompat의 데이터베이스
-(`bootdb = /var/lib/sdcompat/compiled`)를 쓰도록 `/etc/s6.conf`(`dist/s6.conf`)를 씁니다.
-서비스 이름은 s6-rc의 이름입니다:
-`sshd.service`, `gdm.service` 등과 sdcompat 자체의 s6 서비스(`dbus`, `sdcompatd`, `earlyoom`,
-`udevd` 등).
+시스템은 s6 자체의 도구로 관리합니다. 설정 스크립트는 `s6` 명령을 제공하는
+[s6-frontend](https://skarnet.org/software/s6-frontend/)(버전은 `dist/skarnet.versions`)를
+설치하고, sdcompat의 저장소(repository), 스토어(store), 부팅 데이터베이스를 적은
+`/etc/s6.conf`(`dist/s6.conf`)를 씁니다. 서비스 이름은 s6-rc의 이름입니다:
+`sshd.service`, `gdm.service` 등과 sdcompat 자체의 s6 서비스(`dbus`, `sdcompatd`,
+`earlyoom`, `udevd` 등).
+
+구성 방식:
+
+- sdcompat-gen은 유닛 파일을 s6-rc **스토어**(`/var/lib/sdcompat/store`)로 변환합니다.
+  s6-rc **저장소**(`/var/lib/s6-rc/repository`)는 스토어 세 개를 이 순서로 연결합니다:
+  변환된 유닛, sdcompat의 초기 부팅 서비스(`/etc/sdcompat/s6`), 직접 작성한 s6-rc
+  서비스(`/etc/s6/sources`. 여기 있는 서비스는 앞 스토어의 같은 이름을 덮어씁니다).
+- 저장소의 세트(set) **`current`**가 부팅할 것을 정합니다. 모든 서비스는 `always`(초기 부팅,
+  `s6 live stop`으로 멈출 수 없음), `active`(활성: 부팅이 시작하는 `default` 번들에 들어감),
+  `usable`(비활성), `masked`(데이터베이스에 아예 없음) 중 하나입니다.
+- 처음 보는 서비스는 systemd의 상태에서 시작합니다. `default.target`이 끌어들이는 것
+  (systemd가 활성화한 유닛)은 `active`, 나머지는 `usable`이 됩니다. **그다음부터는 세트가
+  정합니다**: `systemctl enable/disable`은 여전히 systemd의 심볼릭 링크를 쓰지만
+  (`systemctl is-enabled`가 그것을 보여 줍니다) 부팅할 것을 바꾸지는 않습니다.
+- `systemctl daemon-reload`와 `sdcompat reload`(패키지가 바뀌면 dnf의 파일 트리거도 실행)는
+  스토어를 다시 만들고 저장소를 동기화한 뒤 `current`를 커밋해 부팅 및 live 데이터베이스로
+  설치합니다. 커밋 전에 `s6-rc-set-fix -u`를 실행해 `active` 서비스가 의존하는 것을
+  활성화하고(커밋은 일관성 없는 세트를 거부합니다), 옮긴 것을 출력합니다.
+- 부팅은 설치된 데이터베이스의 `default` 번들을 그대로 시작합니다. 부팅 때는 아무것도
+  다시 만들지 않습니다. systemd 부팅에서 바꾼 유닛은 다음 reload 때 반영됩니다.
 
 | 명령 | 하는 일 |
 |---|---|
-| `s6 live status` | 모든 서비스와 종류, 상태 (root 불필요) |
-| `s6 live status sshd.service` | 지정한 서비스의 상태 |
-| `sudo s6 process status sshd.service` | 감독 중인 프로세스 (`s6-svstat`) |
-| `sudo s6 process restart sshd.service` | 프로세스만 재시작하고, 그것에 의존하는 것은 그대로 둠 (`s6-svc -r`) |
-| `sudo s6 process kill -s HUP sshd.service` | 프로세스에 시그널 보내기 |
-| `sudo s6 live start\|stop X` | `s6-rc -u\|-d change X`. 유닛은 `systemctl`을 쓰세요(아래 참고) |
+| `s6 set status [NAME...]` | `current`에서 각 서비스의 처방(prescription): `always`, `active`, `usable`, `masked` |
+| `sudo s6 set enable\|disable -p NAME...` | 부팅할 것을 바꿉니다. `-p`는 그것에 의존하는 것도 함께 옮깁니다(없으면 세트가 일관성을 잃고, 다음 reload의 수정이 `disable`을 되돌립니다) |
+| `sudo s6 set mask -p NAME...` | 서비스를 데이터베이스에서 뺍니다. 그것을 담은 타깃(번들)도 사라지므로 `disable`을 권합니다 |
+| `sudo s6 set commit --no-snapshot` 후 `sudo s6 live install --no-snapshot` | `current`를 컴파일해 부팅 및 live 데이터베이스로 만듭니다 |
+| `sudo s6 set apply --no-snapshot` | 커밋, 설치, live 상태를 세트에 맞추기를 한 번에 |
+| `s6 live status [NAME...]` | 모든(또는 지정한) 서비스와 종류, 상태 (root 불필요) |
+| `sudo s6 live start\|stop NAME` | `s6-rc -u\|-d change NAME` |
+| `sudo s6 process status\|restart NAME` | 감독 중인 프로세스 (`s6-svstat`, `s6-svc -r`: 프로세스만, 그것에 의존하는 것은 그대로) |
+| `sudo s6 process kill -s HUP NAME` | 프로세스에 시그널 보내기 |
 | `sudo s6 system reboot\|poweroff` | `systemctl reboot\|poweroff`와 같은 s6-linux-init 종료 |
 
-`s6 live start/stop`과 `s6 process restart`는 sdcompat 아래에서 동작합니다. systemd 작업(job)이
-없고 `ExecStop=`도 실행되지 않으므로(`s6-rc`를 직접 쓸 때와 같음), 유닛의 시작, 중지, 재시작에는
-`systemctl`을 쓰세요.
+참고:
 
-`s6 repository …`, `s6 set …`, `s6 live install`, `s6 live start-everything`/`stop-everything`,
-`s6 system boot`는 **쓰지 마세요**. 이 명령들은 s6-rc 저장소를 관리하고 live 데이터베이스를
-바꾸거나 다시 시작하지만, sdcompat은 그 데이터베이스를 유닛 파일에서 직접 컴파일합니다
-(`systemctl daemon-reload`, `sdcompat reload`).
+- **`--no-snapshot`**: s6-rc 0.8.0.2의 `s6-rc-set-install`은 세트의 스냅샷을 끝에
+  초기화되지 않은 바이트가 하나 남은 경로로 확인합니다(`s6rc_repo_setuptodate()`가 경로를
+  한 바이트 늦게 끝냅니다). 그래서 이 옵션이 없으면 방금 커밋한 세트를 무작위로
+  "not up-to-date"라며 거부합니다. sdcompat은 항상 이 옵션을 넘깁니다. 업스트림 버그이며,
+  sdcompat은 skarnet의 소스를 패치하지 않습니다.
+- **초기 부팅 서비스**는 스토어가 그렇다고 할 때(`flag-essential`, 또는 `setup-fedora.sh`가
+  syslog, journal-relay, resolv에 대해 바꾸는 `sdcompat-sysinit` 소속) 정확히 `always`입니다.
+  세트가 옮기면 reload가 되돌립니다.
+- `s6 live start/stop`과 `s6 process restart`는 sdcompat 아래에서 동작합니다. systemd
+  작업(job)이 없고 `ExecStop=`도 실행되지 않으므로(`s6-rc`를 직접 쓸 때와 같음), 유닛의
+  시작과 중지는 `systemctl`이 낫습니다.
+- 타깃(번들)을 시작하면 `usable` 구성원까지 모두 시작합니다(`s6-rc`와 같음). udev의 장치
+  타깃(`bluetooth.target` 등)이 여기에 기댑니다.
+- SELinux: `s6-rc-update`와 `s6-rc-format-upgrade`는 관리자 셸에서 실행되면 `init_t`로
+  들어갑니다(`dist/selinux/sdcompat.cil`). 그래서 enforcing에서도 `s6 live install`과
+  `s6 set apply`가 동작합니다. 이것이 없을 때는 스캔 디렉터리에 `init_t`가 읽지 못하는
+  레이블이 붙어 설치가 멈췄습니다.
+- 되돌리려면 `sdcompat.db=previous`로 부팅하세요(마지막 것 이전에 설치된 데이터베이스).
 
 ## 설정
 
@@ -376,7 +413,8 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 
 - `EXCLUDE`, `EXCLUDE_ADD`, `INCLUDE`: 어떤 유닛을 변환할지 정합니다.
 - `DEP_MAP`, `DEP_MAP_ADD`: systemd 유닛 → `EXTRA_SOURCE`의 s6 서비스 대응.
-- `EXTRA_SOURCE`: 같은 데이터베이스로 함께 컴파일할 직접 작성한 s6-rc 소스.
+- `EXTRA_SOURCE`: 생성된 스토어 다음에 저장소에 연결할 직접 작성한 s6-rc 스토어(기본값 `/etc/sdcompat/s6:/etc/s6/sources`).
+- `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: 저장소(s6.conf의 `repodir`), 생성된 스토어, reload가 커밋하고 설치하는 세트, 그 커밋이 부팅용으로 만드는 번들(`default`).
 - `JOURNAL`: `yes`(기본값)이면 systemd-journald를 실행하고 서비스 출력을 보냅니다. `no`이면 `LOG_DIR` 아래 서비스별 s6-log 디렉터리를 쓰고, s6 `syslog` 서비스가 rsyslogd이므로 배포판의 `rsyslog.service`는 제외합니다(`INCLUDE`로 되살릴 수 있습니다).
 - `LOG_DIR`: `JOURNAL=no`일 때 s6-log 디렉터리가 들어갈 위치.
 - `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`setup-fedora.sh --no-resolved`처럼 `resolv` s6 서비스도 `sdcompat-sysinit`에 넣어야 DNS가 동작합니다).

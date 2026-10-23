@@ -478,6 +478,9 @@ impl Daemon {
                 r.plan.units.len(),
                 r.db_dir.display()
             );
+            for c in &r.set_changes {
+                eprintln!("sdcompatd: set {}: {c}", self.cfg.set_name);
+            }
         }
         *self.index.write().unwrap() = Index::load(&self.cfg);
         self.invalidate_caches();

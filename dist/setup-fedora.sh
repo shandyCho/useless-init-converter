@@ -468,12 +468,16 @@ configure_sdcompat() {
         set_conf_key RESOLVED "$([ "$RESOLVED" = 1 ] && echo yes || echo no)"
     fi
     [ "$JOURNAL" = 1 ] || put /etc/sdcompat/rsyslog.conf <"$DIST/rsyslog.conf"
-    # The s6 command: sdcompat's database instead of s6-rc's default bootdb.
-    if [ -e /etc/s6.conf ]; then
-        echo "  keeping existing /etc/s6.conf"
-    else
+    # The s6 command: sdcompat's repository stores and boot database.
+    # A copy written by an earlier setup is replaced; yours is kept.
+    if [ -e /etc/s6.conf ] && ! grep -q "written by sdcompat's" /etc/s6.conf; then
+        echo "  keeping your /etc/s6.conf; it needs these lines (see $DIST/s6.conf):"
+        grep -E '^(repodir|bootdb|storelist) ' "$DIST/s6.conf" | sed 's/^/    /'
+    elif ! cmp -s "$DIST/s6.conf" /etc/s6.conf; then
         put /etc/s6.conf <"$DIST/s6.conf"
     fi
+    # The admin's own s6-rc services: the last store, so they override.
+    run mkdir -p /etc/s6/sources
 
     install_s6_services
     # With journald, it owns /dev/log; the s6-only rsyslog is not started.
@@ -533,6 +537,13 @@ s6_past_version() {
 # earlier setup installed them; keep the ones you edited.
 install_s6_services() {
     run mkdir -p /etc/sdcompat/s6
+    # The boot bundle "default" is now made by s6-rc-set-commit from the
+    # repository set; s6-rc refuses a store that defines one.
+    if [ -e /etc/sdcompat/s6/default ]; then
+        echo "  removing /etc/sdcompat/s6/default (the set's commit makes it now)"
+        backup /etc/sdcompat/s6/default
+        run rm -rf /etc/sdcompat/s6/default
+    fi
     if rpm -q sdcompat >/dev/null 2>&1; then
         echo "  sdcompat RPM is installed, it owns /etc/sdcompat/s6"
         return
@@ -659,6 +670,8 @@ setup_selinux() {
     run restorecon -R "$S6LI_BASE" "$LIBEXEC" /usr/sbin/init-selinux /etc/sdcompat "$SHARE" \
         /var/lib/sdcompat /var/log/sdcompat /usr/share/dbus-1/system.d/sdcompat.conf "${files[@]}"
     [ -d /run/sdcompat ] && run restorecon -R /run/sdcompat
+    # The s6-rc repository, which sdcompatd (init_t) syncs and commits.
+    [ -d /var/lib/s6-rc ] && run restorecon -R /var/lib/s6-rc
     # On a running s6 boot this lets a stuck catch-all logger rotate again.
     [ -d /run/uncaught-logs ] && run restorecon -R /run/uncaught-logs
     # ... and lets s6-rc-update (daemon-reload) rename in the live directory.
