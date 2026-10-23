@@ -73,6 +73,13 @@ s6로 부팅한 상태라면, 새 sdcompatd는 데몬을 다시 시작하면 쓰
 /run/service/sdcompatd`). runner와 timers는 서비스가 다음에 시작될 때 쓰이고,
 sdcompat-gen은 다음 `sdcompat reload`나 부팅 때 쓰입니다.
 
+s6-linux-init 스켈레톤(`rc.init`, `rc.shutdown`, `rc.shutdown.final`)은
+다릅니다. 패키지는 setup이 쓰는 원본을 설치할 뿐이고, 부팅에 쓰이는 것은
+`s6-linux-init-maker`가 그것으로 만든 `/etc/s6-linux-init/current`입니다.
+업그레이드로 스켈레톤이 바뀌면 `sudo dist/setup-fedora.sh`를 처음과 같은 옵션으로
+다시 실행해 새로 만드세요. `early`와 나머지는 그러지 않아도 다음 부팅부터
+적용됩니다.
+
 `setup-fedora.sh`는 `sdcompat` RPM이 설치되어 있으면 본체를 빌드하지 않고 그것을
 씁니다. 도구 RPM 일부만 설치되어 있으면 그 도구는 건드리지 않고 나머지만 소스에서
 설치합니다. 제거는 `dnf remove sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd`입니다.

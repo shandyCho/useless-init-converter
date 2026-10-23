@@ -93,7 +93,13 @@ pub fn bind_unix(path: &str, ty: i32, unit: &Unit) -> Result<i32, String> {
     Ok(fd)
 }
 
-fn bind_inet(spec: &str, ty: i32, unit: &Unit) -> Result<i32, String> {
+/// systemd's socket_ipv6_is_supported() (no IPv6 with ipv6.disable=1).
+fn ipv6_supported() -> bool {
+    Path::new("/proc/net/if_inet6").exists()
+}
+
+/// None: an IPv6 address the kernel can't serve, skipped as systemd skips it.
+fn bind_inet(spec: &str, ty: i32, unit: &Unit) -> Result<Option<i32>, String> {
     // Accepted forms: "80", "0.0.0.0:80", "[::1]:80", "[::]:80"
     let (host, port) = if let Ok(p) = spec.parse::<u16>() {
         (None, p)
@@ -105,7 +111,16 @@ fn bind_inet(spec: &str, ty: i32, unit: &Unit) -> Result<i32, String> {
         (Some(h.to_string()), p.parse().map_err(|_| format!("bad port in {spec}"))?)
     };
 
-    let v4: Option<std::net::Ipv4Addr> = host.as_deref().and_then(|h| h.parse().ok());
+    let mut v4: Option<std::net::Ipv4Addr> = host.as_deref().and_then(|h| h.parse().ok());
+    if v4.is_none() && !ipv6_supported() {
+        // As systemd's socket_address_parse(): a bare port is IPv4's any
+        // address then; an IPv6 address is left out with a warning.
+        if host.is_some() {
+            eprintln!("sdcompat: {}: {spec}: IPv6 is not available, ignoring", unit.id);
+            return Ok(None);
+        }
+        v4 = Some(std::net::Ipv4Addr::UNSPECIFIED);
+    }
     let family = if v4.is_some() { libc::AF_INET } else { libc::AF_INET6 };
     let fd = unsafe { libc::socket(family, ty | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
@@ -159,9 +174,11 @@ fn bind_inet(spec: &str, ty: i32, unit: &Unit) -> Result<i32, String> {
         }
     };
     if r < 0 {
-        return Err(format!("bind {spec}: {}", errno()));
+        let e = format!("bind {spec}: {}", errno());
+        unsafe { libc::close(fd) };
+        return Err(e);
     }
-    Ok(fd)
+    Ok(Some(fd))
 }
 
 /// Bind all Listen*= entries of a socket unit.
@@ -198,7 +215,10 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
             let fd = if is_path {
                 bind_unix(&spec, ty, sock)?
             } else {
-                bind_inet(&spec, ty, sock)?
+                match bind_inet(&spec, ty, sock)? {
+                    Some(fd) => fd,
+                    None => continue,
+                }
             };
             if pass_cred {
                 set_opt(fd, libc::SOL_SOCKET, libc::SO_PASSCRED, 1);

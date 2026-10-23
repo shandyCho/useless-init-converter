@@ -158,6 +158,26 @@ pub fn bus_label_unescape(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// systemd's unit_name_path_escape() (systemd-escape --path): "/" and
+/// surrounding slashes dropped, "/" as "-", anything but [A-Za-z0-9:_.]
+/// (and a leading ".") as \xNN.
+pub fn unit_name_path_escape(path: &str) -> String {
+    let parts: Vec<&str> = path.split('/').filter(|c| !c.is_empty() && *c != ".").collect();
+    if parts.is_empty() {
+        return "-".into();
+    }
+    let mut out = String::new();
+    for (i, b) in parts.join("/").bytes().enumerate() {
+        match b {
+            b'/' => out.push('-'),
+            b'.' if i == 0 => out.push_str("\\x2e"),
+            b if b.is_ascii_alphanumeric() || b":_.".contains(&b) => out.push(b as char),
+            b => out.push_str(&format!("\\x{b:02x}")),
+        }
+    }
+    out
+}
+
 /// Unescape a unit name instance (systemd-escape --unescape).
 pub fn unit_name_unescape(s: &str) -> String {
     let b = s.as_bytes();
@@ -222,13 +242,33 @@ pub fn signal_name(sig: i32) -> String {
         (libc::SIGHUP, "HUP"),
         (libc::SIGINT, "INT"),
         (libc::SIGQUIT, "QUIT"),
+        (libc::SIGILL, "ILL"),
+        (libc::SIGTRAP, "TRAP"),
         (libc::SIGABRT, "ABRT"),
+        (libc::SIGBUS, "BUS"),
+        (libc::SIGFPE, "FPE"),
         (libc::SIGKILL, "KILL"),
-        (libc::SIGSEGV, "SEGV"),
-        (libc::SIGPIPE, "PIPE"),
-        (libc::SIGTERM, "TERM"),
         (libc::SIGUSR1, "USR1"),
+        (libc::SIGSEGV, "SEGV"),
         (libc::SIGUSR2, "USR2"),
+        (libc::SIGPIPE, "PIPE"),
+        (libc::SIGALRM, "ALRM"),
+        (libc::SIGTERM, "TERM"),
+        (libc::SIGCHLD, "CHLD"),
+        (libc::SIGCONT, "CONT"),
+        (libc::SIGSTOP, "STOP"),
+        (libc::SIGTSTP, "TSTP"),
+        (libc::SIGTTIN, "TTIN"),
+        (libc::SIGTTOU, "TTOU"),
+        (libc::SIGURG, "URG"),
+        (libc::SIGXCPU, "XCPU"),
+        (libc::SIGXFSZ, "XFSZ"),
+        (libc::SIGVTALRM, "VTALRM"),
+        (libc::SIGPROF, "PROF"),
+        (libc::SIGWINCH, "WINCH"),
+        (libc::SIGIO, "IO"),
+        (libc::SIGPWR, "PWR"),
+        (libc::SIGSYS, "SYS"),
     ];
     names
         .iter()
@@ -288,6 +328,14 @@ pub fn proc_cgroup(pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_escape() {
+        assert_eq!(unit_name_path_escape("/sys/devices/pci0000:00/a-b c"), "sys-devices-pci0000:00-a\\x2db\\x20c");
+        assert_eq!(unit_name_path_escape("/"), "-");
+        assert_eq!(unit_name_path_escape("/.hidden//x/"), "\\x2ehidden-x");
+        assert_eq!(unit_name_unescape(&unit_name_path_escape("/dev/sda1")), "dev/sda1");
+    }
 
     #[test]
     fn label() {

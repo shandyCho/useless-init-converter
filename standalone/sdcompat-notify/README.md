@@ -26,8 +26,27 @@ RPM: `sdcompat-notify.spec`.
 ## 실행
 
 ```sh
-sdcompat-notify [--ready] [--stopping] [--reloading] [--status=TEXT] [--pid=PID] [VAR=VALUE...]
+sdcompat-notify [옵션] [VAR=VALUE...]
+sdcompat-notify --exec [옵션] [VAR=VALUE...] ";" 명령 [인자...]
+sdcompat-notify --booted
 ```
+
+| 옵션 | 보내는 것 / 하는 일 |
+|---|---|
+| `--ready`, `--stopping` | `READY=1`, `STOPPING=1` |
+| `--reloading` | `RELOADING=1`과 `MONOTONIC_USEC=` |
+| `--status=TEXT` | `STATUS=TEXT` |
+| `--pid[=PID]` | `MAINPID=PID`; `auto`나 `parent`(기본값)는 호출한 프로세스, `self`는 이 프로세스 |
+| `--uid=USER` | USER로 보냄 |
+| `--fd=N`, `--fdname=NAME` | fd N을 관리자에 맡김(`FDSTORE=1`, `FDNAME=`); `--fd`는 여러 번 쓸 수 있음 |
+| `--no-block` | 관리자가 메시지를 읽을 때까지 기다리지 않음 |
+| `--exec` | 보낸 뒤 자기 자리에서 명령을 실행 |
+| `--booted` | `/run/systemd/system`이 있으면 종료 코드 0, 없으면 1 |
+
+systemd-notify(254 이후)처럼 메시지는 호출한 프로세스의 이름으로 나가고(커널이
+허락하는 경우 자격 증명에 그 PID; 다른 프로세스를 지정하려면 root여야 함),
+이어서 `BARRIER=1`로 관리자가 읽을 때까지 기다립니다(최대 5초, 응답이 없으면
+경고만 합니다).
 
 예: 서비스 스크립트에서 준비가 끝났음을 알리기
 

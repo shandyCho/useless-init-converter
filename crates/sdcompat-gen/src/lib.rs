@@ -30,10 +30,79 @@ pub struct Planned {
     /// Name of the s6-log consumer, when logging is enabled for this unit.
     pub log_atom: Option<String>,
     pub warnings: Vec<String>,
-    pub timeout_up_ms: u64,
-    pub timeout_down_ms: u64,
-    pub timeout_finish_ms: u64,
+    pub timings: Timings,
+}
+
+/// What s6 needs of a unit's timeouts (milliseconds, 0 = none) and stop
+/// signal; gen's database and the daemon's dynamic instances both use it.
+#[derive(Debug, Clone, Default)]
+pub struct Timings {
+    /// s6-rc's timeout-up: only a backstop, the runner enforces
+    /// TimeoutStartSec= itself (soft failure). 32-bit for s6-rc-compile.
+    pub up_ms: u64,
+    pub down_ms: u64,
+    pub finish_ms: u64,
     pub down_signal: Option<String>,
+}
+
+impl Timings {
+    pub fn of(unit: &Unit) -> Timings {
+        let start = unit.start_timeout_usec();
+        let restart_sec = unit
+            .get("Service", "RestartSec")
+            .and_then(|v| sdcompat_base::unit::parse_timespan_usec(&v, 1_000_000))
+            .unwrap_or(100_000);
+        let down_signal = unit
+            .get("Service", "KillSignal")
+            .and_then(|s| util::signal_number(&s))
+            .filter(|&s| s != libc::SIGTERM)
+            // s6-supervise reads down-signal with skalibs' sig0_scan(), which
+            // takes a number too (SIGRTMIN+n has no name there).
+            .map(|s| match util::signal_name(s) {
+                n if n.parse::<i32>().is_ok() => n,
+                n => format!("SIG{n}"),
+            });
+        // Type=notify: none. EXTEND_TIMEOUT_USEC= can push the start past
+        // any fixed backstop (s6-rc would then bring the service down), and
+        // the notify helper enforces the timeout, extended or not, and
+        // releases s6-rc either way.
+        let notify = matches!(unit.get("Service", "Type").as_deref(), Some("notify" | "notify-reload"));
+        Timings {
+            up_ms: if start == u64::MAX || notify { 0 } else { (ms(start) + 15_000).min(u32::MAX as u64) },
+            down_ms: ms(unit.stop_timeout_usec()).min(u32::MAX as u64),
+            finish_ms: ms(restart_sec).saturating_add(5000),
+            down_signal,
+        }
+    }
+}
+
+/// The files of a longrun's directory that s6-rc's source format and a
+/// plain s6 service directory share: (name, contents, executable).
+pub fn longrun_files(cfg: &Config, id: &str, t: &Timings) -> Vec<(&'static str, String, bool)> {
+    let args = cfg.runner_args();
+    let arg = unit_arg(id);
+    if id.ends_with(".timer") || id.ends_with(".path") {
+        let sub = if id.ends_with(".timer") { "timer-run" } else { "path-run" };
+        let timer_runner = cfg.timer_runner.display();
+        return vec![
+            ("run", format!("#!/bin/sh\nexec {timer_runner} {sub}{args} {arg}\n"), true),
+            ("notification-fd", "3\n".into(), false),
+        ];
+    }
+    let runner = cfg.runner.display();
+    let mut out = vec![
+        ("run", format!("#!/bin/sh\nexec {runner} run{args} {arg}\n"), true),
+        ("finish", format!("#!/bin/sh\nexec {runner} finish{args} {arg} \"$@\"\n"), true),
+        ("notification-fd", "3\n".into(), false),
+        ("timeout-up", format!("{}\n", t.up_ms), false),
+        ("timeout-down", format!("{}\n", t.down_ms), false),
+        ("timeout-kill", format!("{}\n", t.down_ms), false),
+        ("timeout-finish", format!("{}\n", t.finish_ms), false),
+    ];
+    if let Some(sig) = &t.down_signal {
+        out.push(("down-signal", format!("{sig}\n"), false));
+    }
+    out
 }
 
 #[derive(Debug, Default)]
@@ -432,23 +501,6 @@ pub fn plan(cfg: &Config) -> Plan {
             }
         }
 
-        let timeout_start = unit.start_timeout_usec();
-        let timeout_stop = unit
-            .get("Service", "TimeoutStopSec")
-            .or_else(|| unit.get("Service", "TimeoutSec"))
-            .and_then(|v| sdcompat_base::unit::parse_timeout_usec(&v))
-            .unwrap_or(90_000_000);
-        let restart_sec = unit
-            .get("Service", "RestartSec")
-            .and_then(|v| sdcompat_base::unit::parse_timespan_usec(&v, 1_000_000))
-            .unwrap_or(100_000);
-        let down_signal = unit
-            .get("Service", "KillSignal")
-            .and_then(|s| util::signal_number(&s))
-            .filter(|&s| s != libc::SIGTERM)
-            .map(|s| format!("SIG{}", util::signal_name(s)))
-            .filter(|s| !s[3..].chars().all(|c| c.is_ascii_digit()));
-
         let log_atom = (kind == Kind::Longrun
             && unit.utype() == "service"
             && !cfg.journal
@@ -464,13 +516,7 @@ pub fn plan(cfg: &Config) -> Plan {
                 deps,
                 log_atom,
                 warnings,
-                // The runner enforces TimeoutStartSec= itself (soft failure);
-                // s6-rc's own timeout is only a backstop.
-                // s6-rc-compile takes 32-bit milliseconds.
-                timeout_up_ms: if timeout_start == u64::MAX { 0 } else { (ms(timeout_start) + 15_000).min(u32::MAX as u64) },
-                timeout_down_ms: ms(timeout_stop).min(u32::MAX as u64),
-                timeout_finish_ms: ms(restart_sec).saturating_add(5000),
-                down_signal,
+                timings: Timings::of(unit),
             },
         );
     }
@@ -496,14 +542,17 @@ fn resolve_conflicts(plan: &mut Plan, loaded: &BTreeMap<String, Unit>, aliases: 
             stack.extend(p.deps.iter().cloned());
         }
     }
+    // A unit already dropped neither keeps nor drops: of a mutual
+    // Conflicts= pair one stays (the first by name), not neither.
     let mut drops: Vec<(String, String)> = Vec::new();
+    let mut dropped: BTreeSet<String> = BTreeSet::new();
     for (id, unit) in loaded {
-        if !boot.contains(id) {
+        if !boot.contains(id) || dropped.contains(id) {
             continue;
         }
         for c in unit.get_words("Unit", "Conflicts") {
             let c = aliases.get(&c).cloned().unwrap_or(c);
-            if boot.contains(&c) && plan.units.contains_key(&c) {
+            if c != *id && boot.contains(&c) && plan.units.contains_key(&c) && dropped.insert(c.clone()) {
                 drops.push((id.clone(), c));
             }
         }
@@ -595,7 +644,6 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
     fs::create_dir_all(dir)?;
     let runner = cfg.runner.display().to_string();
     let args = cfg.runner_args();
-    let timer_runner = cfg.timer_runner.display().to_string();
 
     for p in plan.units.values() {
         let sdir = dir.join(&p.id);
@@ -613,42 +661,12 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
                 let arg = unit_arg(&p.id);
                 write_file(&sdir.join("up"), &format!("{runner} up{args} {arg}\n"), false)?;
                 write_file(&sdir.join("down"), &format!("{runner} down{args} {arg}\n"), false)?;
-                write_file(&sdir.join("timeout-up"), &format!("{}\n", p.timeout_up_ms), false)?;
-                write_file(&sdir.join("timeout-down"), &format!("{}\n", p.timeout_down_ms), false)?;
-            }
-            Kind::Longrun if p.id.ends_with(".timer") || p.id.ends_with(".path") => {
-                let arg = unit_arg(&p.id);
-                let sub = if p.id.ends_with(".timer") { "timer-run" } else { "path-run" };
-                write_file(
-                    &sdir.join("run"),
-                    &format!("#!/bin/sh\nexec {timer_runner} {sub}{args} {arg}\n"),
-                    true,
-                )?;
-                write_file(&sdir.join("notification-fd"), "3\n", false)?;
+                write_file(&sdir.join("timeout-up"), &format!("{}\n", p.timings.up_ms), false)?;
+                write_file(&sdir.join("timeout-down"), &format!("{}\n", p.timings.down_ms), false)?;
             }
             Kind::Longrun => {
-                let arg = unit_arg(&p.id);
-                write_file(
-                    &sdir.join("run"),
-                    &format!("#!/bin/sh\nexec {runner} run{args} {arg}\n"),
-                    true,
-                )?;
-                write_file(
-                    &sdir.join("finish"),
-                    &format!("#!/bin/sh\nexec {runner} finish{args} {arg} \"$@\"\n"),
-                    true,
-                )?;
-                write_file(&sdir.join("notification-fd"), "3\n", false)?;
-                write_file(&sdir.join("timeout-up"), &format!("{}\n", p.timeout_up_ms), false)?;
-                write_file(&sdir.join("timeout-down"), &format!("{}\n", p.timeout_down_ms), false)?;
-                write_file(&sdir.join("timeout-kill"), &format!("{}\n", p.timeout_down_ms), false)?;
-                write_file(
-                    &sdir.join("timeout-finish"),
-                    &format!("{}\n", p.timeout_finish_ms),
-                    false,
-                )?;
-                if let Some(sig) = &p.down_signal {
-                    write_file(&sdir.join("down-signal"), &format!("{sig}\n"), false)?;
+                for (name, text, exec) in longrun_files(cfg, &p.id, &p.timings) {
+                    write_file(&sdir.join(name), &text, exec)?;
                 }
                 if let (Some(log), Some(log_dir)) = (&p.log_atom, &cfg.log_dir) {
                     write_file(&sdir.join("producer-for"), &format!("{log}\n"), false)?;

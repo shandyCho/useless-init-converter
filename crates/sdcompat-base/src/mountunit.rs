@@ -23,7 +23,8 @@ pub fn where_of(unit: &Unit) -> String {
 
 /// Mount points currently mounted (octal escapes in mountinfo decoded).
 pub fn mounted_points() -> Vec<String> {
-    let text = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+    // Bytes: one mount point that isn't UTF-8 must not hide all the others.
+    let text = String::from_utf8_lossy(&fs::read("/proc/self/mountinfo").unwrap_or_default()).into_owned();
     text.lines()
         .filter_map(|l| l.split_whitespace().nth(4))
         .map(decode_octal)
@@ -36,7 +37,8 @@ fn decode_octal(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'\\' && i + 3 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 4], 8) {
+            // From the bytes: a str slice could split a character.
+            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 4]).ok().and_then(|o| u8::from_str_radix(o, 8).ok()) {
                 out.push(v);
                 i += 4;
                 continue;
@@ -160,5 +162,6 @@ mod tests {
     #[test]
     fn octal() {
         assert_eq!(decode_octal("/mnt/a\\040b"), "/mnt/a b");
+        assert_eq!(decode_octal("/mnt/\\é1"), "/mnt/\\é1");
     }
 }

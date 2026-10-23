@@ -35,6 +35,11 @@ const DGRAM_MAX: usize = 256 * 1024;
 const MSG_MAX: usize = 16 * 1024;
 const MEMFD_MAX: u64 = 1024 * 1024;
 
+/// Stream connections served at once (journald's STDOUT_STREAMS_MAX), and
+/// the stack of each one's thread (a BufReader and two line buffers).
+const STREAMS_MAX: usize = 4096;
+const STREAM_STACK: usize = 128 * 1024;
+
 const LOG_USER: u8 = 1 << 3;
 const LOG_INFO: u8 = 6;
 
@@ -120,7 +125,7 @@ impl StreamHeader {
         let mut pri = LOG_USER | self.level;
         if self.level_prefix {
             if let Some((p, rest)) = level_prefix(line) {
-                pri = if p >> 3 == 0 { LOG_USER | p } else { p };
+                pri = LOG_USER | p;
                 line = rest;
             }
         }
@@ -132,11 +137,17 @@ impl StreamHeader {
     }
 }
 
-/// A leading `<N>` (N up to 191, facility and level) and the rest.
+/// A leading `<N>` and the rest. As journald's syslog_parse_priority()
+/// without facility for stdout streams: a level only (0 to 7); `<30>` and
+/// the like stay part of the message, and the facility is LOG_USER.
 fn level_prefix(line: &[u8]) -> Option<(u8, &[u8])> {
     let rest = line.strip_prefix(b"<")?;
     let end = rest.iter().position(|&b| b == b'>').filter(|&e| (1..=3).contains(&e))?;
-    let p: u8 = std::str::from_utf8(&rest[..end]).ok()?.parse().ok().filter(|&p| p <= 191)?;
+    let digits = &rest[..end];
+    if !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let p: u8 = std::str::from_utf8(digits).ok()?.parse().ok().filter(|&p| p <= 7)?;
     Some((p, &rest[end + 1..]))
 }
 
@@ -241,9 +252,24 @@ impl Relay {
             }
         });
         std::thread::spawn(move || {
+            let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             for conn in listener.incoming().flatten() {
-                let r = relay.clone();
-                std::thread::spawn(move || r.serve_stream(conn));
+                use std::sync::atomic::Ordering;
+                // As journald's STDOUT_STREAMS_MAX: one thread per stream,
+                // but not without bound (the socket is world-writable).
+                if active.load(Ordering::SeqCst) >= STREAMS_MAX {
+                    eprintln!("sdcompat-journal-relay: too many stdout streams, refusing one");
+                    continue;
+                }
+                active.fetch_add(1, Ordering::SeqCst);
+                let (r, a) = (relay.clone(), active.clone());
+                let spawned = std::thread::Builder::new().stack_size(STREAM_STACK).spawn(move || {
+                    r.serve_stream(conn);
+                    a.fetch_sub(1, Ordering::SeqCst);
+                });
+                if spawned.is_err() {
+                    active.fetch_sub(1, Ordering::SeqCst);
+                }
             }
         });
         Ok(())
@@ -362,7 +388,9 @@ mod tests {
         let h = StreamHeader::from_lines(&lines);
         assert_eq!(h, StreamHeader { ident: "gnome-shell".into(), unit: "".into(), level: 6, level_prefix: true });
         assert_eq!(h.entry(b"<3>oops", Some(9)).unwrap().pri, LOG_USER | 3);
-        assert_eq!(h.entry(b"<30>daemon", None).unwrap().pri, 30);
+        // A facility is not taken from a stream: the prefix stays.
+        let e = h.entry(b"<30>daemon", None).unwrap();
+        assert_eq!((e.pri, e.msg.as_slice()), (LOG_USER | 6, b"<30>daemon".as_slice()));
         assert_eq!(h.entry(b"<x>plain", None).unwrap().msg, b"<x>plain");
         assert_eq!(h.entry(b"", None), None);
         let e = h.entry(b"hello", Some(9)).unwrap();

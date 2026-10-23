@@ -9,12 +9,13 @@ pub fn recv_max(sock: RawFd, cap: usize) -> std::io::Result<(Vec<u8>, Vec<OwnedF
     unsafe {
         let mut buf = vec![0u8; cap];
         let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut libc::c_void, iov_len: buf.len() };
-        let mut cbuf = [0u8; 1024];
+        // u64s: aligned for cmsghdr, as a byte array is not.
+        let mut cbuf = [0u64; 128];
         let mut msg: libc::msghdr = std::mem::zeroed();
         msg.msg_iov = &mut iov;
         msg.msg_iovlen = 1;
         msg.msg_control = cbuf.as_mut_ptr() as *mut libc::c_void;
-        msg.msg_controllen = cbuf.len() as _;
+        msg.msg_controllen = std::mem::size_of_val(&cbuf) as _;
         let n = libc::recvmsg(sock, &mut msg, libc::MSG_CMSG_CLOEXEC);
         if n < 0 {
             return Err(std::io::Error::last_os_error());

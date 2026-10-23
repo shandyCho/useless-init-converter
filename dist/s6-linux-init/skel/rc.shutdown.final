@@ -8,29 +8,50 @@
 # s6-log, and the restarted one archives the interrupted "current" as @*.u
 # and starts an empty one. The archives sort by time (TAI64N names).
 d=/var/log/sdcompat
-[ -d "$d" ] || exit 0
 umask 077
-# s6-linux-init-umountall ran just before: it can't unmount the root
-# filesystem, so it remounted it read-only, which works unless a process
-# still has a file open for writing. Make the filesystem writable for
-# these two files and read-only again afterwards.
+# s6-linux-init-umountall ran just before. A separate /var (or /var/log)
+# is unmounted by now: mount it again from fstab for the two files.
+mounted=
+for mp in /var/log /var; do
+    if findmnt --fstab -n "$mp" >/dev/null 2>&1 && ! mountpoint -q "$mp"; then
+        mount "$mp" 2>/dev/null && mounted=$mp
+        break
+    fi
+done
+# It can't unmount the root filesystem, so it remounted it read-only,
+# which works unless a process still has a file open for writing. Make the
+# filesystem writable for these two files and read-only again afterwards.
+# With more than 99 mount points it gives up at once ("too many mount
+# points") and leaves everything mounted read-write: finish its job below.
 remounted=
-if [ ! -w "$d" ]; then
+umountall_failed=
+[ -w / ] && umountall_failed=1
+if [ -d "$d" ] && [ ! -w "$d" ]; then
     mp=$(findmnt -no TARGET -T "$d" 2>/dev/null)
     [ -n "$mp" ] || mp=/
     mount -o remount,rw "$mp" 2>/dev/null && remounted=$mp
 fi
-if [ ! -w "$d" ]; then
+if [ ! -d "$d" ]; then
+    :
+elif [ ! -w "$d" ]; then
     echo "sdcompat: $d is read-only, the shutdown logs are not kept" > /dev/console 2>/dev/null
-    [ -z "$remounted" ] || mount -o remount,ro "$remounted" 2>/dev/null
-    exit 0
+else
+    cat /run/uncaught-logs/@* /run/uncaught-logs/current > "$d/last-shutdown-console.log" 2>/dev/null
+    # From rc.shutdown's marker on; the whole log if it is missing.
+    dmesg > "$d/last-shutdown-kernel.log" 2>/dev/null
+    if grep -q 'sdcompat: shutdown starts' "$d/last-shutdown-kernel.log"; then
+        dmesg | sed -n '/sdcompat: shutdown starts/,$p' > "$d/last-shutdown-kernel.log" 2>/dev/null
+    fi
+    sync
 fi
-cat /run/uncaught-logs/@* /run/uncaught-logs/current > "$d/last-shutdown-console.log" 2>/dev/null
-# From rc.shutdown's marker on; the whole log if it is missing.
-dmesg > "$d/last-shutdown-kernel.log" 2>/dev/null
-if grep -q 'sdcompat: shutdown starts' "$d/last-shutdown-kernel.log"; then
-    dmesg | sed -n '/sdcompat: shutdown starts/,$p' > "$d/last-shutdown-kernel.log" 2>/dev/null
-fi
-sync
 [ -z "$remounted" ] || mount -o remount,ro "$remounted" 2>/dev/null
+[ -z "$mounted" ] || umount "$mounted" 2>/dev/null
+if [ -n "$umountall_failed" ]; then
+    # What s6-linux-init-umountall does: unmount everything, the busy ones
+    # (the root) read-only. umount -a leaves proc, sysfs and devpts alone.
+    echo "sdcompat: filesystems still mounted read-write, unmounting them" > /dev/console 2>/dev/null
+    sync
+    umount -a -r 2>/dev/null
+    mount -o remount,ro / 2>/dev/null
+fi
 exit 0

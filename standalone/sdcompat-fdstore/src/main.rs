@@ -110,7 +110,10 @@ mod tests {
         assert_eq!(request(&sock, "PUT\0a.service\0x", fd)[0], b"ERR fd store full");
         // With <max> from the client.
         assert_eq!(request(&sock, "PUT\0a.service\0x\x001", fd)[0], b"OK");
-        assert_eq!(request(&sock, "PUT\0a.service\0y\x001", fd)[0], b"ERR fd store full");
+        // The same open file again is stored once (systemd's same_fd()).
+        assert_eq!(request(&sock, "PUT\0a.service\0x\x001", fd)[0], b"OK");
+        let other = std::fs::File::open("/dev/null").unwrap();
+        assert_eq!(request(&sock, "PUT\0a.service\0y\x001", Some(other.as_raw_fd()))[0], b"ERR fd store full");
         // Held sockets have their own limit.
         assert_eq!(request(&sock, "PUT\0a.service#sockets\0s", fd)[0], b"OK");
 

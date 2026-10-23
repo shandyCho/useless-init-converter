@@ -39,7 +39,8 @@ cargo build --release --offline -p sdcompatd
 
 %check
 export SDCOMPAT_BUILD=%{version}-%{release}
-cargo test --release --offline -p sdcompatd
+# The library crates it is built from too: they are not packaged.
+cargo test --release --offline -p sdcompatd -p sdcompat-base -p sdcompat-client -p sdcompat-exec -p sdcompat-gen -p sdcompat-install -p sdcompat-version
 
 %install
 install -Dm0755 target/release/sdcompatd %{buildroot}%{_libexecdir}/sdcompat/sdcompatd
@@ -51,5 +52,5 @@ install -Dm0644 dist/dbus/sdcompat.conf %{buildroot}%{_datadir}/dbus-1/system.d/
 %{_datadir}/dbus-1/system.d/sdcompat.conf
 
 %changelog
-* Wed Oct 21 2026 sdcompat developers - 0.1.0-1
+* Wed Oct 21 2026 sdcompat developers
 - Split out of the sdcompat package

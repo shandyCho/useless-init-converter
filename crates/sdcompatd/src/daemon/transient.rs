@@ -128,6 +128,9 @@ fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str
             for item in a.iter() {
                 let Value::Structure(st) = item else { continue };
                 let f = st.fields();
+                if f.len() < 2 {
+                    return Err(format!("{name}: malformed value"));
+                }
                 let path = <&str>::try_from(&f[0]).map_err(|e| e.to_string())?.to_string();
                 let argv: Vec<String> = match &f[1] {
                     Value::Array(av) => av.iter().filter_map(|x| <&str>::try_from(x).ok().map(String::from)).collect(),
@@ -163,6 +166,9 @@ fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str
                 for item in a.iter() {
                     if let Value::Structure(st) = item {
                         let f = st.fields();
+                        if f.len() < 2 {
+                            return Err(format!("{name}: malformed value"));
+                        }
                         let p = <&str>::try_from(&f[0]).unwrap_or("");
                         let opt = matches!(f.get(1), Some(Value::Bool(true)));
                         out.push(("Service", "EnvironmentFile".into(), format!("{}{p}", if opt { "-" } else { "" })));
@@ -175,6 +181,9 @@ fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str
                 for item in a.iter() {
                     if let Value::Structure(st) = item {
                         let f = st.fields();
+                        if f.len() < 2 {
+                            return Err(format!("{name}: malformed value"));
+                        }
                         let spec = <&str>::try_from(&f[1]).unwrap_or("");
                         out.push(("Timer", "OnCalendar".into(), spec.to_string()));
                     }
@@ -186,6 +195,9 @@ fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str
                 for item in a.iter() {
                     if let Value::Structure(st) = item {
                         let f = st.fields();
+                        if f.len() < 2 {
+                            return Err(format!("{name}: malformed value"));
+                        }
                         let base = <&str>::try_from(&f[0]).unwrap_or("");
                         let t = <u64>::try_from(&f[1]).unwrap_or(0);
                         out.push(("Timer", base.replace("USec", "Sec"), usec(t)));

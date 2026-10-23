@@ -36,13 +36,20 @@ fn print_changes(changes: &[install::Change]) {
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // --config PATH before or after the command (generated scripts and the
+    // sdcompat front end put it after), up to a "--".
     let mut config_path: Option<PathBuf> = None;
-    while args.first().map(|a| a == "--config").unwrap_or(false) {
-        args.remove(0);
-        if args.is_empty() {
-            die("--config needs a path");
+    let mut i = 0;
+    while i < args.len() && args[i] != "--" {
+        if args[i] == "--config" {
+            args.remove(i);
+            if i >= args.len() {
+                die("--config needs a path");
+            }
+            config_path = Some(PathBuf::from(args.remove(i)));
+        } else {
+            i += 1;
         }
-        config_path = Some(PathBuf::from(args.remove(0)));
     }
     let Some(cmd) = args.first().cloned() else {
         eprint!("{USAGE}");

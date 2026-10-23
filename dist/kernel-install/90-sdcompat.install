@@ -22,12 +22,17 @@ add)
         break
     done
     [ -n "$src" ] || exit 0
-    dest=${src%.conf}-sdcompat.conf
+    # "~" sorts before anything, also the end of the name, in both ls -v
+    # (grubby's BLS listing) and rpmvercmp (GRUB's blscfg): the systemd
+    # entry stays first, so "grubby --set-default KERNEL" on a kernel
+    # update keeps picking it. "-sdcompat" sorted first; drop that name.
+    rm -f "${src%.conf}-sdcompat.conf"
+    dest="${src%.conf}~sdcompat.conf"
     sed -e "s/^title .*/title $TITLE $KVER/" \
         -e "/^options /{s/ rhgb//; s/ quiet//; s|\$| $args|}" "$src" >"$dest"
     ;;
 remove)
-    for f in "$ENTRIES"/*"$KVER"-sdcompat.conf; do
+    for f in "$ENTRIES"/*"$KVER"~sdcompat.conf "$ENTRIES"/*"$KVER"-sdcompat.conf; do
         [ -e "$f" ] && rm -f "$f"
     done
     ;;

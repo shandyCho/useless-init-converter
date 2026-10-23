@@ -26,8 +26,27 @@ RPM: `sdcompat-notify.spec`.
 ## Run
 
 ```sh
-sdcompat-notify [--ready] [--stopping] [--reloading] [--status=TEXT] [--pid=PID] [VAR=VALUE...]
+sdcompat-notify [OPTIONS] [VAR=VALUE...]
+sdcompat-notify --exec [OPTIONS] [VAR=VALUE...] ";" COMMAND [ARGS...]
+sdcompat-notify --booted
 ```
+
+| Option | Sends / does |
+|---|---|
+| `--ready`, `--stopping` | `READY=1`, `STOPPING=1` |
+| `--reloading` | `RELOADING=1` and `MONOTONIC_USEC=` |
+| `--status=TEXT` | `STATUS=TEXT` |
+| `--pid[=PID]` | `MAINPID=PID`; `auto` or `parent` (the default) is the caller, `self` this process |
+| `--uid=USER` | sends as USER |
+| `--fd=N`, `--fdname=NAME` | stores fd N with the manager (`FDSTORE=1`, `FDNAME=`); `--fd` may repeat |
+| `--no-block` | doesn't wait for the manager to read the message |
+| `--exec` | runs COMMAND after sending, in place of itself |
+| `--booted` | exit code 0 if `/run/systemd/system` exists, otherwise 1 |
+
+As systemd-notify (254 and later), the message goes out on behalf of the
+calling process (its PID in the credentials, where the kernel allows it: root
+may name another process) and then waits with `BARRIER=1` until the manager
+has read it (5 s at most; without an answer it only warns).
 
 For example, a service script saying it is ready:
 

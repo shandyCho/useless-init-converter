@@ -138,6 +138,9 @@ pub struct Sandbox {
     pub inaccessible: Vec<(String, bool)>,
     /// Service directories that must stay writable (StateDirectory= etc).
     pub writable_dirs: Vec<String>,
+    /// An empty mode-0000 file bound over inaccessible files (systemd's
+    /// /run/systemd/inaccessible/reg).
+    pub inaccessible_file: PathBuf,
 }
 
 impl Sandbox {
@@ -182,6 +185,7 @@ impl Sandbox {
             read_only: path_entries(unit, "ReadOnlyPaths"),
             inaccessible: path_entries(unit, "InaccessiblePaths"),
             writable_dirs,
+            inaccessible_file: run_dir.join("inaccessible"),
         }
     }
 
@@ -203,6 +207,17 @@ impl Sandbox {
             || !self.inaccessible.is_empty()
     }
 
+    /// Hide a path: an empty read-only directory, or an empty mode-0000
+    /// read-only file over anything else (not /dev/null: that would read as
+    /// an empty file and take writes).
+    fn make_inaccessible(&self, p: &str) -> Result<(), String> {
+        if Path::new(p).is_dir() {
+            return mount("tmpfs", p, Some("tmpfs"), libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC, Some("mode=0000"));
+        }
+        bind(&self.inaccessible_file.display().to_string(), p)?;
+        set_readonly(p, true)
+    }
+
     /// Prepare persistent per-unit directories (PrivateTmp is shared by all
     /// processes of one unit invocation).
     pub fn prepare(&self) -> Result<(), String> {
@@ -215,6 +230,12 @@ impl Sandbox {
         }
         if let Some(d) = &self.private_dev {
             fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
+        if self.needed() && !self.inaccessible_file.exists() {
+            let f = &self.inaccessible_file;
+            fs::write(f, b"").map_err(|e| format!("{}: {e}", f.display()))?;
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(f, fs::Permissions::from_mode(0)).map_err(|e| format!("{}: {e}", f.display()))?;
         }
         Ok(())
     }
@@ -360,7 +381,7 @@ impl Sandbox {
                     continue;
                 }
                 if inaccessible {
-                    make_inaccessible(p)?;
+                    self.make_inaccessible(p)?;
                 } else {
                     bind_ro(p)?;
                 }
@@ -378,14 +399,14 @@ impl Sandbox {
         if self.protect_kernel_modules {
             for p in ["/usr/lib/modules", "/lib/modules"] {
                 if Path::new(p).is_dir() {
-                    make_inaccessible(p)?;
+                    self.make_inaccessible(p)?;
                 }
             }
         }
         if self.protect_kernel_logs {
             for p in ["/proc/kmsg", "/dev/kmsg"] {
                 if Path::new(p).exists() {
-                    make_inaccessible(p)?;
+                    self.make_inaccessible(p)?;
                 }
             }
         }
@@ -405,9 +426,15 @@ impl Sandbox {
                 return Err(format!("ReadOnlyPaths: {p} does not exist"));
             }
         }
+        // systemd applies the mounts shortest path first: a writable path
+        // below a ReadOnlyPaths= entry stays writable.
+        let below_ro = |p: &str| self.read_only.iter().any(|(q, _)| p != q && Path::new(p).starts_with(q));
+        for p in rw.iter().filter(|p| below_ro(p)) {
+            bind_rw(p)?;
+        }
         for (p, optional) in &self.inaccessible {
             if Path::new(p).exists() {
-                make_inaccessible(p)?;
+                self.make_inaccessible(p)?;
             } else if !optional {
                 return Err(format!("InaccessiblePaths: {p} does not exist"));
             }
@@ -416,14 +443,6 @@ impl Sandbox {
     }
 }
 
-/// Hide a path: an empty read-only directory, or /dev/null over a file.
-fn make_inaccessible(p: &str) -> Result<(), String> {
-    if Path::new(p).is_dir() {
-        mount("tmpfs", p, Some("tmpfs"), libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC, Some("mode=0000"))
-    } else {
-        bind("/dev/null", p)
-    }
-}
 
 /// PrivateDevices=: a /dev with only the pseudo devices, like systemd's. The
 /// nodes are bind mounts of the real ones (keeps their SELinux labels).

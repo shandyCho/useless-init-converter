@@ -26,6 +26,7 @@ use crate::util::{self, UserInfo};
 // systemd's exit codes for setup failures (EXIT_CHDIR etc).
 const EXIT_CHDIR: i32 = 200;
 const EXIT_EXEC: i32 = 203;
+const EXIT_MEMORY: i32 = 204;
 const EXIT_LIMITS: i32 = 205;
 const EXIT_STDIN: i32 = 208;
 const EXIT_STDOUT: i32 = 209;
@@ -34,7 +35,7 @@ const EXIT_GROUP: i32 = 216;
 const EXIT_USER: i32 = 217;
 const EXIT_CAPABILITIES: i32 = 218;
 const EXIT_NAMESPACE: i32 = 226;
-const EXIT_SECCOMP: i32 = 231;
+const EXIT_SECCOMP: i32 = 228;
 
 fn errno() -> String {
     std::io::Error::last_os_error().to_string()
@@ -155,17 +156,11 @@ impl Runner {
     }
 
     pub fn setenv(&mut self, k: &str, v: &str) {
-        if let Some(e) = self.env.iter_mut().find(|(ek, _)| ek == k) {
-            e.1 = v.to_string();
-        } else {
-            self.env.push((k.to_string(), v.to_string()));
-        }
+        env_set(&mut self.env, k, v);
     }
 
-    fn getenv(&self, k: &str) -> Option<String> {
-        self.env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.clone())
-    }
-
+    /// The manager's and the runner's own variables (systemd's our_env);
+    /// the unit's settings go on top in unit_env().
     fn build_env(&mut self) -> Result<(), String> {
         self.setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin");
         if let Ok(vars) = crate::envfile::load(Path::new("/etc/locale.conf")) {
@@ -188,37 +183,6 @@ impl Runner {
             self.setenv("HOME", &home);
             self.setenv("SHELL", &shell);
         }
-        for w in self.unit.get_words("Service", "Environment") {
-            if let Some((k, v)) = w.split_once('=') {
-                self.setenv(k, v);
-            }
-        }
-        for f in self.unit.get_all("Service", "EnvironmentFile") {
-            let (optional, path) = match f.strip_prefix('-') {
-                Some(p) => (true, p.trim().to_string()),
-                None => (false, f.clone()),
-            };
-            match crate::envfile::load(Path::new(&path)) {
-                Ok(vars) => {
-                    for (k, v) in vars {
-                        self.setenv(&k, &v);
-                    }
-                }
-                Err(_) if optional => {}
-                Err(e) => return Err(format!("EnvironmentFile {path}: {e}")),
-            }
-        }
-        for k in self.unit.get_words("Service", "PassEnvironment") {
-            if let Ok(v) = std::env::var(&k) {
-                self.setenv(&k, &v);
-            }
-        }
-        for k in self.unit.get_words("Service", "UnsetEnvironment") {
-            match k.split_once('=') {
-                Some(_) => self.env.retain(|(ek, ev)| format!("{ek}={ev}") != k),
-                None => self.env.retain(|(ek, _)| *ek != k),
-            }
-        }
         for (key, base, var) in DIRS {
             let dirs: Vec<String> = self
                 .unit
@@ -230,12 +194,58 @@ impl Runner {
                 self.setenv(var, &dirs.join(":"));
             }
         }
-        if self.uses_tty() && self.getenv("TERM").is_none() {
+        if self.uses_tty() && !self.env.iter().any(|(k, _)| k == "TERM") {
             let tty = self.tty_path();
             let term = if tty.starts_with("/dev/ttyS") || tty.starts_with("/dev/ttyAMA") { "vt220" } else { "linux" };
             self.setenv("TERM", term);
         }
+        // A missing EnvironmentFile= fails the start here already.
+        self.unit_env(&[])?;
         Ok(())
+    }
+
+    /// The environment of a command, in systemd's order (exec_invoke()):
+    /// our_env, PassEnvironment=, Environment=, EnvironmentFile=, each
+    /// overriding the ones before, then UnsetEnvironment=. The files are
+    /// read for every command, as systemd does: an ExecStartPre= may write
+    /// the file ExecStart= reads.
+    fn unit_env(&self, extra_env: &[(String, String)]) -> Result<Vec<(String, String)>, String> {
+        let mut env = self.env.clone();
+        for (k, v) in extra_env {
+            env_set(&mut env, k, v);
+        }
+        for k in self.unit.get_words("Service", "PassEnvironment") {
+            if let Ok(v) = std::env::var(&k) {
+                env_set(&mut env, &k, &v);
+            }
+        }
+        for w in self.unit.get_words("Service", "Environment") {
+            if let Some((k, v)) = w.split_once('=') {
+                env_set(&mut env, k, v);
+            }
+        }
+        for f in self.unit.get_all("Service", "EnvironmentFile") {
+            let (optional, path) = match f.strip_prefix('-') {
+                Some(p) => (true, p.trim().to_string()),
+                None => (false, f.clone()),
+            };
+            match crate::envfile::load(Path::new(&path)) {
+                Ok(vars) => {
+                    for (k, v) in vars {
+                        env_set(&mut env, &k, &v);
+                    }
+                }
+                Err(_) if optional => {}
+                Err(e) => return Err(format!("EnvironmentFile {path}: {e}")),
+            }
+        }
+        for k in self.unit.get_words("Service", "UnsetEnvironment") {
+            match k.split_once('=') {
+                Some(_) => env.retain(|(ek, ev)| format!("{ek}={ev}") != k),
+                None => env.retain(|(ek, _)| *ek != k),
+            }
+        }
+        Ok(env)
     }
 
     fn uses_tty(&self) -> bool {
@@ -295,11 +305,10 @@ impl Runner {
     /// Only returns on failure, with the exit code to use.
     fn exec_command(&self, cmd: &ExecCommand, extra_env: &[(String, String)]) -> (i32, String) {
         unsafe {
-            // Reset signal state inherited from the supervisor.
-            let mut set: libc::sigset_t = std::mem::zeroed();
-            libc::sigemptyset(&mut set);
-            libc::sigprocmask(libc::SIG_SETMASK, &set, std::ptr::null_mut());
-            for sig in 1..32 {
+            // Reset signal state inherited from the supervisor (or the PAM
+            // wrapper's forwarding handlers): dispositions first, so a
+            // signal pending in the mask is not caught by a handler.
+            for sig in 1..=libc::SIGRTMAX() {
                 if sig != libc::SIGKILL && sig != libc::SIGSTOP {
                     libc::signal(sig, libc::SIG_DFL);
                 }
@@ -307,6 +316,9 @@ impl Runner {
             if self.unit.get_bool("Service", "IgnoreSIGPIPE", true) {
                 libc::signal(libc::SIGPIPE, libc::SIG_IGN);
             }
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigprocmask(libc::SIG_SETMASK, &set, std::ptr::null_mut());
         }
 
         if let Err(e) = self.setup_stdio(cmd) {
@@ -351,11 +363,9 @@ impl Runner {
         // Root once exec()ed: the user switch below does not happen.
         let switches_user = !cmd.privileged && !cmd.no_setuid && self.user.as_ref().map(|u| u.uid != 0).unwrap_or(false);
         let stays_root = self.is_root && !switches_user;
-        let nnp = if cmd.privileged {
-            self.unit.get_bool("Service", "NoNewPrivileges", false)
-        } else {
-            sandbox::no_new_privileges(&self.unit, stays_root)
-        };
+        // '+' commands skip the sandbox, NoNewPrivileges= included (systemd
+        // sets it only with needs_sandboxing).
+        let nnp = !cmd.privileged && sandbox::no_new_privileges(&self.unit, stays_root);
         if nnp {
             unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
         }
@@ -415,14 +425,10 @@ impl Runner {
         }
 
         // Final environment and argv.
-        let mut env = self.env.clone();
-        for (k, v) in extra_env {
-            if let Some(e) = env.iter_mut().find(|(ek, _)| ek == k) {
-                e.1 = v.clone();
-            } else {
-                env.push((k.clone(), v.clone()));
-            }
-        }
+        let env = match self.unit_env(extra_env) {
+            Ok(env) => env,
+            Err(e) => return (EXIT_MEMORY, e),
+        };
         let lookup = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.clone());
         let argv = if cmd.no_env_expand {
             cmd.argv.clone()
@@ -796,7 +802,10 @@ impl Runner {
             };
             for cmd in cmds {
                 let st = self.spawn_wait(&cmd, extra_env);
-                if !st.ok() && !cmd.ignore_failure {
+                // A oneshot's ExecStart= processes are its main processes:
+                // SuccessExitStatus= applies to them (not to Pre/Post).
+                let success = key == "ExecStart" && status_in(&self.unit.get_words("Service", "SuccessExitStatus"), st);
+                if !st.ok() && !success && !cmd.ignore_failure {
                     log(self.id(), &format!("{key}={} failed: {}", cmd.path, describe(st)));
                     return Err(st);
                 }
@@ -856,7 +865,7 @@ impl Runner {
     fn prepare_start(&mut self) -> Result<(), String> {
         for k in [
             keys::CONDITION_FAILED, keys::ASSERT_FAILED, keys::STATUS_TEXT, keys::MAIN_PID,
-            keys::START_FAILED, keys::DEPENDENCY_FAILED,
+            keys::START_FAILED, keys::DEPENDENCY_FAILED, keys::PARKED, keys::EXTEND_UNTIL,
             // A new run starts with a clean result, as systemd's
             // service_start() does; otherwise the exit handler keeps a
             // previous run's failure.
@@ -1200,6 +1209,23 @@ impl Runner {
                 return EXIT_PAM;
             }
         };
+        // Forwarding handlers in place and every signal blocked until
+        // FORWARD_PID names the child: a stop arriving in between is
+        // forwarded, not fatal to the wrapper alone. exec_command() resets
+        // both in the child.
+        let mut old: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            let mut all: libc::sigset_t = std::mem::zeroed();
+            libc::sigfillset(&mut all);
+            libc::sigprocmask(libc::SIG_BLOCK, &all, &mut old);
+            for sig in 1..=libc::SIGRTMAX() {
+                if ![libc::SIGKILL, libc::SIGSTOP, libc::SIGCHLD, libc::SIGSEGV, libc::SIGBUS, libc::SIGFPE, libc::SIGILL]
+                    .contains(&sig)
+                {
+                    libc::signal(sig, forward_signal as *const () as libc::sighandler_t);
+                }
+            }
+        }
         let child = unsafe { libc::fork() };
         if child == 0 {
             let (code, msg) = self.exec_command(main, &env);
@@ -1212,26 +1238,18 @@ impl Runner {
         }
         if child < 0 {
             log(self.id(), &format!("fork: {}", errno()));
+            unsafe { libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut()) };
             session.close();
             return EXIT_EXEC;
         }
+        FORWARD_PID.store(child, std::sync::atomic::Ordering::SeqCst);
+        unsafe { libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut()) };
         // Our copy of the exec-status pipe must go, or the readiness helper
         // never sees the child's exec.
         if let Some(fd) = EXEC_FAIL_PIPE.with(|c| c.take()) {
             unsafe { libc::close(fd) };
         }
         self.st.set(keys::MAIN_PID, &child.to_string());
-        FORWARD_PID.store(child, std::sync::atomic::Ordering::SeqCst);
-        unsafe {
-            let max = libc::SIGRTMAX();
-            for sig in 1..=max {
-                if ![libc::SIGKILL, libc::SIGSTOP, libc::SIGCHLD, libc::SIGSEGV, libc::SIGBUS, libc::SIGFPE, libc::SIGILL]
-                    .contains(&sig)
-                {
-                    libc::signal(sig, forward_signal as *const () as libc::sighandler_t);
-                }
-            }
-        }
         let status = Status::from_wait(wait_pid(child));
         let t = std::time::Instant::now();
         session.close();
@@ -1396,7 +1414,7 @@ impl Runner {
                     }
                 }
             };
-            let deadline = timeout_us.map(|t| util::now_monotonic_usec().saturating_add(t));
+            let mut deadline = timeout_us.map(|t| util::now_monotonic_usec().saturating_add(t));
             loop {
                 let mut pfds = [
                     libc::pollfd { fd, events: libc::POLLIN, revents: 0 },
@@ -1435,8 +1453,25 @@ impl Runner {
                             st.set(keys::RELOADS_DONE, &(st.get_u64(keys::RELOADS_DONE) + 1).to_string());
                         } else if let Some(s) = line.strip_prefix("STATUS=") {
                             st.set(keys::STATUS_TEXT, s);
+                        } else if let (Some(n), false) = (line.strip_prefix("EXTEND_TIMEOUT_USEC="), ready) {
+                            // As systemd: the start timeout ends no earlier
+                            // than N usec from now (MariaDB's crash recovery
+                            // sends it); the daemon's wait reads it too.
+                            if let (Some(d), Ok(n)) = (deadline.as_mut(), n.parse::<u64>()) {
+                                let until = util::now_monotonic_usec().saturating_add(n);
+                                if until > *d {
+                                    *d = until;
+                                    st.set(keys::EXTEND_UNTIL, &until.to_string());
+                                }
+                            }
                         } else if let Some(p) = line.strip_prefix("MAINPID=") {
-                            st.set(keys::MAIN_PID, p);
+                            let sender_uid = cred.map(|c| c.uid).unwrap_or(u32::MAX);
+                            match p.parse::<u32>() {
+                                Ok(p) if main_pid_ok(p, sender_uid, main_pid, st.get(keys::CGROUP).as_deref()) => {
+                                    st.set(keys::MAIN_PID, &p.to_string())
+                                }
+                                _ => eprintln!("sdcompat[{unit_id}]: MAINPID={p} is not a process of the unit, refused"),
+                            }
                         } else if let Some(n) = line.strip_prefix("FDNAME=") {
                             // systemd's fdname_is_valid(): printable ASCII
                             // without ':', at most 255 bytes; else "stored".
@@ -1542,14 +1577,24 @@ impl Runner {
         }
         self.st.stamp(keys::EXEC_MAIN_START);
         let st = self.spawn_wait(main, &[]);
-        self.deadline.set(None);
+        let deadline = self.deadline.take();
         if !st.ok() {
             self.st.set(keys::RESULT, if self.timed_out.get() { "timeout" } else { result_for(st) });
             self.soft_fail(&format!("start command failed: {}", describe(st)));
             return exit_code_for(st);
         }
         let me = std::process::id() as i32;
-        let main_pid = self.find_forked_pid(me);
+        let main_pid = match self.unit.get("Service", "PIDFile") {
+            Some(pidfile) => match self.wait_pid_file(&pidfile, me, deadline) {
+                Ok(p) => Some(p),
+                Err(result) => {
+                    self.st.set(keys::RESULT, result);
+                    self.soft_fail(&format!("PIDFile={pidfile} not written ({result})"));
+                    return 1;
+                }
+            },
+            None => self.guess_main_pid(me),
+        };
         let Some(main_pid) = main_pid else {
             log(self.id(), "could not determine main PID");
             self.signal_ready();
@@ -1613,19 +1658,30 @@ impl Runner {
         }
     }
 
-    fn find_forked_pid(&self, me: i32) -> Option<i32> {
-        if let Some(pidfile) = self.unit.get("Service", "PIDFile") {
-            for _ in 0..100 {
-                if let Some(p) = util::read_trimmed(Path::new(&pidfile)).and_then(|s| s.parse::<i32>().ok()) {
-                    if p > 0 {
-                        return Some(p);
-                    }
+    /// As systemd: wait for the PID file up to TimeoutStartSec= ("timeout"),
+    /// or until no process is left that could write it ("protocol").
+    fn wait_pid_file(&self, pidfile: &str, me: i32, deadline: Option<std::time::Instant>) -> Result<i32, &'static str> {
+        loop {
+            if let Some(p) = util::read_trimmed(Path::new(pidfile)).and_then(|s| s.parse::<i32>().ok()) {
+                if p > 0 {
+                    return Ok(p);
                 }
-                std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            return None;
+            if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                return Err("timeout");
+            }
+            let in_cgroup = self
+                .cgroup_dir()
+                .is_some_and(|d| util::cgroup_pids(&d).iter().any(|&p| p != me as u32));
+            if !in_cgroup && self.guess_main_pid(me).is_none() {
+                return Err("protocol");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        // GuessMainPID: our (reparented) children.
+    }
+
+    /// GuessMainPID: our (reparented) children.
+    fn guess_main_pid(&self, me: i32) -> Option<i32> {
         let mut kids = Vec::new();
         for e in fs::read_dir("/proc").ok()?.flatten() {
             let Ok(pid) = e.file_name().to_string_lossy().parse::<i32>() else { continue };
@@ -1681,8 +1737,8 @@ impl Runner {
             .get("Service", "KillSignal")
             .and_then(|s| util::signal_number(&s))
             .unwrap_or(libc::SIGTERM);
-        let clean = self.is_clean(status) || (stopping && status == Status::Killed(kill_signal));
-        let mut result = if clean {
+        let clean_exit = self.is_clean(status) || (stopping && status == Status::Killed(kill_signal));
+        let mut result = if clean_exit {
             "success"
         } else {
             match status {
@@ -1696,6 +1752,9 @@ impl Runner {
                 result = r;
             }
         }
+        // A start timeout or failed ExecStartPost= ends in our own SIGTERM,
+        // which on its own would count as clean.
+        let clean = clean_exit && result == "success";
 
         self.cleanup(&result, status, stopping);
 
@@ -1716,8 +1775,8 @@ impl Runner {
             "always" => true,
             "on-success" => clean,
             "on-failure" => !clean,
-            "on-abnormal" | "on-watchdog" => matches!(status, Status::Killed(_)) && !clean,
-            "on-abort" => matches!(status, Status::Killed(_)) && !clean,
+            "on-abnormal" | "on-watchdog" => result == "timeout" || matches!(status, Status::Killed(_)) && !clean_exit,
+            "on-abort" => matches!(status, Status::Killed(_)) && !clean_exit,
             _ => false,
         };
         if status_in(&self.unit.get_words("Service", "RestartPreventExitStatus"), status) {
@@ -1739,20 +1798,24 @@ impl Runner {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5);
             let now = util::now_monotonic_usec();
+            // No limit: nothing to remember (the list would only grow).
+            let limited = interval > 0 && burst > 0;
             let mut times: Vec<u64> = self
                 .st
                 .get(keys::RESTART_TIMES)
                 .unwrap_or_default()
                 .split_whitespace()
                 .filter_map(|t| t.parse().ok())
-                .filter(|&t: &u64| interval == 0 || now.saturating_sub(t) < interval)
+                .filter(|&t: &u64| limited && now.saturating_sub(t) < interval)
                 .collect();
-            times.push(now);
+            if limited {
+                times.push(now);
+            }
             self.st.set(
                 keys::RESTART_TIMES,
                 &times.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" "),
             );
-            if interval > 0 && burst > 0 && times.len() > burst {
+            if limited && times.len() > burst {
                 log(self.id(), "start request repeated too quickly, giving up");
                 self.st.set(keys::RESULT, "start-limit-hit");
                 self.st.stamp(keys::INACTIVE_ENTER);
@@ -1813,26 +1876,31 @@ impl Runner {
             ("EXIT_CODE".to_string(), code.to_string()),
             ("EXIT_STATUS".to_string(), st),
         ];
-        let _ = self.run_list("ExecStopPost", &env);
-
-        // KillMode=control-group / mixed: leftover processes go too.
+        // KillMode=control-group / mixed: leftover processes go too, before
+        // ExecStopPost= and again after it (systemd's stop-sigterm,
+        // stop-post and final-sigterm states).
         let mode = self.unit.get("Service", "KillMode").unwrap_or_else(|| "control-group".into());
-        if mode == "control-group" || mode == "mixed" {
-            if let Some(dir) = self.cgroup_dir() {
-                let me = std::process::id();
-                if cgroup::kill_all(&dir, libc::SIGTERM, me) > 0 {
-                    for _ in 0..20 {
-                        if util::cgroup_pids(&dir).is_empty() {
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(100));
+        let kill_leftovers = || {
+            if mode != "control-group" && mode != "mixed" {
+                return;
+            }
+            let Some(dir) = self.cgroup_dir() else { return };
+            let me = std::process::id();
+            if cgroup::kill_all(&dir, libc::SIGTERM, me) > 0 {
+                for _ in 0..20 {
+                    if util::cgroup_pids(&dir).is_empty() {
+                        break;
                     }
-                    if self.unit.get_bool("Service", "SendSIGKILL", true) {
-                        cgroup::kill_all(&dir, libc::SIGKILL, me);
-                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if self.unit.get_bool("Service", "SendSIGKILL", true) {
+                    cgroup::kill_all(&dir, libc::SIGKILL, me);
                 }
             }
-        }
+        };
+        kill_leftovers();
+        let _ = self.run_list("ExecStopPost", &env);
+        kill_leftovers();
         if let Some(sock) = self.st.get(keys::NOTIFY_SOCKET) {
             let _ = fs::remove_file(sock);
             self.st.clear(keys::NOTIFY_SOCKET);
@@ -2109,6 +2177,26 @@ fn notify_sender_ok(cred: Option<libc::ucred>, main_pid: u32, unit_uid: Option<u
     matches!((cg(c.pid as u32), cg(main_pid)), (Some(a), Some(b)) if a == b)
 }
 
+/// MAINPID=: systemd's service_is_suitable_main_pid(), an existing process
+/// in the unit's cgroup (not the helper); a root sender may name any.
+fn main_pid_ok(pid: u32, sender_uid: u32, main_pid: u32, cgroup: Option<&str>) -> bool {
+    if pid <= 1 || pid == std::process::id() || !Path::new(&format!("/proc/{pid}")).exists() {
+        return false;
+    }
+    if sender_uid == 0 {
+        return true;
+    }
+    let cg = |pid: u32| fs::read_to_string(format!("/proc/{pid}/cgroup")).ok();
+    match cgroup {
+        // Subgroups too (Delegate=yes).
+        Some(dir) => cg(pid).and_then(|c| c.lines().find_map(|l| l.strip_prefix("0::")).map(str::to_string)).is_some_and(|rel| {
+            let full = format!("{}{rel}", cgroup::CGROUP_ROOT);
+            full == dir || full.starts_with(&format!("{dir}/"))
+        }),
+        None => matches!((cg(pid), cg(main_pid)), (Some(a), Some(b)) if a == b),
+    }
+}
+
 fn wanted_up() -> bool {
     std::process::Command::new("s6-svstat")
         .args(["-o", "wantedup", "."])
@@ -2117,11 +2205,46 @@ fn wanted_up() -> bool {
         .unwrap_or(true)
 }
 
+fn env_set(env: &mut Vec<(String, String)>, k: &str, v: &str) {
+    if let Some(e) = env.iter_mut().find(|(ek, _)| ek == k) {
+        e.1 = v.to_string();
+    } else {
+        env.push((k.to_string(), v.to_string()));
+    }
+}
+
+/// SuccessExitStatus= and friends: numbers, exit status names (systemd's
+/// exit_status_from_string(): DATAERR, TEMPFAIL, ...) and signal names.
 fn status_in(list: &[String], status: Status) -> bool {
     list.iter().any(|w| match status {
-        Status::Exited(c) => w.parse::<i32>().ok() == Some(c),
-        Status::Killed(s) => util::signal_number(w) == Some(s) && w.parse::<i32>().is_err(),
+        Status::Exited(c) => w.parse::<i32>().ok().or_else(|| exit_status_number(w)) == Some(c),
+        Status::Killed(s) => {
+            w.parse::<i32>().is_err() && exit_status_number(w).is_none() && util::signal_number(w) == Some(s)
+        }
     })
+}
+
+fn exit_status_number(name: &str) -> Option<i32> {
+    const NAMES: &[(&str, i32)] = &[
+        ("SUCCESS", 0), ("FAILURE", 1), ("INVALIDARGUMENT", 2), ("NOTIMPLEMENTED", 3),
+        ("NOPERMISSION", 4), ("NOTINSTALLED", 5), ("NOTCONFIGURED", 6), ("NOTRUNNING", 7),
+        ("USAGE", 64), ("DATAERR", 65), ("NOINPUT", 66), ("NOUSER", 67), ("NOHOST", 68),
+        ("UNAVAILABLE", 69), ("SOFTWARE", 70), ("OSERR", 71), ("OSFILE", 72), ("CANTCREAT", 73),
+        ("IOERR", 74), ("TEMPFAIL", 75), ("PROTOCOL", 76), ("NOPERM", 77), ("CONFIG", 78),
+        ("CHDIR", 200), ("NICE", 201), ("FDS", 202), ("EXEC", 203), ("MEMORY", 204),
+        ("LIMITS", 205), ("OOM_ADJUST", 206), ("SIGNAL_MASK", 207), ("STDIN", 208),
+        ("STDOUT", 209), ("CHROOT", 210), ("IOPRIO", 211), ("TIMERSLACK", 212),
+        ("SECUREBITS", 213), ("SETSCHEDULER", 214), ("CPUAFFINITY", 215), ("GROUP", 216),
+        ("USER", 217), ("CAPABILITIES", 218), ("CGROUP", 219), ("SETSID", 220),
+        ("CONFIRM", 221), ("STDERR", 222), ("PAM", 224), ("NETWORK", 225), ("NAMESPACE", 226),
+        ("NO_NEW_PRIVILEGES", 227), ("SECCOMP", 228), ("SELINUX_CONTEXT", 229),
+        ("PERSONALITY", 230), ("APPARMOR_PROFILE", 231), ("ADDRESS_FAMILIES", 232),
+        ("RUNTIME_DIRECTORY", 233), ("CHOWN", 235), ("SMACK_PROCESS_LABEL", 236),
+        ("KEYRING", 237), ("STATE_DIRECTORY", 238), ("CACHE_DIRECTORY", 239),
+        ("LOGS_DIRECTORY", 240), ("CONFIGURATION_DIRECTORY", 241), ("NUMA_POLICY", 242),
+        ("CREDENTIALS", 243), ("BPF", 245),
+    ];
+    NAMES.iter().find(|(n, _)| *n == name).map(|(_, c)| *c)
 }
 
 fn describe(st: Status) -> String {

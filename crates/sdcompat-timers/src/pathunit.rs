@@ -61,12 +61,16 @@ impl Inotify {
         (fd >= 0).then_some(Inotify { fd })
     }
 
-    fn watch(&self, p: &Path) {
-        let Ok(c) = CString::new(p.as_os_str().as_encoded_bytes()) else { return };
+    fn watch(&self, p: &Path) -> i32 {
+        let Ok(c) = CString::new(p.as_os_str().as_encoded_bytes()) else { return -1 };
         let mask = libc::IN_CREATE | libc::IN_DELETE | libc::IN_MOVED_TO | libc::IN_MOVED_FROM
             | libc::IN_CLOSE_WRITE | libc::IN_MODIFY | libc::IN_ATTRIB | libc::IN_DELETE_SELF
             | libc::IN_MOVE_SELF;
-        unsafe { libc::inotify_add_watch(self.fd, c.as_ptr(), mask) };
+        unsafe { libc::inotify_add_watch(self.fd, c.as_ptr(), mask) }
+    }
+
+    fn unwatch(&self, wd: i32) {
+        unsafe { libc::inotify_rm_watch(self.fd, wd) };
     }
 
     /// Wait up to `ms` for events; returns (any event, any write-type event, any modify event).
@@ -171,18 +175,29 @@ pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
         // TriggerLimitBurst within TriggerLimitIntervalSec (defaults 200 / 2 s).
         let burst: usize = unit.get("Path", "TriggerLimitBurst").and_then(|v| v.parse().ok()).unwrap_or(200);
         let mut recent: Vec<u64> = Vec::new();
+        // One inotify instance for the whole run: a new one each round would
+        // lose the events between closing the old and watching with the new.
+        let Some(ino) = Inotify::new().map(std::sync::Arc::new) else {
+            eprintln!("sdcompat[{name}]: inotify unavailable");
+            return 1;
+        };
+        let mut wds: Vec<i32> = Vec::new();
         loop {
-            // Re-create the watches each round: watched paths may have appeared or vanished.
-            let Some(ino) = Inotify::new() else {
-                eprintln!("sdcompat[{name}]: inotify unavailable");
-                return 1;
-            };
+            // Watched paths may have appeared, vanished or been re-created:
+            // watch what is there now (adding an existing watch returns its
+            // descriptor), and drop the rest, such as the ancestor watched
+            // while the path did not exist yet.
+            let mut now: Vec<i32> = Vec::new();
             for (_, p) in &specs {
-                ino.watch(&watch_target(p));
+                now.push(ino.watch(&watch_target(p)));
                 if Path::new(p).is_dir() {
-                    ino.watch(Path::new(p));
+                    now.push(ino.watch(Path::new(p)));
                 }
             }
+            for wd in wds.iter().filter(|w| !now.contains(w)) {
+                ino.unwatch(*wd);
+            }
+            wds = now;
             if conn.is_none() {
                 conn = crate::client::connect(&cfg).await.ok();
             }
@@ -196,6 +211,7 @@ pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
                 // On the blocking pool, so the connection keeps reading what
                 // the daemon sends (its signals) meanwhile; unread, they fill
                 // the socket and the daemon drops us.
+                let ino = ino.clone();
                 let Ok((_, changed, modified)) = tokio::task::spawn_blocking(move || ino.wait(2000)).await else {
                     return 1;
                 };

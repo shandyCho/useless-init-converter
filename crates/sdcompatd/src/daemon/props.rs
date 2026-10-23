@@ -130,14 +130,44 @@ impl Daemon {
         p
     }
 
-    /// All property interfaces of a unit object.
-    pub(super) async fn unit_props(&self, id: &str, unit: &Unit, active: &BTreeSet<String>) -> Ifaces {
-        let status = self.unit_status(id, active, unit).await;
+    /// The property interfaces of a unit object: all of them, or `only` that
+    /// one (Get and GetAll name an interface; building the others would
+    /// read state files and cgroups for nothing).
+    pub(super) async fn unit_props(&self, id: &str, unit: &Unit, active: &BTreeSet<String>, only: Option<&str>) -> Ifaces {
         let mut out = Ifaces::new();
-        out.insert(UNIT_IFACE.into(), self.unit_iface(id, unit, &status));
+        let type_iface = match unit.utype() {
+            "service" => "org.freedesktop.systemd1.Service",
+            "target" => "org.freedesktop.systemd1.Target",
+            "timer" => "org.freedesktop.systemd1.Timer",
+            "scope" => "org.freedesktop.systemd1.Scope",
+            "mount" => "org.freedesktop.systemd1.Mount",
+            "swap" => "org.freedesktop.systemd1.Swap",
+            "path" => "org.freedesktop.systemd1.Path",
+            "slice" => "org.freedesktop.systemd1.Slice",
+            _ => "",
+        };
+        let want_unit = only.is_none_or(|o| o == UNIT_IFACE);
+        let want_type = !type_iface.is_empty() && only.is_none_or(|o| o == type_iface);
+        if !want_unit && !want_type {
+            return out;
+        }
+        // The status (s6-svstat) only for the interfaces that show it.
+        let status = if want_unit || (want_type && unit.utype() == "service") {
+            Some(self.unit_status(id, active, unit).await)
+        } else {
+            None
+        };
+        if let (true, Some(st)) = (want_unit, &status) {
+            out.insert(UNIT_IFACE.into(), self.unit_iface(id, unit, st));
+        }
+        if !want_type {
+            return out;
+        }
         match unit.utype() {
             "service" => {
-                out.insert("org.freedesktop.systemd1.Service".into(), self.service_iface(id, unit, &status));
+                if let Some(st) = &status {
+                    out.insert("org.freedesktop.systemd1.Service".into(), self.service_iface(id, unit, st));
+                }
             }
             "target" => {
                 out.insert("org.freedesktop.systemd1.Target".into(), Props::new());
@@ -465,7 +495,7 @@ impl Daemon {
         p.insert("RestartMaxDelayUSec".into(), Value::from(u64::MAX));
         p.insert("RestartUSecNext".into(), Value::from(timespan(unit, "Service", &["RestartSec"], 100_000)));
         p.insert("TimeoutStartUSec".into(), Value::from(unit.start_timeout_usec()));
-        p.insert("TimeoutStopUSec".into(), Value::from(timeout(unit, "Service", &["TimeoutStopSec", "TimeoutSec"], 90_000_000)));
+        p.insert("TimeoutStopUSec".into(), Value::from(unit.stop_timeout_usec()));
         p.insert("TimeoutAbortUSec".into(), Value::from(timeout(unit, "Service", &["TimeoutAbortSec", "TimeoutStopSec", "TimeoutSec"], 90_000_000)));
         p.insert("TimeoutStartFailureMode".into(), s("terminate"));
         p.insert("TimeoutStopFailureMode".into(), s("terminate"));
@@ -567,6 +597,10 @@ impl Daemon {
         let cals: Vec<(String, String, u64)> = timer::calendars(unit)
             .into_iter()
             .map(|(raw, spec)| match spec {
+                // A named zone would need TZ switched under the daemon's
+                // threads (setenv is not thread-safe): use the runner's
+                // next elapse instead.
+                Some(sp) if sp.switches_tz() => ("OnCalendar".to_string(), sp.render(), next_rt),
                 Some(sp) => {
                     let n = sp.next_after(now).map(|t| t as u64 * 1_000_000).unwrap_or(0);
                     ("OnCalendar".to_string(), sp.render(), n)
@@ -647,8 +681,8 @@ impl Daemon {
 
     /// Units shown by ListUnits.
     pub(super) fn known_units(&self) -> Vec<String> {
-        let idx = self.index.read().unwrap();
-        let mut v: Vec<String> = idx.units.keys().cloned().collect();
+        // One lock at a time: no order between them to keep.
+        let mut v: Vec<String> = self.index.read().unwrap().units.keys().cloned().collect();
         v.extend(self.transient.lock().unwrap().keys().cloned());
         v.extend(self.dynamic.lock().unwrap().keys().cloned());
         v

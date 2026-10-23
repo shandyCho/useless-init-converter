@@ -68,14 +68,34 @@ mount-api)
     rc=$?
     case $rc in 0|65|73) ;; *) warn "systemd-tmpfiles --prefix=/dev exited $rc" ;; esac
     if [ -e /sys/fs/selinux/enforce ] && command -v restorecon >/dev/null; then
-        restorecon -R /dev /run 2>/dev/null
+        # /run, but not what s6-linux-init and s6-rc-init made there before
+        # us: init_t's type transitions gave them init_var_run_t, and
+        # resetting them to the file_contexts default (var_run_t without a
+        # filecon) is what kept needing fixes (s6-rc-update denied its
+        # renames, the catch-all fifo, the scan directory).
+        restorecon -R /dev 2>/dev/null
+        restorecon /run 2>/dev/null
+        for e in /run/* /run/.[!.]*; do
+            [ -e "$e" ] || continue
+            case ${e#/run/} in
+            service | uncaught-logs | s6-rc | s6-rc:* | s6-linux-init*) continue ;;
+            esac
+            restorecon -R "$e" 2>/dev/null
+        done
     fi
     [ -s /etc/machine-id ] || systemd-machine-id-setup 2>/dev/null || true
     ;;
 mount-fs)
     # fsck of the root filesystem is not done here; the initramfs normally
     # handles it (rd.fsck / fsck.mode kernel options).
-    mount -o remount,rw / 2>/dev/null
+    # As systemd-remount-fs: the options fstab gives the root filesystem
+    # (rw unless it says ro); "remount" with no device reads them from
+    # fstab. Without an fstab line, read-write as before.
+    if findmnt --fstab -n / >/dev/null 2>&1; then
+        mount -o remount / 2>/dev/null || warn "remount of / with its fstab options failed"
+    else
+        mount -o remount,rw / 2>/dev/null
+    fi
     mount -a -O no_netdev || warn "mount -a: some filesystems did not mount"
     swapon -a 2>/dev/null
     ;;

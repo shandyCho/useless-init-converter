@@ -93,6 +93,7 @@ fn setup_failed(cfg: &Config, cmd: &str, unit: &str, e: &str) -> i32 {
             st.stamp(keys::INACTIVE_EXIT);
             st.set(keys::RESULT, "resources");
             st.set(keys::START_FAILED, e);
+            st.clear(keys::PARKED);
             st.stamp(keys::INACTIVE_ENTER);
             if cmd == "up" {
                 return 0;

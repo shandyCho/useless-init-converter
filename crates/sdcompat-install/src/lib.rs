@@ -250,6 +250,13 @@ fn any_link_to(dir: &Path, targets: &BTreeSet<String>, depth: u32, aliases: bool
 /// systemd's UnitFileState: enabled, enabled-runtime, disabled, static,
 /// masked, alias, indirect, linked, bad.
 pub fn unit_file_state(cfg: &Config, name: &str) -> Result<String, String> {
+    state_with(cfg, name, |dir, targets, aliases| any_link_to(dir, targets, 0, aliases))
+}
+
+/// unit_file_state() with `has_link(dir, names, aliases)` in place of
+/// any_link_to(), so list_unit_files() can answer from one reading.
+fn state_with(cfg: &Config, name: &str, has_link: impl Fn(&Path, &BTreeSet<String>, bool) -> bool) -> Result<String, String> {
+    let any_link_to = |d: &Path, t: &BTreeSet<String>, _depth: u32, a: bool| has_link(d, t, a);
     let ld = Loader::new(cfg);
     let unit = ld.load(name);
     match unit.load_state {
@@ -383,7 +390,7 @@ pub fn preset_state(cfg: &Config, name: &str) -> &'static str {
 
 /// All unit files with their state, for ListUnitFiles.
 pub fn list_unit_files(cfg: &Config) -> Vec<(String, String)> {
-    let ld = Loader::new(cfg);
+    let links = Links::read(cfg);
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     for dir in &cfg.unit_path {
@@ -393,12 +400,63 @@ pub fn list_unit_files(cfg: &Config) -> Vec<(String, String)> {
             if loader::parse_name(&n).is_none() || e.path().is_dir() || !seen.insert(n.clone()) {
                 continue;
             }
-            let state = unit_file_state(cfg, &n).unwrap_or_else(|_| "bad".into());
+            let state = state_with(cfg, &n, |d, t, a| links.any(d, t, a)).unwrap_or_else(|_| "bad".into());
             out.push((e.path().display().to_string(), state));
         }
     }
-    let _ = ld;
     out
+}
+
+/// The links of every unit directory (enablement and aliases), read once:
+/// checking each unit file against all of them again made list-unit-files
+/// O(files x links). Keyed by the link's name, its target's name and its
+/// template, the three names link_matches() compares.
+struct Links {
+    by_name: std::collections::HashMap<String, Vec<(PathBuf, bool, String)>>,
+}
+
+impl Links {
+    fn read(cfg: &Config) -> Links {
+        let mut l = Links { by_name: Default::default() };
+        let mut dirs = cfg.unit_path.clone();
+        if !dirs.contains(&cfg.runtime_unit_dir) {
+            dirs.push(cfg.runtime_unit_dir.clone());
+        }
+        for d in &dirs {
+            l.scan(d, d, 0);
+        }
+        l
+    }
+
+    fn scan(&mut self, base: &Path, dir: &Path, depth: u32) {
+        let Ok(rd) = fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            let Ok(meta) = fs::symlink_metadata(&p) else { continue };
+            let n = e.file_name().to_string_lossy().into_owned();
+            if meta.file_type().is_symlink() {
+                let Ok(dest) = fs::read_link(&p) else { continue };
+                if dest == Path::new("/dev/null") {
+                    continue;
+                }
+                let mut keys = vec![n.clone(), basename(&dest.display().to_string())];
+                keys.extend(loader::template_of(&n));
+                keys.dedup();
+                for k in keys {
+                    self.by_name.entry(k).or_default().push((base.to_path_buf(), depth == 0, n.clone()));
+                }
+            } else if meta.is_dir() && depth == 0 && (n.ends_with(".wants") || n.ends_with(".requires") || n.ends_with(".upholds")) {
+                self.scan(base, &p, 1);
+            }
+        }
+    }
+
+    /// any_link_to(dir, targets, 0, aliases) from the index.
+    fn any(&self, dir: &Path, targets: &BTreeSet<String>, aliases: bool) -> bool {
+        targets.iter().filter_map(|t| self.by_name.get(t)).flatten().any(|(d, top, name)| {
+            d == dir && (!*top || (aliases && !targets.contains(name)))
+        })
+    }
 }
 
 pub fn get_default_target(cfg: &Config) -> Option<String> {
@@ -474,6 +532,13 @@ mod tests {
         assert!(etc.join("display-manager.service").is_symlink());
         assert_eq!(unit_file_state(&cfg, "gdm.service").as_deref(), Ok("enabled"));
         assert_eq!(unit_file_state(&cfg, "display-manager.service").as_deref(), Ok("alias"));
+        // list-unit-files answers from one reading of the links, the same.
+        enable(&cfg, &["mc.service".to_string()], false, false).unwrap();
+        let listed = list_unit_files(&cfg);
+        assert!(listed.len() >= 4);
+        for (path, state) in listed {
+            assert_eq!(Ok(state), unit_file_state(&cfg, &basename(&path)), "{path}");
+        }
         let _ = fs::remove_dir_all(&tmp);
     }
 }

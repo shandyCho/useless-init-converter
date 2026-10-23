@@ -28,8 +28,15 @@ R=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sdc-test
 
 if [ "${2:-}" = stop ]; then
     # The daemon's PID is kept apart: tests/check.sh replaces the daemon.
-    # shellcheck disable=SC2046  # PID lists, split on purpose
-    [ -f "$W/pids" ] && kill $(cat "$W/pids") $(cat "$W/daemon.pid" 2>/dev/null) 2>/dev/null || true
+    # Only processes of this sandbox (their command line names $W or $R):
+    # a PID in an old file may belong to anything by now, the machine's own
+    # s6 tree included.
+    for pid in $(cat "$W/pids" "$W/daemon.pid" 2>/dev/null); do
+        cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null) || continue
+        case $cmd in
+        *"$W"* | *"$R"*) kill "$pid" 2>/dev/null ;;
+        esac
+    done
     sleep 0.5
     rm -rf "$W" "$R"
     exit 0
@@ -89,6 +96,22 @@ Type=notify
 ExecStart=/bin/sh -c 'sleep 0.3; $NOTIFY --ready --status="all good"; exec sleep 1000'
 [Install]
 WantedBy=multi-user.target
+EOF
+
+# EXTEND_TIMEOUT_USEC= (MariaDB's crash recovery): ready after 3 s with a
+# 2 s TimeoutStartSec= that the service pushed to 6 s; the same without it
+# times out.
+cat > "$U/extend.service" <<EOF
+[Service]
+Type=notify
+TimeoutStartSec=2
+ExecStart=/bin/sh -c '$NOTIFY EXTEND_TIMEOUT_USEC=6000000; sleep 3; $NOTIFY --ready; exec sleep 1000'
+EOF
+cat > "$U/noextend.service" <<EOF
+[Service]
+Type=notify
+TimeoutStartSec=1
+ExecStart=/bin/sh -c 'sleep 3; $NOTIFY --ready; exec sleep 1000'
 EOF
 
 cat > "$U/once.service" <<EOF

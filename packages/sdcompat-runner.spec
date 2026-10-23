@@ -35,7 +35,8 @@ cargo build --release --offline -p sdcompat-runner
 
 %check
 export SDCOMPAT_BUILD=%{version}-%{release}
-cargo test --release --offline -p sdcompat-runner
+# The library crates it is built from too: they are not packaged.
+cargo test --release --offline -p sdcompat-runner -p sdcompat-base -p sdcompat-client -p sdcompat-exec -p sdcompat-install -p sdcompat-version
 
 %install
 install -Dm0755 target/release/sdcompat-runner %{buildroot}%{_libexecdir}/sdcompat/sdcompat-runner
@@ -45,5 +46,5 @@ install -Dm0755 target/release/sdcompat-runner %{buildroot}%{_libexecdir}/sdcomp
 %{_libexecdir}/sdcompat/sdcompat-runner
 
 %changelog
-* Wed Oct 21 2026 sdcompat developers - 0.1.0-1
+* Wed Oct 21 2026 sdcompat developers
 - Split out of the sdcompat package

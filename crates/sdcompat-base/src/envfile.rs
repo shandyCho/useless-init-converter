@@ -55,16 +55,18 @@ pub fn parse(text: &str) -> Vec<(String, String)> {
             continue;
         }
 
-        while matches!(chars.peek(), Some(' ') | Some('\t')) {
-            chars.next();
-        }
-
+        // systemd's parse_env_file_internal(): quotes open a quoted part only
+        // where a value starts (PRE_VALUE: at the start or right after
+        // another quoted part, whitespace skipped); inside an unquoted value
+        // they are literal.
         let mut value = String::new();
+        let mut pre = true;
         let mut trailing_ws = 0usize;
         while let Some(c) = chars.next() {
             match c {
                 '\n' => break,
-                '"' => {
+                ' ' | '\t' | '\r' if pre => {}
+                '"' if pre => {
                     trailing_ws = 0;
                     while let Some(c) = chars.next() {
                         match c {
@@ -82,7 +84,7 @@ pub fn parse(text: &str) -> Vec<(String, String)> {
                         }
                     }
                 }
-                '\'' => {
+                '\'' if pre => {
                     trailing_ws = 0;
                     for c in chars.by_ref() {
                         if c == '\'' {
@@ -92,17 +94,19 @@ pub fn parse(text: &str) -> Vec<(String, String)> {
                     }
                 }
                 '\\' => {
+                    pre = false;
                     trailing_ws = 0;
                     match chars.next() {
                         Some('\n') | None => {}
                         Some(e) => value.push(e),
                     }
                 }
-                c if c == ' ' || c == '\t' => {
+                ' ' | '\t' | '\r' => {
                     value.push(c);
                     trailing_ws += 1;
                 }
                 c => {
+                    pre = false;
                     value.push(c);
                     trailing_ws = 0;
                 }
@@ -128,6 +132,20 @@ mod tests {
                 ("B".into(), "two words".into()),
                 ("C".into(), "x y".into()),
                 ("D".into(), "ab".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn quotes_only_where_a_value_starts() {
+        let v = parse("A=foo\"bar\"\nB=x 'y z'\nC=\"a\" 'b'c\nD= \"q\"\n");
+        assert_eq!(
+            v,
+            vec![
+                ("A".into(), "foo\"bar\"".into()),
+                ("B".into(), "x 'y z'".into()),
+                ("C".into(), "abc".into()),
+                ("D".into(), "q".into()),
             ]
         );
     }

@@ -77,6 +77,13 @@ On a running s6 boot, the new sdcompatd is used once the daemon restarts
 (`s6-svc -r /run/service/sdcompatd`). The runner and timers are used the next
 time a service starts, and sdcompat-gen at the next `sdcompat reload` or boot.
 
+The s6-linux-init skeleton (`rc.init`, `rc.shutdown`, `rc.shutdown.final`)
+is different: the package installs the copy setup works from, but the boot
+uses `/etc/s6-linux-init/current`, which `s6-linux-init-maker` makes from it.
+When an upgrade changes the skeleton, rerun `sudo dist/setup-fedora.sh` (with
+the options of the first run) to rebuild it; `early` and the rest take effect
+at the next boot without that.
+
 When the `sdcompat` RPM is installed, `setup-fedora.sh` uses it instead of
 building the core. When only some tool RPMs are installed, it leaves those
 tools alone and installs the rest from source. To remove:

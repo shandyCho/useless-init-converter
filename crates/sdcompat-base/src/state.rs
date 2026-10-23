@@ -87,6 +87,12 @@ pub mod keys {
     pub const RELOADS_DONE: &str = "reloads-done";
     /// The start failed (s6-rc was still told "ready" so wanted-by units go on).
     pub const START_FAILED: &str = "start-failed";
+    /// EXTEND_TIMEOUT_USEC= from a starting notify service: the start
+    /// timeout ends no earlier than this (monotonic usec).
+    pub const EXTEND_UNTIL: &str = "extend-until";
+    /// Left by ResetFailed in place of START_FAILED: the run process still
+    /// waits as "up" for s6, but the unit is inactive, not failed.
+    pub const PARKED: &str = "parked";
     /// Not started because a required unit (Requires=/BindsTo=/Requisite=) failed.
     pub const DEPENDENCY_FAILED: &str = "dependency-failed";
     /// Set by the daemon before `s6-svc -r`, so finish restarts regardless of Restart=.

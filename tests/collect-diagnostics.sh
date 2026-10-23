@@ -58,7 +58,7 @@ else
     run dbus-socket ls -lnZ /run/dbus/system_bus_socket
     run earlyoom s6-svstat /run/service/earlyoom
     copy /run/sdcompat/devices devices.txt
-    for f in /boot/loader/entries/*-sdcompat.conf; do copy "$f" "boot-entry-$(basename "$f")"; done
+    for f in /boot/loader/entries/*[~-]sdcompat.conf; do [ -e "$f" ] && copy "$f" "boot-entry-$(basename "$f")"; done
     run avc ausearch -m AVC,USER_AVC -ts boot
 fi
 

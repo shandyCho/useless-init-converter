@@ -306,7 +306,11 @@ impl Config {
             // The s6 "syslog" service is the rsyslogd; the distribution's
             // rsyslog.service would start a second one (reading a journal
             // that does not exist) and write the same files.
-            for u in SYSLOG_UNITS {
+            // INCLUDEd (either name: syslog.service is rsyslog's Alias=):
+            // the owner runs the distribution's unit, so dependencies on it
+            // go to it, not to the s6 service.
+            let included = SYSLOG_UNITS.iter().any(|u| self.include.iter().any(|g| crate::util::fnmatch(g, u)));
+            for u in SYSLOG_UNITS.iter().filter(|_| !included) {
                 if !self.exclude.iter().any(|e| e == u) {
                     self.exclude.push(u.to_string());
                 }
@@ -384,7 +388,10 @@ mod tests {
         let mut cfg = Config::defaults();
         cfg.journal = false;
         cfg.include.push("rsyslog.service".into());
-        assert!(!cfg.finish().is_excluded("rsyslog.service"));
+        let cfg = cfg.finish();
+        assert!(!cfg.is_excluded("rsyslog.service"));
+        assert_eq!(cfg.mapped_dep("rsyslog.service"), None);
+        assert_eq!(cfg.mapped_dep("syslog.service"), None);
     }
 
     #[test]

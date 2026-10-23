@@ -120,7 +120,9 @@ pub struct Daemon {
     /// UnitFileState values (cleared like unit_cache).
     pub file_state_cache: Mutex<HashMap<String, String>>,
     /// Short-lived s6-svstat results and per-database bundle contents.
-    pub svstat_cache: Mutex<HashMap<String, (std::time::Instant, s6::SvStat)>>,
+    /// s6-svstat answers, with when they were taken and the identity of
+    /// the supervise/status file they came from (see svstat_cached()).
+    pub svstat_cache: Mutex<HashMap<String, (std::time::Instant, Option<(u64, u64, i64)>, s6::SvStat)>>,
     pub bundle_cache: Mutex<HashMap<String, Vec<String>>>,
     /// Whether the live state-file reader agrees with `s6-rc -a list`
     /// (None = not verified yet for the current database).
@@ -204,6 +206,18 @@ fn subcgroup(sub: &str) -> Option<&str> {
         return Some("");
     }
     rel.split('/').all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains('\0')).then_some(rel)
+}
+
+/// The unit a cgroup belongs to, as the system manager sees it: the
+/// outermost .service or .scope (below it is a delegated tree, such as
+/// user@1000.service/app.slice/x.service), else the innermost slice.
+fn unit_of_cgroup(cg: &str) -> Option<String> {
+    let parts: Vec<&str> = cg.split('/').filter(|c| !c.is_empty()).collect();
+    parts
+        .iter()
+        .find(|c| c.ends_with(".service") || c.ends_with(".scope"))
+        .or_else(|| parts.iter().rev().find(|c| c.ends_with(".slice")))
+        .map(|c| c.to_string())
 }
 
 /// PIDs behind the pidfds of a PIDFDs (ah) property.
@@ -304,12 +318,28 @@ impl Daemon {
     }
 
     async fn require_privileged(&self, c: &Peer, msg: &Message) -> R<()> {
-        self.authorize(c, msg, "org.freedesktop.systemd1.manage-units").await
+        self.authorize_with(c, msg, "org.freedesktop.systemd1.manage-units", HashMap::new()).await
+    }
+
+    /// manage-units for one unit, with the details systemd passes to polkit:
+    /// rules such as `action.lookup("unit") == "foo.service"` match on them.
+    async fn require_unit(&self, c: &Peer, msg: &Message, unit: &str, verb: &str) -> R<()> {
+        let details = HashMap::from([
+            ("unit".to_string(), unit.to_string()),
+            ("verb".to_string(), verb.to_string()),
+            ("polkit.message".to_string(), format!("Authentication is required to {verb} '{unit}'.")),
+            ("polkit.gettext_domain".to_string(), "systemd".to_string()),
+        ]);
+        self.authorize_with(c, msg, "org.freedesktop.systemd1.manage-units", details).await
+    }
+
+    async fn authorize(&self, c: &Peer, msg: &Message, action: &str) -> R<()> {
+        self.authorize_with(c, msg, action, HashMap::new()).await
     }
 
     /// Root and ALLOW_UIDS pass; other callers on the bus are checked with
     /// polkit using systemd's action IDs (the policy ships with systemd).
-    async fn authorize(&self, c: &Peer, msg: &Message, action: &str) -> R<()> {
+    async fn authorize_with(&self, c: &Peer, msg: &Message, action: &str, details: HashMap<String, String>) -> R<()> {
         match self.caller_uid(c, msg).await {
             Some(0) => return Ok(()),
             Some(u) if self.cfg.allow_uids.contains(&u) => return Ok(()),
@@ -326,7 +356,6 @@ impl Daemon {
         let mut subject_details: HashMap<String, Value<'static>> = HashMap::new();
         subject_details.insert("name".into(), Value::from(sender));
         let subject = ("system-bus-name".to_string(), subject_details);
-        let details: HashMap<String, String> = HashMap::new();
         let reply = self
             .conn
             .call_method(
@@ -516,9 +545,13 @@ impl Daemon {
         if jtype == "reload" && !Self::can_reload(&unit) {
             return Err(err(E_NOT_APPLICABLE, format!("Job type reload is not applicable for unit {name}.")));
         }
+        // As systemd, a reload behind a queued or running start-type job is
+        // accepted and runs after it (jobs on a unit are serialized);
+        // unit_status() would say "activating" for that job and refuse.
         if jtype == "reload" {
+            let behind_job = self.jobs.lock().unwrap().values().any(|j| j.unit == id && j.jtype != "stop");
             let active = self.active_atoms().await;
-            if self.unit_status(&id, &active, &unit).await.active != "active" {
+            if !behind_job && self.unit_status(&id, &active, &unit).await.active != "active" {
                 return Err(err(E_INACTIVE, format!("Unit {name} is not active.")));
             }
         }
@@ -595,7 +628,7 @@ impl Daemon {
                         "done"
                     }
                 }
-                "reload" => self.do_reload(id).await,
+                "reload" => self.reload_if_active(id, unit).await,
                 _ => {
                     if Self::can_reload(unit) && active().await {
                         self.do_reload(id).await
@@ -612,7 +645,7 @@ impl Daemon {
             "stop" => self.do_stop(id, unit).await,
             "restart" => self.do_restart(id, unit, false).await,
             "try-restart" => self.do_restart(id, unit, true).await,
-            "reload" => self.do_reload(id).await,
+            "reload" => self.reload_if_active(id, unit).await,
             "reload-or-restart" => {
                 if Self::can_reload(unit) && self.active_atoms().await.contains(id) {
                     self.do_reload(id).await
@@ -630,6 +663,16 @@ impl Daemon {
             }
             _ => "failed",
         }
+    }
+
+    /// A reload accepted behind another job: that job may have left the
+    /// unit inactive (systemd's job result "invalid").
+    async fn reload_if_active(&self, id: &str, unit: &Unit) -> &'static str {
+        let active = self.active_atoms().await;
+        if !matches!(self.unit_status(id, &active, unit).await.active, "active" | "reloading") {
+            return "invalid";
+        }
+        self.do_reload(id).await
     }
 
     async fn finish_job(&self, job: u32, id: &str, result: &str) {
@@ -682,8 +725,9 @@ impl Daemon {
     }
 
     async fn job_method(&self, c: &Peer, msg: &Message, name: &str, mode: &str, jtype: &str) -> R<()> {
-        self.require_privileged(c, msg).await?;
         Self::valid_name(name)?;
+        let id = self.index.read().unwrap().resolve(name).to_string();
+        self.require_unit(c, msg, &id, jtype).await?;
         let (id, unit) = self.check_job(name, jtype, true, true).await?;
         let job = self.new_job(&id, jtype);
         self.reply_job(c, msg, job).await?;
@@ -695,8 +739,9 @@ impl Daemon {
     /// Runtime property changes: only Markers= is kept (package scriptlets
     /// mark units for EnqueueMarkedJobs); the others are accepted and ignored.
     async fn set_unit_properties(&self, c: &Peer, msg: &Message, name: &str, props: &[(String, OwnedValue)]) -> R<()> {
-        self.require_privileged(c, msg).await?;
         Self::valid_name(name)?;
+        let id = self.index.read().unwrap().resolve(name).to_string();
+        self.require_unit(c, msg, &id, "set-property").await?;
         for (key, v) in props {
             if key != "Markers" {
                 continue;
@@ -986,14 +1031,42 @@ impl Daemon {
     }
 
     /// AttachProcessesToUnit(unit, subcgroup, pids)
+    /// As systemd, "" names the caller's own unit (systemd --user moves its
+    /// processes within user@UID.service so). An unprivileged caller may
+    /// move its own processes inside its own delegated unit; anything else
+    /// needs manage-units.
     async fn attach_processes(&self, c: &Peer, msg: &Message) -> R<()> {
-        self.require_privileged(c, msg).await?;
         let (name, sub, pids): (String, String, Vec<u32>) = Self::args(msg)?;
-        Self::valid_name(&name)?;
         let Some(sub) = subcgroup(&sub) else {
             return Err(err(E_INVALID_ARGS, format!("Control group path is not normalized: {sub}")));
         };
+        let name = if name.is_empty() {
+            let pid = self.caller_pid(c, msg).await.unwrap_or(0);
+            util::proc_cgroup(pid)
+                .and_then(|cg| unit_of_cgroup(&cg))
+                .ok_or_else(|| err(E_NO_UNIT_FOR_PID, format!("PID {pid} does not belong to any loaded unit.")))?
+        } else {
+            name
+        };
+        Self::valid_name(&name)?;
         let (id, unit) = self.load_unit(&name);
+        let caller = self.caller_uid(c, msg).await;
+        let caller_unit = match self.caller_pid(c, msg).await {
+            Some(p) => util::proc_cgroup(p).and_then(|cg| unit_of_cgroup(&cg)),
+            None => None,
+        };
+        let own = |pid: &u32| {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(format!("/proc/{pid}")).ok().map(|m| m.uid()) == caller
+                && util::proc_cgroup(*pid).and_then(|cg| unit_of_cgroup(&cg)).as_deref() == Some(id.as_str())
+        };
+        let delegated = caller.is_some_and(|u| u != 0)
+            && caller_unit.as_deref() == Some(id.as_str())
+            && (unit.get_bool("Service", "Delegate", false) || unit.get_bool("Scope", "Delegate", false))
+            && pids.iter().all(own);
+        if !delegated {
+            self.require_privileged(c, msg).await?;
+        }
         let mut dir = self.cgroup_dir_of(&id, &unit);
         if !sub.is_empty() {
             dir = dir.join(sub);
@@ -1096,7 +1169,9 @@ impl Daemon {
 
     // ---- properties ----
 
-    async fn object_props(&self, path: &str) -> R<Ifaces> {
+    /// `only`: the one interface asked for ("" or None for all).
+    async fn object_props(&self, path: &str, only: Option<&str>) -> R<Ifaces> {
+        let only = only.filter(|o| !o.is_empty());
         if path == MANAGER_PATH {
             let mut m = Ifaces::new();
             let nnames = self.known_units().len() as u32;
@@ -1107,7 +1182,7 @@ impl Daemon {
         if let Some(name) = self.unit_from_path(path) {
             let (id, unit) = self.load_unit(&name);
             let active = self.active_atoms().await;
-            return Ok(self.unit_props(&id, &unit, &active).await);
+            return Ok(self.unit_props(&id, &unit, &active, only).await);
         }
         if let Some(job) = path.strip_prefix(JOB_PREFIX).and_then(|j| j.parse::<u32>().ok()) {
             // A finished job's object is gone: systemd (sd-bus) answers
@@ -1126,7 +1201,7 @@ impl Daemon {
         match member {
             "GetAll" => {
                 let (iface,): (String,) = Self::args(msg)?;
-                let all = self.object_props(path).await?;
+                let all = self.object_props(path, Some(&iface)).await?;
                 let mut out: Props = Props::new();
                 for (name, props) in all {
                     if iface.is_empty() || iface == name {
@@ -1138,7 +1213,7 @@ impl Daemon {
             }
             "Get" => {
                 let (iface, prop): (String, String) = Self::args(msg)?;
-                let all = self.object_props(path).await?;
+                let all = self.object_props(path, Some(&iface)).await?;
                 for (name, props) in all {
                     if iface.is_empty() || iface == name {
                         if let Some(v) = props.get(&prop) {
@@ -1212,14 +1287,6 @@ impl Daemon {
             if iface.is_empty() || iface == UNIT_IFACE {
                 return self.unit_method(c, msg, &name, member).await;
             }
-            if member == "SetProperties" {
-                let (_runtime, props): (bool, Vec<(String, OwnedValue)>) = Self::args(msg)?;
-                return self.set_unit_properties(c, msg, &name, &props).await;
-            }
-            if member == "Ref" || member == "Unref" {
-                self.require_privileged(c, msg).await?;
-                return self.reply(c, msg, &()).await;
-            }
         }
         if let Some(job) = path.strip_prefix(JOB_PREFIX).and_then(|j| j.parse::<u32>().ok()) {
             if !self.jobs.lock().unwrap().contains_key(&job) {
@@ -1248,8 +1315,18 @@ impl Daemon {
                 return self.kill_unit(c, msg, name, &whom, sig).await;
             }
             "ResetFailed" => {
-                self.require_privileged(c, msg).await?;
+                let id = self.index.read().unwrap().resolve(name).to_string();
+                self.require_unit(c, msg, &id, "reset-failed").await?;
                 self.reset_failed(name);
+                return self.reply(c, msg, &()).await;
+            }
+            "SetProperties" => {
+                let (_runtime, props): (bool, Vec<(String, OwnedValue)>) = Self::args(msg)?;
+                return self.set_unit_properties(c, msg, name, &props).await;
+            }
+            // Reference counting is accepted and ignored.
+            "Ref" | "Unref" => {
+                self.require_privileged(c, msg).await?;
                 return self.reply(c, msg, &()).await;
             }
             _ => return Err(err(E_UNKNOWN_METHOD, format!("Unknown method {member}"))),
@@ -1278,15 +1355,28 @@ impl Daemon {
         if st.get(keys::RESULT).map(|r| r != "success").unwrap_or(false) {
             st.set(keys::RESULT, "success");
         }
+        // A soft-failed start: inactive from now on, but still restarted by
+        // the next start like any parked unit.
+        if st.take(keys::START_FAILED) {
+            st.set(keys::PARKED, "1");
+        }
         st.clear(keys::RESTART_TIMES);
     }
 
     async fn kill_unit(&self, c: &Peer, msg: &Message, name: &str, whom: &str, sig: i32) -> R<()> {
-        self.require_privileged(c, msg).await?;
         Self::valid_name(name)?;
         let (id, unit) = self.load_unit(name);
+        self.require_unit(c, msg, &id, "kill").await?;
+        // The supervised pid is a wrapper for PAMName=, Type=forking and
+        // MAINPID=; the runner records the real main process.
         let main = if self.kind_of(&id) == Some(Kind::Longrun) {
-            self.svstat(&id).await.map(|s| s.pid).filter(|&p| p > 0)
+            self.svstat(&id).await.map(|s| s.pid).filter(|&p| p > 0).map(|p| {
+                state::for_unit(&self.cfg.run_dir, &id)
+                    .get(keys::MAIN_PID)
+                    .and_then(|m| m.parse::<u32>().ok())
+                    .filter(|&m| m > 1 && std::path::Path::new(&format!("/proc/{m}")).exists())
+                    .unwrap_or(p)
+            })
         } else {
             None
         };
@@ -1348,12 +1438,7 @@ impl Daemon {
                 if pid == 0 {
                     pid = self.caller_pid(c, msg).await.unwrap_or(0);
                 }
-                let cg = util::proc_cgroup(pid).unwrap_or_default();
-                let unit = cg
-                    .rsplit('/')
-                    .find(|c| c.ends_with(".service") || c.ends_with(".scope"))
-                    .map(String::from);
-                match unit {
+                match util::proc_cgroup(pid).and_then(|cg| unit_of_cgroup(&cg)) {
                     Some(u) => self.reply(c, msg, &(op(unit_path(&u)),)).await,
                     None => Err(err(E_NO_UNIT_FOR_PID, format!("PID {pid} does not belong to any loaded unit."))),
                 }
@@ -1377,9 +1462,10 @@ impl Daemon {
                 self.kill_unit(c, msg, &name, &whom, sig).await
             }
             "ResetFailedUnit" => {
-                self.require_privileged(c, msg).await?;
                 let (name,): (String,) = Self::args(msg)?;
                 Self::valid_name(&name)?;
+                let id = self.index.read().unwrap().resolve(&name).to_string();
+                self.require_unit(c, msg, &id, "reset-failed").await?;
                 self.reset_failed(&name);
                 self.reply(c, msg, &()).await
             }

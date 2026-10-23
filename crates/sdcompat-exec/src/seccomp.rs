@@ -133,17 +133,25 @@ impl Filter {
                     f.syscalls.insert(n, None);
                 }
             }
-            let add = invert != f.allow_list;
             for word in rest.split_whitespace() {
                 let (name, entry_action) = match word.split_once(':') {
                     Some((n, e)) => (n, Some(parse_action(e)?)),
                     None => (word, None),
                 };
+                // As systemd's seccomp_parse_syscall_filter(): an unknown
+                // group is ignored, not fatal to the start.
+                if name.starts_with('@') && !groups.contains_key(name) {
+                    eprintln!("sdcompat: SystemCallFilter=: unknown system call group {name}, ignoring");
+                    continue;
+                }
+                // `~name:errno` in an allow list keeps the entry, answered
+                // with that errno instead of the default action.
+                let add = invert != f.allow_list || (invert && f.allow_list && entry_action.is_some());
                 let mut names = Vec::new();
                 expand(name, &groups, &mut names, 0)?;
                 for n in names {
                     if add {
-                        f.syscalls.insert(n, if f.allow_list { None } else { entry_action });
+                        f.syscalls.insert(n, if f.allow_list && !invert { None } else { entry_action });
                     } else {
                         f.syscalls.remove(&n);
                     }
@@ -223,7 +231,10 @@ impl Filter {
                 if nr == NR_SCMP_ERROR {
                     continue; // unknown to this libseccomp, as systemd does
                 }
-                let a = if self.allow_list { SCMP_ACT_ALLOW } else { act(entry.unwrap_or(self.action)) };
+                let a = match (self.allow_list, entry) {
+                    (true, None) => SCMP_ACT_ALLOW,
+                    (_, e) => act(e.unwrap_or(self.action)),
+                };
                 (lib.rule_add_array)(ctx, a, nr, 0, std::ptr::null());
             }
             let r = (lib.load)(ctx);
@@ -698,6 +709,18 @@ mod tests {
     }
 
     #[test]
+    fn allow_list_errno_entries_and_unknown_groups() {
+        let f = Filter::parse(&lines(&["@system-service @no-such-group", "~setpriority:EPERM ~@clock"]), None, &[])
+            .unwrap()
+            .unwrap();
+        assert!(f.allow_list);
+        // Kept, answered with EPERM (systemd's allow list with an errno).
+        assert_eq!(f.syscalls.get("setpriority"), Some(&Some(Action::Errno(libc::EPERM))));
+        assert!(!f.syscalls.contains_key("clock_settime"));
+        assert_eq!(f.syscalls.get("read"), Some(&None));
+    }
+
+    #[test]
     fn address_families() {
         let (allow, set) = parse_address_families(&lines(&["AF_UNIX AF_INET AF_INET6"])).unwrap();
         assert!(allow);
@@ -722,7 +745,8 @@ mod tests {
 
     #[test]
     fn errors() {
-        assert!(Filter::parse(&lines(&["@nope"]), None, &[]).is_err());
+        // Ignored, as systemd: an allow list of @default alone.
+        assert!(Filter::parse(&lines(&["@nope"]), None, &[]).unwrap().unwrap().syscalls.contains_key("execve"));
         assert!(parse_action("ENOTANERRNO").is_err());
         assert_eq!(parse_action("13").unwrap(), Action::Errno(13));
         assert_eq!(parse_action("kill").unwrap(), Action::Kill);

@@ -17,7 +17,6 @@ use tokio::process::Command;
 use super::Daemon;
 use crate::gen::Kind;
 use crate::loader::{self, Unit};
-use crate::state::{self, keys};
 use crate::util;
 
 pub struct Dynamic {
@@ -109,39 +108,15 @@ impl Daemon {
         let dir = self.dyn_dir(id);
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let runner = self.cfg.runner.display().to_string();
-        let args = self.cfg.runner_args();
-        let arg = crate::gen::unit_arg(id);
         let e = |e: std::io::Error| e.to_string();
-        if matches!(unit.utype(), "timer" | "path") {
-            let sub = if unit.utype() == "timer" { "timer-run" } else { "path-run" };
-            let timer_runner = self.cfg.timer_runner.display().to_string();
-            write(dir.join("run"), &format!("#!/bin/sh\nexec {timer_runner} {sub}{args} {arg}\n"), true).map_err(e)?;
-            write(dir.join("notification-fd"), "3\n", false).map_err(e)?;
-            write(dir.join("down"), "", false).map_err(e)?;
-            return Ok(dir);
+        // The same scripts and timings as the database's longruns (gen);
+        // `down`: s6-svlink -d links it down, dyn_start brings it up.
+        for (name, text, exec) in crate::gen::longrun_files(&self.cfg, id, &crate::gen::Timings::of(unit)) {
+            write(dir.join(name), &text, exec).map_err(e)?;
         }
-        write(dir.join("run"), &format!("#!/bin/sh\nexec {runner} run{args} {arg}\n"), true).map_err(e)?;
-        write(dir.join("finish"), &format!("#!/bin/sh\nexec {runner} finish{args} {arg} \"$@\"\n"), true).map_err(e)?;
-        write(dir.join("notification-fd"), "3\n", false).map_err(e)?;
         write(dir.join("down"), "", false).map_err(e)?;
-        let restart_sec = unit
-            .get("Service", "RestartSec")
-            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
-            .unwrap_or(100_000);
-        write(dir.join("timeout-finish"), &format!("{}\n", restart_sec / 1000 + 5000), false).map_err(e)?;
-        let stop = unit
-            .get("Service", "TimeoutStopSec")
-            .or_else(|| unit.get("Service", "TimeoutSec"))
-            .and_then(|v| crate::unit::parse_timeout_usec(&v))
-            .unwrap_or(90_000_000);
-        if stop != u64::MAX {
-            write(dir.join("timeout-kill"), &format!("{}\n", stop / 1000), false).map_err(e)?;
-        }
-        if let Some(sig) = unit.get("Service", "KillSignal").and_then(|s| util::signal_number(&s)) {
-            if sig != libc::SIGTERM {
-                write(dir.join("down-signal"), &format!("SIG{}\n", util::signal_name(sig)), false).map_err(e)?;
-            }
+        if matches!(unit.utype(), "timer" | "path") {
+            return Ok(dir);
         }
         if let Some(log_dir) = self.cfg.log_dir.as_ref().filter(|_| !self.cfg.journal) {
             let ldir = dir.join("log");
@@ -387,9 +362,7 @@ impl Daemon {
                     self.run_runner("stop-exec", id, Some(sv.pid)).await;
                 }
                 let started_at = crate::util::now_realtime_usec();
-                state::for_unit(&self.cfg.run_dir, id).set(keys::RESTART_REQUESTED, "1");
-                let _ = Command::new("s6-svc").arg("-r").arg(self.scandir(id)).status().await;
-                let r = self.wait_ready(id, unit, Some(sv.pid)).await;
+                let r = self.restart_longrun(id, unit, sv.pid).await;
                 self.job_outcome(id, started_at, r)
             }
             Some(_) => {

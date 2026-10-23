@@ -8,4 +8,10 @@ if [ ! -x "$bin" ]; then
     echo >&3
     exec sleep infinity
 fi
-exec "$bin" --socket /run/sdcompat/fdstore --ready-fd 3
+# Where sdcompatd and the runner look for it: RUN_DIR/fdstore.
+run_dir=$(
+    # shellcheck disable=SC1091
+    . /etc/sdcompat/sdcompat.conf 2>/dev/null
+    echo "${RUN_DIR:-/run/sdcompat}"
+)
+exec "$bin" --socket "${run_dir:-/run/sdcompat}/fdstore" --ready-fd 3

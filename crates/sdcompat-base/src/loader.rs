@@ -177,8 +177,13 @@ impl<'a> Loader<'a> {
     fn dropins_for(&self, unit: &Unit) -> Vec<PathBuf> {
         let mut dirs: Vec<String> = Vec::new();
         let ty = unit_type(&unit.id);
-        // Type-wide drop-ins (service.d), then template, then each name.
+        // Type-wide drop-ins (service.d), then dash prefixes (user-.slice.d
+        // for user-1000.slice, shortest first), then template, then each name.
         dirs.push(format!("{ty}.d"));
+        let stem = unit.id.split(['@', '.']).next().unwrap_or("");
+        for (i, _) in stem.match_indices('-') {
+            dirs.push(format!("{}-.{ty}.d", &stem[..i]));
+        }
         if let Some(t) = template_of(&unit.id) {
             dirs.push(format!("{t}.d"));
         }
@@ -415,6 +420,15 @@ impl Unit {
         } else {
             90_000_000
         }
+    }
+
+    /// TimeoutStopSec= (or TimeoutSec=) in usec, DefaultTimeoutStopSec= (90 s)
+    /// if unset; u64::MAX means none.
+    pub fn stop_timeout_usec(&self) -> u64 {
+        self.get("Service", "TimeoutStopSec")
+            .or_else(|| self.get("Service", "TimeoutSec"))
+            .and_then(|v| crate::unit::parse_timeout_usec(&v))
+            .unwrap_or(90_000_000)
     }
 }
 

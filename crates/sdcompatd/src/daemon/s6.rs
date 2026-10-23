@@ -216,14 +216,27 @@ impl Daemon {
     }
 
     /// s6-svstat for status queries, cached for 500 ms (jobs use svstat()).
+    /// s6-svstat, cached. s6-supervise writes supervise/status anew (a new
+    /// file renamed into place) on every change, so while that file is the
+    /// same (device, inode, mtime) the answer is too: watch_dynamic() then
+    /// costs a stat() per instance and second, not a process. Without the
+    /// file, answers are kept for 500 ms as before.
     pub(super) async fn svstat_cached(&self, atom: &str) -> Option<SvStat> {
-        if let Some((t, v)) = self.svstat_cache.lock().unwrap().get(atom) {
-            if t.elapsed() < Duration::from_millis(500) {
+        let ident = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(self.scandir(atom).join("supervise/status")).ok().map(|m| (m.dev(), m.ino(), m.mtime_nsec() + m.mtime() * 1_000_000_000))
+        };
+        if let Some((t, i, v)) = self.svstat_cache.lock().unwrap().get(atom) {
+            let same = match (ident, i) {
+                (Some(a), Some(b)) => a == *b,
+                _ => t.elapsed() < Duration::from_millis(500),
+            };
+            if same {
                 return Some(v.clone());
             }
         }
         let v = self.svstat(atom).await?;
-        self.svstat_cache.lock().unwrap().insert(atom.to_string(), (Instant::now(), v.clone()));
+        self.svstat_cache.lock().unwrap().insert(atom.to_string(), (Instant::now(), ident, v.clone()));
         Some(v)
     }
 
@@ -273,7 +286,7 @@ impl Daemon {
         let failed_result = !matches!(result.as_str(), "success" | "running");
         let condition_ok = !st.has(keys::CONDITION_FAILED);
         // Soft failures: reported to s6-rc as "up", but failed or never run.
-        let dep_failed = st.has(keys::DEPENDENCY_FAILED);
+        let dep_failed = st.has(keys::DEPENDENCY_FAILED) || st.has(keys::PARKED);
         let start_failed = st.has(keys::START_FAILED);
         let failed_now = failed_result && st.get_u64(keys::INACTIVE_ENTER) >= st.get_u64(keys::INACTIVE_EXIT);
         let result = if start_failed && !failed_result { "exit-code".to_string() } else { result };
@@ -604,11 +617,7 @@ impl Daemon {
                 return false;
             }
         }
-        let usec = unit
-            .get("Service", "TimeoutStopSec")
-            .or_else(|| unit.get("Service", "TimeoutSec"))
-            .and_then(|v| crate::unit::parse_timeout_usec(&v))
-            .unwrap_or(90_000_000);
+        let usec = unit.stop_timeout_usec();
         let ms = (usec / 1000).saturating_add(5000).min(u32::MAX as u64);
         let _ = Command::new("s6-svc")
             .args(["-wD", "-T", &ms.to_string(), "-d"])
@@ -616,6 +625,39 @@ impl Daemon {
             .status()
             .await;
         true
+    }
+
+    /// Restart a running longrun with `s6-svc -r`. That only sends the down
+    /// signal: s6-supervise arms timeout-kill for -d alone. So, as systemd's
+    /// stop, SIGKILL after TimeoutStopSec=; and if the old process survives
+    /// even that, the restart did not happen and RESTART_REQUESTED must not
+    /// be left for a later exit.
+    pub(super) async fn restart_longrun(&self, id: &str, unit: &Unit, old_pid: u32) -> &'static str {
+        let st = state::for_unit(&self.cfg.run_dir, id);
+        st.set(keys::RESTART_REQUESTED, "1");
+        let _ = Command::new("s6-svc").arg("-r").arg(self.scandir(id)).status().await;
+        let usec = unit.stop_timeout_usec();
+        let mut deadline = (usec != u64::MAX).then(|| Instant::now() + Duration::from_micros(usec));
+        let mut killed = false;
+        loop {
+            match self.svstat(id).await {
+                Some(sv) if sv.up && sv.pid == old_pid => {}
+                _ => break,
+            }
+            if deadline.is_some_and(|d| Instant::now() > d) {
+                if killed {
+                    st.clear(keys::RESTART_REQUESTED);
+                    eprintln!("sdcompatd: restart {id}: process {old_pid} survived SIGKILL");
+                    return "timeout";
+                }
+                eprintln!("sdcompatd: restart {id}: stop timed out, killing");
+                let _ = Command::new("s6-svc").arg("-k").arg(self.scandir(id)).status().await;
+                killed = true;
+                deadline = Some(Instant::now() + Duration::from_secs(5));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        self.wait_ready(id, unit, Some(old_pid)).await
     }
 
     pub(super) async fn run_runner(&self, sub: &str, id: &str, main_pid: Option<u32>) -> bool {
@@ -631,6 +673,12 @@ impl Daemon {
                 false
             }
         }
+    }
+
+    /// Past the start deadline, counting EXTEND_TIMEOUT_USEC= too: the
+    /// notify helper records how far the service pushed it.
+    fn start_timed_out(st: &state::UnitState, deadline: Instant) -> bool {
+        Instant::now() > deadline && st.get_u64(keys::EXTEND_UNTIL) <= util::now_monotonic_usec()
     }
 
     fn start_timeout(unit: &Unit) -> Duration {
@@ -684,7 +732,7 @@ impl Daemon {
                 Some(_) => {}
                 None => return "failed",
             }
-            if Instant::now() > deadline {
+            if Self::start_timed_out(&st, deadline) {
                 return "timeout";
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -714,7 +762,7 @@ impl Daemon {
             } else {
                 return "failed";
             }
-            if Instant::now() > deadline {
+            if Self::start_timed_out(&st, deadline) {
                 return "timeout";
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -795,13 +843,14 @@ impl Daemon {
                 if active.contains(id) {
                     let sv = self.svstat(id).await.unwrap_or_default();
                     let st = state::for_unit(&self.cfg.run_dir, id);
-                    let parked = st.has(keys::CONDITION_FAILED) || st.has(keys::DEPENDENCY_FAILED) || st.has(keys::START_FAILED);
+                    let parked = st.has(keys::CONDITION_FAILED)
+                        || st.has(keys::DEPENDENCY_FAILED)
+                        || st.has(keys::START_FAILED)
+                        || st.has(keys::PARKED);
                     if sv.up && parked {
                         // Skipped or failed earlier but still "up" for s6:
                         // restart so conditions and requirements are re-checked.
-                        st.set(keys::RESTART_REQUESTED, "1");
-                        let _ = Command::new("s6-svc").arg("-r").arg(self.scandir(id)).status().await;
-                        return self.wait_ready(id, unit, Some(sv.pid)).await;
+                        return self.restart_longrun(id, unit, sv.pid).await;
                     }
                     if sv.up {
                         return self.wait_ready(id, unit, None).await;
@@ -950,9 +999,7 @@ impl Daemon {
                 if !unit.get_all("Service", "ExecStop").is_empty() {
                     self.run_runner("stop-exec", id, Some(sv.pid)).await;
                 }
-                state::for_unit(&self.cfg.run_dir, id).set(keys::RESTART_REQUESTED, "1");
-                let _ = Command::new("s6-svc").arg("-r").arg(self.scandir(id)).status().await;
-                let r = self.wait_ready(id, unit, Some(sv.pid)).await;
+                let r = self.restart_longrun(id, unit, sv.pid).await;
                 self.job_outcome(id, started_at, r)
             }
             Some(Kind::Oneshot) if active.contains(id) => {

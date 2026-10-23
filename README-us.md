@@ -136,6 +136,11 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
   grant for systemd's action IDs (`manage-units`, `manage-unit-files`,
   `reload-daemon`, `set-environment`; the policy ships with systemd). Without
   polkit, non-root callers are denied. `ALLOW_UIDS` is root-equivalent.
+  Calls on one unit pass polkit the `unit` and `verb` details as systemd does,
+  so rules that match on them work. As in systemd, `AttachProcessesToUnit`
+  with an empty unit name means the caller's own unit, and an unprivileged
+  caller may move its own processes within its own `Delegate=yes` unit
+  (`systemd --user` in `user@UID.service`).
 - D-Bus activation is accepted only from the bus daemon itself, and never makes
   the daemon regenerate its database.
 - Jobs on the same unit run one after another; queued jobs can be cancelled.

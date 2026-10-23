@@ -432,8 +432,12 @@ install_sdcompat() {
 # (sdcompat --version exits 1 otherwise).
 check_versions() {
     [ "$DRY" = 1 ] && { echo "  + $LIBEXEC/sdcompat --version"; return; }
-    "$LIBEXEC/sdcompat" --version | sed 's/^/  /'
-    [ "${PIPESTATUS[0]}" = 0 ] || warn "the sdcompat tools are not all from one build (see above): rebuild them together (--rebuild, or packages/build-rpms.sh and dnf upgrade)"
+    # Not a plain pipeline: with pipefail its failure would end setup here
+    # (set -e) before the warning, half-way through.
+    local out rc=0
+    out=$("$LIBEXEC/sdcompat" --version) || rc=$?
+    printf '%s\n' "$out" | sed 's/^/  /'
+    [ "$rc" = 0 ] || warn "the sdcompat tools are not all from one build (see above): rebuild them together (--rebuild, or packages/build-rpms.sh and dnf upgrade)"
 }
 
 # set_conf_key KEY yes|no: "no" sets KEY=no in sdcompat.conf, "yes" removes
@@ -703,7 +707,17 @@ add_grub_entry() {
         # now and on every future kernel update.
         run install -Dm0755 "$DIST/kernel-install/90-sdcompat.install" "$KI_PLUGIN"
         remove_grub_entry
-        run "$KI_PLUGIN" add "$kver"
+        # Every installed kernel, as the plugin keeps them: the removal
+        # above took all their entries, not only the default kernel's.
+        local k added=0
+        for k in /lib/modules/*/; do
+            k=${k%/}
+            k=${k##*/}
+            [ -e "/boot/vmlinuz-$k" ] || continue
+            run "$KI_PLUGIN" add "$k"
+            added=1
+        done
+        [ "$added" = 1 ] || run "$KI_PLUGIN" add "$kver"
     else
         remove_grub_entry
         run grubby --add-kernel="$kernel" --initrd="/boot/initramfs-$kver.img" \

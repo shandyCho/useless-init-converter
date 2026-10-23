@@ -43,6 +43,13 @@ expect_eq() {
     [ "$2" = "$3" ] && ok "$1" || bad "$1: expected '$3', got '$2'"
 }
 
+lines() { wc -l 2>/dev/null <"$1" || echo 0; }
+# last_new FILE COUNT: FILE's last line if it grew past COUNT lines, so a
+# line left by an earlier run doesn't pass for the new one.
+last_new() {
+    if [ "$(lines "$1")" -gt "$2" ]; then tail -1 "$1"; else echo "(no new line)"; fi
+}
+
 # SANDBOX_JOURNAL=no: output goes to per-service s6-log directories.
 grep -qx 'JOURNAL=no' "$W/sdcompat.conf" && journal=no || journal=yes
 expect_log() {
@@ -447,12 +454,22 @@ else
     echo "SKIP finished job's object (no dbus-send)"
 fi
 
+section "start timeout"
+call StartUnit ss extend.service replace
+expect_state extend.service active/running 40
+call StartUnit ss noextend.service replace
+expect_state noextend.service failed/failed 40
+expect_eq "start timeout result" "$(prop noextend.service Service Result)" "timeout"
+call StopUnit ss extend.service replace
+call ResetFailedUnit s noextend.service
+
 section "fd store"
 call StartUnit ss fdkeep.service replace
 expect_state fdkeep.service active/running
+n=$(lines "$R/fdkeep.out")
 call RestartUnit ss fdkeep.service replace
 sleep 1
-expect_eq "FDSTORE=1 fd handed back after restart" "$(tail -1 "$R/fdkeep.out" 2>/dev/null)" "start names=kept"
+expect_eq "FDSTORE=1 fd handed back after restart" "$(last_new "$R/fdkeep.out" "$n")" "start names=kept"
 i1=$(stat -c %i "$R/test.sock")
 call RestartUnit ss sock.service replace
 sleep 1
@@ -670,15 +687,16 @@ expect_state inst@b.service inactive/dead
 # With sdcompat-fdstore the store is its own process: what units stored
 # survived both daemon swaps. Without it (SANDBOX_FDSTORE=no) the daemon
 # held them, so they went with it and the socket was bound anew.
+n=$(lines "$R/fdkeep.out")
 call RestartUnit ss fdkeep.service replace
 sleep 1
 call RestartUnit ss sock.service replace
 sleep 1
 if [ -e "$W/fdstore.log" ]; then
-    expect_eq "FDSTORE=1 fd kept across daemon restarts" "$(tail -1 "$R/fdkeep.out" 2>/dev/null)" "start names=kept"
+    expect_eq "FDSTORE=1 fd kept across daemon restarts" "$(last_new "$R/fdkeep.out" "$n")" "start names=kept"
     expect_eq "listening socket kept across daemon restarts" "$(stat -c %i "$R/test.sock")" "$i1"
 else
-    expect_eq "FDSTORE=1 fd gone with the daemon (no sdcompat-fdstore)" "$(tail -1 "$R/fdkeep.out" 2>/dev/null)" "start names="
+    expect_eq "FDSTORE=1 fd gone with the daemon (no sdcompat-fdstore)" "$(last_new "$R/fdkeep.out" "$n")" "start names="
     [ "$(stat -c %i "$R/test.sock")" != "$i1" ] && ok "listening socket bound anew (no sdcompat-fdstore)" \
         || bad "listening socket kept without sdcompat-fdstore"
 fi

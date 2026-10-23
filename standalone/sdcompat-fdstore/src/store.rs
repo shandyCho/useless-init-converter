@@ -20,7 +20,8 @@ fn errno() -> String {
 pub fn send(sock: RawFd, data: &[u8], fd: Option<RawFd>) -> std::io::Result<()> {
     unsafe {
         let mut iov = libc::iovec { iov_base: data.as_ptr() as *mut libc::c_void, iov_len: data.len() };
-        let mut cbuf = [0u8; 64];
+        // u64s: aligned for cmsghdr, as a byte array is not.
+        let mut cbuf = [0u64; 8];
         let mut msg: libc::msghdr = std::mem::zeroed();
         msg.msg_iov = &mut iov;
         msg.msg_iovlen = 1;
@@ -51,12 +52,13 @@ fn recv_max(sock: RawFd, cap: usize) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>, 
     unsafe {
         let mut buf = vec![0u8; cap];
         let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut libc::c_void, iov_len: buf.len() };
-        let mut cbuf = [0u8; 1024];
+        // u64s: aligned for cmsghdr, as a byte array is not.
+        let mut cbuf = [0u64; 128];
         let mut msg: libc::msghdr = std::mem::zeroed();
         msg.msg_iov = &mut iov;
         msg.msg_iovlen = 1;
         msg.msg_control = cbuf.as_mut_ptr() as *mut libc::c_void;
-        msg.msg_controllen = cbuf.len() as _;
+        msg.msg_controllen = std::mem::size_of_val(&cbuf) as _;
         let n = libc::recvmsg(sock, &mut msg, libc::MSG_CMSG_CLOEXEC);
         if n < 0 {
             return Err(std::io::Error::last_os_error());
@@ -110,6 +112,23 @@ fn prune_hung_up(key: &str, list: &mut Vec<(String, OwnedFd)>) {
         let r = unsafe { libc::poll(&mut p, 1, 0) };
         !(r > 0 && p.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0)
     });
+}
+
+/// Both fds refer to the same open file description (systemd's same_fd():
+/// kcmp(), or the inode and flags without it).
+fn same_file(a: RawFd, b: RawFd) -> bool {
+    const KCMP_FILE: libc::c_int = 0;
+    let pid = unsafe { libc::getpid() };
+    let r = unsafe { libc::syscall(libc::SYS_kcmp, pid, pid, KCMP_FILE, a, b) };
+    if r >= 0 {
+        return r == 0;
+    }
+    let stat = |fd: RawFd| {
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        (unsafe { libc::fstat(fd, &mut st) } == 0).then_some((st.st_dev, st.st_ino))
+    };
+    let flags = |fd: RawFd| unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    stat(a).is_some() && stat(a) == stat(b) && flags(a) == flags(b)
 }
 
 /// The serving side.
@@ -166,6 +185,14 @@ impl Store {
             if cred.uid != 0 && cred.uid != me {
                 continue;
             }
+            // One thread serves everyone: a client that connects and then
+            // neither sends nor reads must not stop the store.
+            let tv = libc::timeval { tv_sec: 2, tv_usec: 0 };
+            for opt in [libc::SO_RCVTIMEO, libc::SO_SNDTIMEO] {
+                unsafe {
+                    libc::setsockopt(c, libc::SOL_SOCKET, opt, &tv as *const _ as *const libc::c_void, std::mem::size_of::<libc::timeval>() as u32);
+                }
+            }
             store.handle(&conn, &limit);
         });
         Ok(())
@@ -187,6 +214,11 @@ impl Store {
                 let mut map = self.inner.lock().unwrap();
                 let list = map.entry(parts[1].clone()).or_default();
                 prune_hung_up(&parts[1], list);
+                // As systemd's service_add_fd_store(): the same open file
+                // passed again is stored once.
+                if list.iter().any(|(_, f)| same_file(f.as_raw_fd(), fd.as_raw_fd())) {
+                    return reply(b"OK");
+                }
                 if list.len() >= max {
                     return reply(b"ERR fd store full");
                 }

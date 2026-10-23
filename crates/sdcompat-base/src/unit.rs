@@ -26,8 +26,9 @@ impl UnitFile {
 
         for raw in text.lines() {
             let line = raw.trim_start();
-            if pending.is_some() && (line.starts_with('#') || line.starts_with(';')) {
-                // Comments inside a continuation are skipped.
+            if line.starts_with('#') || line.starts_with(';') {
+                // Comments are skipped, inside a continuation too, and are
+                // never continued themselves (a trailing '\' is part of it).
                 continue;
             }
             let mut line = match pending.take() {
@@ -251,19 +252,22 @@ pub fn parse_timespan_usec(v: &str, default_unit_usec: u64) -> Option<u64> {
         let num: f64 = rest[..num_end].parse().ok()?;
         rest = rest[num_end..].trim_start();
         let unit_end = rest
-            .find(|c: char| !c.is_ascii_alphabetic())
+            .find(|c: char| !c.is_alphabetic())
             .unwrap_or(rest.len());
         let unit = &rest[..unit_end];
         rest = &rest[unit_end..];
         let mult: f64 = match unit {
             "" => default_unit_usec as f64,
-            "us" | "usec" | "µs" => 1.0,
+            "us" | "usec" | "µs" | "μs" => 1.0,
             "ms" | "msec" => 1e3,
             "s" | "sec" | "second" | "seconds" => 1e6,
             "m" | "min" | "minute" | "minutes" => 60e6,
             "h" | "hr" | "hour" | "hours" => 3600e6,
             "d" | "day" | "days" => 86400e6,
             "w" | "week" | "weeks" => 604800e6,
+            // systemd's USEC_PER_MONTH and USEC_PER_YEAR (30.44 and 365.25 days).
+            "M" | "month" | "months" => 2629800e6,
+            "y" | "year" | "years" => 31557600e6,
             _ => return None,
         };
         total = total.saturating_add((num * mult) as u64);
@@ -294,6 +298,14 @@ mod tests {
     }
 
     #[test]
+    fn comments_are_not_continued() {
+        let mut u = UnitFile::default();
+        u.parse_str("[Service]\n# old: \\\nType=notify\nExecStart=/bin/a \\\n # inside\n  -x\n");
+        assert_eq!(u.get("Service", "Type"), Some("notify"));
+        assert_eq!(u.get("Service", "ExecStart"), Some("/bin/a  -x"));
+    }
+
+    #[test]
     fn words() {
         assert_eq!(
             split_words(r#"/bin/echo "a b" 'c\d' e\x41"#).unwrap(),
@@ -306,6 +318,8 @@ mod tests {
         assert_eq!(parse_timespan_usec("90", 1_000_000), Some(90_000_000));
         assert_eq!(parse_timespan_usec("1min 30s", 1_000_000), Some(90_000_000));
         assert_eq!(parse_timespan_usec("500ms", 1_000_000), Some(500_000));
+        assert_eq!(parse_timespan_usec("20µs", 1_000_000), Some(20));
+        assert_eq!(parse_timespan_usec("1y 1M", 1_000_000), Some(31_557_600_000_000 + 2_629_800_000_000));
         assert_eq!(parse_timeout_usec("0"), Some(u64::MAX));
         assert_eq!(parse_timeout_usec("infinity"), Some(u64::MAX));
         assert_eq!(parse_timeout_usec("90"), Some(90_000_000));

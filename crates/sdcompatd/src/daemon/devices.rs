@@ -138,15 +138,43 @@ fn save_plugged(path: &Path, plugged: &Plugged) {
 }
 
 /// SYSTEMD_WANTS value -> unit names (a name without a unit suffix is a
-/// service, as in systemd).
-pub fn parse_wants(v: &str) -> Vec<String> {
+/// service, as in systemd). A template gets the device's sysfs path,
+/// escaped, as its instance (systemd's device_add_udev_wants()); without
+/// the path it is left out.
+pub fn parse_wants(v: &str, syspath: Option<&str>) -> Vec<String> {
     const SUFFIXES: &[&str] = &[
         ".service", ".socket", ".target", ".device", ".mount", ".automount", ".swap", ".timer", ".path", ".slice",
         ".scope",
     ];
     v.split_whitespace()
         .map(|w| if SUFFIXES.iter().any(|s| w.ends_with(s)) { w.to_string() } else { format!("{w}.service") })
+        .filter_map(|w| match w.split_once("@.") {
+            Some((prefix, suffix)) => syspath.map(|p| format!("{prefix}@{}.{suffix}", crate::util::unit_name_path_escape(p))),
+            None => Some(w),
+        })
         .collect()
+}
+
+/// The sysfs path of a udev database id (b8:0, c189:3, n3, +subsystem:name).
+fn syspath_of_id(id: &str) -> Option<String> {
+    let link = if let Some(dev) = id.strip_prefix('b') {
+        format!("/sys/dev/block/{dev}")
+    } else if let Some(dev) = id.strip_prefix('c') {
+        format!("/sys/dev/char/{dev}")
+    } else if let Some(idx) = id.strip_prefix('n') {
+        let rd = std::fs::read_dir("/sys/class/net").ok()?;
+        rd.flatten()
+            .map(|e| e.path())
+            .find(|p| std::fs::read_to_string(p.join("ifindex")).is_ok_and(|i| i.trim() == idx))?
+            .display()
+            .to_string()
+    } else {
+        let (subsystem, name) = id.strip_prefix('+')?.split_once(':')?;
+        [format!("/sys/bus/{subsystem}/devices/{name}"), format!("/sys/class/{subsystem}/{name}")]
+            .into_iter()
+            .find(|p| std::path::Path::new(p).exists())?
+    };
+    std::fs::canonicalize(link).ok().map(|p| p.display().to_string())
 }
 
 fn has_tag(tags: &str, tag: &str) -> bool {
@@ -173,12 +201,13 @@ pub fn event_from_props(p: &BTreeMap<String, String>) -> Option<Event> {
     let present = get("ACTION") != Some("remove")
         && has_tag(tags, "systemd")
         && get("SYSTEMD_READY").and_then(crate::unit::parse_bool) != Some(false);
-    Some(Event { id, present, wants: get("SYSTEMD_WANTS").map(parse_wants).unwrap_or_default() })
+    let syspath = format!("/sys{devpath}");
+    Some(Event { id, present, wants: get("SYSTEMD_WANTS").map(|v| parse_wants(v, Some(&syspath))).unwrap_or_default() })
 }
 
 /// Event from a udev database file (data/<id>: "E:KEY=value", "G:tag",
 /// "Q:current tag" lines).
-pub fn event_from_db(id: &str, text: &str) -> Event {
+pub fn event_from_db(id: &str, text: &str, syspath: Option<&str>) -> Event {
     let mut tags = Vec::new();
     let mut current = Vec::new();
     let mut wants = Vec::new();
@@ -189,7 +218,7 @@ pub fn event_from_db(id: &str, text: &str) -> Event {
         } else if let Some(t) = line.strip_prefix("Q:") {
             current.push(t);
         } else if let Some(v) = line.strip_prefix("E:SYSTEMD_WANTS=") {
-            wants = parse_wants(v);
+            wants = parse_wants(v, syspath);
         } else if let Some(v) = line.strip_prefix("E:SYSTEMD_READY=") {
             ready = crate::unit::parse_bool(v) != Some(false);
         }
@@ -205,7 +234,7 @@ fn scan_db(udev_dir: &Path) -> Vec<Event> {
         .filter_map(|e| {
             let id = e.file_name().into_string().ok()?;
             let text = std::fs::read_to_string(udev_dir.join("data").join(&id)).ok()?;
-            Some(event_from_db(&id, &text))
+            Some(event_from_db(&id, &text, syspath_of_id(&id).as_deref()))
         })
         .collect()
 }
@@ -373,7 +402,10 @@ mod tests {
 
     #[test]
     fn wants() {
-        assert_eq!(parse_wants(" a  b.target c@x:y.service "), ["a.service", "b.target", "c@x:y.service"]);
+        assert_eq!(parse_wants(" a  b.target c@x:y.service ", None), ["a.service", "b.target", "c@x:y.service"]);
+        // Templates take the escaped sysfs path; without it they are left out.
+        assert_eq!(parse_wants("t@.service u@", Some("/sys/devices/a-b")), ["t@sys-devices-a\\x2db.service", "u@sys-devices-a\\x2db.service"]);
+        assert!(parse_wants("t@.service", None).is_empty());
     }
 
     #[test]
@@ -424,11 +456,11 @@ mod tests {
 
     #[test]
     fn database() {
-        let e = event_from_db("+bluetooth:hci0", "I:123\nE:SYSTEMD_WANTS=bluetooth.target\nG:systemd\nQ:systemd\nV:1\n");
+        let e = event_from_db("+bluetooth:hci0", "I:123\nE:SYSTEMD_WANTS=bluetooth.target\nG:systemd\nQ:systemd\nV:1\n", None);
         assert_eq!(e, Event { id: "+bluetooth:hci0".into(), present: true, wants: vec!["bluetooth.target".into()] });
-        assert!(!event_from_db("x", "G:systemd\nQ:seat\n").present);
-        assert!(!event_from_db("x", "G:systemd\nE:SYSTEMD_READY=0\n").present);
-        assert!(event_from_db("x", "G:systemd\n").present);
+        assert!(!event_from_db("x", "G:systemd\nQ:seat\n", None).present);
+        assert!(!event_from_db("x", "G:systemd\nE:SYSTEMD_READY=0\n", None).present);
+        assert!(event_from_db("x", "G:systemd\n", None).present);
     }
 
     #[test]

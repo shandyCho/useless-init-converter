@@ -26,7 +26,8 @@ fn errno() -> String {
 pub fn send(sock: RawFd, data: &[u8], fd: Option<RawFd>) -> std::io::Result<()> {
     unsafe {
         let mut iov = libc::iovec { iov_base: data.as_ptr() as *mut libc::c_void, iov_len: data.len() };
-        let mut cbuf = [0u8; 64];
+        // u64s: aligned for cmsghdr, as a byte array is not.
+        let mut cbuf = [0u64; 8];
         let mut msg: libc::msghdr = std::mem::zeroed();
         msg.msg_iov = &mut iov;
         msg.msg_iovlen = 1;
@@ -57,12 +58,13 @@ pub fn recv_max(sock: RawFd, cap: usize) -> std::io::Result<(Vec<u8>, Vec<OwnedF
     unsafe {
         let mut buf = vec![0u8; cap];
         let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut libc::c_void, iov_len: buf.len() };
-        let mut cbuf = [0u8; 1024];
+        // u64s: aligned for cmsghdr, as a byte array is not.
+        let mut cbuf = [0u64; 128];
         let mut msg: libc::msghdr = std::mem::zeroed();
         msg.msg_iov = &mut iov;
         msg.msg_iovlen = 1;
         msg.msg_control = cbuf.as_mut_ptr() as *mut libc::c_void;
-        msg.msg_controllen = cbuf.len() as _;
+        msg.msg_controllen = std::mem::size_of_val(&cbuf) as _;
         let n = libc::recvmsg(sock, &mut msg, libc::MSG_CMSG_CLOEXEC);
         if n < 0 {
             return Err(std::io::Error::last_os_error());
@@ -216,6 +218,23 @@ fn prune_hung_up(key: &str, list: &mut Vec<(String, OwnedFd)>) {
     });
 }
 
+/// Both fds refer to the same open file description (systemd's same_fd():
+/// kcmp(), or the inode and flags without it).
+fn same_file(a: RawFd, b: RawFd) -> bool {
+    const KCMP_FILE: libc::c_int = 0;
+    let pid = unsafe { libc::getpid() };
+    let r = unsafe { libc::syscall(libc::SYS_kcmp, pid, pid, KCMP_FILE, a, b) };
+    if r >= 0 {
+        return r == 0;
+    }
+    let stat = |fd: RawFd| {
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        (unsafe { libc::fstat(fd, &mut st) } == 0).then_some((st.st_dev, st.st_ino))
+    };
+    let flags = |fd: RawFd| unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    stat(a).is_some() && stat(a) == stat(b) && flags(a) == flags(b)
+}
+
 /// The serving side.
 #[derive(Clone, Default)]
 pub struct Store {
@@ -270,6 +289,14 @@ impl Store {
             if cred.uid != 0 && cred.uid != me {
                 continue;
             }
+            // One thread serves everyone: a client that connects and then
+            // neither sends nor reads must not stop the store.
+            let tv = libc::timeval { tv_sec: 2, tv_usec: 0 };
+            for opt in [libc::SO_RCVTIMEO, libc::SO_SNDTIMEO] {
+                unsafe {
+                    libc::setsockopt(c, libc::SOL_SOCKET, opt, &tv as *const _ as *const libc::c_void, std::mem::size_of::<libc::timeval>() as u32);
+                }
+            }
             store.handle(&conn, &limit);
         });
         Ok(())
@@ -291,6 +318,11 @@ impl Store {
                 let mut map = self.inner.lock().unwrap();
                 let list = map.entry(parts[1].clone()).or_default();
                 prune_hung_up(&parts[1], list);
+                // As systemd's service_add_fd_store(): the same open file
+                // passed again is stored once.
+                if list.iter().any(|(_, f)| same_file(f.as_raw_fd(), fd.as_raw_fd())) {
+                    return reply(b"OK");
+                }
                 if list.len() >= max {
                     return reply(b"ERR fd store full");
                 }
@@ -343,16 +375,18 @@ mod tests {
         // The server's own limit: 1 for "old.service", as a store that reads
         // unit files would; nothing for other keys.
         Store::default().serve(&sock, |k| if k == "old.service" { 1 } else { 0 }).unwrap();
-        let f = std::fs::File::open("/dev/null").unwrap();
-        let fd = f.as_raw_fd();
+        let files: Vec<std::fs::File> = (0..3).map(|_| std::fs::File::open("/dev/null").unwrap()).collect();
+        let (fd, fd2, fd3) = (files[0].as_raw_fd(), files[1].as_raw_fd(), files[2].as_raw_fd());
 
         // The client's <max> wins over the server's limit.
         put(&sock, "a.service", "x", fd, 2).unwrap();
-        put(&sock, "a.service", "y", fd, 2).unwrap();
-        assert_eq!(put(&sock, "a.service", "z", fd, 2).unwrap_err(), "ERR fd store full");
+        put(&sock, "a.service", "y", fd2, 2).unwrap();
+        // The same open file again is stored once (systemd's same_fd()).
+        put(&sock, "a.service", "x", fd, 2).unwrap();
+        assert_eq!(put(&sock, "a.service", "z", fd3, 2).unwrap_err(), "ERR fd store full");
         // Without <max> the server's limit applies.
         assert_eq!(put_msg(&sock, "PUT\0old.service\0x", fd), Ok(()));
-        assert_eq!(put_msg(&sock, "PUT\0old.service\0y", fd).unwrap_err(), "ERR fd store full");
+        assert_eq!(put_msg(&sock, "PUT\0old.service\0y", fd2).unwrap_err(), "ERR fd store full");
 
         let names: Vec<String> = get(&sock, "a.service").into_iter().map(|(n, _)| n).collect();
         assert_eq!(names, ["x", "y"]);

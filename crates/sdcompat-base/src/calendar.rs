@@ -32,6 +32,23 @@ impl Field {
         }
     }
 
+    /// A day field after `~`, `v` counted from the end of the month (1 =
+    /// the last day). An open repetition runs toward the end, as in
+    /// systemd.time(7): `~07/1` is the last seven days, not the 7th-last day
+    /// and every day before it.
+    fn matches_from_end(&self, v: u32) -> bool {
+        match &self.0 {
+            None => true,
+            Some(comps) => comps.iter().any(|c| {
+                if c.step > 0 && c.end == u32::MAX {
+                    v <= c.start && (c.start - v) % c.step == 0
+                } else {
+                    v >= c.start && v <= c.end && (c.step == 0 || (v - c.start) % c.step == 0)
+                }
+            }),
+        }
+    }
+
     fn values(&self, lo: u32, hi: u32) -> Vec<u32> {
         (lo..=hi).filter(|&v| self.matches(v)).collect()
     }
@@ -261,7 +278,15 @@ impl CalendarSpec {
         s
     }
 
-    /// First elapse strictly after `after` (seconds since the epoch).
+    /// True if next_after() switches TZ (a named zone other than UTC): it
+    /// sets an environment variable, which only a single-threaded process
+    /// may do (the timer runner, not the daemon).
+    pub fn switches_tz(&self) -> bool {
+        self.tz.as_deref().is_some_and(|z| z != "UTC")
+    }
+
+    /// First elapse strictly after `after` (seconds since the epoch). See
+    /// switches_tz() before calling it from a multi-threaded process.
     pub fn next_after(&self, after: i64) -> Option<i64> {
         let _tz = TzGuard::set(self.tz.as_deref());
         let utc = self.tz.as_deref() == Some("UTC");
@@ -295,12 +320,12 @@ impl CalendarSpec {
                 continue;
             }
             let dim = days_in_month(y, m);
-            let day_value = if self.end_of_month { dim - d + 1 } else { d };
+            let day_ok = if self.end_of_month { self.day.matches_from_end(dim - d + 1) } else { self.day.matches(d) };
             let wd_ok = self
                 .weekdays
                 .map(|mask| mask & (1 << weekday(y, m, d)) != 0)
                 .unwrap_or(true);
-            if self.day.matches(day_value) && wd_ok {
+            if day_ok && wd_ok {
                 for &h in &hours {
                     for &mi in &minutes {
                         for &s in &seconds {
@@ -450,6 +475,8 @@ mod tests {
         assert_eq!(fmt(utc("Sat,Sun 20:00").next_after(NOW).unwrap()), "2026-10-18 20:00:00");
         assert_eq!(fmt(utc("*-*-01,15 03:30:00").next_after(NOW).unwrap()), "2026-11-01 03:30:00");
         assert_eq!(fmt(utc("*-02~01").next_after(NOW).unwrap()), "2027-02-28 00:00:00");
+        // The last Monday in May (systemd.time(7)).
+        assert_eq!(fmt(utc("Mon *-05~07/1").next_after(NOW).unwrap()), "2027-05-31 00:00:00");
         assert_eq!(fmt(utc("2027-03-04 05:06:07").next_after(NOW).unwrap()), "2027-03-04 05:06:07");
         assert_eq!(fmt(utc("*-*-* 12:34:56").next_after(NOW).unwrap()), "2026-10-19 12:34:56");
         assert!(utc("2020-01-01").next_after(NOW).is_none());

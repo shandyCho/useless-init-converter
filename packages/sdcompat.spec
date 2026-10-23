@@ -59,7 +59,8 @@ cargo build --release --offline -p sdcompat
 
 %check
 export SDCOMPAT_BUILD=%{version}-%{release}
-cargo test --release --offline -p sdcompat
+# The library crates it is built from too: they are not packaged.
+cargo test --release --offline -p sdcompat -p sdcompat-version
 
 %install
 install -Dm0755 target/release/sdcompat %{buildroot}%{_libexecdir}/sdcompat/sdcompat
@@ -83,15 +84,17 @@ install -d %{buildroot}%{_localstatedir}/log/sdcompat
 # before this one, and later updates get the labels from the loaded policy.
 if [ -x /usr/sbin/semodule ]; then
     semodule -i %{_datadir}/sdcompat/selinux/sdcompat.cil || :
-    restorecon $(rpm -ql execline s6 s6-rc s6-linux-init 2>/dev/null | grep '^/usr/') \
-        %{_libexecdir}/sdcompat/* 2>/dev/null || :
+    rpm -ql execline s6 s6-rc s6-linux-init 2>/dev/null | grep '^/usr/' |
+        xargs -r -d '\n' restorecon 2>/dev/null || :
+    restorecon %{_libexecdir}/sdcompat/* 2>/dev/null || :
     [ -d /var/lib/sdcompat ] && restorecon -R /var/lib/sdcompat || :
 fi
 
 %postun
 if [ "$1" -eq 0 ] && [ -x /usr/sbin/semodule ]; then
     semodule -r sdcompat 2>/dev/null || :
-    restorecon $(rpm -ql execline s6 s6-rc s6-linux-init 2>/dev/null | grep '^/usr/') 2>/dev/null || :
+    rpm -ql execline s6 s6-rc s6-linux-init 2>/dev/null | grep '^/usr/' |
+        xargs -r -d '\n' restorecon 2>/dev/null || :
     [ -d /var/lib/sdcompat ] && restorecon -R /var/lib/sdcompat || :
 fi
 
@@ -109,9 +112,9 @@ fi
 %dir %{_localstatedir}/log/sdcompat
 
 %changelog
-* Wed Oct 21 2026 sdcompat developers - 0.1.0-1
+* Wed Oct 21 2026 sdcompat developers
 - The tools moved to their own packages: sdcompat-gen, sdcompat-runner,
   sdcompat-timers, sdcompatd
 
-* Sun Oct 18 2026 sdcompat developers - 0.1.0-1
+* Sun Oct 18 2026 sdcompat developers
 - Initial package
