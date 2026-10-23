@@ -378,8 +378,11 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "sdcompat-base",
+ "sdcompat-client",
  "sdcompat-install",
  "sdcompat-version",
+ "tokio",
+ "zbus",
 ]
 
 [[package]]

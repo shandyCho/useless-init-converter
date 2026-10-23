@@ -33,7 +33,7 @@ on its own, and the core works without them.
 
 | Tool | Commands | Role |
 |---|---|---|
-| `sdcompat-gen` | `reload`, `plan` | Translates every unit into an s6-rc source tree, compiles it together with your hand-written s6 services (`EXTRA_SOURCE`) and switches the live state (`s6-rc-update`). Writes a coverage report. |
+| `sdcompat-gen` | `reload`, `plan` | Translates every unit into an s6-rc source tree, compiles it together with your hand-written s6 services (`EXTRA_SOURCE`) and switches the live state (`s6-rc-update`). Writes a coverage report. On a running s6 boot `reload` asks sdcompatd to do it (like `systemctl daemon-reload`): run from a login shell, s6-rc-update would give the scan directory SELinux labels init_t can't read and hang. |
 | | `enable/disable/mask/unmask/preset/is-enabled` | Offline unit file management. |
 | `sdcompatd` | `daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | Minimal client for the daemon (private socket or bus); a service's log (`journalctl -u`, or the s6-log directory with `JOURNAL=no`). |

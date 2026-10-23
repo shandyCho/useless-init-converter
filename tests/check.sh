@@ -252,6 +252,11 @@ out=$($B call $MGR EnableUnitFiles asbb 1 hello.service false false)
 case "$out" in *symlink*) ok "enable created links" ;; *) bad "enable: $out" ;; esac
 call Reload && ok "daemon-reload"
 expect_state hello.service active/running
+# With a live state, `sdcompat-gen reload` goes through sdcompatd (from a
+# login shell s6-rc-update would label the scan directory for that shell).
+out=$("$(dirname "$0")/../target/debug/sdcompat-gen" --config "$W/sdcompat.conf" reload 2>&1)
+case "$out" in "reloaded by sdcompatd"*) ok "sdcompat-gen reload through sdcompatd" ;; *) bad "sdcompat-gen reload: $out" ;; esac
+expect_state hello.service active/running
 
 section "timers"
 expect_state tick.timer active/waiting

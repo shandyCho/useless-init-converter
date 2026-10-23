@@ -9,3 +9,6 @@ sdcompat-version.workspace = true
 sdcompat-base.workspace = true
 sdcompat-install.workspace = true
 libc.workspace = true
+sdcompat-client.workspace = true
+zbus.workspace = true
+tokio.workspace = true

@@ -37,7 +37,7 @@ cargo build --release --offline -p sdcompat-gen
 %check
 export SDCOMPAT_BUILD=%{version}-%{release}
 # The library crates it is built from too: they are not packaged.
-cargo test --release --offline -p sdcompat-gen -p sdcompat-base -p sdcompat-install -p sdcompat-version
+cargo test --release --offline -p sdcompat-gen -p sdcompat-base -p sdcompat-install -p sdcompat-client -p sdcompat-version
 
 %install
 install -Dm0755 target/release/sdcompat-gen %{buildroot}%{_libexecdir}/sdcompat/sdcompat-gen

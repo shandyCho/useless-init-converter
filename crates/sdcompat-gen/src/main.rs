@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 use std::process::exit;
 
@@ -10,8 +11,11 @@ usage: sdcompat-gen [--config PATH] COMMAND [ARGS]
        sdcompat-gen --version
 
 Database:
-  reload [--no-update]     translate units, compile the s6-rc database and
-                           switch the live state to it (s6-rc-update)
+  reload [--no-update] [--direct]
+                           translate units, compile the s6-rc database and
+                           switch the live state to it (s6-rc-update); on a
+                           running s6 boot sdcompatd does it (daemon-reload),
+                           --direct does it here (only from init_t on SELinux)
   plan                     print the translation report without writing anything
 
 Offline unit file management:
@@ -30,6 +34,45 @@ fn print_changes(changes: &[install::Change]) {
             println!("Created symlink {} → {}.", c.path, c.source);
         } else {
             println!("Removed \"{}\".", c.path);
+        }
+    }
+}
+
+/// `reload` on a running s6 boot: Manager.Reload on sdcompatd. Refuses a
+/// manager that isn't sdcompatd (systemd's own private socket).
+fn reload_via_daemon(cfg: &Config) -> i32 {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let res: Result<(), String> = rt.block_on(async {
+        let conn = sdcompat_client::connect(cfg).await?;
+        let version: String = zbus::fdo::PropertiesProxy::builder(&conn)
+            .destination("org.freedesktop.systemd1")
+            .and_then(|b| b.path("/org/freedesktop/systemd1"))
+            .map_err(|e| e.to_string())?
+            .build()
+            .await
+            .map_err(|e| e.to_string())?
+            .get(zbus::names::InterfaceName::from_static_str_unchecked("org.freedesktop.systemd1.Manager"), "Version")
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|v| String::try_from(v).map_err(|e| e.to_string()))?;
+        if !version.contains("sdcompat") {
+            return Err(format!("the service manager is not sdcompatd ({version})"));
+        }
+        sdcompat_client::manager_call(&conn, "Reload", &()).await.map(|_| ())
+    });
+    match res {
+        Ok(()) => {
+            let db = fs::read_link(cfg.state_dir.join("current")).unwrap_or_default();
+            println!("reloaded by sdcompatd");
+            println!("database: {} (live state updated)", cfg.state_dir.join(&db).display());
+            println!("report:   {}", cfg.state_dir.join(&db).join("report.txt").display());
+            0
+        }
+        Err(e) => {
+            eprintln!("sdcompat-gen: reload through sdcompatd failed: {e}");
+            eprintln!("sdcompat-gen: `reload --direct` updates the live state from this process instead");
+            eprintln!("sdcompat-gen: (only from init_t on an SELinux system: a login shell's labels break it)");
+            1
         }
     }
 }
@@ -73,6 +116,15 @@ fn main() {
         }
         "reload" => {
             let update = !rest.iter().any(|a| a == "--no-update");
+            let direct = rest.iter().any(|a| a == "--direct");
+            // With a live state, sdcompatd does the update (as daemon-reload
+            // does): run from a login shell, s6-rc-update's links and service
+            // directories get the shell's SELinux labels (user_tmp_t in the
+            // tmpfs scan directory), which init_t can't read; s6-svscan then
+            // never supervises them and s6-rc-update waits forever.
+            if update && !direct && fs::symlink_metadata(cfg.live_dir.join("compiled")).is_ok() {
+                exit(reload_via_daemon(&cfg));
+            }
             match gen::regenerate(&cfg, update) {
                 Ok(r) => {
                     let first = gen::report(&r.plan);

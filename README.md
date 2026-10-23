@@ -32,7 +32,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 
 | 도구 | 명령 | 역할 |
 |---|---|---|
-| `sdcompat-gen` | `reload`, `plan` | 모든 유닛을 s6-rc 소스 트리로 변환하고, 직접 작성한 s6 서비스(`EXTRA_SOURCE`)와 함께 컴파일한 뒤 라이브 상태를 전환합니다(`s6-rc-update`). 변환 보고서를 남깁니다. |
+| `sdcompat-gen` | `reload`, `plan` | 모든 유닛을 s6-rc 소스 트리로 변환하고, 직접 작성한 s6 서비스(`EXTRA_SOURCE`)와 함께 컴파일한 뒤 라이브 상태를 전환합니다(`s6-rc-update`). 변환 보고서를 남깁니다. s6로 부팅된 상태에서는 `reload`가 sdcompatd에 맡깁니다(`systemctl daemon-reload`와 같음). 로그인 셸에서 s6-rc-update를 직접 돌리면 스캔 디렉터리에 init_t가 읽을 수 없는 SELinux 레이블이 붙어 멈추기 때문입니다. |
 | | `enable/disable/mask/unmask/preset/is-enabled` | 오프라인 유닛 파일 관리입니다. |
 | `sdcompatd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | 데몬용 최소 클라이언트(private 소켓 또는 버스)와, 서비스 로그 보기(`journalctl -u`, `JOURNAL=no`이면 s6-log 디렉터리)입니다. |
