@@ -396,11 +396,54 @@ impl Unit {
     pub fn is_loaded(&self) -> bool {
         self.load_state == LoadState::Loaded
     }
+
+    /// TimeoutStartSec= (or TimeoutSec=) in usec; u64::MAX means none. As
+    /// systemd: 0 means none, and a Type=oneshot service has none unless it
+    /// sets one; otherwise DefaultTimeoutStartSec= (90 s).
+    pub fn start_timeout_usec(&self) -> u64 {
+        let set = self.get("Service", "TimeoutStartSec").or_else(|| self.get("Service", "TimeoutSec"));
+        if let Some(u) = set.and_then(|v| crate::unit::parse_timeout_usec(&v)) {
+            return u;
+        }
+        let oneshot = self.utype() == "service"
+            && match self.get("Service", "Type") {
+                Some(t) => t == "oneshot",
+                None => self.file.get("Service", "ExecStart").is_none(),
+            };
+        if oneshot {
+            u64::MAX
+        } else {
+            90_000_000
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_timeouts() {
+        let unit = |text: &str| {
+            let mut file = crate::unit::UnitFile::default();
+            file.parse_str(text);
+            Unit {
+                id: "t.service".into(),
+                names: vec!["t.service".into()],
+                fragment: None,
+                dropins: Vec::new(),
+                load_state: LoadState::Loaded,
+                load_error: None,
+                file,
+            }
+        };
+        assert_eq!(unit("[Service]\nExecStart=/bin/true\n").start_timeout_usec(), 90_000_000);
+        // Type=oneshot: no start timeout unless set (fstrim, man-db-cache-update).
+        assert_eq!(unit("[Service]\nType=oneshot\nExecStart=/bin/true\n").start_timeout_usec(), u64::MAX);
+        assert_eq!(unit("[Service]\nType=oneshot\nTimeoutSec=5\n").start_timeout_usec(), 5_000_000);
+        // 0 is "no timeout" (docker.service).
+        assert_eq!(unit("[Service]\nType=notify\nTimeoutStartSec=0\n").start_timeout_usec(), u64::MAX);
+    }
 
     #[test]
     fn names() {

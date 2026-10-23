@@ -319,6 +319,24 @@ impl Daemon {
     pub(super) async fn watch_dynamic(&self, last: &mut HashMap<String, (String, String)>) {
         let names: Vec<String> = self.dynamic.lock().unwrap().keys().cloned().collect();
         let active = self.active_atoms().await;
+        // The unit a transient timer or path unit triggers stays while that
+        // unit is loaded, as in systemd: its next elapse starts it again
+        // (systemd-run --on-calendar).
+        let triggered: std::collections::HashSet<String> = names
+            .iter()
+            .filter_map(|n| {
+                let (_, u) = self.load_unit(n);
+                if !self.is_transient_file(&u) {
+                    return None;
+                }
+                let t = match u.utype() {
+                    "timer" => crate::timer::trigger_unit(&u),
+                    "path" => crate::pathunit::trigger_unit(&u),
+                    _ => return None,
+                };
+                Some(self.load_unit(&t).0)
+            })
+            .collect();
         for n in names {
             let (id, unit) = self.load_unit(&n);
             let st = self.unit_status(&id, &active, &unit).await;
@@ -346,7 +364,10 @@ impl Daemon {
             let elapsed_timer = unit.utype() == "timer"
                 && rs.has(crate::timer::ELAPSED)
                 && !unit.get_bool("Timer", "RemainAfterElapse", true);
-            let idle = cur.0 == "inactive" && since > 0 && crate::util::now_realtime_usec().saturating_sub(since) > 10_000_000;
+            let idle = cur.0 == "inactive"
+                && since > 0
+                && crate::util::now_realtime_usec().saturating_sub(since) > 10_000_000
+                && !triggered.contains(&id);
             if idle || elapsed_timer {
                 self.dyn_stop(&id, &unit).await;
                 self.remove_transient_file(&id);

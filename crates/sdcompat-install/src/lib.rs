@@ -220,19 +220,25 @@ pub fn unmask(cfg: &Config, names: &[String], runtime: bool) -> Result<Vec<Chang
     Ok(changes)
 }
 
-fn any_link_to(dir: &Path, targets: &BTreeSet<String>, depth: u32) -> bool {
+/// `aliases`: also count an Alias= link at the top of `dir` (for gdm.service,
+/// display-manager.service -> gdm.service is all that enabling it creates).
+/// Not in vendor directories, where such links are the package's own names.
+fn any_link_to(dir: &Path, targets: &BTreeSet<String>, depth: u32, aliases: bool) -> bool {
     let Ok(rd) = fs::read_dir(dir) else { return false };
     for e in rd.flatten() {
         let p = e.path();
         let Ok(meta) = fs::symlink_metadata(&p) else { continue };
         if meta.file_type().is_symlink() {
-            if depth > 0 && link_matches(&p, targets) {
+            // At the top, a link under the unit's own name is "linked", not
+            // an enablement.
+            let alias = aliases && depth == 0 && !targets.contains(&e.file_name().to_string_lossy().into_owned());
+            if (depth > 0 || alias) && link_matches(&p, targets) {
                 return true;
             }
         } else if meta.is_dir() && depth == 0 {
             let n = e.file_name().to_string_lossy().into_owned();
             if (n.ends_with(".wants") || n.ends_with(".requires") || n.ends_with(".upholds"))
-                && any_link_to(&p, targets, 1)
+                && any_link_to(&p, targets, 1, false)
             {
                 return true;
             }
@@ -260,15 +266,15 @@ pub fn unit_file_state(cfg: &Config, name: &str) -> Result<String, String> {
     }
     let mut targets: BTreeSet<String> = unit.names.iter().cloned().collect();
     targets.insert(name.to_string());
-    if any_link_to(cfg.config_unit_dir(), &targets, 0) {
+    if any_link_to(cfg.config_unit_dir(), &targets, 0, true) {
         return Ok("enabled".into());
     }
-    if any_link_to(&cfg.runtime_unit_dir, &targets, 0) {
+    if any_link_to(&cfg.runtime_unit_dir, &targets, 0, true) {
         return Ok("enabled-runtime".into());
     }
     // Enabled from a vendor directory (e.g. /usr/lib/systemd/system/*.wants).
     for d in cfg.unit_path.iter().skip(1) {
-        if any_link_to(d, &targets, 0) {
+        if any_link_to(d, &targets, 0, false) {
             return Ok("static".into());
         }
     }
@@ -443,6 +449,31 @@ mod tests {
         assert!(etc.join("multi-user.target.wants/cups.path").is_symlink());
         assert!(!etc.join("multi-user.target.wants/cups.service").exists());
         assert_eq!(unit_file_state(&cfg, "cups.service").as_deref(), Ok("disabled"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn enabled_through_alias() {
+        let tmp = std::env::temp_dir().join(format!("sdcompat-alias-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let (etc, lib) = (tmp.join("etc"), tmp.join("lib"));
+        for d in [&etc, &lib] {
+            fs::create_dir_all(d).unwrap();
+        }
+        fs::write(lib.join("gdm.service"), "[Service]\nExecStart=/bin/true\n[Install]\nAlias=display-manager.service\n").unwrap();
+        fs::write(lib.join("mc.service"), "[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n").unwrap();
+        // A vendor alias (dnf5-makecache.service) does not enable anything.
+        symlink("mc.service", lib.join("mc5.service")).unwrap();
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![etc.clone(), lib.clone()];
+        cfg.runtime_unit_dir = tmp.join("run");
+        assert_eq!(unit_file_state(&cfg, "gdm.service").as_deref(), Ok("disabled"));
+        assert_eq!(unit_file_state(&cfg, "mc.service").as_deref(), Ok("disabled"));
+        // `systemctl enable gdm.service` creates only the alias link.
+        enable(&cfg, &["gdm.service".to_string()], false, false).unwrap();
+        assert!(etc.join("display-manager.service").is_symlink());
+        assert_eq!(unit_file_state(&cfg, "gdm.service").as_deref(), Ok("enabled"));
+        assert_eq!(unit_file_state(&cfg, "display-manager.service").as_deref(), Ok("alias"));
         let _ = fs::remove_dir_all(&tmp);
     }
 }

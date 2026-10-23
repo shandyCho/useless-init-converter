@@ -122,4 +122,26 @@ mod tests {
         assert_eq!(request(&sock, "GET\0a.service", None)[0], b"END");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn hung_up_fds_go() {
+        let dir = std::env::temp_dir().join(format!("sdcompat-fdstore-hup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sock = dir.join("s");
+        Store::default().serve(&sock, |k| store::key_limit(k).unwrap_or(0)).unwrap();
+        // A journald stream whose other end is closed: dropped, as systemd
+        // drops FDSTORE= fds on POLLHUP, so the key has room again.
+        let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert_eq!(request(&sock, "PUT\0j.service\0stored\x001", Some(a.as_raw_fd()))[0], b"OK");
+        drop(b);
+        let file = std::fs::File::open("/dev/null").unwrap();
+        assert_eq!(request(&sock, "PUT\0j.service\0stored\x001", Some(file.as_raw_fd()))[0], b"OK");
+        assert_eq!(request(&sock, "GET\0j.service", None).len(), 2);
+        // Held sockets and stdio ("#" keys) stay.
+        let (c, d) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert_eq!(request(&sock, "PUT\0j.service#stdio\0stdin", Some(c.as_raw_fd()))[0], b"OK");
+        drop(d);
+        assert_eq!(request(&sock, "GET\0j.service#stdio", None).len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

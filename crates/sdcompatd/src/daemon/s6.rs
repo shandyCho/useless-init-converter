@@ -607,7 +607,7 @@ impl Daemon {
         let usec = unit
             .get("Service", "TimeoutStopSec")
             .or_else(|| unit.get("Service", "TimeoutSec"))
-            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
+            .and_then(|v| crate::unit::parse_timeout_usec(&v))
             .unwrap_or(90_000_000);
         let ms = (usec / 1000).saturating_add(5000).min(u32::MAX as u64);
         let _ = Command::new("s6-svc")
@@ -634,11 +634,7 @@ impl Daemon {
     }
 
     fn start_timeout(unit: &Unit) -> Duration {
-        let usec = unit
-            .get("Service", "TimeoutStartSec")
-            .or_else(|| unit.get("Service", "TimeoutSec"))
-            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
-            .unwrap_or(90_000_000);
+        let usec = unit.start_timeout_usec();
         if usec == u64::MAX {
             Duration::from_secs(86400 * 365)
         } else {
@@ -933,6 +929,9 @@ impl Daemon {
     }
 
     pub(super) async fn do_restart(&self, id: &str, unit: &Unit, only_if_active: bool) -> &'static str {
+        // The new run's result, as do_start() reports it: the runner tells
+        // s6 "ready" (and exits 0 for a oneshot) even when the start failed.
+        let started_at = util::now_realtime_usec();
         let active = self.active_atoms().await;
         if !only_if_active || active.contains(id) {
             self.stop_conflicts(id, unit).await;
@@ -953,15 +952,13 @@ impl Daemon {
                 }
                 state::for_unit(&self.cfg.run_dir, id).set(keys::RESTART_REQUESTED, "1");
                 let _ = Command::new("s6-svc").arg("-r").arg(self.scandir(id)).status().await;
-                self.wait_ready(id, unit, Some(sv.pid)).await
+                let r = self.wait_ready(id, unit, Some(sv.pid)).await;
+                self.job_outcome(id, started_at, r)
             }
             Some(Kind::Oneshot) if active.contains(id) => {
                 self.run_runner("down", id, None).await;
-                if self.run_runner("up", id, None).await {
-                    "done"
-                } else {
-                    "failed"
-                }
+                let r = if self.run_runner("up", id, None).await { "done" } else { "failed" };
+                self.job_outcome(id, started_at, r)
             }
             _ if only_if_active => "done",
             _ => self.do_start(id, unit, false).await,

@@ -272,6 +272,13 @@ pub fn parse_timespan_usec(v: &str, default_unit_usec: u64) -> Option<u64> {
     any.then_some(total)
 }
 
+/// A Timeout*Sec= value. As in systemd, 0 disables the timeout like
+/// "infinity" does (docker.service has TimeoutStartSec=0), so both give
+/// u64::MAX.
+pub fn parse_timeout_usec(v: &str) -> Option<u64> {
+    parse_timespan_usec(v, 1_000_000).map(|u| if u == 0 { u64::MAX } else { u })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +306,8 @@ mod tests {
         assert_eq!(parse_timespan_usec("90", 1_000_000), Some(90_000_000));
         assert_eq!(parse_timespan_usec("1min 30s", 1_000_000), Some(90_000_000));
         assert_eq!(parse_timespan_usec("500ms", 1_000_000), Some(500_000));
+        assert_eq!(parse_timeout_usec("0"), Some(u64::MAX));
+        assert_eq!(parse_timeout_usec("infinity"), Some(u64::MAX));
+        assert_eq!(parse_timeout_usec("90"), Some(90_000_000));
     }
 }

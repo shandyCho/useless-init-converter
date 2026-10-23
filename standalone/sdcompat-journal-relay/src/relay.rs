@@ -18,7 +18,7 @@
 //! survive; other fields are dropped. Messages are dropped too when syslog
 //! is not up or does not keep up: the relay must never block its clients.
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
@@ -232,11 +232,7 @@ impl Relay {
         std::thread::spawn(move || loop {
             let Ok((data, fds, cred)) = crate::scm::recv_max(dgram.as_raw_fd(), DGRAM_MAX) else { continue };
             let data = match fds.into_iter().next() {
-                Some(fd) if data.is_empty() => {
-                    let mut buf = Vec::new();
-                    let _ = std::fs::File::from(fd).take(MEMFD_MAX).read_to_end(&mut buf);
-                    buf
-                }
+                Some(fd) if data.is_empty() => read_from_start(std::fs::File::from(fd)),
                 _ => data,
             };
             if let Some(mut e) = native_entry(&parse_native(&data)) {
@@ -299,9 +295,44 @@ pub fn serve_forever(dir: &Path, syslog: &Path, ready_fd: Option<RawFd>) -> i32 
     }
 }
 
+/// The entry in a memfd (sd_journal_sendv() uses one for an entry too big
+/// for a datagram), read from the start as journald does: the sender wrote
+/// it with writev(), so the shared file offset is at its end. Regular files
+/// only, as journald: reading a pipe whose writer stays open would block
+/// this socket's only thread, and every sender once the socket's queue is
+/// full (the socket is world-writable).
+fn read_from_start(mut f: std::fs::File) -> Vec<u8> {
+    if !f.metadata().map(|m| m.file_type().is_file()).unwrap_or(false) {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    let _ = f.seek(SeekFrom::Start(0));
+    let _ = f.take(MEMFD_MAX).read_to_end(&mut buf);
+    buf
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memfd_from_start() {
+        use std::io::Write;
+        let mut f = tempfile_in_tmp();
+        f.write_all(b"MESSAGE=big\n").unwrap();
+        // The offset is at the end now, as after the sender's writev().
+        assert_eq!(read_from_start(f), b"MESSAGE=big\n");
+        // Not a regular file: ignored at once, not read until EOF.
+        let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert!(read_from_start(std::fs::File::from(std::os::fd::OwnedFd::from(a))).is_empty());
+    }
+
+    fn tempfile_in_tmp() -> std::fs::File {
+        let p = std::env::temp_dir().join(format!("sdcompat-relay-memfd-{}", std::process::id()));
+        let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&p).unwrap();
+        let _ = std::fs::remove_file(&p);
+        f
+    }
 
     #[test]
     fn native_fields() {

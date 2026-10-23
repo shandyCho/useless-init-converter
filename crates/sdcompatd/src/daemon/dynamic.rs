@@ -133,7 +133,7 @@ impl Daemon {
         let stop = unit
             .get("Service", "TimeoutStopSec")
             .or_else(|| unit.get("Service", "TimeoutSec"))
-            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
+            .and_then(|v| crate::unit::parse_timeout_usec(&v))
             .unwrap_or(90_000_000);
         if stop != u64::MAX {
             write(dir.join("timeout-kill"), &format!("{}\n", stop / 1000), false).map_err(e)?;
@@ -386,9 +386,11 @@ impl Daemon {
                 if !unit.get_all("Service", "ExecStop").is_empty() {
                     self.run_runner("stop-exec", id, Some(sv.pid)).await;
                 }
+                let started_at = crate::util::now_realtime_usec();
                 state::for_unit(&self.cfg.run_dir, id).set(keys::RESTART_REQUESTED, "1");
                 let _ = Command::new("s6-svc").arg("-r").arg(self.scandir(id)).status().await;
-                self.wait_ready(id, unit, Some(sv.pid)).await
+                let r = self.wait_ready(id, unit, Some(sv.pid)).await;
+                self.job_outcome(id, started_at, r)
             }
             Some(_) => {
                 self.dyn_stop(id, unit).await;

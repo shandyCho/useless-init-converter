@@ -360,15 +360,16 @@ impl Runner {
             unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
         }
 
-        if self.is_root && !cmd.privileged {
-            if let Some(bset) = sandbox::bounding_set(&self.unit) {
-                if let Err(e) = sandbox::drop_bounding_set(bset) {
-                    return (EXIT_CAPABILITIES, e);
-                }
+        let bset = if self.is_root && !cmd.privileged { sandbox::bounding_set(&self.unit) } else { None };
+        if let Some(bset) = bset {
+            if let Err(e) = sandbox::drop_bounding_set(bset) {
+                return (EXIT_CAPABILITIES, e);
             }
         }
 
-        let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities");
+        // As systemd, ambient capabilities outside the bounding set are left
+        // out: capset() would refuse them and fail the start.
+        let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities").map(|a| bset.map_or(a, |b| a & b));
         let switch_ids = !cmd.privileged && !cmd.no_setuid && self.is_root;
         if let (Some(u), true) = (&self.user, switch_ids) {
             if u.uid != 0 {
@@ -745,13 +746,8 @@ impl Runner {
     }
 
     fn start_timeout(&self) -> Option<std::time::Duration> {
-        self.unit
-            .get("Service", "TimeoutStartSec")
-            .or_else(|| self.unit.get("Service", "TimeoutSec"))
-            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
-            .or(Some(90_000_000))
-            .filter(|&u| u != u64::MAX && u != 0)
-            .map(std::time::Duration::from_micros)
+        let u = self.unit.start_timeout_usec();
+        (u != u64::MAX).then(|| std::time::Duration::from_micros(u))
     }
 
     /// A required unit (Requires=/Requisite=/BindsTo=) that failed. s6-rc
@@ -1372,13 +1368,8 @@ impl Runner {
         let unit_uid = Some(self.user.as_ref().map(|u| u.uid).unwrap_or_else(|| unsafe { libc::geteuid() }));
 
         let notify = self.notify_fd;
-        let timeout_ms = self
-            .unit
-            .get("Service", "TimeoutStartSec")
-            .or_else(|| self.unit.get("Service", "TimeoutSec"))
-            .and_then(|v| crate::unit::parse_timespan_usec(&v, 1_000_000))
-            .map(|u| if u == u64::MAX { -1 } else { (u / 1000) as i32 })
-            .unwrap_or(90_000);
+        // None: no start timeout (TimeoutStartSec=infinity or 0).
+        let timeout_us = self.start_timeout().map(|t| t.as_micros().min(u64::MAX as u128) as u64);
         let st_dir = self.st.dir.clone();
         let store = self.cfg.run_dir.join("fdstore");
         let unit_id = self.unit.id.clone();
@@ -1405,7 +1396,7 @@ impl Runner {
                     }
                 }
             };
-            let deadline = (timeout_ms >= 0).then(|| util::now_monotonic_usec() + timeout_ms as u64 * 1000);
+            let deadline = timeout_us.map(|t| util::now_monotonic_usec().saturating_add(t));
             loop {
                 let mut pfds = [
                     libc::pollfd { fd, events: libc::POLLIN, revents: 0 },
@@ -1447,7 +1438,13 @@ impl Runner {
                         } else if let Some(p) = line.strip_prefix("MAINPID=") {
                             st.set(keys::MAIN_PID, p);
                         } else if let Some(n) = line.strip_prefix("FDNAME=") {
-                            fdname = n.to_string();
+                            // systemd's fdname_is_valid(): printable ASCII
+                            // without ':', at most 255 bytes; else "stored".
+                            if n.len() <= 255 && n.bytes().all(|b| (b' '..=b'~').contains(&b) && b != b':') {
+                                fdname = n.to_string();
+                            } else {
+                                eprintln!("sdcompat[{unit_id}]: invalid FDNAME=, ignored");
+                            }
                         } else if line == "FDSTORE=1" {
                             store_fds = true;
                         } else if line == "FDSTOREREMOVE=1" {

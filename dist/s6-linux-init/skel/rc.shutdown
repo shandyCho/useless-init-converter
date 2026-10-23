@@ -6,14 +6,18 @@
 # s6-linux-init-shutdownd waits for this script without a time limit, so a
 # stop that never finishes would keep the machine up for good. After 3
 # minutes s6-rc gives up (exit 2) and shutdownd kills what is left, as
-# systemd ends a shutdown its unit stop timeouts couldn't.
+# systemd ends a shutdown its unit stop timeouts couldn't. s6-rc starts its
+# -t clock only once it has the lock, and -b waits for the lock with no
+# limit: a change that never ends (the boot's, or a start sdcompatd began
+# before the marker, of a unit with TimeoutStartSec=infinity) would hold
+# it for good. So timeout(1) bounds the whole call (137: killed).
 mkdir -p /run/sdcompat && : > /run/sdcompat/shutting-down
 echo "sdcompat: shutdown starts" > /dev/kmsg 2>/dev/null
-s6-rc -v2 -t 180000 -bDa change
+timeout -s KILL 180 s6-rc -v2 -t 180000 -bDa change
 rc=$?
 case $rc in
 0) ;;
-2) echo "sdcompat: services still not down after 180 s, killing the rest" > /dev/kmsg 2>/dev/null ;;
+2|137) echo "sdcompat: services still not down after 180 s, killing the rest" > /dev/kmsg 2>/dev/null ;;
 *) echo "sdcompat: s6-rc change exited $rc" > /dev/kmsg 2>/dev/null ;;
 esac
 exit "$rc"

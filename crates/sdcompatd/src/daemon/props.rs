@@ -14,7 +14,7 @@ use crate::execcmd;
 use crate::install;
 use crate::loader::{Loader, Unit};
 use crate::state::{self, keys};
-use crate::unit::parse_timespan_usec;
+use crate::unit::{parse_timeout_usec, parse_timespan_usec};
 use crate::util;
 
 pub type Props = BTreeMap<String, Value<'static>>;
@@ -42,6 +42,11 @@ fn timespan(unit: &Unit, sec: &str, keys_: &[&str], default: u64) -> u64 {
         .find_map(|k| unit.get(sec, k))
         .and_then(|v| parse_timespan_usec(&v, 1_000_000))
         .unwrap_or(default)
+}
+
+/// A Timeout*Sec= setting as a property: 0 means infinity, as in systemd.
+fn timeout(unit: &Unit, sec: &str, keys_: &[&str], default: u64) -> u64 {
+    keys_.iter().find_map(|k| unit.get(sec, k)).and_then(|v| parse_timeout_usec(&v)).unwrap_or(default)
 }
 
 impl Daemon {
@@ -459,9 +464,9 @@ impl Daemon {
         p.insert("RestartSteps".into(), Value::from(0u32));
         p.insert("RestartMaxDelayUSec".into(), Value::from(u64::MAX));
         p.insert("RestartUSecNext".into(), Value::from(timespan(unit, "Service", &["RestartSec"], 100_000)));
-        p.insert("TimeoutStartUSec".into(), Value::from(timespan(unit, "Service", &["TimeoutStartSec", "TimeoutSec"], 90_000_000)));
-        p.insert("TimeoutStopUSec".into(), Value::from(timespan(unit, "Service", &["TimeoutStopSec", "TimeoutSec"], 90_000_000)));
-        p.insert("TimeoutAbortUSec".into(), Value::from(timespan(unit, "Service", &["TimeoutAbortSec", "TimeoutStopSec"], 90_000_000)));
+        p.insert("TimeoutStartUSec".into(), Value::from(unit.start_timeout_usec()));
+        p.insert("TimeoutStopUSec".into(), Value::from(timeout(unit, "Service", &["TimeoutStopSec", "TimeoutSec"], 90_000_000)));
+        p.insert("TimeoutAbortUSec".into(), Value::from(timeout(unit, "Service", &["TimeoutAbortSec", "TimeoutStopSec", "TimeoutSec"], 90_000_000)));
         p.insert("TimeoutStartFailureMode".into(), s("terminate"));
         p.insert("TimeoutStopFailureMode".into(), s("terminate"));
         p.insert("RuntimeMaxUSec".into(), Value::from(u64::MAX));
@@ -600,7 +605,7 @@ impl Daemon {
         p.insert("What".into(), s(unit.get("Mount", "What").unwrap_or_default()));
         p.insert("Options".into(), s(unit.get("Mount", "Options").unwrap_or_default()));
         p.insert("Type".into(), s(unit.get("Mount", "Type").unwrap_or_default()));
-        p.insert("TimeoutUSec".into(), Value::from(timespan(unit, "Mount", &["TimeoutSec"], 90_000_000)));
+        p.insert("TimeoutUSec".into(), Value::from(timeout(unit, "Mount", &["TimeoutSec"], 90_000_000)));
         p.insert("ControlPID".into(), Value::from(0u32));
         p.insert("DirectoryMode".into(), Value::from(0o755u32));
         p.insert("SloppyOptions".into(), Value::from(unit.get_bool("Mount", "SloppyOptions", false)));

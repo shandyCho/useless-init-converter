@@ -432,15 +432,11 @@ pub fn plan(cfg: &Config) -> Plan {
             }
         }
 
-        let timeout_start = unit
-            .get("Service", "TimeoutStartSec")
-            .or_else(|| unit.get("Service", "TimeoutSec"))
-            .and_then(|v| sdcompat_base::unit::parse_timespan_usec(&v, 1_000_000))
-            .unwrap_or(90_000_000);
+        let timeout_start = unit.start_timeout_usec();
         let timeout_stop = unit
             .get("Service", "TimeoutStopSec")
             .or_else(|| unit.get("Service", "TimeoutSec"))
-            .and_then(|v| sdcompat_base::unit::parse_timespan_usec(&v, 1_000_000))
+            .and_then(|v| sdcompat_base::unit::parse_timeout_usec(&v))
             .unwrap_or(90_000_000);
         let restart_sec = unit
             .get("Service", "RestartSec")
@@ -470,8 +466,9 @@ pub fn plan(cfg: &Config) -> Plan {
                 warnings,
                 // The runner enforces TimeoutStartSec= itself (soft failure);
                 // s6-rc's own timeout is only a backstop.
-                timeout_up_ms: if timeout_start == u64::MAX { 0 } else { ms(timeout_start) + 15_000 },
-                timeout_down_ms: ms(timeout_stop),
+                // s6-rc-compile takes 32-bit milliseconds.
+                timeout_up_ms: if timeout_start == u64::MAX { 0 } else { (ms(timeout_start) + 15_000).min(u32::MAX as u64) },
+                timeout_down_ms: ms(timeout_stop).min(u32::MAX as u64),
                 timeout_finish_ms: ms(restart_sec).saturating_add(5000),
                 down_signal,
             },
@@ -798,6 +795,16 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
     run(&mut cmd)?;
 
     let live_compiled = cfg.live_dir.join("compiled");
+    // The database running now. After a rollback boot (sdcompat.db=previous)
+    // it is "previous", not "current", and it has to stay the one to roll
+    // back to: taking "current" would make the database the user fled from
+    // "previous" and delete the good one below.
+    let db_root_abs = fs::canonicalize(&db_root).unwrap_or_else(|_| db_root.clone());
+    let running = fs::canonicalize(&live_compiled)
+        .ok()
+        .and_then(|c| c.parent().map(Path::to_path_buf))
+        .filter(|d| d.parent() == Some(db_root_abs.as_path()) && d != &db_dir)
+        .and_then(|d| d.file_name().map(|n| PathBuf::from("db").join(n)));
     let mut updated_live = false;
     if update_live && fs::symlink_metadata(&live_compiled).is_ok() {
         let abs = fs::canonicalize(&compiled).map_err(|e| e.to_string())?;
@@ -835,7 +842,7 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
 
     // Keep the database we are replacing as "previous" (rollback with
     // sdcompat.db=previous on the kernel command line).
-    if let Ok(prev) = fs::read_link(cfg.state_dir.join("current")) {
+    if let Some(prev) = running.or_else(|| fs::read_link(cfg.state_dir.join("current")).ok()) {
         for (link, target) in [("previous", prev.clone()), ("compiled.previous", prev.join("compiled"))] {
             let tmp = cfg.state_dir.join(format!(".{link}.tmp"));
             let _ = fs::remove_file(&tmp);

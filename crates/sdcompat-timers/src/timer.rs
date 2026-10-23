@@ -48,8 +48,13 @@ impl Runner {
             .min()
             .unwrap_or(0);
 
-        let unit_active = self.target_st.get_u64("inactive-exit-mono").max(self.st.get_u64(LAST_TRIGGER_MONO));
-        let unit_inactive = self.target_st.get_u64("inactive-enter-mono");
+        // As systemd: relative to the unit's last (de)activation or this
+        // timer's last trigger, whichever is later. Without the trigger, a
+        // unit still running (or skipped by a condition) after the trigger
+        // would leave the elapse in the past and re-trigger at once.
+        let last_trigger = self.st.get_u64(LAST_TRIGGER_MONO);
+        let unit_active = self.target_st.get_u64("inactive-exit-mono").max(last_trigger);
+        let unit_inactive = self.target_st.get_u64("inactive-enter-mono").max(last_trigger);
         let mut mono = u64::MAX;
         for (key, _, us) in monotonic(&self.timer) {
             let at = match key {
@@ -57,11 +62,15 @@ impl Runner {
                     if self.fired_once.contains(&(key, us)) {
                         continue;
                     }
-                    if key == "OnActiveSec" {
-                        self.started_mono + us
-                    } else {
-                        us
+                    let at = if key == "OnActiveSec" { self.started_mono + us } else { us };
+                    // As systemd: a one-time elapse that had passed when this
+                    // timer (re)started is done if the timer has triggered
+                    // since boot (dnf-makecache's OnBootSec= on a restart).
+                    // fired_once covers this run's own elapses.
+                    if last_trigger > 0 && at < self.started_mono {
+                        continue;
                     }
+                    at
                 }
                 "OnUnitActiveSec" if unit_active > 0 => unit_active + us,
                 "OnUnitInactiveSec" if unit_inactive > 0 => unit_inactive + us,
@@ -152,7 +161,9 @@ pub fn cmd_timer_run(cfg: Config, name: &str) -> i32 {
             eprintln!("sdcompat[{name}]: cannot parse OnCalendar={raw}, ignored");
         }
     }
-    let target = trigger_unit(&timer);
+    // The unit's own name: its runner keeps its state under that, also when
+    // Unit= names an alias (dnf-makecache.timer: Unit=dnf5-makecache.service).
+    let target = ld.load(&trigger_unit(&timer)).id;
     let st = state::for_unit(&cfg.run_dir, &timer.id);
     st.ensure();
     st.clear(ELAPSED);
@@ -210,6 +221,12 @@ pub fn cmd_timer_run(cfg: Config, name: &str) -> i32 {
             r.st.set(NEXT_REALTIME, &next_rt.to_string());
             r.st.set(NEXT_MONOTONIC, &next_mono.to_string());
             if next_rt == 0 && next_mono == 0 {
+                // OnUnitActiveSec=/OnUnitInactiveSec= are armed once the unit
+                // has run or the timer has triggered: keep waiting for that.
+                if monotonic(&r.timer).iter().any(|(k, _, _)| matches!(*k, "OnUnitActiveSec" | "OnUnitInactiveSec")) {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    continue;
+                }
                 // RemainAfterElapse=: stay active, nothing left to do.
                 r.st.set(ELAPSED, "1");
                 loop {

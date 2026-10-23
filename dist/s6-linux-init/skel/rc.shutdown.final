@@ -22,6 +22,7 @@ if [ ! -w "$d" ]; then
 fi
 if [ ! -w "$d" ]; then
     echo "sdcompat: $d is read-only, the shutdown logs are not kept" > /dev/console 2>/dev/null
+    [ -z "$remounted" ] || mount -o remount,ro "$remounted" 2>/dev/null
     exit 0
 fi
 cat /run/uncaught-logs/@* /run/uncaught-logs/current > "$d/last-shutdown-console.log" 2>/dev/null

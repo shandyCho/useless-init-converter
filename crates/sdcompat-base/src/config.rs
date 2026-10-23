@@ -329,8 +329,10 @@ impl Config {
         &self.unit_path[0]
     }
 
+    /// RUN_DIR/units/<unit>, as state::for_unit names it: a name that is
+    /// not a single path component is escaped, so "../x.scope" stays inside.
     pub fn unit_run_dir(&self, unit: &str) -> PathBuf {
-        self.run_dir.join("units").join(unit)
+        self.run_dir.join("units").join(&*crate::util::path_component(unit))
     }
 
     /// Arguments generated scripts pass to the runner so it loads this config.

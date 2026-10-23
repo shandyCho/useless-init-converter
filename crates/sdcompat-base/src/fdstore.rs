@@ -113,6 +113,11 @@ fn connect(path: &Path) -> Option<OwnedFd> {
 
 /// Client: store one fd; `max` is how many the key may hold.
 pub fn put(path: &Path, key: &str, name: &str, fd: RawFd, max: usize) -> Result<(), String> {
+    // NUL separates the fields: "x\0<n>" as a name would turn the retry
+    // below into a request with the client's own <max>.
+    if key.contains('\0') || name.contains('\0') {
+        return Err("invalid fd store key or name".into());
+    }
     match put_msg(path, &format!("PUT\0{key}\0{name}\0{max}"), fd) {
         // A store from before <max> was added (still running until the next
         // boot after an upgrade) reads the limit from the unit file itself.
@@ -195,6 +200,22 @@ pub fn del(path: &Path, key: &str, name: Option<&str>) {
     }
 }
 
+/// Drop stored fds whose other end hung up, as systemd does with FDSTORE=
+/// fds (POLLHUP/POLLERR): journald stores one per stdout stream and never
+/// removes it, so the key would grow until the store runs out of fds.
+/// Held sockets and stdio ("#" keys) stay: a stdin pipe may be at EOF
+/// before its service takes it.
+fn prune_hung_up(key: &str, list: &mut Vec<(String, OwnedFd)>) {
+    if key.contains('#') {
+        return;
+    }
+    list.retain(|(_, fd)| {
+        let mut p = libc::pollfd { fd: fd.as_raw_fd(), events: 0, revents: 0 };
+        let r = unsafe { libc::poll(&mut p, 1, 0) };
+        !(r > 0 && p.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0)
+    });
+}
+
 /// The serving side.
 #[derive(Clone, Default)]
 pub struct Store {
@@ -235,6 +256,8 @@ impl Store {
         std::thread::spawn(move || loop {
             let c = unsafe { libc::accept4(lfd.as_raw_fd(), std::ptr::null_mut(), std::ptr::null_mut(), libc::SOCK_CLOEXEC) };
             if c < 0 {
+                // EMFILE and the like stay until something is freed: don't spin.
+                std::thread::sleep(std::time::Duration::from_millis(100));
                 continue;
             }
             let conn = unsafe { OwnedFd::from_raw_fd(c) };
@@ -267,6 +290,7 @@ impl Store {
                 };
                 let mut map = self.inner.lock().unwrap();
                 let list = map.entry(parts[1].clone()).or_default();
+                prune_hung_up(&parts[1], list);
                 if list.len() >= max {
                     return reply(b"ERR fd store full");
                 }
@@ -274,13 +298,15 @@ impl Store {
                 reply(b"OK");
             }
             Some("GET") if parts.len() == 2 => {
-                let dups: Vec<(String, RawFd)> = self
-                    .inner
-                    .lock()
-                    .unwrap()
+                let mut map = self.inner.lock().unwrap();
+                if let Some(v) = map.get_mut(&parts[1]) {
+                    prune_hung_up(&parts[1], v);
+                }
+                let dups: Vec<(String, RawFd)> = map
                     .get(&parts[1])
                     .map(|v| v.iter().map(|(n, f)| (n.clone(), f.as_raw_fd())).collect())
                     .unwrap_or_default();
+                drop(map);
                 for (n, fd) in dups {
                     let _ = send(conn.as_raw_fd(), format!("FD\0{n}").as_bytes(), Some(fd));
                 }
@@ -334,6 +360,30 @@ mod tests {
         assert_eq!(get(&sock, "a.service").len(), 1);
         del(&sock, "a.service", None);
         assert!(get(&sock, "a.service").is_empty());
+        // A NUL in the name would add a field (and the client's own <max>).
+        assert!(put(&sock, "a.service", "x\099", fd, 1).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hung_up_fds_go() {
+        let dir = std::env::temp_dir().join(format!("sdcompat-fdstore-hup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sock = dir.join("s");
+        Store::default().serve(&sock, |_| 0).unwrap();
+        // A journald stream: once its other end is closed the stored fd
+        // hangs up and goes, so the key has room again.
+        let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+        put(&sock, "j.service", "stored", a.as_raw_fd(), 1).unwrap();
+        drop(b);
+        let f = std::fs::File::open("/dev/null").unwrap();
+        put(&sock, "j.service", "stored", f.as_raw_fd(), 1).unwrap();
+        assert_eq!(get(&sock, "j.service").len(), 1);
+        // Held sockets and stdio ("#" keys) stay.
+        let (c, d) = std::os::unix::net::UnixStream::pair().unwrap();
+        put(&sock, "j.service#stdio", "stdin", c.as_raw_fd(), 3).unwrap();
+        drop(d);
+        assert_eq!(get(&sock, "j.service#stdio").len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

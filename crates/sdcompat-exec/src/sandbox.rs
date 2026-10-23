@@ -265,6 +265,15 @@ impl Sandbox {
                 for d in ["/dev", "/proc", "/sys"] {
                     rw.insert(d.to_string());
                 }
+                // As systemd, /home, /root and /run/user stay writable; they
+                // are ProtectHome='s (accounts-daemon creates home dirs).
+                if self.protect_home.is_empty() {
+                    for d in ["/home", "/root", "/run/user"] {
+                        if Path::new(d).is_dir() {
+                            rw.insert(d.to_string());
+                        }
+                    }
+                }
             }
             other => return Err(format!("unsupported ProtectSystem={other}")),
         }
@@ -306,10 +315,14 @@ impl Sandbox {
             bind_rw(p)?;
         }
 
+        // Writable even under ProtectSystem=strict: the private dirs live in
+        // RUN_DIR, which strict made read-only, and a bind keeps that flag.
         if let Some((tmp, vtmp)) = &self.private_tmp {
             bind(&tmp.display().to_string(), "/tmp")?;
+            set_readonly("/tmp", false)?;
             if Path::new("/var/tmp").is_dir() {
                 bind(&vtmp.display().to_string(), "/var/tmp")?;
+                set_readonly("/var/tmp", false)?;
             }
         }
 
@@ -575,7 +588,11 @@ pub fn bounding_set(unit: &Unit) -> Option<u64> {
     if on("ProtectClock") {
         drop |= cap("SYS_TIME") | cap("WAKE_ALARM");
     }
-    let set = parse_capset(unit, "CapabilityBoundingSet");
+    let set = parse_capset(unit, "CapabilityBoundingSet").or_else(|| {
+        // A lone `CapabilityBoundingSet=` is not "never set": systemd.exec(5)
+        // resets the bounding set to the empty set (upower, systemd-localed).
+        unit.file.keys_in("Service").contains(&"CapabilityBoundingSet").then_some(0)
+    });
     if drop == 0 {
         return set;
     }
@@ -685,5 +702,17 @@ mod tests {
         // No sandboxing setting: never implied; explicit =yes always wins.
         assert!(!no_new_privileges(&test_unit("[Service]\nUser=x\n"), false));
         assert!(no_new_privileges(&test_unit("[Service]\nNoNewPrivileges=yes\n"), true));
+    }
+
+    #[test]
+    fn empty_bounding_set() {
+        // `CapabilityBoundingSet=` alone empties the set (upower, localed).
+        assert_eq!(bounding_set(&test_unit("[Service]\nCapabilityBoundingSet=\n")), Some(0));
+        assert_eq!(bounding_set(&test_unit("[Service]\nCapabilityBoundingSet=\nProtectKernelModules=yes\n")), Some(0));
+        // Later assignments add to the reset set; never set leaves it alone.
+        let net = 1u64 << cap_number("NET_ADMIN").unwrap();
+        let reset = "[Service]\nCapabilityBoundingSet=CAP_SYS_ADMIN\nCapabilityBoundingSet=\nCapabilityBoundingSet=CAP_NET_ADMIN\n";
+        assert_eq!(bounding_set(&test_unit(reset)), Some(net));
+        assert_eq!(bounding_set(&test_unit("[Service]\nUser=x\n")), None);
     }
 }

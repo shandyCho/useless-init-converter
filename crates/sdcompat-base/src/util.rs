@@ -352,9 +352,25 @@ pub fn tee_stderr_to_syslog(ident: &'static CStr) {
     };
     std::thread::spawn(move || {
         let mut orig = orig;
-        for line in io::BufReader::new(r).lines() {
-            let Ok(line) = line else { break };
-            let _ = writeln!(orig, "{line}");
+        let mut r = io::BufReader::new(r);
+        let mut buf = Vec::new();
+        // Bytes, not lines(): a line that is not UTF-8 (a child's output)
+        // must not end this thread, or fd 2 becomes a pipe nobody reads:
+        // every eprintln! then panics and every child dies of SIGPIPE.
+        loop {
+            buf.clear();
+            match r.read_until(b'\n', &mut buf) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+            if buf.last() == Some(&b'\n') {
+                buf.pop();
+            }
+            let _ = orig.write_all(&buf);
+            let _ = orig.write_all(b"\n");
+            let line = String::from_utf8_lossy(&buf).replace('\0', "");
             let Ok(c) = CString::new(line) else { continue };
             unsafe { libc::syslog(libc::LOG_NOTICE, c"%s".as_ptr(), c.as_ptr()) };
         }

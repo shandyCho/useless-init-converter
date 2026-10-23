@@ -76,6 +76,43 @@ fn parse_internal(args: &[String]) -> Internal {
     }
 }
 
+/// The unit could not be set up (User= or Group= that does not exist, a
+/// missing EnvironmentFile=, the unit file gone). As for any other failed
+/// start, s6-rc must still see it as done (every start is reported as
+/// successful; the result goes to the state files), or the boot's change
+/// waits for its timeout and skips the units after it: `run` records the
+/// failure, reports ready and waits like a unit whose requirement failed;
+/// `finish` says "don't restart" instead of failing every second; `up`
+/// records it and succeeds.
+fn setup_failed(cfg: &Config, cmd: &str, unit: &str, e: &str) -> i32 {
+    use state::keys;
+    eprintln!("sdcompat-runner: {unit}: {e}");
+    let st = state::for_unit(&cfg.run_dir, &loader::Loader::new(cfg).load(unit).id);
+    match cmd {
+        "run" | "up" => {
+            st.stamp(keys::INACTIVE_EXIT);
+            st.set(keys::RESULT, "resources");
+            st.set(keys::START_FAILED, e);
+            st.stamp(keys::INACTIVE_ENTER);
+            if cmd == "up" {
+                return 0;
+            }
+            unsafe {
+                if libc::fcntl(3, libc::F_GETFD) >= 0 {
+                    libc::write(3, b"\n".as_ptr() as *const libc::c_void, 1);
+                    libc::close(3);
+                }
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        "finish" => 125,
+        "down" => 0,
+        _ => 1,
+    }
+}
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut config_path: Option<PathBuf> = None;
@@ -105,7 +142,10 @@ fn main() {
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
     let a = parse_internal(&args[1..]);
-    let r = runner::Runner::new(cfg, &a.unit).unwrap_or_else(|e| die(&e));
+    let r = match runner::Runner::new(cfg.clone(), &a.unit) {
+        Ok(r) => r,
+        Err(e) => exit(setup_failed(&cfg, &cmd, &a.unit, &e)),
+    };
     let code = match cmd.as_str() {
         "run" => r.cmd_run(),
         "finish" => {

@@ -453,7 +453,12 @@ pub fn restrictions(unit: &Unit) -> Vec<Restriction> {
     if on("RestrictSUIDSGID") {
         let mut rules = vec![rule("openat2", libc::ENOSYS, vec![])];
         for bit in [libc::S_ISUID as u64, libc::S_ISGID as u64] {
-            for (sc, mode_arg) in [("chmod", 1), ("fchmod", 1), ("fchmodat", 2), ("fchmodat2", 2), ("creat", 1)] {
+            // As systemd's seccomp_restrict_sxid(): mkdir() and mknod() take
+            // a mode too (mknod(S_IFREG|S_ISUID) makes a setuid file).
+            for (sc, mode_arg) in [
+                ("chmod", 1), ("fchmod", 1), ("fchmodat", 2), ("fchmodat2", 2), ("creat", 1),
+                ("mkdir", 1), ("mkdirat", 2), ("mknod", 1), ("mknodat", 2),
+            ] {
                 rules.push(rule(sc, libc::EPERM, vec![arg_has(mode_arg, bit)]));
             }
             for flag in [libc::O_CREAT as u64, libc::O_TMPFILE as u64] {

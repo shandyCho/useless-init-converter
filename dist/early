@@ -53,6 +53,20 @@ mount-api)
         mknod -m 0000 /run/systemd/inaccessible/chr c 0 0
         mknod -m 0000 /run/systemd/inaccessible/blk b 0 0
     fi
+    # kmod-static-nodes and systemd-tmpfiles-setup-dev-early, which EXCLUDE
+    # drops: the nodes of modules that load when their node is first opened
+    # (/dev/net/tun for podman and VPNs, /dev/uinput, /dev/vhost-net). The
+    # initramfs made only those of its own modules; without these, opening
+    # one fails with ENOENT and the module never loads.
+    kver=$(uname -r)
+    if [ -s "/lib/modules/$kver/modules.devname" ] && [ -x /usr/bin/kmod ]; then
+        mkdir -p /run/tmpfiles.d
+        /usr/bin/kmod static-nodes --format=tmpfiles --output=/run/tmpfiles.d/static-nodes.conf \
+            || warn "kmod static-nodes exited $?"
+    fi
+    /usr/bin/systemd-tmpfiles --prefix=/dev --create --boot --graceful
+    rc=$?
+    case $rc in 0|65|73) ;; *) warn "systemd-tmpfiles --prefix=/dev exited $rc" ;; esac
     if [ -e /sys/fs/selinux/enforce ] && command -v restorecon >/dev/null; then
         restorecon -R /dev /run 2>/dev/null
     fi

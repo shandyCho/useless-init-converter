@@ -567,9 +567,15 @@ impl Daemon {
             }
         }
         if self.dynamic_kind(id).is_some() || self.can_be_dynamic(id, unit) {
+            // Not unit_status(): it reports this very job as "activating", so
+            // try-restart would start an inactive instance (user@UID after
+            // logout).
             let active = || async {
-                let a = self.active_atoms().await;
-                matches!(self.unit_status(id, &a, unit).await.active, "active" | "activating" | "reloading")
+                match self.dynamic_kind(id) {
+                    Some(Kind::Oneshot) => self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false),
+                    Some(_) => self.svstat(id).await.map(|s| s.up).unwrap_or(false),
+                    None => false,
+                }
             };
             return match jtype {
                 "start" => self.dyn_start(id, unit).await,
@@ -614,8 +620,9 @@ impl Daemon {
                     self.do_restart(id, unit, false).await
                 }
             }
+            // Nothing for an inactive unit (do_restart checks that too).
             "reload-or-try-restart" => {
-                if Self::can_reload(unit) {
+                if Self::can_reload(unit) && self.active_atoms().await.contains(id) {
                     self.do_reload(id).await
                 } else {
                     self.do_restart(id, unit, true).await
@@ -855,6 +862,9 @@ impl Daemon {
         self.require_privileged(c, msg).await?;
         type Aux = Vec<(String, Vec<(String, OwnedValue)>)>;
         let (name, mode, props, aux): (String, String, Vec<(String, OwnedValue)>, Aux) = Self::args(msg)?;
+        // The name becomes a cgroup and a state directory: as for the job
+        // methods, only valid unit names (no '/', no "..").
+        Self::valid_name(&name)?;
         if name.ends_with(".service") || name.ends_with(".timer") || name.ends_with(".path") {
             return self.start_transient_file(c, msg, &name, &mode, &props, &aux).await;
         }
