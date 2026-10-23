@@ -12,6 +12,12 @@ starting work; append a new session entry when you finish.
 - Approach chosen by the owner: a **translation layer**. Programs keep using
   systemd's interfaces (`systemctl`, libsystemd, D-Bus), and sdcompat carries
   them out with s6-rc.
+- Corrected by the owner on 2026-10-23: the admin manages the system with
+  the **s6 ecosystem's own tools** (s6-frontend's `s6`, s6-rc, including
+  `s6 set` and the repository); systemd's commands are used only in a
+  limited way. A pure s6 Fedora is impossible, so sdcompat is the bridge,
+  but s6's tools are first-class (see the 2026-10-23 "s6-rc repository"
+  session).
 - The owner builds Fedora packages and tests in a Fedora VM. The development
   machine is Artix Linux (s6 init), user `fraufaust37`.
 - The owner's disk is encrypted with LUKS2.
@@ -4665,3 +4671,175 @@ The owner's s6 boot is repaired. The fix is committed in `885df66`.
 3. On a systemd boot (no /run/s6-rc): `sudo sdcompat reload` compiles
    only, as before (the Version check is a guard, not the usual path).
 4. Earlier next steps (power-off retest, rc.shutdown.final with /var).
+
+## Session: 2026-10-23: s6-rc repository and `s6 set`
+
+The owner reported `s6 set list` failing ("unable to lock
+/var/lib/s6-rc/repository") and corrected the project goal: s6 is PID 1
+and the admin uses s6-frontend and s6-rc, with systemd's commands only in
+a limited way (Project goal updated). The earlier decision "do not use
+`s6 set`/`s6 live install`" (`88bb40d`) is reversed.
+
+Decisions asked of the owner (AskUserQuestion):
+- systemd's enable state is only a new service's first prescription; after
+  that the s6 set decides (`systemctl enable/disable` keeps writing the
+  symlinks but does not change what boots).
+- A reload (daemon-reload, `sdcompat reload`, dnf's file triggers) commits
+  and installs the set automatically.
+- No regeneration at boot (rc.init boots the installed database).
+
+### Design (read in s6-rc 0.8.0.2 and s6-frontend 0.2.0.0 sources)
+
+- sdcompat-gen writes the translated units as an s6-rc **store**
+  (STATE_DIR/db/<stamp>/source; STORE_DIR, default STATE_DIR/store, is a
+  symlink to the newest, swapped atomically and put back on failure). The
+  repository (REPO_DIR, default /var/lib/s6-rc/repository, s6's default)
+  links [STORE_DIR] + the EXTRA_SOURCE dirs that exist (default
+  /etc/sdcompat/s6:/etc/s6/sources; later stores override earlier ones).
+- Reload: plan, write store, `s6-rc-repo-init` (no repo) / `-U` (store
+  list changed) / `s6-rc-repo-sync`, `s6-rc-set-new current` if missing,
+  essentials sync, `s6-rc-set-fix -u`, `s6-rc-set-commit --no-snapshot -f
+  -D default current`, `s6-rc-set-install -K --no-snapshot [-c bootdb -l
+  live | --no-update]`. GenResult.set_changes (fix moves, essentials)
+  printed by the CLI and the daemon.
+- The dependency graph is unchanged: targets stay bundles with everything
+  they want. In s6-rc a set holds only atomic services (bundles are not in
+  sets; one with a masked member is dropped), and `active` only means
+  "in the default bundle" that set-commit makes. So `s6 set disable sshd`
+  keeps it from booting while starting a bundle (udev's bluetooth.target,
+  systemctl isolate) still starts its usable members. Removing enablement
+  edges from target bundles was considered and rejected: it would have
+  broken device targets (bluetooth.service is enabled into
+  bluetooth.target.wants in /etc).
+- flag-recommended on every atomic service in Plan.boot = the closure of
+  default.target over deps/contents (what the old "default" bundle
+  started), with log atoms. Repository sync reads flags only for services
+  it hasn't seen.
+- s6-rc-set-commit refuses an inconsistent set (an active service with a
+  usable/masked dependency; an always one with a lower one;
+  s6rc_repo_badrx/fixset). Hence `s6-rc-set-fix -u` before each commit:
+  a new package's service needing a usable one gets it enabled, and a
+  `s6 set disable X` without `-p` while active services need X is undone
+  (documented: use `-p`).
+- Essentials: dist/s6 dbus, mount-api, mount-fs, udevd, udev-trigger,
+  hostname, modules-load, sysctl, sysusers, tmpfiles-setup, vconsole got
+  flag-essential (sdcompatd, sdcompat-fdstore had it): always services may
+  only depend on always ones, and runlevel's `s6-rc -up` keeps essentials.
+  earlyoom flag-recommended. syslog/journal-relay/resolv carry no flag:
+  sync_essentials makes `always` = flag-essential or member of
+  SYSINIT_BUNDLE (setup toggles membership only), and moves a service no
+  longer either from always to active (`s6-rc-set-change -e`). An RPM
+  upgrade re-adding a flag file can't start rsyslog beside journald.
+- DEFAULT_BUNDLE now means set-commit's -D bundle, default `default`
+  (s6-rc's, s6-frontend's and s6-linux-init's runlevel name). The
+  generated `sdcompat-default` bundle and dist/s6/default are gone
+  (s6rc_repo_makedefbundle refuses a store defining it; gen errors
+  clearly, setup removes /etc/sdcompat/s6/default with a backup).
+- Rollback: the boot link's target before the install becomes
+  compiled.previous (read from the link: set-install prints the replaced
+  db only for a live update); the one before is deleted; after a rollback
+  boot the replaced (bad) db is deleted instead. GC removes STATE_DIR/
+  .current:* copies that are not boot/previous/live and db/<stamp> dirs
+  not current/previous/holding a db in use. rc.init: no regeneration,
+  sdcompat.db=previous kept, sdcompat.reload= gone.
+- Install retry (the old "Broken pipe" flake): set-install leaves its copy
+  beside the boot link when s6-rc-update fails; a second set-install then
+  says "already installed" and exits 0 without doing anything (read in
+  copy_compiled_to_bootdir). The retry now reruns `s6-rc-update -e` on the
+  copy and switches the boot link itself when the live state already runs
+  on it, else removes the copy and reruns set-install.
+- SELinux (dist/selinux/sdcompat.cil): new type sdcompat_live_exec_t for
+  /usr/bin/s6-rc-update and s6-rc-format-upgrade, entrypoint of init_t,
+  `typetransition unconfined_t ... process init_t` and roletransition
+  unconfined_r -> system_r (sesearch on this host: unconfined_t may
+  transition to any domain, `allow unconfined_r system_r` exists,
+  unconfined_u has system_r; same pattern as initrc_exec_t). So `s6 live
+  install`/`s6 set apply` from sudo work like sdcompatd's own updates
+  instead of the user_tmp_t breakage of this morning. /var/lib/s6-rc gets
+  init_var_lib_t (filecon + named typetransitions for init_t and
+  unconfined_t); spec %post/%postun and setup restorecon it.
+- s6.conf: repodir, bootdb, storelist = /var/lib/sdcompat/store:
+  /etc/sdcompat/s6:/etc/s6/sources; setup replaces a copy it wrote, warns
+  about an edited one, creates /etc/s6/sources.
+
+### Upstream bug found (not patched, per the rules)
+
+s6-rc 0.8.0.2 src/repo/s6rc_repo_setuptodate.c: the snapshot path is
+built as repo/sources/.snapshot<readlink of compiled/SET>, readlink fills
+up to index repolen+setlen+51, and the terminator is written at
+`snap[repolen + setlen + 53]`, leaving index +52 uninitialized. stat()
+then randomly fails and s6-rc-set-install says "set current is not
+up-to-date; commit it first" right after a commit (seen in the sandbox;
+a small test repo happened to have a 0 there). Workaround: --no-snapshot
+on commit and install (sdcompat always; documented for `s6 set commit`,
+`s6 live install`, `s6 set apply`). The owner may want to report it to
+skarnet.
+
+### Tests
+
+- cargo build (no warnings), cargo test: all pass (new
+  boot_closure_marks_recommended); standalone fdstore 2, journal-relay 3,
+  notify 2.
+- check.sh: new section "s6-rc repository" (10 checks: enabled unit starts
+  active, new unit usable, new enabled unit active, set-fix enables its
+  usable dependency, default bundle contents, a reload keeps
+  `s6-rc-set-change usable`, systemctl disable leaves the set alone,
+  compiled.previous kept, only two boot copies); sandbox.sh sets REPO_DIR
+  and starts the `default` bundle.
+- Sandbox, default: 221/221 in 9 of 13 runs (several in parallel); 3 runs
+  hit the Broken pipe flake (19-20 cascading failures), 1 left a
+  cal.service job at the end. SANDBOX_FDSTORE=no: 221/221 in 4 of 4.
+  SANDBOX_JOURNAL=no: the flake in every completed run (5), then a hang in
+  the next reload (s6-rc-update waiting for s6rc-fdholder, whose
+  supervisor the failed update removed). Baseline at HEAD (worktree, same
+  machine): default 1 of 6 flaked, JOURNAL=no 2 of 3 flaked and hung the
+  same way, so this is not new. Idle sandbox (JOURNAL=no): 15 direct
+  `reload --direct` and 15 D-Bus Reloads in a row, no failure: the flake
+  needs concurrent s6 activity (check.sh's earlier sections).
+- Real units of this host into a scratch repository (`reload --no-update`
+  with UNIT_PATH default, EXTRA_SOURCE a copy of dist/s6 without
+  syslog/journal-relay in sdcompat-sysinit): commits with no fix needed;
+  13 always, 79 active, 149 usable; gdm/NetworkManager/cups/journald
+  active, sshd usable (not enabled here), syslog usable. Adding syslog to
+  sdcompat-sysinit -> always, removing it -> active; `s6-rc-set-change
+  usable NetworkManager.service` without -p is undone by the fix
+  (rsyslog and NetworkManager-wait-online need it); a store `default` is
+  refused with the message; boot copies rotate (compiled +
+  compiled.previous only).
+- s6-rc dry run: a commit of an unchanged store converts nothing.
+- bash -n / sh -n and shellcheck -S warning: setup-fedora.sh, check.sh,
+  sandbox.sh, rc.init. `setup-fedora.sh --dry-run` on this host: writes
+  /etc/s6.conf, creates /etc/s6/sources, backs up and removes
+  /etc/sdcompat/s6/default.
+
+### Not done / open
+
+- The "Broken pipe" reload flake (s6_supervise_link_names ->
+  "unable to manage new service directories: Broken pipe", after the live
+  switch) is still open and frequent with JOURNAL=no in the sandbox, at
+  HEAD as well (see Tests). s6-svscan's control fifo can't give EPIPE (it
+  holds a writer), so it is most likely s6-ftrigrd dying under s6-rc-update;
+  not found why. The new retry handles the half-done update better but
+  damage (supervisors killed by do_unlink) can remain.
+- sdcompatd still reports UnitFileState from systemd's symlinks, not the
+  set's prescription; a masked-in-set unit is still in the index (s6-rc
+  then refuses it as unknown).
+- Not run with root / on a real boot: the SELinux transition (module not
+  compiled here: no read access to the policy store), set-install against
+  /run/s6-rc, setup's migration, rc.init without regeneration.
+
+### Current state
+
+Committed as `e8af905`; this entry in the next commit.
+
+### Next steps
+
+1. Owner: build RPMs; upgrade; rerun setup (removes
+   /etc/sdcompat/s6/default, new s6.conf, SELinux module, repository).
+2. On the s6 boot: `s6 set status`; `sudo s6 set disable -p X`, reload,
+   reboot, X not started; `sudo s6 set commit --no-snapshot && sudo s6
+   live install --no-snapshot` returns and leaves no user_tmp_t in
+   /run/service and no AVCs (TESTING rows added).
+3. Find the Broken pipe flake's cause (s6-ftrigrd's exit under
+   s6-rc-update in the sandbox, JOURNAL=no reproduces it most often).
+4. Optionally: UnitFileState from the set; report the s6-rc snapshot bug.
