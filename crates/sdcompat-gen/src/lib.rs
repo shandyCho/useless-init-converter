@@ -438,9 +438,15 @@ pub fn plan(cfg: &Config) -> Plan {
         }
         // FDSTORE=1 goes to the sdcompat-fdstore service. journald starts
         // before it otherwise (DefaultDependencies=no): "fd store not reachable".
+        // So do the sockets the runner binds: unheld, a service that exits
+        // (dmeventd -R) is not started again on activity.
         let fdstore_max: usize =
             unit.get("Service", "FileDescriptorStoreMax").and_then(|v| v.parse().ok()).unwrap_or(0);
-        if unit.utype() == "service" && fdstore_max > 0 && plan.extra_names.contains(FDSTORE_SERVICE) {
+        let has_sockets = socket_service.iter().any(|(s, svc)| svc == id && s.ends_with(".socket"));
+        if unit.utype() == "service"
+            && (fdstore_max > 0 || has_sockets)
+            && plan.extra_names.contains(FDSTORE_SERVICE)
+        {
             deps.insert(FDSTORE_SERVICE.into());
         }
 
@@ -1186,6 +1192,30 @@ mod tests {
         let plan = plan(&cfg);
         assert!(plan.units["named.service"].deps.contains("dbus"));
         assert!(!plan.units["plain.service"].deps.contains("dbus"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A service with a .socket holds it in the fd store, so it starts
+    /// after the store even with DefaultDependencies=no (dm-event).
+    #[test]
+    fn socket_service_orders_after_fdstore() {
+        let tmp = std::env::temp_dir().join(format!("sdcompat-gen-sock-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let (units, extra) = (tmp.join("units"), tmp.join("extra"));
+        fs::create_dir_all(&units).unwrap();
+        fs::create_dir_all(extra.join(FDSTORE_SERVICE)).unwrap();
+        fs::write(extra.join(FDSTORE_SERVICE).join("type"), "longrun\n").unwrap();
+        let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
+        write("ev.socket", "[Unit]\nDefaultDependencies=no\n[Socket]\nListenFIFO=/run/ev\n");
+        write("ev.service", "[Unit]\nDefaultDependencies=no\nRequires=ev.socket\n[Service]\nExecStart=/bin/true\n");
+        write("plain.service", "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n");
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![units];
+        cfg.extra_source = vec![extra];
+
+        let plan = plan(&cfg);
+        assert!(plan.units["ev.service"].deps.contains(FDSTORE_SERVICE));
+        assert!(!plan.units["plain.service"].deps.contains(FDSTORE_SERVICE));
         let _ = fs::remove_dir_all(&tmp);
     }
 
