@@ -5057,3 +5057,23 @@ No code changes.
 ### Next steps
 
 Unchanged from the previous entry.
+
+## 2026-10-25: disable test service changed to chronyd
+
+- The TESTING row "s6 set decides what boots" used cups.service, which
+  could never pass: cups.service is already `usable` in the set, and
+  cups.path (active) starts it at boot anyway. Changed the pair to
+  chronyd.service: `active` in the set, a converted unit (Type=notify),
+  with no .socket/.path/.timer, D-Bus activation file or udev rule for it,
+  and only chrony-wait.service (not enabled) refers to it. A reboot
+  without time sync does no harm.
+- Not chosen: earlyoom (sdcompat's own s6 service, not a converted unit;
+  earlyoom.service is `usable`), D-Bus-activatable services (firewalld,
+  ModemManager, upower, ...), and services with socket units (avahi,
+  sssd-kcm, iscsid, virt*).
+
+### Next steps
+
+1. Owner: the chronyd row of TESTING; then `sudo s6 set enable
+   chronyd.service` and `sudo systemctl daemon-reload` to restore it.
+2. The rest unchanged.
