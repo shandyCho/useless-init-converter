@@ -183,11 +183,10 @@ impl Config {
                 // udev restarts it for each new console (vtcon); the boot run
                 // is the vconsole s6 oneshot, since sdcompatd isn't up yet.
                 "systemd-vconsole-setup.service",
-                // Wanted by udev for each backlight/rfkill device: restore the
-                // brightness and radio state at boot, save it on change/stop.
+                // Wanted by udev for each backlight device: restore the
+                // brightness at boot, save it at stop. (The radio state is
+                // the rfkill s6 oneshot's, in systemd-rfkill's files.)
                 "systemd-backlight@*.service",
-                "systemd-rfkill.socket",
-                "systemd-rfkill.service",
             ]
             .iter()
             .map(|s| s.to_string())

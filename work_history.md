@@ -5617,3 +5617,48 @@ the new runner (setup rerun); the s6 images are rebuilt by the new
    part 2 (dm-event, dmeventd -R, systemctl --user -M).
 2. Decide on SELinux access checks in sdcompatd and the fd stores.
 3. Broken pipe reload flake.
+
+## 2026-10-26, part 4: systemd-rfkill replaced by an s6 oneshot
+
+Owner asked to replace systemd-rfkill with util-linux rfkill and an s6
+oneshot, and whether mdevd is only used at boot.
+
+- mdevd: only in the s6 initramfs (--boot-only-s6). It is killed with
+  s6-svscan before switch_root; no mdevd process on the running system
+  (pgrep), where systemd-udevd (the `udevd` s6 service) manages devices.
+- New s6 oneshot `rfkill` (dist/s6/rfkill: flag-essential, in
+  sdcompat-sysinit, after mount-fs, which is after udev-trigger's
+  settle). `early rfkill` restores, `early rfkill-save` (down, at
+  shutdown) saves. Decision: keep systemd-rfkill's own state files
+  (/var/lib/systemd/rfkill/ID_PATH:TYPE, "0"/"1", ID_PATH from
+  udevadm, devices without ID_PATH skipped as systemd does), so the
+  systemd boot entry shares the radio state. The state is read from
+  sysfs `soft` (rfkill can't print one device's state), applied with
+  `rfkill block|unblock ID`. Honours systemd.restore_state=0.
+- systemd-rfkill.socket/.service left the default INCLUDE (config.rs,
+  dist/sdcompat.conf), so EXCLUDE's systemd-* drops them; udev's
+  SYSTEMD_WANTS for /dev/rfkill is ignored for excluded units.
+- SELinux: init_t may only stat systemd_rfkill_var_lib_t (sesearch on
+  this host); sdcompat.cil allows init_t to read/write/create files
+  there and labels a new /var/lib/systemd/rfkill as that type.
+  /dev/rfkill (wireless_device_t) is already open/read/write for init_t.
+- Known differences from systemd-rfkill: saves only at a clean shutdown
+  (systemd saves on every change), and a device appearing after the
+  boot's udev settle keeps its state. README pair and TESTING pair (new
+  row) say so.
+- Tests: early with a fake sysfs and stub rfkill/udevadm: saved
+  `platform-thinkpad_acpi:bluetooth=1`, `pci-0000:02:00.0:wlan=0`,
+  skipped the device without ID_PATH, restored with `unblock 0`/
+  `block 1`. sh -n, shellcheck -S warning. cargo test. Sandbox
+  SANDBOX_JOURNAL=no 232/232, SANDBOX_FDSTORE=no 225/225, default
+  225/225 once, but 4 of 6 default runs (2 of them on the code before
+  this change) hit the known reload flake: it got much more frequent in
+  default mode this evening.
+- Not tested: the policy (needs semodule as root), a real boot.
+
+### Next steps
+
+1. Owner: rebuild RPMs, rerun setup (loads the policy, installs
+   /etc/sdcompat/s6/rfkill), reboot into s6, then the TESTING rfkill row.
+2. The reload flake is now the most urgent open item.
+3. Earlier steps (SELinux access checks decision, part 3's checks).

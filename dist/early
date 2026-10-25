@@ -149,6 +149,38 @@ vconsole)
     [ -x "$v" ] || exit 0
     "$v" || warn "systemd-vconsole-setup exited $?"
     ;;
+rfkill | rfkill-save)
+    # In place of systemd-rfkill (socket-activated by udev for /dev/rfkill):
+    # restore each radio's soft block at boot, save it at shutdown. The
+    # state lives in systemd-rfkill's files (/var/lib/systemd/rfkill/
+    # ID_PATH:TYPE, "0" or "1"), so the systemd boot entry shares it.
+    # Devices that appear after the boot's udev settle keep their state.
+    dir=/var/lib/systemd/rfkill
+    [ -d /sys/class/rfkill ] || exit 0
+    if [ "$1" = rfkill ]; then
+        case " $(cat /proc/cmdline) " in *" systemd.restore_state=0 "*) exit 0 ;; esac
+        command -v rfkill >/dev/null || { warn "rfkill (util-linux) not found"; exit 0; }
+    else
+        mkdir -p "$dir"
+        command -v restorecon >/dev/null && restorecon "$dir" >/dev/null 2>&1
+    fi
+    for d in /sys/class/rfkill/rfkill*; do
+        [ -r "$d/type" ] || continue
+        path=$(udevadm info -q property -p "$d" 2>/dev/null | sed -n 's/^ID_PATH=//p')
+        # systemd-rfkill skips devices without ID_PATH too.
+        [ -n "$path" ] || continue
+        f=$dir/$path:$(cat "$d/type")
+        if [ "$1" = rfkill ]; then
+            [ -r "$f" ] || continue
+            case $(cat "$f") in
+            1) rfkill block "${d##*/rfkill}" || warn "rfkill block ${d##*/}" ;;
+            0) rfkill unblock "${d##*/rfkill}" || warn "rfkill unblock ${d##*/}" ;;
+            esac
+        else
+            printf '%s\n' "$(cat "$d/soft")" >"$f" || warn "saving $f failed"
+        fi
+    done
+    ;;
 resolv)
     # RESOLVED=no (setup-fedora.sh --no-resolved): systemd-resolved does not
     # run on this boot. NetworkManager handles DNS itself, and the stub file

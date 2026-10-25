@@ -187,7 +187,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 | mdevd (optional) | Loads the drivers in the s6 initramfs (`--boot-only-s6`); built with the others |
 | systemd | Stays installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | The system bus (`--systemd-activation`); dbus-broker stays for the user bus |
-| util-linux | `mount`, `swapon`, `mountpoint` for mount units and early boot |
+| util-linux | `mount`, `swapon`, `mountpoint` for mount units and early boot; `rfkill` for the radio state |
 | policycoreutils | `restorecon` and `semodule` for the SELinux module |
 
 **Libraries loaded at run time (recommended).** sdcompat `dlopen()`s them, so
@@ -342,6 +342,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 | Logging | systemd-journald as an s6 service (`--no-journal`: rsyslog + s6-log) |
 | Network / DNS / time | NetworkManager, systemd-resolved (`--no-resolved`: NetworkManager alone), chrony |
 | OOM handling | earlyoom instead of systemd-oomd |
+| Radio state (rfkill) | util-linux `rfkill` from an s6 oneshot instead of systemd-rfkill |
 | Devices | systemd-udevd as a plain service |
 | Login, user manager | systemd-logind and `systemd --user`, as supervised services |
 
@@ -509,7 +510,7 @@ and defaults). The most important keys:
 - `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `sdcompat-sysinit` too, as `setup-fedora.sh --no-resolved` does, or DNS breaks).
 - `ALLOW_UIDS`: non-root users allowed to manage units.
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
-- `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight and rfkill (screen/keyboard brightness and radio state kept across boots) and the sleep services.
+- `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight (screen/keyboard brightness kept across boots) and the sleep services. The radio state (rfkill) is kept by the `rfkill` s6 oneshot instead of systemd-rfkill: util-linux `rfkill` restores each device's soft block at boot and the state is saved at shutdown, in systemd-rfkill's own files (`/var/lib/systemd/rfkill/ID_PATH:TYPE`), so the systemd boot entry shares it. Unlike systemd-rfkill it saves only at a clean shutdown, and a device that appears after the boot's udev settle keeps its state.
 
 ## Source layout
 

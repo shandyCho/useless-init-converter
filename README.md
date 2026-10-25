@@ -164,7 +164,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 | mdevd (선택) | s6 initramfs(`--boot-only-s6`)에서 드라이버를 로드합니다. 나머지와 함께 빌드됩니다 |
 | systemd | 설치된 채로 둡니다: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | 시스템 버스(`--systemd-activation`). 사용자 버스는 dbus-broker가 계속 맡습니다 |
-| util-linux | 마운트 유닛과 초기 부팅의 `mount`, `swapon`, `mountpoint` |
+| util-linux | 마운트 유닛과 초기 부팅의 `mount`, `swapon`, `mountpoint`, 무선 상태의 `rfkill` |
 | policycoreutils | SELinux 모듈용 `restorecon`, `semodule` |
 
 **실행 중에 불러오는 라이브러리 (권장).** sdcompat이 `dlopen()`으로 불러오므로
@@ -307,6 +307,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 | 로그 | s6 서비스로 실행되는 systemd-journald (`--no-journal`: rsyslog + s6-log) |
 | 네트워크 / DNS / 시간 | NetworkManager, systemd-resolved(`--no-resolved`: NetworkManager만), chrony |
 | OOM 처리 | systemd-oomd 대신 earlyoom |
+| 무선 상태(rfkill) | systemd-rfkill 대신 s6 oneshot에서 util-linux `rfkill` |
 | 장치 | 일반 서비스로 실행되는 systemd-udevd |
 | 로그인, 사용자 매니저 | 감독(supervised) 서비스로 실행되는 systemd-logind와 `systemd --user` |
 
@@ -457,7 +458,7 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 - `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`setup-fedora.sh --no-resolved`처럼 `resolv` s6 서비스도 `sdcompat-sysinit`에 넣어야 DNS가 동작합니다).
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 원하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
-- `INCLUDE`: 기본값으로 sdcompat에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight와 rfkill(화면·키보드 밝기와 무선 상태를 부팅 사이에 유지), 절전 서비스)를 통과시킵니다.
+- `INCLUDE`: 기본값으로 sdcompat에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight(화면·키보드 밝기를 부팅 사이에 유지), 절전 서비스)를 통과시킵니다. 무선 상태(rfkill)는 systemd-rfkill 대신 `rfkill` s6 oneshot이 유지합니다. 부팅 때 util-linux `rfkill`로 장치마다 soft block을 되살리고, 종료할 때 상태를 systemd-rfkill 자신의 파일(`/var/lib/systemd/rfkill/ID_PATH:TYPE`)에 저장하므로 systemd 부팅 항목과 상태를 공유합니다. systemd-rfkill과 달리 정상 종료할 때만 저장하며, 부팅 중 udev settle 뒤에 나타난 장치는 상태를 그대로 둡니다.
 
 ## 소스 구조
 

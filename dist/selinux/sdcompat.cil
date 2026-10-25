@@ -121,3 +121,11 @@
 (filecon "/var/lib/s6-rc(/.*)?" any (system_u object_r init_var_lib_t ((s0) (s0))))
 (typetransition init_t var_lib_t dir "s6-rc" init_var_lib_t)
 (typetransition unconfined_t var_lib_t dir "s6-rc" init_var_lib_t)
+;
+; The rfkill s6 oneshot (dist/s6/rfkill, in place of systemd-rfkill, which
+; runs as systemd_rfkill_t) restores and saves the radio state in
+; systemd-rfkill's own files, so the systemd boot shares them. It runs in
+; init_t, which may only stat that directory's files.
+(allow init_t systemd_rfkill_var_lib_t (dir (getattr search open read write add_name remove_name)))
+(allow init_t systemd_rfkill_var_lib_t (file (create getattr open read write append truncate setattr)))
+(typetransition init_t init_var_lib_t dir "rfkill" systemd_rfkill_var_lib_t)
