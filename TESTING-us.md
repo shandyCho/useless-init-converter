@@ -109,12 +109,12 @@ lines are normal and not failures:
 - `sdcompat[bad.service]: ExecStart=/bin/sh failed: exit status 1`, printed by `tests/sandbox.sh`.
   `bad.service` fails on purpose, to test how its dependents are handled.
 
-**Known flaky failure:** about half of the runs fail the same 14 checks
-(`hello.service: expected active/running, got inactive/dead`, `tick.timer: …`,
-`job not queued`, `CancelJob failed`, …). This is a known bug when the
-database is reloaded (`s6-rc-update: … Broken pipe`). Recreate the sandbox and
-run it again. Report it only if other checks fail, or if these 14 fail every
-time.
+**`Broken pipe` on a database reload:** on a loaded machine `daemon.log` may show
+`s6-rc-update: fatal: unable to manage new service directories in …: Broken pipe`
+followed by `sdcompat: relinked …` lines. It is an s6-ftrigrd bug in s6 2.15.1.1;
+sdcompat repairs what it leaves and retries, so the checks should still pass. If a
+run of failures like `hello.service: expected active/running, got inactive/dead`
+follows anyway, report it with `daemon.log`.
 
 `check.sh` expects the state right after the sandbox starts, so it runs once per
 sandbox. To run it again, recreate the sandbox:

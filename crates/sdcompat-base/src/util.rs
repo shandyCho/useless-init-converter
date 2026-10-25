@@ -39,6 +39,19 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
+/// Whether another process holds a lock on `path`, as skalibs' fd_islocked()
+/// asks (s6-rc's change lock, s6-supervise's supervise/lock). skalibs locks
+/// with fcntl(); F_GETLK only looks.
+pub fn lock_held(path: &Path) -> bool {
+    use std::os::fd::AsRawFd;
+    let Ok(f) = fs::File::open(path) else { return false };
+    let mut fl: libc::flock = unsafe { std::mem::zeroed() };
+    fl.l_type = libc::F_RDLCK as libc::c_short;
+    fl.l_whence = libc::SEEK_SET as libc::c_short;
+    let r = unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GETLK, &mut fl) };
+    r == 0 && fl.l_type != libc::F_UNLCK as libc::c_short
+}
+
 pub fn read_trimmed(path: &Path) -> Option<String> {
     fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }

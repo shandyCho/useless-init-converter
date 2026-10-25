@@ -1012,8 +1012,9 @@ fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>
     if !live {
         return install(&["--no-update"]).map(|_| false);
     }
-    // s6-rc-update can race s6-svscan's rescan of the service directories
-    // ("unable to manage new service directories"); rescan and retry.
+    // s6-rc-update can fail after its switch ("unable to manage new service
+    // directories": relink_supervised) or race s6-svscan's rescan; repair
+    // or rescan, and retry.
     // Report the first error: later attempts may only fail because of
     // what the first one left behind.
     //
@@ -1046,8 +1047,13 @@ fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>
         }
         attempt += 1;
         eprintln!("sdcompat: installing the set failed, retrying: {}", e.trim());
+        let linking = e.contains("manage new service directories");
         first.get_or_insert(e);
-        if let Ok(scan) = fs::canonicalize(cfg.live_dir.join("scandir")) {
+        if linking {
+            // No rescan here: it would kill the supervisors whose links the
+            // failed update removed (see relink_supervised).
+            relink_supervised(&cfg.live_dir);
+        } else if let Ok(scan) = fs::canonicalize(cfg.live_dir.join("scandir")) {
             let _ = Command::new("s6-svscanctl").arg("-an").arg(scan).status();
         }
         std::thread::sleep(std::time::Duration::from_millis(500 * attempt));
@@ -1065,6 +1071,37 @@ fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>
             }
             None => install(&[]).map(|_| ()),
         };
+    }
+}
+
+/// Put back the scan directory links of live service directories that
+/// still have a supervisor. "unable to manage new service directories"
+/// comes after s6-rc-update's switch to the new live directory: its
+/// s6-ftrigrd died (s6 2.15.1.1 crashes when a subscription follows one
+/// that already fired), and s6_supervise_link_names() then unlinks every
+/// name it had linked so far, those of running services too. The next scan
+/// would kill their supervisors, and the services stay down while s6-rc
+/// has them up. Directories with no supervisor stay unlinked: the retry's
+/// s6-rc-update links them and refuses a link that exists.
+fn relink_supervised(live: &Path) {
+    let prefix = fs::read_to_string(live.join("prefix")).unwrap_or_default();
+    let Ok(dir) = fs::read_dir(live.join("servicedirs")) else { return };
+    for e in dir.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let link = live.join("scandir").join(format!("{prefix}{name}"));
+        if fs::symlink_metadata(&link).is_ok()
+            || !sdcompat_base::util::lock_held(&e.path().join("supervise/lock"))
+        {
+            continue;
+        }
+        // The target s6-rc gives it: LIVE/servicedirs/NAME as -l names LIVE.
+        match std::os::unix::fs::symlink(live.join("servicedirs").join(&name), &link) {
+            Ok(()) => eprintln!("sdcompat: relinked {} (its supervisor still runs)", link.display()),
+            Err(err) => eprintln!("sdcompat: relinking {}: {err}", link.display()),
+        }
     }
 }
 
@@ -1195,6 +1232,45 @@ mod tests {
         let plan = plan(&cfg);
         assert!(plan.units["named.service"].deps.contains("dbus"));
         assert!(!plan.units["plain.service"].deps.contains("dbus"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// After s6-rc-update's failed linking, only directories that still
+    /// have a supervisor get their link back.
+    #[test]
+    fn relink_supervised_only_locked() {
+        use std::io::{BufRead, Write};
+        let tmp = std::env::temp_dir().join(format!("sdcompat-gen-relink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let live = tmp.join("live");
+        for n in ["run.service", "new.service", "kept.service"] {
+            fs::create_dir_all(live.join("servicedirs").join(n).join("supervise")).unwrap();
+            fs::write(live.join("servicedirs").join(n).join("supervise/lock"), "").unwrap();
+        }
+        fs::create_dir_all(live.join("scandir")).unwrap();
+        fs::write(live.join("prefix"), "").unwrap();
+        std::os::unix::fs::symlink("elsewhere", live.join("scandir/kept.service")).unwrap();
+        // A supervisor's fcntl lock, held by another process.
+        let mut child = Command::new("python3")
+            .args(["-c", "import fcntl,sys; f=open(sys.argv[1],'w'); fcntl.lockf(f, fcntl.LOCK_EX); print('locked', flush=True); sys.stdin.read()"])
+            .arg(live.join("servicedirs/run.service/supervise/lock"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        assert_eq!(line.trim(), "locked");
+
+        relink_supervised(&live);
+        assert_eq!(
+            fs::read_link(live.join("scandir/run.service")).unwrap(),
+            live.join("servicedirs/run.service")
+        );
+        assert!(fs::symlink_metadata(live.join("scandir/new.service")).is_err());
+        assert_eq!(fs::read_link(live.join("scandir/kept.service")).unwrap(), Path::new("elsewhere"));
+        let _ = child.stdin.take().unwrap().write_all(b"");
+        let _ = child.wait();
         let _ = fs::remove_dir_all(&tmp);
     }
 

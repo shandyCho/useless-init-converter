@@ -106,11 +106,12 @@ tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 - `tests/sandbox.sh`가 출력하는 `sdcompat[bad.service]: ExecStart=/bin/sh failed: exit status 1`.
   `bad.service`는 의존성 처리를 검사하려고 일부러 실패하게 만든 유닛입니다.
 
-**알려진 간헐적 실패:** 실행의 절반 정도에서 같은 14개 검사가 실패합니다
-(`hello.service: expected active/running, got inactive/dead`, `tick.timer: …`,
-`job not queued`, `CancelJob failed` 등). 데이터베이스를 다시 불러올 때 생기는 알려진
-버그입니다(`s6-rc-update: … Broken pipe`). 샌드박스를 새로 만들어 다시 실행하세요. 다른
-검사가 실패하거나 이 14개가 매번 실패할 때만 알려 주세요.
+**데이터베이스를 다시 불러올 때의 `Broken pipe`:** 부하가 걸린 기계에서는
+`daemon.log`에 `s6-rc-update: fatal: unable to manage new service directories in …:
+Broken pipe`와 그 뒤에 `sdcompat: relinked …` 줄이 보일 수 있습니다. s6 2.15.1.1의
+s6-ftrigrd 버그이고, sdcompat이 고친 뒤 다시 시도하므로 검사는 통과해야 합니다. 그런데도
+`hello.service: expected active/running, got inactive/dead` 같은 실패가 줄지어 나오면
+`daemon.log`와 함께 알려 주세요.
 
 `check.sh`는 샌드박스를 띄운 직후의 상태를 기대하므로 샌드박스마다 한 번만 실행됩니다. 다시
 실행하려면 샌드박스를 새로 만드세요: `tests/sandbox.sh ~/sdc stop && tests/sandbox.sh ~/sdc`.
