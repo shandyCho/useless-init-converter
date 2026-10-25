@@ -43,8 +43,18 @@ if [ "${2:-}" = stop ]; then
 fi
 
 rm -rf "$W" "$R"
-mkdir -p "$W/units" "$W/presets" "$W/scan" "$R"
+mkdir -p "$W/units" "$W/presets" "$W/scan" "$W/bin" "$R"
 U=$W/units
+# With sdcompat's SELinux module installed, /usr/bin/s6-rc-update (and
+# s6-rc-format-upgrade) run as init_t when started from unconfined_t, and
+# init_t can't open the sandbox's user_tmp_t files ("unable to take lock
+# ... Permission denied"). Copies here have this directory's label and no
+# transition; s6-rc-set-install and sdcompat find s6-rc-update by PATH.
+for p in s6-rc-update s6-rc-format-upgrade; do
+    cp "$(command -v "$p")" "$W/bin/"
+done
+PATH=$W/bin:$PATH
+export PATH
 
 cat > "$W/sdcompat.conf" <<EOF
 UNIT_PATH=$U

@@ -121,6 +121,11 @@ journal 스트림 대신 `~/sdc/logs/` 아래에서 확인하고, `sdcompat-jour
 스트림 메시지를 보내 봅니다(소켓은 `$XDG_RUNTIME_DIR/sdc-test/jrelay`, 받은 내용은 대역 `/dev/log`가
 같은 곳의 `devlog.out`에 씁니다).
 
+sdcompat의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-update`를 직접 실행해도
+`init_t`로 돕니다(`sudo s6 live install`이 동작하는 이유입니다). `init_t`는 샌드박스의 파일을 열
+수 없으므로, `sandbox.sh`는 `s6-rc-update`와 `s6-rc-format-upgrade`를 `WORKDIR/bin`에 복사하고
+(복사본은 그 디렉터리의 레이블을 가집니다), 두 스크립트 모두 그 디렉터리를 `PATH` 맨 앞에 둡니다.
+
 본체가 독립 도구 `sdcompat-fdstore` 없이 동작하는지 보려면 `SANDBOX_FDSTORE=no`를 앞에 붙여
 `sandbox.sh`와 `check.sh`를 실행하세요. 그러면 데몬이 fd를 직접 보관하므로, 데몬을 다시 시작한
 뒤 fd가 사라졌는지를 확인합니다. 독립 도구는 `tests/sandbox.sh`가 `standalone/`에서 빌드합니다.

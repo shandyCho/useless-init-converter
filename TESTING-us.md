@@ -132,6 +132,12 @@ To check that the core works without the standalone `sdcompat-fdstore`, run
 holds the fds itself, so `check.sh` checks that they are gone after the daemon
 restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
+On a machine with sdcompat's SELinux module installed, `/usr/bin/s6-rc-update`
+runs as `init_t` when you start it (that is what lets `sudo s6 live install`
+work), and `init_t` can't open the sandbox's files. So `sandbox.sh` copies
+`s6-rc-update` and `s6-rc-format-upgrade` into `WORKDIR/bin`, where they keep
+the directory's label, and both scripts put that directory first in `PATH`.
+
 Then try Fedora's real `systemctl` against the sandbox:
 
 ```sh

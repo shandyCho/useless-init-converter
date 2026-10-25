@@ -5,6 +5,10 @@ set -u
 
 W=$1
 R=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sdc-test
+# The unlabelled s6-rc-update copies (see sandbox.sh), for the daemon this
+# script starts and its own s6-rc-set-* calls.
+PATH=$W/bin:$PATH
+export PATH
 B="busctl --address=unix:path=$R/bus"
 DEST=org.freedesktop.systemd1
 MGR="$DEST /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager"
