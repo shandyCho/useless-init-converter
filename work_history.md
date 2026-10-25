@@ -5003,3 +5003,34 @@ fifo fix (`d23ad7b`) is installed; its boot check is still to do.
    `sudo s6-svc -wR` returns) and the catch-all fifo row.
 3. Then the earlier steps (`s6 set disable -p X` across a reboot; the
    Broken pipe flake).
+
+## 2026-10-25: owner's boot check of the fifo labels (`d23ad7b`, `bdbdcb0`)
+
+No code changes.
+
+- Owner rebooted into s6 (enforcing) with both fixes installed.
+- `ls -dZ /run/service/*/event`: every entry is init_var_run_t, the four
+  s6-linux-init directories (early-getty, runleveld, shutdownd,
+  s6-svscan-log) and the s6-rc ones alike. So the named `event` transition
+  works at boot, before setup or %post restorecon.
+- `sudo s6-svc -wR -T 30000 -r /run/service/sdcompatd` returned silently,
+  without the s6-svlisten timeout: the ready event reaches a waiter started
+  from sudo.
+- `/run/service/s6-svscan-log/fifo` is sdcompat_log_fifo_t, and
+  `ausearch -m AVC -ts boot | grep s6-svscan-log/fifo` is empty.
+- Both TESTING rows (waiting from a shell; catch-all fifo) are verified on
+  the real boot. Whether setup's own restart step runs without the timeout
+  was not shown separately, but it does the same `s6-svc -wR` wait.
+
+### Current state
+
+`d23ad7b` and `bdbdcb0` verified on the enforcing s6 boot.
+
+### Next steps
+
+1. `sudo s6 set disable -p X`, reload, reboot, X not started.
+2. Optionally `sudo s6-rc change` waits from an admin shell, and an
+   `ausearch -m AVC -ts boot | grep ftrig` check.
+3. Find the Broken pipe flake's cause (s6-ftrigrd's exit under
+   s6-rc-update in the sandbox; JOURNAL=no reproduces it most often).
+4. Optionally: UnitFileState from the set; report the s6-rc snapshot bug.
