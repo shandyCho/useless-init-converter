@@ -5527,7 +5527,6 @@ with no LVM, so nothing was being monitored.
    `systemctl status dm-event.service` (active after boot);
    `sudo dmeventd -R; echo $?` → 0 with no message, service active
    again; `sudo systemctl --user -M $USER@ is-system-running` →
-   running; `sudo /usr/lib/systemd/systemd-update-helper
-   mark-restart-user-units dbus-broker.service; echo $?` → 0, no output.
+   running (both via the unixexec bridge).
 2. Earlier next steps unchanged (rescue/kernel-update rows,
    --default-s6 checks, Broken pipe flake).
