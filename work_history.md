@@ -5208,3 +5208,62 @@ The two things seen in the previous entry, fixed on sdcompat's side.
    `ausearch -m AVC -ts boot | grep ftrig` check.
 3. Find the Broken pipe flake's cause (not seen in today's two runs).
 4. Optionally: report the s6-rc snapshot bug.
+
+## 2026-10-25: s6 as the default boot entry (`1e0fdea`)
+
+Owner asked to make s6 the first (default) boot instead of systemd. This
+was next step 3 of the first session ("after testing: make the s6 entry
+the default"); the enforcing s6 boot is verified, so done now, opt-in.
+
+- Read on this machine: GRUB_DEFAULT=saved, UPDATEDEFAULT=yes. On a
+  kernel add, /usr/lib/kernel/install.d/20-grub.install sets
+  `tmp_saved_entry=<new systemd BLS id>` (not for debug/rt/64k kernels),
+  and 95-set-boot-entry.install, after checking the initrd, sets
+  saved_entry from it. So a plain `grub2-editenv set saved_entry` would
+  be undone by the next kernel update.
+- 90-sdcompat.install: with /etc/sdcompat/boot-default = s6, on add it
+  replaces tmp_saved_entry when it names this kernel's systemd entry with
+  `<id>~sdcompat`; on remove, if saved_entry named a removed entry
+  ending in ~sdcompat, it sets the newest remaining s6 entry (`ls -v`).
+  Env overrides for tests: SDCOMPAT_BOOT_DEFAULT, SDCOMPAT_GRUB_EDITENV.
+- setup-fedora.sh: `--default-s6` / `--default-systemd`; neither keeps
+  the file's choice (like --journal). set_boot_default (end of
+  add_grub_entry) writes the file and sets saved_entry to the default
+  kernel's s6 entry, or removes the file and moves an s6 saved_entry
+  back to `${id%~sdcompat}` (unset if that entry is gone). Uninstall
+  does the latter and removes the file. Plan, final messages and header
+  say which entry is the default. --help printed three code lines after
+  the header (sed range 2,38); now exactly the header.
+- Bug found while testing: `saved=$(saved_entry)` exited setup under
+  set -euo pipefail when grub2-editenv list fails (unreadable grubenv);
+  fixed with `|| true` in the pipeline.
+- Docs: README pair (summary, options table, plugin paragraph incl.
+  Shift/Esc for the hidden menu), TESTING pair (install note, new section
+  "Making s6 the default boot" with checks).
+
+### Tests
+
+- Plugin, unprivileged, with a fake BLS dir and a grub2-editenv stand-in,
+  simulating 20-grub -> 90-sdcompat -> 95-set-boot-entry: no file ->
+  systemd default kept; s6 -> saved_entry abc-7.2.12~sdcompat; removing
+  that kernel -> abc-7.2.11~sdcompat; removing a non-default kernel ->
+  unchanged; debug kernel (no tmp_saved_entry) -> unchanged.
+- setup --dry-run (as a user): --default-s6 writes boot-default and
+  sets saved_entry (kver shows wrong in a user dry run: grubby
+  --default-kernel needs root, existing behaviour); none/--default-systemd
+  print the systemd default; --uninstall removes boot-default and, with
+  an s6 saved_entry (fake grub2-editenv), moves it back (unset as a user
+  since /boot/loader/entries is unreadable).
+- bash -n / sh -n, shellcheck -S warning: setup-fedora.sh, the plugin.
+- Not run as root; no real GRUB change made.
+
+### Next steps
+
+1. Owner: build RPMs, `sudo dist/setup-fedora.sh --enforcing --default-s6
+   --rpms=...`, then the TESTING section "Making s6 the default boot"
+   (grubby --info=DEFAULT, reboot without the menu, later a kernel
+   update). Also step 1 of the previous entry (logger/is-enabled check).
+2. Optionally `sudo s6-rc change` waits from an admin shell, and an
+   `ausearch -m AVC -ts boot | grep ftrig` check.
+3. Find the Broken pipe flake's cause.
+4. Optionally: report the s6-rc snapshot bug.
