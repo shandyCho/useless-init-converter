@@ -5662,3 +5662,81 @@ oneshot, and whether mdevd is only used at boot.
    /etc/sdcompat/s6/rfkill), reboot into s6, then the TESTING rfkill row.
 2. The reload flake is now the most urgent open item.
 3. Earlier steps (SELinux access checks decision, part 3's checks).
+
+## 2026-10-26, part 5: the reload flake's cause, and the repair
+
+Owner asked to investigate the s6-rc-update "Broken pipe" reload flake
+(open since session 7). Later in the session the owner said: don't report
+upstream and don't modify upstream source (memory updated; the s6-rc
+snapshot report is dropped from the next steps too). Changes not
+committed yet.
+
+### Cause (read from s6 2.15.1.1 / skalibs 2.16.0.0, reproduced)
+
+- "unable to manage new service directories: Broken pipe" is
+  s6_supervise_link_names() losing its s6-ftrigrd. s6-ftrigrd dies with
+  SIGSEGV when a subscription follows one that already fired on the same
+  connection: sassserver_async_success() frees the fired query's handle
+  without calling the cancel function, so the ftrigio stays in
+  s6-ftrigrd's list; the next subscribe reuses the handle and its data,
+  links the same ftrigio again, and the list loops (writes past the
+  iopause array). A 40-line ftrigr client reproduced it every time
+  (subscribe A, B; fire A; subscribe C -> EPIPE; s6-ftrigrd signal 11).
+  Upstream git head has the same ftrigio_read().
+- How s6-rc-update meets it: make_new_livedir() unlinks every scandir
+  link and sends "x" to the supervisors it doesn't keep (down or
+  restarted services), then manage relinks them all while subscribing
+  (subscribe, then symlink, per directory). s6-svscan respawns an exited
+  supervisor of a still-active name at once, or every second after
+  "unable to chdir" (the svscan.log lines); when the respawn finds the
+  just-made link, the new supervisor's "s" event fires a subscription
+  while later ones are still to come. inotify trace of a flaky run
+  (scratch watcher on $R and the scandir): beside1.service subscribed at
+  +32.9 ms, its supervisor started at +37.6 ms, the subscriptions stopped
+  after s6rc-fdholder at +34.9 ms. It depends on timing: the linking pass
+  takes ~1.5 ms on an idle machine and 10-120 ms under load, which is
+  why it came and went (0 of 11 idle runs today, 4 of 6 this evening
+  while builds ran; 1 of 4 with all cores busy on the old code).
+- The damage after it was ours: on that error do_unlink() removes the
+  links it made so far, those of running supervisors too (no kill, the
+  failure is before "a"). sdcompat-gen's retry then sent `s6-svscanctl
+  -an`, which killed those supervisors; the retry relinked them, the new
+  supervisors kept the services down while s6-rc had them up (hello,
+  tick.timer, watch.path, s6rc-oneshot-runner: exactly the cascade).
+
+### Fix (sdcompat side only)
+
+- sdcompat-gen: on "unable to manage new service directories" the retry
+  no longer rescans; relink_supervised() first puts back the scandir
+  link (PREFIX+NAME -> LIVE/servicedirs/NAME, as s6-rc makes it) of
+  every live service directory whose supervise/lock is held. Directories
+  with no supervisor stay unlinked (the retry's s6-rc-update links them
+  and refuses an existing link for an unlocked one). Other errors keep
+  the rescan.
+- lock_held() moved from sdcompatd to sdcompat-base::util (both use it).
+- New test relink_supervised_only_locked (a python child holds the
+  fcntl lock). TESTING pair: the "known flaky failure" note now says the
+  Broken pipe is repaired and to report only a cascade after it.
+
+### Tests
+
+cargo build (no warnings), cargo test. Sandbox with the fix, all cores
+busy: default 8 of 8 runs 225/225, 7 of them hit the crash
+(`relinked` 20-25 links each, damage checks clean); SANDBOX_JOURNAL=no
+loaded 232/232 with the crash repaired (35 links); idle
+SANDBOX_JOURNAL=no 232/232, SANDBOX_FDSTORE=no 225/225. Baseline under
+the same load (old code): 19 failures with the usual cascade. Not on a
+real boot.
+
+### Current state
+
+The crash still happens (s6 bug, not patched per the rules); sdcompat
+recovers from it. A crash during the wait for the new supervisors (after
+"a") would kill them instead (do_unlink with kill options); not seen,
+since the crash needs a subscribe.
+
+### Next steps
+
+1. Owner: review and commit; rebuild RPMs at the next install.
+2. Earlier steps: the rfkill row (part 4), SELinux access checks
+   decision, part 3's checks.
