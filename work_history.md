@@ -5462,3 +5462,72 @@ the dm/udev handoff is verified on hardware.
    `dnf upgrade kernel*`.
 2. The earlier steps (--default-s6 checks, logger/is-enabled check,
    Broken pipe flake, s6-rc snapshot bug report).
+
+## 2026-10-26, part 2: dnf upgrade scriptlet errors (`865d4e6`, `6742f46`)
+
+Owner ran `sudo dnf upgrade --refresh` on the s6 boot (--boot-only-s6,
+JOURNAL=no). Two scriptlet errors, both sdcompat bugs.
+
+### 1. User-unit markers: "Transport endpoint is not connected"
+
+oo7-portal/oo7-daemon %postun → systemd-update-helper
+mark-restart-user-units → `systemctl --user -M 1000@ set-property ...`.
+Evidence: /var/log/sdcompat/run-p*-i*.service/current (00:58-00:59)
+held `DATA`, `OK <guid>`, `ERROR`: systemd-stdio-bridge's SASL replies
+went to its s6 log, not back to systemctl. Cause: `761d2e0` (Oct 23,
+after the Oct 20 real-boot check of `-M`) made both fd stores store an
+open file passed twice once (systemd's FDSTORE= rule). sd-bus's unixexec
+hands systemd-run one socketpair as stdin and stdout, so "stdout" was
+dropped from `<unit>#stdio` and the runner left stdout on the log pipe.
+The sandbox test piped `echo | systemd-run -P cat`, where they differ.
+
+Fix `865d4e6`: no dedup for `#stdio` keys, in crates/sdcompat-base and
+standalone/sdcompat-fdstore. Tests: both stores' unit tests (one socket
+PUT as stdin and stdout → two fds); sandbox check "systemd-run -P with
+stdin and stdout one socket" (python socketpair) fails without the fix
+(got ''), passes with it. First try exempted every "#" key; dropped for
+`#stdio` only since `#sockets` gains nothing from it. Note for tests:
+systemd-run expands `$VAR` in the command (`--expand-environment`), so
+the check uses sed, not `echo "$x"`.
+
+### 2. dmeventd -R: "Failed to communicate with new instance"
+
+device-mapper-event %post: `systemctl start dm-event.socket`, then
+`dmeventd -R` (old daemon reports exec_method=systemd, exits, and the
+new one is expected from socket activation). dm-event.service stayed
+down afterwards: s6-supervise with no child, result success, exit 0 at
+00:58:00. Cause: dm-event (DefaultDependencies=no) started at
+00:48:48.94, the fd store's socket appeared at 00:48:49.05; the runner's
+"best effort" PUT of the FIFOs failed, so at exit has_held_sockets() was
+false → 125 (down) instead of SOCKET_WAIT.
+
+Fix `6742f46`: sdcompat-gen gives every service activated by a .socket
+a dependency on sdcompat-fdstore (as FileDescriptorStoreMax>0 services
+already had). The store depends only on mount-api, so no cycle. Test
+`socket_service_orders_after_fdstore` fails without the fix.
+
+### Tests
+
+cargo build, cargo test, every standalone's tests; sandbox default
+224/224 (×4 of 5 runs; one run hit the known session-7 "Broken pipe"
+reload flake, same checks as recorded there), SANDBOX_FDSTORE=no
+224/224 (×2), SANDBOX_JOURNAL=no 231/231 (×2). bash -n and shellcheck
+-S warning on tests/check.sh. Not on a real boot.
+
+### Current state
+
+Both fixes committed, not installed. The running fd store has the old
+code until the next boot (the 2026-10-21 part 3 lesson), and
+dm-event.service is down on the running system; root is btrfs on LUKS
+with no LVM, so nothing was being monitored.
+
+### Next steps
+
+1. Owner: rebuild RPMs, rerun setup, reboot into the s6 entry, then:
+   `systemctl status dm-event.service` (active after boot);
+   `sudo dmeventd -R; echo $?` → 0 with no message, service active
+   again; `sudo systemctl --user -M $USER@ is-system-running` →
+   running; `sudo /usr/lib/systemd/systemd-update-helper
+   mark-restart-user-units dbus-broker.service; echo $?` → 0, no output.
+2. Earlier next steps unchanged (rescue/kernel-update rows,
+   --default-s6 checks, Broken pipe flake).
