@@ -20,6 +20,12 @@
 #                   kernels (the systemd entry stays in the menu)
 #   --default-systemd  make the systemd entry the default again
 #                   Without these two, a re-run keeps the current choice.
+#   --boot-only-s6  boot the s6 entry with sdcompat's own initramfs: s6-svscan
+#                   is its PID 1 and mdevd loads the drivers, so no systemd
+#                   runs at all (needs mdevd; the LUKS root is unlocked by a
+#                   typed passphrase, no TPM2/FIDO2). Rebuilt for new kernels.
+#   --no-boot-only-s6  the s6 entry uses Fedora's initramfs again
+#                   Without these two, a re-run keeps the current choice.
 #   --rpms=DIR      install the skarnet tools (dist/skarnet.versions) from RPMs
 #                   built with dist/rpm/build-skarnet-rpms.sh (recommended:
 #                   Fedora does not package them)
@@ -49,7 +55,8 @@ BACKUP=/var/lib/sdcompat/setup-backup/$(date +%Y%m%d-%H%M%S)
 
 # The skarnet.org packages, their versions and the SHA-256 of their release
 # tarballs, in build order. dist/skarnet.versions is the only place they are
-# listed (build-skarnet-rpms.sh reads it too). s6-frontend is optional.
+# listed (build-skarnet-rpms.sh reads it too). s6-frontend and mdevd (only
+# for --boot-only-s6) are optional.
 SKARNET=()
 declare -A SKARNET_VER SKARNET_SHA256
 while read -r name ver sum _; do
@@ -58,7 +65,7 @@ while read -r name ver sum _; do
     SKARNET_VER[$name]=$ver
     SKARNET_SHA256[$name]=$sum
 done <"$DIST/skarnet.versions"
-SKARNET_OPTIONAL=" s6-frontend "
+SKARNET_OPTIONAL=" s6-frontend mdevd "
 SKARNET_MANIFEST=/var/lib/sdcompat/skarnet-files.txt
 # Checksums of the hand-written s6 services as this script last installed them.
 S6_SUMS=/var/lib/sdcompat/s6-dist-sums.txt
@@ -71,6 +78,8 @@ STANDALONE=(sdcompat-fdstore sdcompat-notify sdcompat-journal-relay)
 WITHOUT=""
 BOOT_DEFAULT_FILE=/etc/sdcompat/boot-default
 BOOT_DEFAULT=""
+BOOT_ONLY_S6_FILE=/etc/sdcompat/boot-only-s6
+BOOT_ONLY_S6=""
 DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0 JOURNAL="" RESOLVED="" REMOVE_S6=0
 KI_PLUGIN=/etc/kernel/install.d/90-sdcompat.install
 for a in "$@"; do
@@ -81,6 +90,8 @@ for a in "$@"; do
         --no-grub) GRUB=0 ;;
         --default-s6) BOOT_DEFAULT=s6 ;;
         --default-systemd) BOOT_DEFAULT=systemd ;;
+        --boot-only-s6) BOOT_ONLY_S6=1 ;;
+        --no-boot-only-s6) BOOT_ONLY_S6=0 ;;
         --build-s6) BUILD_S6=1 ;;
         --rpms=*) RPM_DIR=${a#--rpms=} ;;
         --rebuild) REBUILD=1 ;;
@@ -91,7 +102,7 @@ for a in "$@"; do
         --no-resolved) RESOLVED=0 ;;
         --resolved) RESOLVED=1 ;;
         --remove-s6) REMOVE_S6=1 ;;
-        -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -104,6 +115,10 @@ conf_bool() {
     case ${v,,} in no|false|0|off|n|f) echo 0 ;; *) echo 1 ;; esac
 }
 JOURNAL=${JOURNAL:-$(conf_bool JOURNAL)}
+if [ -z "$BOOT_ONLY_S6" ]; then
+    BOOT_ONLY_S6=0
+    [ -e "$BOOT_ONLY_S6_FILE" ] && BOOT_ONLY_S6=1
+fi
 if [ -z "$BOOT_DEFAULT" ]; then
     BOOT_DEFAULT=systemd
     [ "$(sed -e 's/#.*//' "$BOOT_DEFAULT_FILE" 2>/dev/null | tr -d ' \t\n')" = s6 ] && BOOT_DEFAULT=s6
@@ -185,7 +200,11 @@ uninstall() {
     confirm "Remove the '$TITLE' boot entry, $S6LI_BASE and sdcompat's files?"
     systemd_default
     remove_grub_entry
-    run rm -f "$KI_PLUGIN" /etc/sdcompat/boot-options "$BOOT_DEFAULT_FILE"
+    run rm -f "$KI_PLUGIN" /etc/sdcompat/boot-options "$BOOT_DEFAULT_FILE" "$BOOT_ONLY_S6_FILE"
+    local img
+    for img in /boot/initramfs-*-s6.img; do
+        [ -e "$img" ] && run rm -f "$img"
+    done
     if grep -q "written by sdcompat's" /etc/s6.conf 2>/dev/null; then
         run rm -f /etc/s6.conf
     fi
@@ -459,6 +478,9 @@ install_sdcompat() {
     copy_tree "$DIST/s6-linux-init/skel" "$SHARE/s6-linux-init/skel"
     run install -Dm0644 "$DIST/rsyslog.conf" "$SHARE/rsyslog.conf"
     run install -Dm0644 "$DIST/selinux/sdcompat.cil" "$SHARE/selinux/sdcompat.cil"
+    run install -Dm0755 "$DIST/initramfs/mkinitramfs" "$LIBEXEC/mkinitramfs"
+    run rm -rf "$SHARE/initramfs"
+    copy_tree "$DIST/initramfs/root" "$SHARE/initramfs"
 }
 
 # Show which builds are installed; the core tools must be from one build
@@ -757,6 +779,16 @@ add_grub_entry() {
         kernel=$(grubby --default-kernel)
     fi
     local kver=${kernel#/boot/vmlinuz-}
+    # The plugin builds the s6 initramfs (--boot-only-s6) while this file
+    # exists, for the kernels below and for every later one.
+    if [ "$BOOT_ONLY_S6" = 1 ]; then
+        command -v mdevd >/dev/null || [ "$DRY" = 1 ] ||
+            die "--boot-only-s6 needs mdevd: build the skarnet RPMs again (dist/rpm/build-skarnet-rpms.sh) and pass --rpms"
+        printf '# The s6 entries boot with the s6 initramfs (setup-fedora.sh --boot-only-s6).\n' |
+            put "$BOOT_ONLY_S6_FILE"
+    elif [ -e "$BOOT_ONLY_S6_FILE" ]; then
+        run rm -f "$BOOT_ONLY_S6_FILE"
+    fi
     if [ -d /boot/loader/entries ] || [ "$DRY" = 1 ]; then
         # The kernel-install plugin copies the BLS entry for each kernel,
         # now and on every future kernel update.
@@ -778,6 +810,10 @@ add_grub_entry() {
         run grubby --add-kernel="$kernel" --initrd="/boot/initramfs-$kver.img" \
             --copy-default --title="$TITLE $kver" --args="$args"
         warn "no BLS entries: future kernels will not get an s6 entry automatically"
+        [ "$BOOT_ONLY_S6" = 1 ] && warn "no BLS entries: --boot-only-s6 is not applied (the entry uses Fedora's initramfs)"
+    fi
+    if [ "$BOOT_ONLY_S6" = 1 ]; then
+        echo "  The s6 entries boot with the s6 initramfs (/boot/initramfs-KVER-s6.img): no systemd at all."
     fi
     set_boot_default "$kver"
 }
@@ -829,6 +865,8 @@ This will set up booting Fedora with s6-linux-init + s6-rc + sdcompat:
   * GRUB:    add "$TITLE" with init=/usr/sbin/init-selinux, no splash$([ "$ENFORCING" = 1 ] || echo ", SELinux permissive"),
              and a kernel-install plugin that adds it for every new kernel;
              default entry: $([ "$BOOT_DEFAULT" = s6 ] && echo "$TITLE (--default-s6)" || echo "the systemd one")
+  * initramfs: $([ "$BOOT_ONLY_S6" = 1 ] && echo "the s6 entry boots with sdcompat's s6 initramfs (s6-svscan as its PID 1,
+             mdevd, passphrase prompt; --boot-only-s6), built for every kernel" || echo "Fedora's (systemd inside) for both entries")
 
 Nothing about the normal systemd boot changes: systemd, dbus-broker, journald
 and all your units stay installed$([ "$BOOT_DEFAULT" = s6 ] && echo ", and the systemd entry stays in the menu" || echo "; the new entry is not made the default").
@@ -852,6 +890,17 @@ EOF
     fi
 }
 
+boot_only_s6_step() {
+    [ "$BOOT_ONLY_S6" = 1 ] || return 0
+    cat <<EOF
+     With the s6 initramfs (--boot-only-s6) the LUKS passphrase prompt is
+     plain text on the console. If it fails it opens a rescue shell (exit it to
+     try again); rd.break on the kernel command line gives a shell before the
+     switch. To boot one time with Fedora's initramfs, change the entry's
+     initrd line from initramfs-KVER-s6.img to initramfs-KVER.img (press e).
+EOF
+}
+
 next_steps() {
     cat <<EOF
 
@@ -866,6 +915,7 @@ $(selinux_step)
   5. If a new s6 database breaks booting, add this to the kernel command
      line in GRUB (press e):
        sdcompat.db=previous    boot the database from before the last change
+$(boot_only_s6_step)
   6. To go back: boot the normal Fedora entry (hold Shift or press Esc for the
      GRUB menu); make it the default again with --default-systemd. To remove
      everything:

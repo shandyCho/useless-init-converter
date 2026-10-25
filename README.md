@@ -161,6 +161,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 |---|---|
 | skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, 서비스 감독, 서비스 데이터베이스. Fedora에 패키지가 없으므로 `--rpms=DIR` 또는 `--build-s6` |
 | s6-frontend (선택) | `s6` 명령([`s6` 명령](#s6-명령-s6-frontend) 참고). 나머지와 함께 빌드됩니다 |
+| mdevd (선택) | s6 initramfs(`--boot-only-s6`)에서 드라이버를 로드합니다. 나머지와 함께 빌드됩니다 |
 | systemd | 설치된 채로 둡니다: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | 시스템 버스(`--systemd-activation`). 사용자 버스는 dbus-broker가 계속 맡습니다 |
 | util-linux | 마운트 유닛과 초기 부팅의 `mount`, `swapon`, `mountpoint` |
@@ -207,7 +208,7 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 ## Fedora에 배포하기 (먼저 VM에서 해 보세요)
 
-Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend를 패키지로 제공하지 않으므로 먼저
+Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd를 패키지로 제공하지 않으므로 먼저
 RPM을 빌드합니다(spec은 `dist/rpm/`에 있으며, 소스는 고정된 SHA-256 값으로 검증합니다).
 
 ```sh
@@ -260,6 +261,7 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 | `--no-resolved` / `--resolved` | s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / resolved로 되돌립니다 |
 | `--enforcing` | s6 부팅 항목에 `enforcing=0`을 추가하지 않습니다 |
 | `--no-grub` | 부팅 항목을 추가하지 않습니다 |
+| `--boot-only-s6` / `--no-boot-only-s6` | s6 항목을 Fedora의 initramfs 대신 sdcompat의 initramfs로 부팅해 systemd가 전혀 실행되지 않게 합니다(아래 참고) / Fedora의 것으로 되돌립니다. 둘 다 없으면 다시 실행해도 선택이 유지됩니다(`/etc/sdcompat/boot-only-s6`) |
 | `--default-s6` / `--default-systemd` | s6 항목을 기본 부팅 항목으로 합니다(나중에 설치되는 커널에도) / systemd 항목을 다시 기본값으로 합니다. 둘 다 없으면 다시 실행해도 선택이 유지됩니다(`/etc/sdcompat/boot-default`). 어느 쪽이든 systemd 항목은 메뉴에 남습니다 |
 | `--uninstall [--remove-s6]` | 부팅 항목과 설치된 파일(그리고 소스로 빌드한 skarnet 도구)을 제거합니다. 설정은 남깁니다 |
 
@@ -273,11 +275,32 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 커널의 systemd 항목으로 되돌립니다. 메뉴가 숨겨져 있을 때 systemd 항목을 고르려면 GRUB이
 시작할 때 Shift를 누르고 있거나 Esc를 누르세요.
 
+**`--boot-only-s6`: systemd 없이 부팅.** Fedora의 initramfs는 dracut이 만들며, 루트로 전환할
+때까지 systemd를 PID 1로 실행합니다. 이 옵션을 주면 s6 항목은 sdcompat의 initramfs로
+부팅합니다(`/boot/initramfs-KVER-s6.img`. kernel-install 플러그인이 커널마다
+`/usr/libexec/sdcompat/mkinitramfs`로 만들며, systemd 항목은 Fedora의 것을 그대로 씁니다). 그
+`/init`(execline)은 **s6-svscan을 PID 1로** 실행하고, s6-svscan은 **mdevd**(skarnet의 uevent
+데몬. `mdevd-coldplug`로 발견된 하드웨어의 드라이버를 장치의 modalias에 따라 로드합니다)와
+`rootfs` 서비스를 감독합니다. 이 서비스는 커널 명령줄의 `root=`, `rootflags=`, `rootfstype=`,
+`ro`/`rw`, `init=`, `rd.luks.uuid=`, `rd.luks.name=`을 읽고, 콘솔에서 LUKS 암호를 묻고(3회,
+`/etc/crypttab`의 `discard`를 따릅니다), 루트를 `/sysroot`에 마운트한 뒤 s6-svscan을 멈춥니다.
+그러면 s6-svscan의 `.s6-svscan/finish`가 `/dev`, `/proc`, `/sys`, `/run`을 옮기고 `init=`
+(`/usr/sbin/init-selinux`)로 `switch_root`합니다. 실패하면 복구 셸을 열고, 셸을 나가면 다시
+시도합니다. `rd.break`는 전환 직전에 셸을 주고, `sdcompat.initrd.timeout=초`는 디스크를 기다리는
+시간(기본 30초)을 정합니다. dracut은 이미지를 만들 때 도구로만 쓰이며(`dracut-install`이
+프로그램을 라이브러리와 함께, 모듈을 의존 모듈과 함께 복사합니다) 부팅 때는 아무것도 실행되지
+않습니다. 제한: 루트는 입력한 암호로 열어야 하고(TPM2/FIDO2/PKCS#11 잠금 해제 없음), plymouth가
+없으며(s6 항목은 원래 없음), 최대 절전 모드 복귀가 없고, 암호 입력에 US가 아닌 키맵을 쓰지
+않습니다. 추가 모듈은 `/etc/sdcompat/initramfs-modules`에 적습니다(한 줄에 이름 또는 `=DIR`
+하나). initramfs에서는 udev가 돌지 않으므로, systemd initramfs가 하듯 LUKS 매핑의 udev 활성화
+기록을 `/run/udev/data`에 남겨 실제 시스템의 coldplug가 `/dev/disk/by-*` 링크를 만들게 합니다.
+
 어떤 systemd 구성 요소를 대체하는지, 그리고 logind와 `systemd --user`를 왜 남기는지
 (GNOME에 필요합니다. 다음 절 참고):
 
 | 역할 | s6 + sdcompat에서 |
 |---|---|
+| Initramfs | Fedora의 것(dracut, systemd가 PID 1). `--boot-only-s6`이면 sdcompat의 것: s6-svscan, mdevd, cryptsetup |
 | PID 1 / 서비스 | s6-linux-init, s6-rc, sdcompat |
 | 시스템 버스 | dbus-daemon (사용자 버스용으로 dbus-broker는 유지) |
 | 로그 | s6 서비스로 실행되는 systemd-journald (`--no-journal`: rsyslog + s6-log) |

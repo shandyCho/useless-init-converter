@@ -64,7 +64,7 @@ rpm -q pam libselinux libseccomp policycoreutils
 
 ## 2. s6 패키지 빌드와 설치
 
-Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend를 패키지로 제공하지 않습니다.
+Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd를 패키지로 제공하지 않습니다.
 빌드 스크립트가 소스를 내려받아 고정된 SHA-256 값으로 검증하고, 의존성 순서대로
 RPM을 빌드합니다.
 
@@ -82,7 +82,7 @@ RPM은 `~/rpmbuild-skarnet/rpms`에 생깁니다. 전부 설치하세요.
 
 ```sh
 sudo dnf install -y ~/rpmbuild-skarnet/rpms/*.rpm
-rpm -q skalibs execline s6 s6-rc s6-linux-init s6-frontend     # 여섯 개가 모두 나와야 합니다
+rpm -q skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd   # 일곱 개가 모두 나와야 합니다
 ```
 
 **패키지 빌드가 실패하면** 로그가 `~/rpmbuild-skarnet/<이름>.build.log`에 있습니다.
@@ -344,13 +344,54 @@ systemd 항목으로 한 번만 부팅하려면 GRUB이 시작할 때 Shift를 �
 systemd를 다시 기본값으로 하려면 `sudo dist/setup-fedora.sh --default-systemd ...`(위와 같은
 옵션)를 실행하세요.
 
+## systemd 없이 부팅하기
+
+`--boot-only-s6`은 s6 항목에 sdcompat의 initramfs를 줍니다. s6-svscan이 그 PID 1이고 mdevd가
+드라이버를 로드하므로, initramfs에서도 systemd가 실행되지 않습니다. LUKS 루트는 암호를 입력해
+열어야 합니다.
+
+먼저 머신을 건드리지 않고 QEMU에서 시험하세요(mdevd가 설치되어 있거나, `mdevd`와
+`mdevd-coldplug`가 있는 디렉터리를 `MDEVD_BIN=DIR`로 주어야 합니다. root는 필요 없습니다):
+
+```sh
+tests/initramfs.sh /tmp/sdc-initramfs
+```
+
+btrfs 루트를 `subvol=root`에 둔 LUKS2 디스크를 만들고, 실행 중인 커널을 s6 initramfs로 부팅해
+시리얼 콘솔에서 암호를 입력합니다. 기대 결과: `passed: 6  failed: 0`(암호 입력, mdevd가
+드라이버를 로드해야 하는 NVMe 디스크, 틀린 암호 세 번 뒤 복구 셸과 재시도, `rd.break`, 디스크
+없음).
+
+그다음 머신에서, 설치할 때와 같은 옵션으로:
+
+```sh
+sudo dist/setup-fedora.sh --enforcing --boot-only-s6 --rpms=$HOME/rpmbuild-skarnet/rpms
+```
+
+| 항목 | 명령 | 기대 결과 |
+|---|---|---|
+| 이미지 | `ls -l /boot/initramfs-*-s6.img` | 설치된 커널마다 하나, 방금 만들어짐 |
+| 항목이 그것을 씀 | `sudo grep ^initrd /boot/loader/entries/*~sdcompat.conf` | `initramfs-<커널>-s6.img`. systemd 항목은 `initramfs-<커널>.img` 그대로 |
+| 암호 입력 | s6 항목으로 부팅 | 평범한 `Enter passphrase for /dev/nvme…:` 프롬프트, 입력 뒤 부팅이 계속됨 |
+| systemd가 실행되지 않음 | `sudo dmesg \| grep -E 'Run /init\|systemd\[1\]\|running in initrd'` | `Run /init as init process`만 나옴 |
+| PID 1 | `cat /proc/1/comm` | `s6-svscan` |
+| LUKS 매핑의 링크 | `ls -l /dev/disk/by-uuid/ \| grep dm-`와 `udevadm info /dev/dm-0 \| grep -E 'DM_NAME\|ID_FS_TYPE'` | 루트 파일 시스템의 UUID가 `../../dm-0`을 가리킴. `DM_NAME=luks-…`, `ID_FS_TYPE=btrfs` |
+| 마운트 | `findmnt -n / /home` | 둘 다 전처럼 LUKS 매핑에서 |
+| 복구(선택) | 틀린 암호를 세 번 입력 | `initramfs: rescue shell …`. `exit`하면 다시 물음 |
+| 커널 업데이트 | `sudo dnf upgrade kernel*` 뒤 처음 두 줄 | 새 커널에 `-s6.img`가 있고 그 s6 항목이 그것을 씀 |
+
+암호 프롬프트가 나오지 않거나 디스크를 찾지 못하면 콘솔에 복구 셸이 열립니다. `dmesg`, `ls /dev`,
+`cat /proc/cmdline`으로 무엇이 없는지 보세요(결과를 보내 주세요). Fedora의 initramfs로 한 번만
+부팅하려면 s6 항목에서 `e`를 눌러 `initramfs-<커널>-s6.img`를 `initramfs-<커널>.img`로 바꾸세요.
+완전히 되돌리려면 `sudo dist/setup-fedora.sh --no-boot-only-s6 ...`을 실행하세요.
+
 ## 제거하기
 
 일반 Fedora 항목으로 부팅한 뒤:
 
 ```sh
 sudo dist/setup-fedora.sh --uninstall
-sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend \
+sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd \
     skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel
 ```
 

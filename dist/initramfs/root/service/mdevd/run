@@ -1,0 +1,5 @@
+#!/usr/bin/execlineb -P
+# The device manager of the s6 initramfs; ready (fd 3) once it listens on
+# the netlink, so rootfs can start the coldplug.
+fdmove -c 2 1
+mdevd -D 3 -f /etc/mdev.conf -F /usr/lib/firmware

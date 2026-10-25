@@ -1,0 +1,18 @@
+#!/usr/bin/execlineb -S0
+# PID 1 of the s6 initramfs (setup-fedora.sh --boot-only-s6). Mounts the
+# kernel filesystems, keeps the kernel's arguments for the real init, and
+# execs s6-svscan on /service: mdevd loads the drivers, rootfs unlocks and
+# mounts the root, and .s6-svscan/finish switches to it.
+#
+# The kernel starts this with no PATH and, without a /dev/console node in
+# the archive, with no stdio: hence the absolute first commands.
+/usr/bin/export PATH /usr/bin:/usr/sbin
+foreground { mount -t devtmpfs -o nosuid,mode=0755 devtmpfs /dev }
+redirfd -r 0 /dev/console
+redirfd -w 1 /dev/console
+fdmove -c 2 1
+foreground { mount -t proc -o nosuid,nodev,noexec proc /proc }
+foreground { mount -t sysfs -o nosuid,nodev,noexec sysfs /sys }
+foreground { mount -t tmpfs -o nosuid,nodev,mode=0755 tmpfs /run }
+foreground { redirfd -w 1 /init-args printf "%s\n" $@ }
+s6-svscan /service

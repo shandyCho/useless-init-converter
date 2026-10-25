@@ -1,0 +1,189 @@
+#!/bin/bash
+# Build the s6 initramfs (setup-fedora.sh --boot-only-s6): s6-svscan is its
+# PID 1, mdevd loads the drivers, and a bash script opens LUKS and mounts the
+# root (see root/ beside this script, installed as /usr/share/sdcompat/initramfs).
+# No systemd and no dracut run at boot; dracut-install only copies binaries
+# with their libraries and kernel modules with their dependencies here.
+#
+#   mkinitramfs [options]
+#     -k KVER           kernel version (default: uname -r)
+#     -o FILE           output (default: /boot/initramfs-KVER-s6.img)
+#     --source DIR      the initramfs tree (default: root/ beside this script,
+#                       else /usr/share/sdcompat/initramfs)
+#     --add-module M    another kernel module (or =DIR of them); repeatable
+#     --add FILE        another file or program (with its libraries); repeatable
+#     --no-microcode    no early CPU microcode
+#
+# Extra modules are also read from /etc/sdcompat/initramfs-modules (one name
+# or =DIR per line). Runs unprivileged when the output is writable.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+# Programs come from the system, not from the caller's PATH (tests set
+# SDCOMPAT_INITRAMFS_PATH to use tools that are not installed).
+PATH=${SDCOMPAT_INITRAMFS_PATH:-/usr/bin:/usr/sbin}
+KVER=$(uname -r)
+OUT=""
+SRC=""
+MICROCODE=1
+EXTRA_MODULES=()
+EXTRA_FILES=()
+MODULES_FILE=${SDCOMPAT_INITRAMFS_MODULES:-/etc/sdcompat/initramfs-modules}
+DI=/usr/lib/dracut/dracut-install
+
+die() { echo "mkinitramfs: $*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+    case $1 in
+    -k) KVER=$2; shift ;;
+    -o) OUT=$2; shift ;;
+    --source) SRC=$2; shift ;;
+    --add-module) EXTRA_MODULES+=("$2"); shift ;;
+    --add) EXTRA_FILES+=("$2"); shift ;;
+    --no-microcode) MICROCODE=0 ;;
+    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
+    *) die "unknown option: $1" ;;
+    esac
+    shift
+done
+OUT=${OUT:-/boot/initramfs-$KVER-s6.img}
+if [ -z "$SRC" ]; then
+    SRC=$HERE/root
+    [ -d "$SRC" ] || SRC=/usr/share/sdcompat/initramfs
+fi
+KDIR=/lib/modules/$KVER
+[ -d "$SRC" ] || die "$SRC: no initramfs tree"
+[ -d "$KDIR" ] || die "$KDIR: no modules for kernel $KVER"
+[ -x "$DI" ] || die "$DI missing (dnf install dracut)"
+for p in cpio zstd depmod mdevd s6-svscan execlineb cryptsetup; do
+    command -v "$p" >/dev/null || die "$p not found"
+done
+
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/sdcompat-initramfs.XXXXXX")
+trap 'rm -rf "$WORK"' EXIT
+R=$WORK/root
+
+# The host's /usr layout (Fedora: /bin, /sbin, /lib, /lib64 and /usr/sbin
+# are symlinks), so paths in scripts and libraries resolve the same way.
+mkdir -p "$R/usr/bin" "$R/usr/lib" "$R/usr/lib64"
+for d in usr/sbin bin sbin lib lib64; do
+    if [ -L "/$d" ]; then
+        ln -s "$(readlink "/$d")" "$R/$d"
+    else
+        mkdir -p "$R/$d"
+    fi
+done
+mkdir -p "$R/dev" "$R/proc" "$R/sys" "$R/run" "$R/sysroot" "$R/tmp" "$R/etc" "$R/usr/lib/firmware"
+cp -a "$SRC/." "$R/"
+
+# inst PATH: one program or file with its libraries. A symlink to a
+# multicall binary (execline's programs, kmod's modprobe) is copied as the
+# link plus its target: dracut-install mixes such links up when given many.
+inst() {
+    local p=$1 t
+    if [ -L "$p" ]; then
+        t=$(readlink "$p")
+        case $t in
+        /*) inst "$t" ;;
+        *) inst "$(dirname "$p")/$t" ;;
+        esac
+        mkdir -p "$R$(dirname "$p")"
+        [ -e "$R$p" ] || [ -L "$R$p" ] || ln -s "$t" "$R$p"
+    else
+        "$DI" -D "$R" -l "$p"
+    fi
+}
+# prog NAME: inst the program NAME as found in PATH (its directory
+# resolved: /sbin/x is installed as /usr/bin/x on Fedora). One found
+# outside /usr (a test's PATH) goes to /usr/bin.
+prog() {
+    local p d
+    p=$(type -P "$1") || die "$1 not found"
+    d=$(readlink -f "$(dirname "$p")")
+    case $d in
+    /usr/*) inst "$d/$1" ;;
+    *) "$DI" -D "$R" -l "$(readlink -f "$p")" "/usr/bin/$1" ;;
+    esac
+}
+
+# What /init, the services, mdev.conf and the rescue shell run.
+for p in execlineb export foreground redirfd fdmove importas \
+    s6-svscan s6-supervise s6-svscanctl s6-svc s6-svwait \
+    mdevd mdevd-coldplug \
+    bash mount umount mountpoint switch_root setsid blkid cryptsetup \
+    modprobe insmod lsmod depmod \
+    printf cat sleep mkdir ls ln rm dmesg; do
+    prog "$p"
+done
+type -P btrfs >/dev/null && prog btrfs
+# s6-svwait (rootfs waits for mdevd) starts s6's ftrigrd helper.
+[ -x /usr/libexec/s6/s6-ftrigrd ] || die "/usr/libexec/s6/s6-ftrigrd missing (s6's helper for s6-svwait)"
+inst /usr/libexec/s6/s6-ftrigrd
+ln -sfn bash "$R/usr/bin/sh"
+# glibc loads libgcc_s for thread cancellation (cryptsetup's argon2 threads).
+[ -e /usr/lib64/libgcc_s.so.1 ] && inst /usr/lib64/libgcc_s.so.1
+for f in "${EXTRA_FILES[@]}"; do
+    inst "$f"
+done
+[ -r /etc/crypttab ] && cp /etc/crypttab "$R/etc/crypttab"
+
+# Kernel modules: what can sit between the CPU and the root filesystem or
+# the keyboard. mdevd loads only those the hardware asks for.
+modules=(
+    "=drivers/nvme" "=drivers/ata" "=drivers/scsi" "=drivers/md" "=drivers/block"
+    "=drivers/mmc" "=drivers/virtio" "=drivers/pci/controller"
+    "=drivers/usb/host" "=drivers/usb/storage" "=drivers/hid"
+    "=drivers/input/keyboard" "=drivers/input/serio"
+    "=crypto" "=arch/x86/crypto" "=lib/crypto"
+    dm_mod dm_crypt btrfs ext4 xfs vfat nls_cp437 nls_iso8859-1
+)
+if [ -r "$MODULES_FILE" ]; then
+    while read -r m _; do
+        case $m in '' | '#'*) continue ;; esac
+        modules+=("$m")
+    done <"$MODULES_FILE"
+fi
+modules+=("${EXTRA_MODULES[@]}")
+"$DI" -D "$R" --kerneldir "$KDIR" \
+    --firmwaredirs "/usr/lib/firmware/updates/$KVER:/usr/lib/firmware/updates:/usr/lib/firmware/$KVER:/usr/lib/firmware" \
+    -o -m "${modules[@]}"
+mkdir -p "$R/usr/lib/modules/$KVER"
+for f in modules.builtin modules.builtin.modinfo modules.order; do
+    [ -e "$KDIR/$f" ] && cp "$KDIR/$f" "$R/usr/lib/modules/$KVER/"
+done
+depmod -b "$R" "$KVER"
+
+# Early microcode: an uncompressed cpio in front, as the kernel wants it.
+early=$WORK/early.cpio
+: >"$early"
+if [ "$MICROCODE" = 1 ]; then
+    vendor=$(sed -n 's/^vendor_id[[:space:]]*: //p' /proc/cpuinfo | head -n 1)
+    fam=$(sed -n 's/^cpu family[[:space:]]*: //p' /proc/cpuinfo | head -n 1)
+    model=$(sed -n 's/^model[[:space:]]*: //p' /proc/cpuinfo | head -n 1)
+    step=$(sed -n 's/^stepping[[:space:]]*: //p' /proc/cpuinfo | head -n 1)
+    ucode=""
+    case $vendor in
+    AuthenticAMD)
+        ucode=/usr/lib/firmware/amd-ucode/microcode_amd.bin
+        [ "${fam:-0}" -ge 21 ] && ucode=$(printf '/usr/lib/firmware/amd-ucode/microcode_amd_fam%02xh.bin' "$fam")
+        ;;
+    GenuineIntel)
+        ucode=$(printf '/usr/lib/firmware/intel-ucode/%02x-%02x-%02x' "${fam:-0}" "${model:-0}" "${step:-0}")
+        ;;
+    esac
+    if [ -n "$ucode" ] && [ -r "$ucode" ]; then
+        mkdir -p "$WORK/early/kernel/x86/microcode"
+        cp "$ucode" "$WORK/early/kernel/x86/microcode/$vendor.bin"
+        (cd "$WORK/early" && find . -print0 | sort -z | cpio --null -o -H newc -R 0:0 --quiet) >"$early"
+    fi
+fi
+
+# Owned by root in the archive whoever builds it.
+tmp=$OUT.tmp.$$
+umask 077
+{
+    cat "$early"
+    (cd "$R" && find . -print0 | sort -z | cpio --null -o -H newc -R 0:0 --quiet) | zstd -q -15 -T0
+} >"$tmp" || { rm -f "$tmp"; die "writing $OUT failed"; }
+mv -f "$tmp" "$OUT"
+echo "mkinitramfs: $OUT ($(du -h "$OUT" | cut -f1), kernel $KVER)"

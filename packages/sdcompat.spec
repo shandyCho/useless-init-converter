@@ -35,6 +35,8 @@ Recommends:     rsyslog
 Recommends:     earlyoom
 # The s6 command; setup-fedora.sh writes /etc/s6.conf for it.
 Recommends:     s6-frontend
+# The s6 initramfs (setup-fedora.sh --boot-only-s6) loads drivers with it.
+Recommends:     mdevd
 # Separate projects (standalone/), each its own package; sdcompat works
 # without them. sdcompat-journal-relay is needed for JOURNAL=no.
 Recommends:     sdcompat-fdstore
@@ -65,6 +67,7 @@ cargo test --release --offline -p sdcompat -p sdcompat-version
 %install
 install -Dm0755 target/release/sdcompat %{buildroot}%{_libexecdir}/sdcompat/sdcompat
 install -Dm0755 dist/early %{buildroot}%{_libexecdir}/sdcompat/early
+install -Dm0755 dist/initramfs/mkinitramfs %{buildroot}%{_libexecdir}/sdcompat/mkinitramfs
 install -d %{buildroot}%{_bindir}
 ln -s ../libexec/sdcompat/sdcompat %{buildroot}%{_bindir}/sdcompat
 install -Dm0644 dist/sdcompat.conf %{buildroot}%{_sysconfdir}/sdcompat/sdcompat.conf
@@ -73,6 +76,7 @@ cp -a dist/s6 %{buildroot}%{_sysconfdir}/sdcompat/s6
 install -d %{buildroot}%{_datadir}/sdcompat/s6-linux-init
 cp -a dist/s6-linux-init/skel %{buildroot}%{_datadir}/sdcompat/s6-linux-init/skel
 install -Dm0644 dist/rsyslog.conf %{buildroot}%{_datadir}/sdcompat/rsyslog.conf
+cp -a dist/initramfs/root %{buildroot}%{_datadir}/sdcompat/initramfs
 install -Dm0755 dist/s6-linux-init/init-selinux %{buildroot}%{_sbindir}/init-selinux
 install -Dm0644 dist/selinux/sdcompat.cil %{buildroot}%{_datadir}/sdcompat/selinux/sdcompat.cil
 install -Dm0755 dist/kernel-install/90-sdcompat.install %{buildroot}%{_prefix}/lib/kernel/install.d/90-sdcompat.install
@@ -108,6 +112,7 @@ fi
 %dir %{_libexecdir}/sdcompat
 %{_libexecdir}/sdcompat/sdcompat
 %{_libexecdir}/sdcompat/early
+%{_libexecdir}/sdcompat/mkinitramfs
 %{_sbindir}/init-selinux
 %{_datadir}/sdcompat/
 %dir %{_sysconfdir}/sdcompat

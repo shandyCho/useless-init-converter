@@ -1,0 +1,20 @@
+#!/bin/bash
+# s6-svscan execs this as PID 1 when it stops: normally after rootfs has
+# mounted the root, then switch to it. Without a root (s6-svscan was
+# stopped some other way) there is nothing to switch to: a shell, as PID 1
+# must not exit.
+exec </dev/console >/dev/console 2>&1
+init=$(cat /init-target 2>/dev/null)
+if [ -z "$init" ] || ! mountpoint -q /sysroot; then
+    echo "initramfs: s6-svscan stopped without a root to switch to"
+    while :; do bash -i; done
+fi
+# The kernel's arguments for init, as /init kept them.
+args=()
+while IFS= read -r a; do
+    [ -n "$a" ] && args+=("$a")
+done </init-args
+for m in dev proc sys run; do
+    mount --move "/$m" "/sysroot/$m"
+done
+exec switch_root /sysroot "$init" "${args[@]}"

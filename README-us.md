@@ -184,6 +184,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 |---|---|
 | skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, supervision, the service database. Fedora doesn't package them: `--rpms=DIR` or `--build-s6` |
 | s6-frontend (optional) | The `s6` command (see [The `s6` command](#the-s6-command-s6-frontend)); built with the others |
+| mdevd (optional) | Loads the drivers in the s6 initramfs (`--boot-only-s6`); built with the others |
 | systemd | Stays installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | The system bus (`--systemd-activation`); dbus-broker stays for the user bus |
 | util-linux | `mount`, `swapon`, `mountpoint` for mount units and early boot |
@@ -230,7 +231,7 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 ## Deploying on Fedora (do it in a VM first)
 
-Fedora doesn't package skalibs, execline, s6, s6-rc, s6-linux-init or s6-frontend, so build
+Fedora doesn't package skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend or mdevd, so build
 RPMs for them first (specs in `dist/rpm/`, sources checked against pinned SHA-256 sums):
 
 ```sh
@@ -286,6 +287,7 @@ Other options:
 | `--no-resolved` / `--resolved` | No systemd-resolved on the s6 boot: NetworkManager handles DNS itself / back to resolved |
 | `--enforcing` | Don't add `enforcing=0` to the s6 boot entry |
 | `--no-grub` | Don't add the boot entry |
+| `--boot-only-s6` / `--no-boot-only-s6` | Boot the s6 entry with sdcompat's own initramfs instead of Fedora's, so no systemd runs at all (see below) / back to Fedora's. Without them a re-run keeps the choice (`/etc/sdcompat/boot-only-s6`) |
 | `--default-s6` / `--default-systemd` | Make the s6 entry the default boot entry, also for kernels installed later / make the systemd entry the default again. Without them a re-run keeps the choice (`/etc/sdcompat/boot-default`). The systemd entry stays in the menu either way |
 | `--uninstall [--remove-s6]` | Remove the entry and installed files (and the source-built skarnet tools); keeps your config |
 
@@ -301,11 +303,39 @@ kernel is removed, it picks the newest s6 entry left. `--uninstall` and
 entry. To reach the systemd entry when the menu is hidden, hold Shift or
 press Esc while GRUB starts.
 
+**`--boot-only-s6`: no systemd at all.** Fedora's initramfs is built by dracut
+and runs systemd as its PID 1 until it switches to the root. With this
+option the s6 entry boots with sdcompat's own initramfs instead
+(`/boot/initramfs-KVER-s6.img`, built by `/usr/libexec/sdcompat/mkinitramfs`
+for every kernel by the kernel-install plugin; the systemd entry keeps
+Fedora's). Its `/init` (execline) execs **s6-svscan as PID 1**, which
+supervises **mdevd** (skarnet's uevent daemon: `mdevd-coldplug` makes it load
+the drivers for the hardware found, from each device's modalias) and a
+`rootfs` service. That service reads `root=`, `rootflags=`, `rootfstype=`,
+`ro`/`rw`, `init=`, `rd.luks.uuid=` and `rd.luks.name=` from the kernel
+command line, asks for the LUKS passphrase on the console (3 tries;
+`discard` from `/etc/crypttab` is honoured), mounts the root on `/sysroot`
+and stops s6-svscan, whose `.s6-svscan/finish` moves `/dev`, `/proc`, `/sys`
+and `/run` and runs `switch_root` to `init=` (`/usr/sbin/init-selinux`).
+On a failure it opens a rescue shell; exiting it tries again. `rd.break`
+gives a shell before the switch, `sdcompat.initrd.timeout=SECONDS` sets how
+long to wait for the disks (30). dracut is used only as a tool when the
+image is built (`dracut-install` copies programs with their libraries and
+modules with their dependencies); nothing of it runs at boot. Limits: the
+root must be opened by a typed passphrase (no TPM2/FIDO2/PKCS#11 unlock), no
+plymouth (the s6 entry has none anyway), no hibernation resume, no
+non-US keymap for the prompt. Extra modules go in
+`/etc/sdcompat/initramfs-modules` (one name or `=DIR` per line). Because
+udev does not run in it, the initramfs leaves udev's activation record for
+the LUKS mapping in `/run/udev/data`, as a systemd initramfs would, so the
+real system's coldplug gives it its `/dev/disk/by-*` links.
+
 What systemd components are replaced, and why logind and `systemd --user` stay
 (GNOME needs them; see the next section):
 
 | Role | Under s6 + sdcompat |
 |---|---|
+| Initramfs | Fedora's (dracut, systemd as its PID 1); with `--boot-only-s6` sdcompat's: s6-svscan, mdevd, cryptsetup |
 | PID 1 / services | s6-linux-init, s6-rc, sdcompat |
 | System bus | dbus-daemon (dbus-broker stays for the user bus) |
 | Logging | systemd-journald as an s6 service (`--no-journal`: rsyslog + s6-log) |

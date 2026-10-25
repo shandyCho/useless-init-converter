@@ -2,6 +2,9 @@
 # kernel-install plugin: keep a "Fedora (s6 + sdcompat)" boot entry for every
 # installed kernel. It copies the BLS entry that 20-grub.install just wrote
 # and adds the s6 options. Options come from /etc/sdcompat/boot-options.
+# With /etc/sdcompat/boot-only-s6 (setup-fedora.sh --boot-only-s6) it also
+# builds the s6 initramfs (initramfs-VERSION-s6.img, PID 1 s6-svscan, no
+# systemd) and boots the s6 entry with it; the systemd entry keeps Fedora's.
 #   kernel-install add VERSION IMAGE  /  kernel-install remove VERSION
 COMMAND=$1
 KVER=$2
@@ -11,6 +14,9 @@ OPTS_FILE=${SDCOMPAT_BOOT_OPTIONS:-/etc/sdcompat/boot-options}
 # "s6" here (setup-fedora.sh --default-s6) keeps the s6 entry the default.
 DEFAULT_FILE=${SDCOMPAT_BOOT_DEFAULT:-/etc/sdcompat/boot-default}
 EDITENV=${SDCOMPAT_GRUB_EDITENV:-grub2-editenv}
+ONLY_S6_FILE=${SDCOMPAT_BOOT_ONLY_S6:-/etc/sdcompat/boot-only-s6}
+MKINITRAMFS=${SDCOMPAT_MKINITRAMFS:-/usr/libexec/sdcompat/mkinitramfs}
+BOOT=${SDCOMPAT_BOOT_DIR:-/boot}
 [ -d "$ENTRIES" ] || exit 0
 
 s6_default() {
@@ -38,8 +44,23 @@ add)
     # update keeps picking it. "-sdcompat" sorted first; drop that name.
     rm -f "${src%.conf}-sdcompat.conf"
     dest="${src%.conf}~sdcompat.conf"
+    # The s6 initramfs replaces Fedora's on the initrd line (a tuned or
+    # microcode image beside it stays). If it can't be built, the entry
+    # keeps Fedora's and still boots s6, with systemd in the initramfs.
+    initrd=""
+    if [ -r "$ONLY_S6_FILE" ] && [ -e "$BOOT/initramfs-$KVER.img" ]; then
+        if "$MKINITRAMFS" -k "$KVER" -o "$BOOT/initramfs-$KVER-s6.img"; then
+            initrd="s|initramfs-$KVER\.img|initramfs-$KVER-s6.img|"
+        else
+            echo "90-sdcompat: building the s6 initramfs for $KVER failed; the s6 entry uses Fedora's" >&2
+            rm -f "$BOOT/initramfs-$KVER-s6.img"
+        fi
+    else
+        rm -f "$BOOT/initramfs-$KVER-s6.img"
+    fi
     sed -e "s/^title .*/title $TITLE $KVER/" \
-        -e "/^options /{s/ rhgb//; s/ quiet//; s|\$| $args|}" "$src" >"$dest"
+        -e "/^options /{s/ rhgb//; s/ quiet//; s|\$| $args|}" \
+        -e "/^initrd /{${initrd}}" "$src" >"$dest"
     # On a kernel update 20-grub.install names the new systemd entry in
     # tmp_saved_entry, and 95-set-boot-entry.install makes that the
     # saved_entry after checking the initrd. Name the s6 entry instead.
@@ -55,6 +76,7 @@ remove)
     for f in "$ENTRIES"/*"$KVER"~sdcompat.conf "$ENTRIES"/*"$KVER"-sdcompat.conf; do
         [ -e "$f" ] && rm -f "$f"
     done
+    rm -f "$BOOT/initramfs-$KVER-s6.img"
     # The default s6 entry went with its kernel: the newest s6 entry left
     # (GRUB would otherwise fall back to the first entry, a systemd one).
     if s6_default && [ -n "$saved" ] && [ ! -e "$ENTRIES/$saved.conf" ]; then

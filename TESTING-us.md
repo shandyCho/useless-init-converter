@@ -67,7 +67,7 @@ rpm -q pam libselinux libseccomp policycoreutils
 
 ## 2. Build and install the s6 packages
 
-Fedora does not package skalibs, execline, s6, s6-rc, s6-linux-init or s6-frontend. The
+Fedora does not package skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend or mdevd. The
 build script downloads them, checks them against pinned SHA-256 sums and builds
 RPMs in dependency order:
 
@@ -85,7 +85,7 @@ The RPMs end up in `~/rpmbuild-skarnet/rpms`. Install all of them:
 
 ```sh
 sudo dnf install -y ~/rpmbuild-skarnet/rpms/*.rpm
-rpm -q skalibs execline s6 s6-rc s6-linux-init s6-frontend     # all six must be listed
+rpm -q skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd   # all seven must be listed
 ```
 
 **If a package fails to build**, the log is in `~/rpmbuild-skarnet/<name>.build.log`.
@@ -365,13 +365,56 @@ To reach the systemd entry once, hold Shift or press Esc while GRUB starts
 and pick it. To make systemd the default again:
 `sudo dist/setup-fedora.sh --default-systemd ...` (the same options as above).
 
+## Booting with no systemd at all
+
+`--boot-only-s6` gives the s6 entry sdcompat's own initramfs: s6-svscan is
+its PID 1 and mdevd loads the drivers, so systemd never runs, not even in
+the initramfs. The LUKS root must be unlocked by typing the passphrase.
+
+First test it without touching the machine, in QEMU (needs mdevd installed,
+or `MDEVD_BIN=DIR` holding `mdevd` and `mdevd-coldplug`; no root):
+
+```sh
+tests/initramfs.sh /tmp/sdc-initramfs
+```
+
+It makes a LUKS2 disk with a btrfs root in `subvol=root`, boots the running
+kernel with the s6 initramfs and types the passphrase on the serial console.
+Expected: `passed: 6  failed: 0` (passphrase, an NVMe disk whose driver mdevd
+must load, three wrong passphrases then the rescue shell and a retry,
+`rd.break`, no disk).
+
+Then on the machine, with the same options as your install:
+
+```sh
+sudo dist/setup-fedora.sh --enforcing --boot-only-s6 --rpms=$HOME/rpmbuild-skarnet/rpms
+```
+
+| What | Command | Expected |
+|---|---|---|
+| The image | `ls -l /boot/initramfs-*-s6.img` | one per installed kernel, built just now |
+| The entry uses it | `sudo grep ^initrd /boot/loader/entries/*~sdcompat.conf` | `initramfs-<kernel>-s6.img`; the systemd entries keep `initramfs-<kernel>.img` |
+| The prompt | boot the s6 entry | a plain `Enter passphrase for /dev/nvme…:` prompt; the boot goes on after it |
+| No systemd ran | `sudo dmesg \| grep -E 'Run /init\|systemd\[1\]\|running in initrd'` | only `Run /init as init process` |
+| PID 1 | `cat /proc/1/comm` | `s6-svscan` |
+| The LUKS mapping's links | `ls -l /dev/disk/by-uuid/ \| grep dm-` and `udevadm info /dev/dm-0 \| grep -E 'DM_NAME\|ID_FS_TYPE'` | the root filesystem's UUID points at `../../dm-0`; `DM_NAME=luks-…`, `ID_FS_TYPE=btrfs` |
+| Mounts | `findmnt -n / /home` | both from the LUKS mapping, as before |
+| Rescue (optional) | type a wrong passphrase three times | `initramfs: rescue shell …`; `exit` asks again |
+| A kernel update | `sudo dnf upgrade kernel*`, then the first two rows | the new kernel has its `-s6.img` and its s6 entry uses it |
+
+If the prompt never comes or the disk is not found, the rescue shell is on
+the console: `dmesg`, `ls /dev`, `cat /proc/cmdline` show what is missing
+(send them). To boot once with Fedora's initramfs, press `e` on the s6 entry
+and change `initramfs-<kernel>-s6.img` to `initramfs-<kernel>.img`. To go
+back for good: `sudo dist/setup-fedora.sh --no-boot-only-s6 ...`.
+
 ## Removing it
 
 Boot the normal Fedora entry, then:
 
 ```sh
 sudo dist/setup-fedora.sh --uninstall
-sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend \
+sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd \
     skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel
 ```
 

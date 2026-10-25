@@ -1,0 +1,121 @@
+#!/bin/bash
+# The s6 initramfs's one job: open the LUKS volumes named on the kernel
+# command line, mount the root on /sysroot, then stop s6-svscan, whose
+# .s6-svscan/finish switches to it. On any failure: a rescue shell on the
+# console; when it exits, s6-supervise runs this again.
+#
+# Kernel options read: root= (UUID=, LABEL=, PARTUUID=, PARTLABEL=, /dev/...),
+# rootfstype=, rootflags=, ro/rw, init=, rd.luks.uuid= (luks-UUID or UUID),
+# rd.luks.name=UUID=NAME, rd.luks=0, rd.break (shell before switching),
+# sdcompat.initrd.timeout=SECONDS (wait for disks, default 30).
+exec 2>&1
+export DM_DISABLE_UDEV=1
+SYSROOT=/sysroot
+
+say() { printf 'initramfs: %s\n' "$*"; }
+
+rescue() {
+    say "$*"
+    say "rescue shell: fix it and exit to try again (the root goes to $SYSROOT)"
+    setsid -c bash -i
+    exit 1
+}
+
+root="" fstype=auto flags="" mode=ro init=/sbin/init timeout=30 brk=0 luks=1
+declare -A luks_name=()
+read -r -a args </proc/cmdline
+for a in "${args[@]}"; do
+    case $a in
+    root=*) root=${a#root=} ;;
+    rootfstype=*) fstype=${a#rootfstype=} ;;
+    rootflags=*) flags=${flags:+$flags,}${a#rootflags=} ;;
+    ro | rw) mode=$a ;;
+    init=*) init=${a#init=} ;;
+    rd.luks=0) luks=0 ;;
+    rd.luks.uuid=*)
+        u=${a#rd.luks.uuid=}
+        u=${u#luks-}
+        luks_name[$u]=luks-$u
+        ;;
+    rd.luks.name=*=*)
+        u=${a#rd.luks.name=}
+        luks_name[${u%%=*}]=${u#*=}
+        ;;
+    rd.break) brk=1 ;;
+    sdcompat.initrd.timeout=*) timeout=${a#sdcompat.initrd.timeout=} ;;
+    esac
+done
+[ -n "$root" ] || rescue "no root= on the kernel command line"
+
+# mdevd loads the drivers; the coldplug replays what came before it.
+s6-svwait -U -t 10000 /service/mdevd || say "mdevd is not ready; trying anyway"
+mdevd-coldplug
+modprobe -q dm_crypt
+
+# find_dev SPEC: the device for root=-style SPEC, waiting up to $timeout.
+find_dev() {
+    local spec=$1 dev="" n=0
+    while :; do
+        case $spec in
+        UUID=* | LABEL=* | PARTUUID=* | PARTLABEL=*) dev=$(blkid -l -o device -t "$spec" 2>/dev/null) ;;
+        /dev/*) [ -b "$spec" ] && dev=$spec ;;
+        *) dev=$(blkid -l -o device -t "UUID=$spec" 2>/dev/null) ;;
+        esac
+        [ -n "$dev" ] && { echo "$dev"; return 0; }
+        [ "$n" -ge $((timeout * 4)) ] && return 1
+        [ "$n" = 8 ] && say "waiting for $spec ..." >&2
+        n=$((n + 1))
+        sleep 0.25
+    done
+}
+
+# Options from /etc/crypttab (copied from the host): only discard matters.
+crypt_opts() {
+    local name dev opts
+    [ -r /etc/crypttab ] || return 0
+    while read -r name dev _ opts; do
+        case $name in '' | '#'*) continue ;; esac
+        [ "$dev" = "UUID=$1" ] || [ "$name" = "$2" ] || continue
+        case ,$opts, in *,discard,*) echo --allow-discards ;; esac
+    done </etc/crypttab
+}
+
+if [ "$luks" = 1 ]; then
+    mkdir -p /run/cryptsetup
+    for u in "${!luks_name[@]}"; do
+        name=${luks_name[$u]}
+        [ -b "/dev/mapper/$name" ] && continue
+        dev=$(find_dev "UUID=$u") || rescue "LUKS device UUID=$u not found"
+        # shellcheck disable=SC2046 # crypt_opts prints whole options
+        cryptsetup open --type luks --tries 3 $(crypt_opts "$u" "$name") "$dev" "$name" \
+            || rescue "could not open $dev"
+    done
+fi
+
+# Fedora's 10-dm.rules ignore a coldplug "add" event for a dm device unless
+# the udev database says it was activated (DM_UDEV_PRIMARY_SOURCE_FLAG):
+# the real system's coldplug would give the LUKS mapping no /dev/disk/by-*
+# links. A systemd initramfs leaves its udev database in /run; this leaves
+# the record udev would have made when the device was activated.
+mkdir -p /run/udev/data
+for d in /sys/block/dm-*; do
+    [ -r "$d/dev" ] || continue
+    printf 'E:DM_UDEV_PRIMARY_SOURCE_FLAG=1\nE:DM_UDEV_RULES_VSN=2\n' >"/run/udev/data/b$(cat "$d/dev")"
+done
+
+dev=$(find_dev "$root") || rescue "root device $root not found"
+# A btrfs root may span devices: register them all before mounting.
+if command -v btrfs >/dev/null && { [ "$fstype" = btrfs ] || [ "$(blkid -o value -s TYPE "$dev")" = btrfs ]; }; then
+    btrfs device scan >/dev/null 2>&1
+fi
+mkdir -p "$SYSROOT"
+mountpoint -q "$SYSROOT" ||
+    mount -t "$fstype" -o "$mode${flags:+,$flags}" "$dev" "$SYSROOT" ||
+    rescue "could not mount $dev on $SYSROOT"
+[ -x "$SYSROOT$init" ] || [ -L "$SYSROOT$init" ] || rescue "no $init on the root"
+[ "$brk" = 1 ] && { say "rd.break: shell before switching to the root"; setsid -c bash -i; }
+
+# finish (s6-svscan's last act, as PID 1) execs the real init.
+printf '%s\n' "$init" >/init-target
+s6-svc -O /service/rootfs
+exec s6-svscanctl -t /service
