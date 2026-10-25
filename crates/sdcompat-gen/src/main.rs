@@ -166,7 +166,7 @@ fn main() {
         "is-enabled" => {
             let mut code = 1;
             for n in rest {
-                match install::unit_file_state(&cfg, n) {
+                match install::unit_file_state(&cfg, n).map(|s| install::set_file_state(&cfg, n, s)) {
                     Ok(s) => {
                         if s.starts_with("enabled") || s == "static" || s == "alias" {
                             code = 0;

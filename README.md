@@ -364,11 +364,17 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 - 처음 보는 서비스는 systemd의 상태에서 시작합니다. `default.target`이 끌어들이는 것
   (systemd가 활성화한 유닛)은 `active`, 나머지는 `usable`이 됩니다. **그다음부터는 세트가
   정합니다**: `systemctl enable/disable`은 여전히 systemd의 심볼릭 링크를 쓰지만
-  (`systemctl is-enabled`가 그것을 보여 줍니다) 부팅할 것을 바꾸지는 않습니다.
+  부팅할 것을 바꾸지는 않습니다. `systemctl is-enabled`, `systemctl status`,
+  `list-unit-files`는 세트를 보여 줍니다: `always`/`active`는 `enabled`, `usable`은
+  `disabled`, `masked`는 `masked`입니다(`static`, `indirect`, `alias`는 systemd가 보는
+  그대로입니다).
 - `systemctl daemon-reload`와 `sdcompat reload`(패키지가 바뀌면 dnf의 파일 트리거도 실행)는
   스토어를 다시 만들고 저장소를 동기화한 뒤 `current`를 커밋해 부팅 및 live 데이터베이스로
   설치합니다. 커밋 전에 `s6-rc-set-fix -u`를 실행해 `active` 서비스가 의존하는 것을
-  활성화하고(커밋은 일관성 없는 세트를 거부합니다), 옮긴 것을 출력합니다.
+  활성화하고(커밋은 일관성 없는 세트를 거부합니다), 옮긴 것을 출력합니다. 서비스가 더는
+  `active`가 아닌데 남아 있는 그 서비스의 로거(`s6 set disable -p`는 의존 대상인 로거를
+  그대로 둡니다)는 `usable`이 됩니다. 로거는 여전히 서비스와 함께 시작되고, 서비스를
+  활성화하면 다시 `active`가 됩니다.
 - 부팅은 설치된 데이터베이스의 `default` 번들을 그대로 시작합니다. 부팅 때는 아무것도
   다시 만들지 않습니다. systemd 부팅에서 바꾼 유닛은 다음 reload 때 반영됩니다.
 

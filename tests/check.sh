@@ -247,7 +247,8 @@ out=$($B call $MGR EnableUnitFiles asbb 1 forking.service false false)
 expect_eq "enable without [Install]" "$out" "ba(sss) false 0"
 out=$($B call $MGR DisableUnitFiles asb 1 hello.service false)
 case "$out" in *unlink*) ok "disable removed links" ;; *) bad "disable: $out" ;; esac
-expect_eq "UnitFileState after disable" "$(prop hello.service Unit UnitFileState)" "disabled"
+# The s6 set decides what boots; systemctl disable only removes the links.
+expect_eq "UnitFileState after disable follows the s6 set" "$(prop hello.service Unit UnitFileState)" "enabled"
 out=$($B call $MGR EnableUnitFiles asbb 1 hello.service false false)
 case "$out" in *symlink*) ok "enable created links" ;; *) bad "enable: $out" ;; esac
 call Reload && ok "daemon-reload"
@@ -797,6 +798,9 @@ s6-rc-set-change -r "$W/repo" current usable hello.service 2>/dev/null
 call Reload
 expect_eq "a reload keeps the set's choice" "$(rx hello.service)" "usable"
 in_default hello.service && bad "a usable service is still in the default bundle" || ok "a usable service is not in the default bundle"
+expect_eq "UnitFileState of a usable service" "$(prop hello.service Unit UnitFileState)" "disabled"
+# JOURNAL=no: the service's logger follows it out of the boot.
+[ -n "$(rx hello.service.log)" ] && expect_eq "the logger of a usable service is usable" "$(rx hello.service.log)" "usable"
 "$GEN" --config "$W/sdcompat.conf" disable repo-new.service >/dev/null
 call Reload && expect_eq "systemctl disable leaves the set alone" "$(rx repo-new.service)" "active"
 prev=$(readlink -f "$W/state/compiled.previous")
@@ -804,6 +808,8 @@ prev=$(readlink -f "$W/state/compiled.previous")
 expect_eq "older boot databases are removed" "$(find "$W/state" -maxdepth 1 -name '.current:*' | wc -l)" "2"
 s6-rc-set-change -r "$W/repo" current active hello.service 2>/dev/null
 call Reload
+expect_eq "UnitFileState of an active service" "$(prop hello.service Unit UnitFileState)" "enabled"
+[ -n "$(rx hello.service.log)" ] && expect_eq "the logger is active again with its service" "$(rx hello.service.log)" "active"
 
 section "end state"
 # A job that never finishes (logind's stop of user@0 did) holds everyone

@@ -268,6 +268,7 @@ impl Daemon {
                 Some(v) => v,
                 None => {
                     let v = install::unit_file_state(&self.cfg, id).unwrap_or_default();
+                    let v = install::set_file_state(&self.cfg, id, v);
                     self.file_state_cache.lock().unwrap().insert(id.to_string(), v.clone());
                     v
                 }

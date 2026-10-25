@@ -1402,6 +1402,17 @@ impl Daemon {
         self.reply(c, msg, &()).await
     }
 
+    /// install::list_unit_files() with the states as the s6 set has them.
+    fn list_unit_files(&self) -> Vec<(String, String)> {
+        install::list_unit_files(&self.cfg)
+            .into_iter()
+            .map(|(p, st)| {
+                let st = install::set_file_state(&self.cfg, p.rsplit('/').next().unwrap_or(&p), st);
+                (p, st)
+            })
+            .collect()
+    }
+
     async fn file_op_done(&self) {
         self.invalidate_caches();
         self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitFilesChanged", &()).await;
@@ -1592,12 +1603,13 @@ impl Daemon {
                 self.reply(c, msg, &()).await
             }
             "ListUnitFiles" => {
-                let v = install::list_unit_files(&self.cfg);
+                let v = self.list_unit_files();
                 self.reply(c, msg, &(v,)).await
             }
             "ListUnitFilesByPatterns" => {
                 let (states, patterns): (Vec<String>, Vec<String>) = Self::args(msg)?;
-                let v: Vec<(String, String)> = install::list_unit_files(&self.cfg)
+                let v: Vec<(String, String)> = self
+                    .list_unit_files()
                     .into_iter()
                     .filter(|(p, s)| {
                         let n = p.rsplit('/').next().unwrap_or(p);
@@ -1610,6 +1622,7 @@ impl Daemon {
             "GetUnitFileState" => {
                 let (name,): (String,) = Self::args(msg)?;
                 let st = install::unit_file_state(&self.cfg, &name).map_err(|e| err(E_NO_UNIT, e))?;
+                let st = install::set_file_state(&self.cfg, &name, st);
                 self.reply(c, msg, &(st,)).await
             }
             "EnableUnitFiles" | "ReenableUnitFiles" | "EnableUnitFilesWithFlags" => {

@@ -400,14 +400,20 @@ How it fits together:
 - A service seen for the first time starts from systemd's state: what
   `default.target` pulls in (the units systemd enables) becomes `active`, the
   rest `usable`. **From then on the set decides**: `systemctl
-  enable/disable` still writes systemd's symlinks (`systemctl is-enabled`
-  reports them) but no longer changes what boots.
+  enable/disable` still writes systemd's symlinks but no longer changes what
+  boots. `systemctl is-enabled`, `systemctl status` and `list-unit-files`
+  show the set: `enabled` for `always`/`active`, `disabled` for `usable`,
+  `masked` for `masked` (`static`, `indirect` and `alias` stay as systemd
+  has them).
 - `systemctl daemon-reload` and `sdcompat reload` (also run by dnf's file
   triggers when packages change) regenerate the store, sync the repository,
   then commit `current` and install it as the boot and live database. Before
   committing they run `s6-rc-set-fix -u`, which enables what an `active`
   service depends on (the commit refuses an inconsistent set), and print
-  what they moved.
+  what they moved. A service's logger whose service is no longer `active`
+  (`s6 set disable -p` leaves it, being a dependency) becomes `usable`; it
+  still starts with its service, and enabling the service makes it
+  `active` again.
 - The boot starts the installed database's `default` bundle as it is;
   nothing is regenerated at boot. Units changed from a systemd boot are
   picked up by the next reload.

@@ -20,6 +20,7 @@ use sdcompat_base::config::Config;
 pub use sdcompat_base::index::{unit_arg, Index, Kind};
 use sdcompat_base::loader::{self, LoadState, Loader, Unit};
 use sdcompat_base::util;
+use sdcompat_install as install;
 
 #[derive(Debug, Clone)]
 pub struct Planned {
@@ -876,13 +877,6 @@ fn repo_sync(cfg: &Config) -> Result<(), String> {
     Ok(())
 }
 
-/// The prescription a set gives a service, from the set's rx directories.
-fn set_rx(cfg: &Config, name: &str) -> Option<&'static str> {
-    let set = cfg.repo_dir.join("sources").join(&cfg.set_name);
-    ["always", "active", "usable", "masked"]
-        .into_iter()
-        .find(|rx| fs::symlink_metadata(set.join(rx).join(name)).is_ok())
-}
 
 /// The early services are `always`: those with flag-essential, and the
 /// members of SYSINIT_BUNDLE (setup-fedora.sh adds or removes syslog,
@@ -905,7 +899,7 @@ fn sync_essentials(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String
             continue;
         }
         let flagged = atomics.join(&name).join("flag-essential").exists() || members.contains(&name);
-        match (flagged, set_rx(cfg, &name)) {
+        match (flagged, install::set_rx(cfg, &name)) {
             (true, Some(rx)) if rx != "always" => up.push(name),
             (false, Some("always")) => down.push(name),
             _ => {}
@@ -924,6 +918,46 @@ fn sync_essentials(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String
             .args(&names))?;
         changes.push(format!("{} -> {rx} (early boot service)", names.join(" ")));
     }
+    Ok(())
+}
+
+/// A logger is `active` with its service (both were in the boot closure),
+/// but `s6 set disable -p X` moves only X and what depends on it: the
+/// logger is X's dependency, so it stays and boots with nothing to log.
+/// Move a last consumer that is `active` while none of its producers is
+/// active or always to `usable`. Starting the service still starts it (a
+/// dependency), and set-fix -u makes it active again with the service.
+fn sync_loggers(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
+    let atomics = cfg.repo_dir.join("sources").join(".atomics");
+    let Ok(rd) = fs::read_dir(&atomics) else { return Ok(()) };
+    let mut idle = Vec::new();
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let dir = atomics.join(&name);
+        if name.starts_with('.') || dir.join("producer-for").exists() {
+            continue;
+        }
+        let Ok(producers) = fs::read_to_string(dir.join("consumer-for")) else { continue };
+        if install::set_rx(cfg, &name) == Some("active")
+            && !producers
+                .lines()
+                .filter(|l| !l.is_empty())
+                .any(|p| matches!(install::set_rx(cfg, p), Some("active" | "always")))
+        {
+            idle.push(name);
+        }
+    }
+    if idle.is_empty() {
+        return Ok(());
+    }
+    idle.sort();
+    run(Command::new("s6-rc-set-change")
+        .arg("-r")
+        .arg(&cfg.repo_dir)
+        .arg(&cfg.set_name)
+        .arg("usable")
+        .args(&idle))?;
+    changes.push(format!("{} -> usable (logger of a service that is not active)", idle.join(" ")));
     Ok(())
 }
 
@@ -1046,6 +1080,7 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
     let mut set_changes = Vec::new();
     let res = repo_sync(cfg)
         .and_then(|_| sync_essentials(cfg, &mut set_changes))
+        .and_then(|_| sync_loggers(cfg, &mut set_changes))
         .and_then(|_| commit_and_install(cfg, update_live, &mut set_changes));
     let updated_live = match res {
         Ok(r) => r,

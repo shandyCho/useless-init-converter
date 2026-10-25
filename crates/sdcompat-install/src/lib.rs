@@ -299,6 +299,33 @@ fn state_with(cfg: &Config, name: &str, has_link: impl Fn(&Path, &BTreeSet<Strin
     Ok("disabled".into())
 }
 
+/// The prescription the s6 set gives a service (always, active, usable,
+/// masked), from the set's rx directories; None when the set doesn't list
+/// it (no repository, a template, a unit sdcompat doesn't convert).
+pub fn set_rx(cfg: &Config, name: &str) -> Option<&'static str> {
+    let set = cfg.repo_dir.join("sources").join(&cfg.set_name);
+    ["always", "active", "usable", "masked"]
+        .into_iter()
+        .find(|rx| fs::symlink_metadata(set.join(rx).join(name)).is_ok())
+}
+
+/// A unit file `state` as the s6 set has it, for what systemctl shows.
+/// After a service's first prescription the set decides what boots, not
+/// the [Install] links (`systemctl disable` leaves the set alone), so for a
+/// unit the set lists, enabled and disabled come from the set. static,
+/// indirect, alias and the others are about the unit file and stay.
+pub fn set_file_state(cfg: &Config, name: &str, state: String) -> String {
+    if !matches!(state.as_str(), "enabled" | "enabled-runtime" | "disabled") {
+        return state;
+    }
+    match set_rx(cfg, name) {
+        Some("always" | "active") if state == "disabled" => "enabled".into(),
+        Some("usable") => "disabled".into(),
+        Some("masked") => "masked".into(),
+        _ => state,
+    }
+}
+
 pub fn is_enabled(cfg: &Config, name: &str) -> bool {
     matches!(unit_file_state(cfg, name).as_deref(), Ok("enabled") | Ok("enabled-runtime") | Ok("static"))
 }
@@ -507,6 +534,34 @@ mod tests {
         assert!(etc.join("multi-user.target.wants/cups.path").is_symlink());
         assert!(!etc.join("multi-user.target.wants/cups.service").exists());
         assert_eq!(unit_file_state(&cfg, "cups.service").as_deref(), Ok("disabled"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn file_state_follows_the_set() {
+        let tmp = std::env::temp_dir().join(format!("sdcompat-setstate-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let (etc, lib) = (tmp.join("etc"), tmp.join("lib"));
+        let set = tmp.join("repo/sources/current");
+        for d in [&etc, &lib, &set.join("active"), &set.join("usable"), &set.join("masked")] {
+            fs::create_dir_all(d).unwrap();
+        }
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![etc, lib];
+        cfg.runtime_unit_dir = tmp.join("run");
+        cfg.repo_dir = tmp.join("repo");
+        symlink("x", set.join("active/a.service")).unwrap();
+        symlink("x", set.join("usable/u.service")).unwrap();
+        symlink("x", set.join("masked/m.service")).unwrap();
+        let st = |n: &str, s: &str| set_file_state(&cfg, n, s.to_string());
+        assert_eq!(st("a.service", "disabled"), "enabled");
+        assert_eq!(st("a.service", "enabled-runtime"), "enabled-runtime");
+        assert_eq!(st("u.service", "enabled"), "disabled");
+        assert_eq!(st("m.service", "enabled"), "masked");
+        // Not in the set, or not an enablement state: unchanged.
+        assert_eq!(st("other.service", "enabled"), "enabled");
+        assert_eq!(st("u.service", "static"), "static");
+        assert_eq!(st("a.service", "indirect"), "indirect");
         let _ = fs::remove_dir_all(&tmp);
     }
 
