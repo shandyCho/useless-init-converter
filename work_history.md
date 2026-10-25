@@ -4938,3 +4938,68 @@ their service's s6-log pipe (init_t pipefs), JOURNAL=no only.
   s6 boot only, aliases dbus.service to dbus-daemon.service in
   generator.early (searched before /etc/systemd/user). Owner chose to do
   nothing for now.
+
+## Session: 2026-10-25: setup's sdcompatd restart timed out (event fifodir labels)
+
+### Findings (owner's setup rerun on the enforcing s6 boot, `d23ad7b` RPMs)
+
+- Setup printed `s6-svlisten: fatal: timed out` / "sdcompatd was not ready
+  within 30 s". sdcompatd itself was fine: restarted at 19:33:15, logged
+  "ready, serving org.freedesktop.systemd1" at 19:33:16, s6-svstat "up ...
+  ready".
+- Cause: three AVCs at 19:33:16, s6-supervise (init_t) denied `write` on
+  `ftrig1:@...` (unconfined_u:object_r:user_tmp_t) fifo_file. `s6-svc -wR`
+  (run from sudo, unconfined_t) creates its s6-ftrigr fifo in the service's
+  event/ directory. The event directories are created by init_t in the
+  /run tmpfs and stay tmpfs_t (early no longer relabels, `761d2e0`), and
+  the policy has `type_transition unconfined_t tmpfs_t:fifo_file
+  user_tmp_t`; init_t may not write user_tmp_t, so the ready event never
+  reached the waiter. setup_selinux's restorecon of /run/s6-rc:* (which
+  makes the live directory init_var_run_t) ran only after restart_daemon.
+- The same affects any waiter started from an admin shell on a fresh boot:
+  `s6-svc -w*`, s6-svwait, s6-svlisten, and s6-rc's own waits (not yet
+  confirmed for `sudo s6-rc change`).
+- The four real directories in /run/service (s6-linux-init's
+  early-getty, runleveld, shutdownd, s6-svscan-log) still had tmpfs_t
+  event/ after setup; the 250 s6-rc ones were init_var_run_t.
+
+### Changes (`bdbdcb0`)
+
+- sdcompat.cil: named transition `init_t tmpfs_t dir "event"
+  init_var_run_t` and a filecon for /run/service/*/event. A fifo created by
+  unconfined_t in an init_var_run_t directory keeps init_var_run_t (no
+  transition rule for it), which init_t may write and unlink.
+  Decision: label the fifodir instead of allowing init_t to write
+  user_tmp_t, which would cover every user's /tmp fifos.
+- setup-fedora.sh: restart_daemon after setup_selinux (the new daemon
+  starts under the new policy and waits in relabelled directories);
+  restorecon the event/ of the real /run/service directories (the s6-rc
+  ones are covered by the live directory's -R). The final "Next" text:
+  step 4 says "boots enforcing" with --enforcing; the obsolete
+  `sdcompat.reload=0` line is removed (rc.init no longer regenerates).
+- sdcompat.spec %post: restorecon /run/service/*/event.
+- TESTING pair: a row for waiting from a shell.
+
+### Tests
+
+- CIL parsed with libsepol's `cil_add_file` (rc 0); init_t may create
+  non_security_file_type dirs (init_create_dirs on); unconfined_t has no
+  fifo_file transition in init_var_run_t. `semodule -i` not run (root).
+- `bash -n` and `shellcheck -S warning` on setup-fedora.sh pass;
+  `--dry-run --enforcing`: labels, then the restart; restorecon of the four
+  real event/ directories; the new step 4 text.
+
+### Current state
+
+Committed as `bdbdcb0`; this entry in the next commit. Fix not yet loaded
+or booted. Earlier entry's catch-all
+fifo fix (`d23ad7b`) is installed; its boot check is still to do.
+
+### Next steps
+
+1. Owner: build RPMs, rerun setup; the restart step returns without the
+   timeout and `ausearch -m AVC -ts recent | grep ftrig` is empty.
+2. Reboot; check the new TESTING row (event dirs init_var_run_t at boot,
+   `sudo s6-svc -wR` returns) and the catch-all fifo row.
+3. Then the earlier steps (`s6 set disable -p X` across a reboot; the
+   Broken pipe flake).
