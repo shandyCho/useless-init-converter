@@ -5108,3 +5108,66 @@ No code changes.
    s6-rc-update in the sandbox; JOURNAL=no reproduces it most often).
 4. Optionally: UnitFileState from the set; disable a service's logger
    along with it; report the s6-rc snapshot bug.
+
+## 2026-10-25: UnitFileState and idle loggers from the set (`25f6fc4`)
+
+The two things seen in the previous entry, fixed on sdcompat's side.
+
+- **Logger left booting.** In s6-rc's compiled database a producer
+  depends on its logger (read in s6-rc 0.8.0.2: `s6-rc-db all-dependencies
+  chronyd.service` lists chronyd.service.log), but not the other way;
+  s6rc_repo_badpipeline only requires a pipeline to agree on masked or
+  not. So `s6 set disable -p X` leaves X.log active. New reload step
+  sync_loggers (after sync_essentials, before set-fix): a last consumer
+  (consumer-for, no producer-for) that is `active` while none of its
+  producers is active/always becomes `usable` (s6-rc-set-change, reported
+  in set_changes). Starting the service still starts the logger (s6-rc
+  dependency; start_beside starts it too), and set-fix -u makes it active
+  again when the service is. On the owner's machine this applies to
+  cups.service.log (cups.service usable since the preset fix); loggers of
+  never-enabled services were already usable.
+- **UnitFileState.** sdcompat-install: set_rx (moved from sdcompat-gen)
+  and set_file_state: for a unit the set lists, enabled/enabled-runtime/
+  disabled become enabled (always/active; enabled-runtime kept),
+  disabled (usable) or masked (masked); static, indirect, alias, bad,
+  masked from systemd are unchanged. Used by the UnitFileState property,
+  GetUnitFileState, ListUnitFiles(ByPatterns) and `sdcompat-gen
+  is-enabled`. PresetAllUnitFiles and the plan's first prescription keep
+  systemd's link state. Consequence: `systemctl disable X` alone now
+  shows X as enabled while the set has it active (true: it still boots);
+  the cache is cleared on reload and file ops, so an `s6 set` change
+  shows after the reload.
+- Docs: README pair (the set paragraph), TESTING pair (the chronyd row
+  now also expects the logger usable and is-enabled `disabled`).
+
+### Tests
+
+- cargo build (no warnings), cargo test all pass (new
+  file_state_follows_the_set); standalone 2/3/2.
+- Sandbox needs a short path (the scratchpad path overflows sun_path:
+  "Argument list too long") and XDG_RUNTIME_DIR under /tmp/claude-1000.
+  Default 212/218, JOURNAL=no 219/225; the 6 failures are one
+  s6-rc-update "unable to take lock on .../live: Permission denied" in
+  the reload and what follows from it. HEAD without the change (worktree)
+  fails the same 6 (210/216): this environment, not the change. New
+  checks pass: UnitFileState after disable follows the set, of a usable
+  and an active service; JOURNAL=no: the logger usable with its service,
+  active again after.
+- bash -n and shellcheck -S warning: check.sh.
+
+### Current state
+
+`25f6fc4` committed, not yet on the real boot.
+
+### Next steps
+
+1. Owner: build RPMs, install, `sudo systemctl daemon-reload` (prints
+   `cups.service.log -> usable`); then the chronyd TESTING row again
+   (logger usable, `systemctl is-enabled chronyd.service` disabled), then
+   enable and reload to restore.
+2. Find why s6-rc-update can't take its lock in this agent environment
+   (the last sessions' sandbox runs passed the repository section).
+3. Optionally `sudo s6-rc change` waits from an admin shell, and an
+   `ausearch -m AVC -ts boot | grep ftrig` check.
+4. Find the Broken pipe flake's cause.
+5. Optionally: report the s6-rc snapshot bug.
