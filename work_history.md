@@ -5309,3 +5309,99 @@ Proposed design (awaiting the owner's go-ahead):
 2. Then implement and test in QEMU; then a real s6 boot.
 3. The earlier steps unchanged (RPMs, --default-s6 checks, logger and
    is-enabled checks, Broken pipe flake).
+
+## 2026-10-25: --boot-only-s6, the s6 initramfs (`07a34f7`)
+
+Owner's choices: setup option name `--boot-only-s6`; drivers loaded by
+skarnet's mdevd (packaged), not a fixed module list.
+
+### What changed
+
+- mdevd 0.1.8.2 in dist/skarnet.versions (sha256 matches skarnet's
+  published .sha256) and dist/rpm/mdevd.spec (no library; its only
+  header, config.h, is dropped). Optional in setup's skarnet list like
+  s6-frontend; sdcompat.spec Recommends it.
+- dist/initramfs/root: `init` (execline: devtmpfs, console stdio, proc,
+  sys, tmpfs /run, kernel args kept in /init-args, exec s6-svscan
+  /service; scandir outside /run so the moved /run is clean),
+  service/mdevd (notification-fd 3), service/rootfs/run (bash: cmdline
+  parse, s6-svwait mdevd, mdevd-coldplug, LUKS via cryptsetup with
+  DM_DISABLE_UDEV=1 and crypttab discard, btrfs device scan, mount ro,
+  init= check, rd.break, rescue shell -> exit 1 -> s6-supervise retries;
+  on success s6-svc -O then s6-svscanctl -t), .s6-svscan/finish (bash:
+  mount --move dev/proc/sys/run, switch_root to init= with the kept
+  args; without a root a shell loop, PID 1 must not exit), etc/mdev.conf
+  (`$MODALIAS=.* 0:0 0600 ! +importas ... modprobe -bq`).
+- dist/initramfs/mkinitramfs: host /usr layout symlinks, programs by
+  type -P on a fixed PATH (SDCOMPAT_INITRAMFS_PATH for tests),
+  multicall symlinks resolved by hand (dracut-install given several
+  links made modprobe -> execline), /usr/libexec/s6/s6-ftrigrd (s6-svwait
+  needs it: found by the test), libgcc_s, crypttab, modules
+  (=drivers/{nvme,ata,scsi,md,block,mmc,virtio,pci/controller,usb/host,
+  usb/storage,hid,input/keyboard,input/serio} =crypto =arch/x86/crypto
+  =lib/crypto dm_mod dm_crypt btrfs ext4 xfs vfat nls) plus
+  /etc/sdcompat/initramfs-modules, depmod -b, early microcode cpio
+  (AMD famXXh / Intel FF-MM-SS), cpio -R 0:0, zstd. 30 MB, 4 s here.
+- 90-sdcompat.install: with /etc/sdcompat/boot-only-s6 and Fedora's
+  initramfs present, builds BOOT/initramfs-KVER-s6.img and rewrites only
+  the image name on the s6 entry's initrd line ($tuned_initrd stays);
+  build failure -> Fedora's image + message; no marker or remove ->
+  deletes the s6 image. Env overrides SDCOMPAT_BOOT_ONLY_S6,
+  SDCOMPAT_MKINITRAMFS, SDCOMPAT_BOOT_DIR.
+- setup: `--boot-only-s6` / `--no-boot-only-s6` (kept across reruns by
+  the marker file), dies without mdevd, installs mkinitramfs and the
+  tree on the non-RPM path, plan/next-steps text, uninstall removes the
+  marker and the s6 images. sdcompat.spec installs both.
+- Docs: README pair (packages, options, a paragraph on the initramfs,
+  roles table), TESTING pair (seven skarnet RPMs, new section "Booting
+  with no systemd at all" with the QEMU test and real-boot rows).
+
+### Decisions and why
+
+- udev doesn't run in the initramfs, and Fedora's 10-dm.rules skip a
+  coldplug "add" for a dm device without DM_UDEV_PRIMARY_SOURCE_FLAG in
+  the udev db (read in /usr/lib/udev/rules.d/10-dm.rules, lines 76-106):
+  rootfs writes /run/udev/data/b<maj:min> with that flag (and
+  DM_UDEV_RULES_VSN=2) for each dm device, as a systemd initramfs's udev
+  would have. Shown to be present after switch_root in QEMU; that the
+  real system then makes /dev/disk/by-uuid links is NOT shown (needs a
+  real boot: TESTING row).
+- Bash for rootfs/finish (prompting, loops); PID 1 is s6-svscan
+  throughout, as asked.
+
+### Tests
+
+- tests/initramfs.sh (QEMU/KVM, unprivileged, running kernel 7.2.11,
+  mdevd from the freshly built RPM): prep (LUKS2 argon2id + btrfs
+  subvol=root, made in a guest) and 5 boots: passphrase -> PID 1
+  init-selinux stand-in with its arg, root=/root, /run moved, no other
+  user process left, udev record present; NVMe disk (nvme is a module:
+  mdevd loads it); three wrong passphrases -> rescue -> exit -> retry ->
+  boots; rd.break; no disk -> timeout -> rescue. 6/6 in four runs (the
+  last with the doubled rootflags= of the owner's cmdline).
+- Test bugs fixed on the way: cryptsetup prints its prompt before
+  tcsetattr(TCSAFLUSH), which drops input typed in between (the driver
+  pauses 1 s); sysrq's message split the report line.
+- Plugin with fake entries: build ok / build fails / no marker / remove.
+- setup --dry-run --boot-only-s6 and --uninstall.
+- dist/rpm/build-skarnet-rpms.sh into /tmp: all built after the spec fix
+  (first run: unpackaged config.h). packages/build-rpms.sh: sdcompat RPM
+  holds mkinitramfs and the tree, Recommends mdevd.
+- bash -n / sh -n, shellcheck -S warning on every changed script.
+- Not done: a real boot; root; a USB keyboard at the prompt (hid modules
+  are in the image, mdevd loads them by modalias, untested); the
+  SELinux side of /run/udev/data on the enforcing boot (early's /run
+  relabel should cover it).
+
+### Current state
+
+Committed, QEMU-verified, not booted on hardware.
+
+### Next steps
+
+1. Owner: rebuild skarnet RPMs (now with mdevd) and sdcompat RPMs,
+   `sudo dist/setup-fedora.sh --enforcing --boot-only-s6 --rpms=...`,
+   run tests/initramfs.sh first, then TESTING "Booting with no systemd at
+   all" (the dm links row matters most).
+2. The earlier steps (--default-s6 checks, logger/is-enabled check).
+3. Broken pipe flake; s6-rc snapshot bug report (optional).
