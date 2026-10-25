@@ -5171,3 +5171,40 @@ The two things seen in the previous entry, fixed on sdcompat's side.
    `ausearch -m AVC -ts boot | grep ftrig` check.
 4. Find the Broken pipe flake's cause.
 5. Optionally: report the s6-rc snapshot bug.
+
+## 2026-10-25: why the sandbox's s6-rc-update couldn't take its lock (`3055b48`)
+
+- Cause: sdcompat's own SELinux module (2026-10-23) labels
+  /usr/bin/s6-rc-update and s6-rc-format-upgrade sdcompat_live_exec_t
+  with `typetransition unconfined_t ... process init_t`, so from the
+  agent's (or the owner's) unconfined shell s6-rc-update runs as init_t.
+  The sandbox's files are user_tmp_t and init_t may not write them
+  (sesearch: no allow init_t user_tmp_t file write), so s6rc_lock's
+  open(live/lock, O_RDWR|O_CREAT) got EACCES. (skalibs' fd_lock maps a
+  held lock to EBUSY, so "Permission denied" had to be the open.) The
+  sandbox runs that passed the repository section were before the module
+  was on this machine. Not a code bug; the real system wants the
+  transition.
+- Shown: in a running sandbox, `/usr/bin/s6-rc-update -n -l LIVE DB`
+  fails with the lock error; a byte-identical copy in the sandbox dir
+  (user_tmp_t, no transition) exits 0. Python's open + fcntl/flock on the
+  same files work. Not shown: the AVC itself (ausearch needs root).
+- Fix (tests only): sandbox.sh copies both binaries into WORKDIR/bin and
+  puts it first in PATH; check.sh does the same for the daemon it
+  restarts. s6-rc-set-install runs `s6-rc-update` by PATH (no prefix),
+  and sdcompat-gen's retry does too. TESTING pair notes it.
+- Sandbox: default 223/223, SANDBOX_JOURNAL=no 230/230 (this includes
+  the repository section and `25f6fc4`'s logger and UnitFileState
+  checks, so `25f6fc4` is now fully covered in the sandbox); no Broken
+  pipe flake in either run. bash -n, sh -n, shellcheck -S warning:
+  sandbox.sh, check.sh.
+
+### Next steps
+
+1. Owner: build RPMs, install, `sudo systemctl daemon-reload` (prints
+   `cups.service.log -> usable`); then the chronyd TESTING row again,
+   then enable and reload to restore.
+2. Optionally `sudo s6-rc change` waits from an admin shell, and an
+   `ausearch -m AVC -ts boot | grep ftrig` check.
+3. Find the Broken pipe flake's cause (not seen in today's two runs).
+4. Optionally: report the s6-rc snapshot bug.
