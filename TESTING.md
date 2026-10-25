@@ -228,6 +228,7 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | 이전 종료 | s6에서 전원을 끄고 다시 s6로 부팅한 뒤 `sudo ls -l /var/log/sdcompat/last-shutdown-*.log; sudo grep -ci denied /var/log/sdcompat/last-shutdown-*.log` | 두 파일 모두 전원을 끈 시각의 것이고 거부(denied)는 `0`입니다(아니면 파일을 보내 주세요). 전원 끄기가 25초 이상이 아니라 몇 초 걸렸고, 콘솔 로그가 비어 있지 않으며 `unable to rename`, `Failed to activate service ... timed out`, `sdcompatd: stopping ... took`이 없고, 커널 로그에 `services still not down after 180 s`가 없습니다 |
 | 버스와 userdb 레이블 | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t`와 `systemd_userdbd_runtime_t` |
 | catch-all fifo 레이블 | `ls -Z /run/service/s6-svscan-log/fifo`와 `sudo ausearch -m AVC -ts boot \| grep s6-svscan-log/fifo` | `sdcompat_log_fifo_t`이고, 이 fifo에 대한 거부가 없음 (`initctl_t`이면 서비스의 stderr가 /dev/null로 바뀜) |
+| 셸에서 기다리기 | 재부팅 후 `ls -dZ /run/service/s6-svscan-log/event /run/service/sdcompatd/event`; `sudo s6-svc -wR -T 30000 -r /run/service/sdcompatd`; `sudo ausearch -m AVC -ts recent \| grep ftrig` | 둘 다 `init_var_run_t`; s6-svc가 바로 0으로 끝남; 거부 없음 (`tmpfs_t`이면 기다리는 쪽의 fifo가 `user_tmp_t`가 되어 s6-supervise가 쓰지 못하고 기다림이 시간 초과됨) |
 | 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |
 | 실패한 유닛 | `systemctl --failed` | 없는 것이 좋습니다. 있으면 적어 두세요 |
 | 저널 | `journalctl -b \| head` | 이번 부팅의 로그 |

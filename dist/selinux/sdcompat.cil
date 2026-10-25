@@ -79,6 +79,18 @@
 (typetransition init_t tmpfs_t fifo_file "fifo" sdcompat_log_fifo_t)
 (allow init_t sdcompat_log_fifo_t (fifo_file (create open read write append ioctl getattr setattr lock unlink)))
 (allow domain sdcompat_log_fifo_t (fifo_file (write append ioctl getattr)))
+;
+; A service directory's event/ is s6's fifodir: s6-svc -w, s6-svwait,
+; s6-svlisten and s6-rc's waits (s6-ftrigr) create a fifo in it that
+; s6-supervise (init_t) writes the events to. Created by init_t in the /run
+; tmpfs it was tmpfs_t, so a waiter run from an admin's shell (unconfined_t)
+; made its fifo user_tmp_t (the policy's unconfined_t tmpfs_t fifo_file
+; transition), s6-supervise's writes were denied and the waiter never saw
+; the event (setup's `s6-svc -wR` on sdcompatd timed out although the daemon
+; was ready). init_var_run_t, as restorecon makes the rest of the live
+; directory: fifos created there keep that type, which init_t may write.
+(typetransition init_t tmpfs_t dir "event" init_var_run_t)
+(filecon "/run/service/[^/]+/event" dir (system_u object_r init_var_run_t ((s0) (s0))))
 
 ; s6-rc-update and s6-rc-format-upgrade switch the live database: they
 ; create the scan directory's links and the live directory's service

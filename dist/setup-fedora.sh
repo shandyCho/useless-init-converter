@@ -676,6 +676,13 @@ setup_selinux() {
     [ -d /run/uncaught-logs ] && run restorecon -R /run/uncaught-logs
     # ... and lets the services write their stderr to its fifo.
     [ -p /run/service/s6-svscan-log/fifo ] && run restorecon /run/service/s6-svscan-log/fifo
+    # ... and lets s6-supervise notify waiters started from a shell (s6-svc -w).
+    # (The s6-rc services' are in the live directory, relabelled below.)
+    local d events=()
+    for d in /run/service/*/event; do
+        [ -d "$d" ] && [ ! -L "${d%/event}" ] && events+=("$d")
+    done
+    [ "${#events[@]}" -gt 0 ] && run restorecon "${events[@]}"
     # ... and lets s6-rc-update (daemon-reload) rename in the live directory.
     local live
     mapfile -t live < <(compgen -G '/run/s6-rc:*'; [ -L /run/s6-rc ] && echo /run/s6-rc)
@@ -767,6 +774,21 @@ Backups of overwritten files go to $BACKUP.
 EOF
 }
 
+selinux_step() {
+    if [ "$ENFORCING" = 1 ]; then
+        cat <<EOF
+  4. SELinux: the entry boots enforcing. Check for denials with
+       ausearch -m AVC -ts boot
+EOF
+    else
+        cat <<EOF
+  4. SELinux: the entry boots permissive. Collect denials with
+       ausearch -m AVC -ts boot | audit2allow -M sdcompat_local
+     review sdcompat_local.te, load it with semodule -i, then re-run with --enforcing.
+EOF
+    fi
+}
+
 next_steps() {
     cat <<EOF
 
@@ -777,13 +799,10 @@ Done. Next:
        s6-rc -a list                     (what is up)
   3. Once booted:  systemctl status, systemctl list-units --failed,
                    journalctl -b, journalctl -u systemd-logind, journalctl -u user@1000
-  4. SELinux: the entry boots permissive. Collect denials with
-       ausearch -m AVC -ts boot | audit2allow -M sdcompat_local
-     review sdcompat_local.te, load it with semodule -i, then re-run with --enforcing.
-  5. If a new s6 database breaks booting, add one of these to the kernel
-     command line in GRUB (press e):
+$(selinux_step)
+  5. If a new s6 database breaks booting, add this to the kernel command
+     line in GRUB (press e):
        sdcompat.db=previous    boot the database from before the last change
-       sdcompat.reload=0       do not regenerate the database at boot
   6. To go back: boot the normal Fedora entry. To remove everything:
        sudo $0 --uninstall [--remove-s6]
 EOF
@@ -802,9 +821,11 @@ main() {
     configure_sdcompat
     enable_units
     build_database
-    restart_daemon
     setup_s6_linux_init
+    # After the labels: the new daemon starts under the new policy, and
+    # s6-svc -wR needs the event directories relabelled.
     setup_selinux
+    restart_daemon
     add_grub_entry
     next_steps
 }
