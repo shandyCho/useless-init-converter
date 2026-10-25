@@ -5077,3 +5077,34 @@ Unchanged from the previous entry.
 1. Owner: the chronyd row of TESTING; then `sudo s6 set enable
    chronyd.service` and `sudo systemctl daemon-reload` to restore it.
 2. The rest unchanged.
+
+## 2026-10-25: owner's `s6 set disable -p` check across a reboot
+
+No code changes.
+
+- Owner ran the TESTING row with chronyd.service (`58462a5`) and rebooted
+  into s6 (boot 22:26:29); `systemctl is-active chronyd.service` ->
+  inactive. Checked on the machine: `s6 set status` says
+  `chronyd.service/usable`, s6-rc has it `down`, no chronyd process, and
+  `journalctl -b -u chronyd.service` is empty, so it was not started at
+  all (not a failed start). The set decides what boots: verified.
+- Seen, not acted on: `chronyd.service.log` stays `active` in the set and
+  `up` (`-p` disables dependents, and the logger is a dependency), which
+  leaves one idle s6-log. `systemctl status` still shows `enabled`
+  (UnitFileState not from the set, already a next step).
+
+### Current state
+
+`s6 set disable -p X` across a reboot verified on the enforcing s6 boot.
+
+### Next steps
+
+1. Owner: `sudo s6 set enable chronyd.service` and
+   `sudo systemctl daemon-reload` to restore it (time sync is off until
+   then).
+2. Optionally `sudo s6-rc change` waits from an admin shell, and an
+   `ausearch -m AVC -ts boot | grep ftrig` check.
+3. Find the Broken pipe flake's cause (s6-ftrigrd's exit under
+   s6-rc-update in the sandbox; JOURNAL=no reproduces it most often).
+4. Optionally: UnitFileState from the set; disable a service's logger
+   along with it; report the s6-rc snapshot bug.
