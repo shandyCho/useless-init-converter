@@ -5530,3 +5530,90 @@ with no LVM, so nothing was being monitored.
    running (both via the unixexec bridge).
 2. Earlier next steps unchanged (rescue/kernel-update rows,
    --default-s6 checks, Broken pipe flake).
+
+## 2026-10-26, part 3: code and security review fixes
+
+Owner ran `/engineering:code-review` (this session's commits, then the
+whole project) and `/security-review` on the whole project, asked for
+Korean copies of the results in code-review.md and security-review.md
+(written, ignored by .gitignore, not committed) and for the suggested
+fixes.
+
+### Security review (whole project)
+
+Four candidates, each verified separately; confidence threshold 8.
+- Reported (8/10, MEDIUM): PrivateTmp= reachable by every local user.
+  The 1777 dirs were RUN_DIR/units/<unit>/private/{tmp,var-tmp} under
+  0755 parents; seen live: uid 1000 could list the private /tmp of
+  fwupd, chronyd, colord, bolt, bluetooth, ModemManager (init_var_run_t,
+  readable by unconfined_t). Fixed: `private` is 0700, set on every
+  prepare() (systemd's /tmp/systemd-private-* layout).
+- Below threshold, fixed anyway:
+  - collect-diagnostics.sh wrote a 0644 archive at a guessable name
+    beside its mktemp dir (7/10): now umask 077, the archive's name from
+    mktemp, chowned to SUDO_UID under sudo.
+  - PIDFile= PID used without checks (6/10, signals only): as systemd's
+    service_load_pid_file() (CVE-2018-16888), a PID file that someone
+    other than root could have written or redirected (non-root file or
+    symlink, directory on the way not root's or group/other-writable)
+    must name a process in the unit's cgroup; PID 1 and the runner
+    itself are never taken. Refused PIDs are logged and waited past
+    (timeout/protocol as before).
+- Below threshold, NOT fixed (owner to decide): no SELinux access check
+  in sdcompatd (uid 0 passes without systemd's mac_selinux_access_check)
+  or in the fd stores (any uid-0 peer can GET/PUT/DEL any key). On this
+  host's policy nsswitch_domain (540 types) can send to init_t and
+  connect to init_var_run_t sockets. Needs the caller's label
+  (GetConnectionCredentials / SO_PEERSEC), selinux_check_access() with
+  systemd's class/permission mapping, and an enforcing VM to test; risk
+  of new denials on the real boot.
+
+### Code review fixes
+
+- rootfs: root=/dev/disk/by-{uuid,label,partuuid,partlabel}/X is looked
+  up as the blkid tag (no udev, so no such links in the initramfs).
+- sdcompat.spec %posttrans: with /etc/sdcompat/boot-only-s6, re-run the
+  kernel-install plugin for every kernel that has an -s6.img, so an
+  sdcompat update reaches the next boot. README pair says so.
+- sdcompatd: the UnitFileState cache is dropped when a directory of the
+  s6 set changes (mtimes of the set dir and its rx dirs): `s6 set
+  enable|disable` doesn't go through the daemon.
+- 90-sdcompat.install: boot options escaped for the sed replacement (`\`,
+  `&`, `|`; before, `d=e|f` failed with "unknown option to 's'").
+- gen: a socket's Service= naming an alias of the service counts for the
+  fdstore dependency.
+- check.sh: timeout 30 on both systemd-run pipe checks; the fd stores'
+  `#stdio` comments name each other.
+- Not done: the s6-rc-update "Broken pipe" reload flake (needs its own
+  investigation; seen again below).
+
+### Tests
+
+- cargo test (new: sandbox private_tmp_parent_is_closed, runner
+  pid_file_trust, gen alias socket case, which fails without the fix),
+  standalone tests.
+- tests/initramfs.sh (QEMU/KVM): 7/7, new "root=/dev/disk/by-uuid/...
+  without udev links".
+- Sandbox: default 225/225, SANDBOX_JOURNAL=no 232/232 (new checks
+  "UnitFileState follows an s6 set change without a reload", forking
+  MainPID from PIDFile still passes); SANDBOX_FDSTORE=no 225/225 on the
+  second run (the first hit the known reload flake: 19 failures, same
+  signature).
+- Plugin with fake entries and `a=b&c d=e|f g=h\\i`: options intact.
+- collect-diagnostics.sh unprivileged: archive 0600, owner the user.
+- bash -n / shellcheck -S warning on every changed script, %posttrans
+  body included (rpmspec -P shows `%%` expanded to `%`).
+
+### Current state
+
+Committed, not installed or booted. PrivateTmp and PIDFile changes need
+the new runner (setup rerun); the s6 images are rebuilt by the new
+%posttrans when the RPM is updated.
+
+### Next steps
+
+1. Owner: rebuild RPMs, rerun setup, reboot into s6, then
+   `ls -ld /run/sdcompat/units/*/private` (drwx------) and the checks of
+   part 2 (dm-event, dmeventd -R, systemctl --user -M).
+2. Decide on SELinux access checks in sdcompatd and the fd stores.
+3. Broken pipe reload flake.
