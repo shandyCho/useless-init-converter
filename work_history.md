@@ -4843,3 +4843,98 @@ Committed as `e8af905`; this entry in the next commit.
 3. Find the Broken pipe flake's cause (s6-ftrigrd's exit under
    s6-rc-update in the sandbox, JOURNAL=no reproduces it most often).
 4. Optionally: UnitFileState from the set; report the s6-rc snapshot bug.
+
+## 2026-10-25: owner's check of the s6 set on the real boot (next step 2)
+
+No code changes.
+
+- Owner ran on the s6 boot (Fedora, `JOURNAL=no` in
+  /etc/sdcompat/sdcompat.conf): `s6 set status cups.service` -> usable;
+  `sudo s6 set commit --no-snapshot && sudo s6 live install --no-snapshot`
+  returned ("set current is already installed", exit 0); all 254 entries
+  of /run/service are tmpfs_t, no user_tmp_t. So the sdcompat_live_exec_t
+  transition works from sudo.
+- `ausearch -m AVC -ts recent`: nothing from s6-rc, s6-svscan, sdcompat or
+  the repository. Only the two accepted JOURNAL=no output-loss kinds:
+  NM dispatcher scripts (NetworkManager_dispatcher_{iscsid,chronyc}_t)
+  writing the service's s6-log pipe (init_t), and systemd-user-runtime-dir
+  writing the catch-all /run/service/s6-svscan-log/fifo. The fifo is now
+  labelled initctl_t (earlier entries said var_run_t); neither type is
+  writable by those domains, so the result is the same: the kernel gives
+  them /dev/null, the programs run, their messages are lost.
+- Not yet shown: `sudo s6 set disable -p X`, reload, reboot, X not started.
+
+### Next steps
+
+Unchanged from the previous entry, minus the commit/install/AVC part of
+step 2.
+
+## Session: 2026-10-25: catch-all fifo denials (initctl_t) on the enforcing boot
+
+### Findings (from the owner's `ausearch -m AVC -ts boot`, enforcing, JOURNAL=no)
+
+- Writes to /run/service/s6-svscan-log/fifo were denied for loadkeys_t,
+  syslogd_t (rsyslogd), setfiles_t (restorecon), system_dbusd_t, getty_t
+  and (earlier entry) systemd_user_runtimedir_t, and getattr for
+  logrotate_t: ~255 records from one `pkill` (procps stats each process's
+  fds) in a second. The fifo is `initctl_t`.
+- Cause: a regression from `761d2e0`. `early` no longer runs restorecon on
+  /run/service, so the fifo keeps its creation label: init_t creates it in
+  the /run tmpfs (tmpfs_t) and the policy has
+  `type_transition init_t tmpfs_t:fifo_file initctl_t` (for /dev/initctl).
+  Before, restorecon made it var_run_t, which sdcompat.cil let
+  system_dbusd_t and hostname_t write; those rules no longer matched, so
+  dbus-daemon's stderr went to /dev/null again. (The previous entry's "same
+  result" holds for the two domains it named, not for dbus-daemon and
+  hostname.)
+- Not sdcompat: systemd-hostnamed searching /proc/pressure (proc_psi_t),
+  as before.
+
+### Changes (`d23ad7b`)
+
+- dist/selinux/sdcompat.cil: new type `sdcompat_log_fifo_t` for the fifo
+  (named type transition `init_t tmpfs_t fifo_file "fifo"`, filecon for
+  restorecon). init_t creates/reads it; the `domain` attribute may
+  write/append/ioctl/getattr it but not open it, so only an inherited
+  descriptor works, as with journald's stream socket under systemd. The
+  three var_run_t fifo_file allows (init_t, system_dbusd_t, hostname_t)
+  are removed.
+  Decision: all domains instead of a per-domain list, because every
+  service's stderr goes there and the list kept growing with each boot's
+  AVCs (output loss under JOURNAL=no had been left "not fixed"; this fixes
+  the catch-all part of it). Without `open`, the type only grants writing
+  to an fd s6 handed over.
+- setup-fedora.sh and sdcompat.spec %post: restorecon the live fifo, so a
+  running boot is fixed without a reboot.
+- TESTING pair: a row for the fifo's label and its denials.
+
+### Tests
+
+- CIL parsed with libsepol's `cil_add_file` (rc 0); `domain`, `file_type`,
+  `non_*_file_type` and `tmpfs_t` exist in the loaded policy; file_type may
+  associate with tmpfs_t. `semodule -i` not run (root).
+- `bash -n` and `shellcheck -S warning` on setup-fedora.sh pass. No Rust
+  or sandbox change (the sandbox has no SELinux), so cargo/sandbox not run.
+
+### Current state
+
+Committed as `d23ad7b`; this entry in the next commit. Fix not yet
+loaded or booted. Left: NM dispatcher scripts writing
+their service's s6-log pipe (init_t pipefs), JOURNAL=no only.
+
+### Next steps
+
+1. Owner: rerun setup (or reinstall the sdcompat RPM), check
+   `ls -Z /run/service/s6-svscan-log/fifo` is sdcompat_log_fifo_t, reboot,
+   `sudo ausearch -m AVC -ts boot | grep s6-svscan-log/fifo` is empty.
+2. Then the previous entry's steps.
+
+### Also discussed (no changes)
+
+- Owner asked about removing dbus-broker. Uninstalling is blocked by the
+  `dbus` package (`Requires: (dbus-broker >= 16-4 if systemd)`); a mock
+  package providing it would replace the real one, which the owner wants
+  kept for the systemd boot. Proposed instead: a user generator that, on the
+  s6 boot only, aliases dbus.service to dbus-daemon.service in
+  generator.early (searched before /etc/systemd/user). Owner chose to do
+  nothing for now.
