@@ -97,6 +97,21 @@ if [ -x /usr/sbin/semodule ]; then
     restorecon /run/service/*/event 2>/dev/null || :
 fi
 
+%posttrans
+# The s6 initramfs (setup-fedora.sh --boot-only-s6) holds this package's
+# initramfs scripts: rebuild the images there are, so an update reaches the
+# next boot and not only the next kernel. The plugin falls back to Fedora's
+# image if a build fails.
+if [ -e /etc/sdcompat/boot-only-s6 ]; then
+    for img in /boot/initramfs-*-s6.img; do
+        [ -e "$img" ] || continue
+        kver=${img#/boot/initramfs-}
+        kver=${kver%%-s6.img}
+        [ -d "/lib/modules/$kver" ] || continue
+        %{_prefix}/lib/kernel/install.d/90-sdcompat.install add "$kver" || :
+    done
+fi
+
 %postun
 if [ "$1" -eq 0 ] && [ -x /usr/sbin/semodule ]; then
     semodule -r sdcompat 2>/dev/null || :

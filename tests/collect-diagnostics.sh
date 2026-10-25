@@ -7,6 +7,8 @@
 # It only reads; nothing is changed. Review the archive before sharing it:
 # it contains unit names, log lines and kernel/boot settings of this machine.
 set -u
+# The archive holds journal and audit lines: readable by its owner only.
+umask 077
 
 SANDBOX=${1:-}
 REPO=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
@@ -62,7 +64,11 @@ else
     run avc ausearch -m AVC,USER_AVC -ts boot
 fi
 
-tar -C "$OUT" -czf "$OUT.tar.gz" diag
+# mktemp creates the archive's name itself (no name to guess in /tmp);
+# under sudo it goes to the user who ran it, so it can be read without sudo.
+ARCHIVE=$(mktemp /tmp/sdcompat-diag.XXXXXX.tar.gz)
+tar -C "$OUT" -czf "$ARCHIVE" diag
 rm -rf "$OUT"
-echo "Diagnostics written to $OUT.tar.gz"
-echo "Check its contents before sharing:  tar -tzf $OUT.tar.gz"
+[ "$(id -u)" = 0 ] && [ -n "${SUDO_UID:-}" ] && chown "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$ARCHIVE"
+echo "Diagnostics written to $ARCHIVE"
+echo "Check its contents before sharing:  tar -tzf $ARCHIVE"

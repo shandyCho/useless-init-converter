@@ -30,6 +30,8 @@ case "$COMMAND" in
 add)
     [ -r "$OPTS_FILE" ] || exit 0
     args=$(sed -e 's/#.*//' "$OPTS_FILE" | tr '\n' ' ')
+    # Escaped for the sed replacement below: \, & and its | delimiter.
+    args_sed=$(printf '%s\n' "$args" | sed -e 's/[\\&|]/\\&/g')
     src=""
     for f in "$ENTRIES"/*"$KVER".conf; do
         [ -e "$f" ] || continue
@@ -59,7 +61,7 @@ add)
         rm -f "$BOOT/initramfs-$KVER-s6.img"
     fi
     sed -e "s/^title .*/title $TITLE $KVER/" \
-        -e "/^options /{s/ rhgb//; s/ quiet//; s|\$| $args|}" \
+        -e "/^options /{s/ rhgb//; s/ quiet//; s|\$| $args_sed|}" \
         -e "/^initrd /{${initrd}}" "$src" >"$dest"
     # On a kernel update 20-grub.install names the new systemd entry in
     # tmp_saved_entry, and 95-set-boot-entry.install makes that the

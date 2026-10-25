@@ -278,7 +278,8 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 **`--boot-only-s6`: systemd 없이 부팅.** Fedora의 initramfs는 dracut이 만들며, 루트로 전환할
 때까지 systemd를 PID 1로 실행합니다. 이 옵션을 주면 s6 항목은 sdcompat의 initramfs로
 부팅합니다(`/boot/initramfs-KVER-s6.img`. kernel-install 플러그인이 커널마다
-`/usr/libexec/sdcompat/mkinitramfs`로 만들며, systemd 항목은 Fedora의 것을 그대로 씁니다). 그
+`/usr/libexec/sdcompat/mkinitramfs`로 만들고, sdcompat 패키지를 업데이트하면 이미지가 있는
+커널마다 다시 만듭니다. systemd 항목은 Fedora의 것을 그대로 씁니다). 그
 `/init`(execline)은 **s6-svscan을 PID 1로** 실행하고, s6-svscan은 **mdevd**(skarnet의 uevent
 데몬. `mdevd-coldplug`로 발견된 하드웨어의 드라이버를 장치의 modalias에 따라 로드합니다)와
 `rootfs` 서비스를 감독합니다. 이 서비스는 커널 명령줄의 `root=`, `rootflags=`, `rootfstype=`,

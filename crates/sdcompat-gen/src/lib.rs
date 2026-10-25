@@ -442,7 +442,10 @@ pub fn plan(cfg: &Config) -> Plan {
         // (dmeventd -R) is not started again on activity.
         let fdstore_max: usize =
             unit.get("Service", "FileDescriptorStoreMax").and_then(|v| v.parse().ok()).unwrap_or(0);
-        let has_sockets = socket_service.iter().any(|(s, svc)| svc == id && s.ends_with(".socket"));
+        // Service= may name an alias of the service.
+        let has_sockets = socket_service.iter().any(|(s, svc)| {
+            s.ends_with(".socket") && plan.aliases.get(svc).unwrap_or(svc) == id
+        });
         if unit.utype() == "service"
             && (fdstore_max > 0 || has_sockets)
             && plan.extra_names.contains(FDSTORE_SERVICE)
@@ -1209,12 +1212,17 @@ mod tests {
         write("ev.socket", "[Unit]\nDefaultDependencies=no\n[Socket]\nListenFIFO=/run/ev\n");
         write("ev.service", "[Unit]\nDefaultDependencies=no\nRequires=ev.socket\n[Service]\nExecStart=/bin/true\n");
         write("plain.service", "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n");
+        // Service= naming an alias of the service.
+        write("al.socket", "[Unit]\nDefaultDependencies=no\n[Socket]\nListenFIFO=/run/al\nService=al-alias.service\n");
+        write("al.service", "[Unit]\nDefaultDependencies=no\nRequires=al.socket\n[Service]\nExecStart=/bin/true\n");
+        std::os::unix::fs::symlink("al.service", units.join("al-alias.service")).unwrap();
         let mut cfg = Config::defaults();
         cfg.unit_path = vec![units];
         cfg.extra_source = vec![extra];
 
         let plan = plan(&cfg);
         assert!(plan.units["ev.service"].deps.contains(FDSTORE_SERVICE));
+        assert!(plan.units["al.service"].deps.contains(FDSTORE_SERVICE));
         assert!(!plan.units["plain.service"].deps.contains(FDSTORE_SERVICE));
         let _ = fs::remove_dir_all(&tmp);
     }

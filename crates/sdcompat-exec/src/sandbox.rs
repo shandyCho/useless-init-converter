@@ -222,6 +222,16 @@ impl Sandbox {
     /// processes of one unit invocation).
     pub fn prepare(&self) -> Result<(), String> {
         if let Some((tmp, vtmp)) = &self.private_tmp {
+            // As systemd's /tmp/systemd-private-*: the 1777 directories sit
+            // in a 0700 one, so only the unit (through its bind mounts)
+            // reaches them, not every user through RUN_DIR. Set each time:
+            // older runs left it 0755.
+            if let Some(base) = tmp.parent() {
+                use std::os::unix::fs::PermissionsExt;
+                fs::create_dir_all(base).map_err(|e| format!("{}: {e}", base.display()))?;
+                fs::set_permissions(base, fs::Permissions::from_mode(0o700))
+                    .map_err(|e| format!("{}: {e}", base.display()))?;
+            }
             for d in [tmp, vtmp] {
                 fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
                 let c = cstr(&d.display().to_string());
@@ -721,6 +731,24 @@ mod tests {
         // No sandboxing setting: never implied; explicit =yes always wins.
         assert!(!no_new_privileges(&test_unit("[Service]\nUser=x\n"), false));
         assert!(no_new_privileges(&test_unit("[Service]\nNoNewPrivileges=yes\n"), true));
+    }
+
+    /// PrivateTmp=: the 1777 directories are reachable only through a 0700
+    /// parent, also when an older run left it 0755.
+    #[test]
+    fn private_tmp_parent_is_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("sdcompat-ptmp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("private")).unwrap();
+        fs::set_permissions(dir.join("private"), fs::Permissions::from_mode(0o755)).unwrap();
+        let sb = Sandbox::from_unit(&test_unit("[Service]\nPrivateTmp=yes\n"), &dir, Vec::new());
+        sb.prepare().unwrap();
+        let mode = |p: &str| fs::metadata(dir.join(p)).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode("private"), 0o700);
+        assert_eq!(mode("private/tmp"), 0o1777);
+        assert_eq!(mode("private/var-tmp"), 0o1777);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

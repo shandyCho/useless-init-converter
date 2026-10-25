@@ -307,7 +307,8 @@ press Esc while GRUB starts.
 and runs systemd as its PID 1 until it switches to the root. With this
 option the s6 entry boots with sdcompat's own initramfs instead
 (`/boot/initramfs-KVER-s6.img`, built by `/usr/libexec/sdcompat/mkinitramfs`
-for every kernel by the kernel-install plugin; the systemd entry keeps
+for every kernel by the kernel-install plugin, and again for every kernel
+that has one when the sdcompat package is updated; the systemd entry keeps
 Fedora's). Its `/init` (execline) execs **s6-svscan as PID 1**, which
 supervises **mdevd** (skarnet's uevent daemon: `mdevd-coldplug` makes it load
 the drivers for the hardware found, from each device's modalias) and a

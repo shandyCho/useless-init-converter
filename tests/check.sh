@@ -408,10 +408,10 @@ if [ -n "$SR" ]; then
     sc reload 'notrel*.service' >/dev/null 2>&1 && ok "systemctl reload with a glob" || bad "systemctl reload notrel*"
     expect_eq "notify-reload waits for READY=1" "$(cat "$R/notreload.out" 2>/dev/null)" "reloaded"
     expect_state notreload.service active/running
-    expect_eq "systemd-run -PGq --wait pipes stdio" "$(echo piped | run_sr -PGq --wait /bin/cat 2>&1)" "piped"
+    expect_eq "systemd-run -PGq --wait pipes stdio" "$(echo piped | timeout 30 env SYSTEMCTL="$SR" "$(dirname "$0")/systemctl.sh" -PGq --wait /bin/cat 2>&1)" "piped"
     # stdin and stdout one socket, as sd-bus's unixexec socketpair for
     # systemctl --user -M UID@: both must reach the unit.
-    out=$(SYSTEMCTL=$SR python3 -c '
+    out=$(SYSTEMCTL=$SR timeout 30 python3 -c '
 import socket, subprocess, sys
 a, b = socket.socketpair()
 p = subprocess.Popen(sys.argv[1:], stdin=b, stdout=b, stderr=subprocess.DEVNULL)
@@ -823,7 +823,10 @@ call Reload && expect_eq "systemctl disable leaves the set alone" "$(rx repo-new
 prev=$(readlink -f "$W/state/compiled.previous")
 [ -d "$prev" ] && [ "$prev" != "$(readlink -f "$W/state/compiled")" ] && ok "the replaced database is kept as compiled.previous" || bad "compiled.previous: '$prev'"
 expect_eq "older boot databases are removed" "$(find "$W/state" -maxdepth 1 -name '.current:*' | wc -l)" "2"
+prop hello.service Unit UnitFileState >/dev/null
 s6-rc-set-change -r "$W/repo" current active hello.service 2>/dev/null
+# s6 set changes don't go through the daemon: no cached state is kept.
+expect_eq "UnitFileState follows an s6 set change without a reload" "$(prop hello.service Unit UnitFileState)" "enabled"
 call Reload
 expect_eq "UnitFileState of an active service" "$(prop hello.service Unit UnitFileState)" "enabled"
 [ -n "$(rx hello.service.log)" ] && expect_eq "the logger is active again with its service" "$(rx hello.service.log)" "active"

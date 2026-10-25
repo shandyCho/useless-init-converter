@@ -125,6 +125,10 @@ result='S6-INITRAMFS-TEST pid=1 args=\[testarg\] root=/root run=yes procs=\[init
 boot "passphrase, LUKS2 + btrfs subvol, switch_root to init with its args" \
     "$cmdline testarg" "${disk[@]}" -- \
     "wait:Enter passphrase" "sleep:1" "send:$PASS" "wait:$result"
+# No udev makes no /dev/disk links: rootfs looks the path up as UUID=.
+boot "root=/dev/disk/by-uuid/... without udev links" \
+    "${cmdline/root=UUID=/root=/dev/disk/by-uuid/} testarg" "${disk[@]}" -- \
+    "wait:Enter passphrase" "sleep:1" "send:$PASS" "wait:$result"
 # nvme is a module (virtio_blk is built in): only mdevd loading it from the
 # device's modalias makes the disk appear, as on a laptop's NVMe root.
 boot "NVMe disk: mdevd loads the nvme module" \

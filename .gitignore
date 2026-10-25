@@ -1,3 +1,5 @@
 /target
 /standalone/*/target
 /report-ko.md
+/code-review.md
+/security-review.md

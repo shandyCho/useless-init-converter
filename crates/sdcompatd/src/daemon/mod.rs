@@ -117,8 +117,11 @@ pub struct Daemon {
     unit_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Parsed unit files (cleared by Reload and unit file operations).
     pub unit_cache: Mutex<HashMap<String, Unit>>,
-    /// UnitFileState values (cleared like unit_cache).
+    /// UnitFileState values (cleared like unit_cache, and when the s6 set
+    /// changes: see file_state_cache_check()).
     pub file_state_cache: Mutex<HashMap<String, String>>,
+    /// The s6 set's directories' mtimes the cache was filled under.
+    file_state_set_stamp: Mutex<Vec<Option<std::time::SystemTime>>>,
     /// Short-lived s6-svstat results and per-database bundle contents.
     /// s6-svstat answers, with when they were taken and the identity of
     /// the supervise/status file they came from (see svstat_cached()).
@@ -408,6 +411,22 @@ impl Daemon {
             self.unit_cache.lock().unwrap().insert(resolved, unit.clone());
         }
         (unit.id.clone(), unit)
+    }
+
+    /// UnitFileState follows the s6 set, which `s6 set enable|disable`
+    /// changes without telling the daemon: drop the cached states when a
+    /// directory of the set changed.
+    pub(super) fn file_state_cache_check(&self) {
+        let set = self.cfg.repo_dir.join("sources").join(&self.cfg.set_name);
+        let stamp: Vec<_> = ["", "always", "active", "usable", "masked"]
+            .iter()
+            .map(|d| std::fs::metadata(set.join(d)).and_then(|m| m.modified()).ok())
+            .collect();
+        let mut last = self.file_state_set_stamp.lock().unwrap();
+        if *last != stamp {
+            *last = stamp;
+            self.file_state_cache.lock().unwrap().clear();
+        }
     }
 
     pub(super) fn invalidate_caches(&self) {
@@ -1775,6 +1794,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         unit_locks: Mutex::new(HashMap::new()),
         unit_cache: Mutex::new(HashMap::new()),
         file_state_cache: Mutex::new(HashMap::new()),
+        file_state_set_stamp: Mutex::new(Vec::new()),
         svstat_cache: Mutex::new(HashMap::new()),
         bundle_cache: Mutex::new(HashMap::new()),
         state_reader: Mutex::new((None, None)),

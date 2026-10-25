@@ -1661,10 +1661,22 @@ impl Runner {
     /// As systemd: wait for the PID file up to TimeoutStartSec= ("timeout"),
     /// or until no process is left that could write it ("protocol").
     fn wait_pid_file(&self, pidfile: &str, me: i32, deadline: Option<std::time::Instant>) -> Result<i32, &'static str> {
+        let mut refused = false;
         loop {
             if let Some(p) = util::read_trimmed(Path::new(pidfile)).and_then(|s| s.parse::<i32>().ok()) {
-                if p > 0 {
+                // As systemd's service_load_pid_file(): a PID file someone
+                // other than root could have written names a process of the
+                // unit only, or the runner would signal any process as root.
+                let cgroup = self.st.get(keys::CGROUP);
+                let ok = p > 1
+                    && p != me
+                    && (!pid_file_questionable(Path::new(pidfile)) || main_pid_ok(p as u32, u32::MAX, me as u32, cgroup.as_deref()));
+                if ok {
                     return Ok(p);
+                }
+                if !refused {
+                    log(self.id(), &format!("PIDFile={pidfile}: PID {p} is not a process of the unit and the file is not root's alone: refusing it"));
+                    refused = true;
                 }
             }
             if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
@@ -2177,6 +2189,35 @@ fn notify_sender_ok(cred: Option<libc::ucred>, main_pid: u32, unit_uid: Option<u
     matches!((cg(c.pid as u32), cg(main_pid)), (Some(a), Some(b)) if a == b)
 }
 
+/// Whether a user other than root could have written `path` or made it
+/// point elsewhere (systemd's CHASE_SAFE check and the file owner): a
+/// component that is a symlink not owned by root, a directory on the way
+/// not owned by root or writable by group or others, or a file not owned
+/// by root.
+fn pid_file_questionable(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let mut prefix = PathBuf::new();
+    for c in path.components() {
+        prefix.push(c);
+        match fs::symlink_metadata(&prefix) {
+            Ok(m) if m.file_type().is_symlink() && m.uid() != 0 => return true,
+            Ok(_) => {}
+            Err(_) => return true,
+        }
+    }
+    let Ok(real) = fs::canonicalize(path) else { return true };
+    let mut dir = real.parent();
+    while let Some(d) = dir {
+        match fs::metadata(d) {
+            Ok(m) if m.uid() != 0 || m.mode() & 0o022 != 0 => return true,
+            Ok(_) => {}
+            Err(_) => return true,
+        }
+        dir = d.parent();
+    }
+    fs::metadata(&real).map_or(true, |m| m.uid() != 0)
+}
+
 /// MAINPID=: systemd's service_is_suitable_main_pid(), an existing process
 /// in the unit's cgroup (not the helper); a root sender may name any.
 fn main_pid_ok(pid: u32, sender_uid: u32, main_pid: u32, cgroup: Option<&str>) -> bool {
@@ -2297,3 +2338,29 @@ fn ensure_system_user(name: &str) -> Result<UserInfo, String> {
     util::lookup_user(name).ok_or_else(|| format!("user {name} still missing after useradd"))
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pid_file_trust() {
+        // Root's file in root's directories: trusted as written.
+        assert!(!pid_file_questionable(Path::new("/etc/passwd")));
+        // A file this (unprivileged) test owns, or one that doesn't exist.
+        let dir = std::env::temp_dir().join(format!("sdcompat-pidfile-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let f = dir.join("x.pid");
+        fs::write(&f, "1\n").unwrap();
+        assert!(pid_file_questionable(&f));
+        assert!(pid_file_questionable(&dir.join("missing.pid")));
+        // A symlink not owned by root, even to root's file.
+        let l = dir.join("link.pid");
+        let _ = fs::remove_file(&l);
+        std::os::unix::fs::symlink("/etc/passwd", &l).unwrap();
+        if unsafe { libc::geteuid() } != 0 {
+            assert!(pid_file_questionable(&l));
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

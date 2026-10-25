@@ -262,6 +262,7 @@ impl Daemon {
         let ufs = if self.transient.lock().unwrap().contains_key(id) || self.is_transient_file(unit) {
             "transient".to_string()
         } else {
+            self.file_state_cache_check();
             // Bind first: a guard in an `if let` condition lives through `else`.
             let cached = self.file_state_cache.lock().unwrap().get(id).cloned();
             match cached {

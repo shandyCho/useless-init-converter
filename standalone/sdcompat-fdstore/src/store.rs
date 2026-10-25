@@ -217,7 +217,8 @@ impl Store {
                 // As systemd's service_add_fd_store(): the same open file
                 // passed again is stored once. Not for "#stdio": one socket can
                 // be both stdin and stdout (sd-bus unixexec: systemd-run --pipe),
-                // and each name must get its fd.
+                // and each name must get its fd. Keep in step with
+                // crates/sdcompat-base/src/fdstore.rs (no shared code).
                 if !parts[1].ends_with("#stdio") && list.iter().any(|(_, f)| same_file(f.as_raw_fd(), fd.as_raw_fd())) {
                     return reply(b"OK");
                 }
