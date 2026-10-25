@@ -89,6 +89,7 @@ if [ -x /usr/sbin/semodule ]; then
     restorecon %{_libexecdir}/sdcompat/* 2>/dev/null || :
     [ -d /var/lib/sdcompat ] && restorecon -R /var/lib/sdcompat || :
     [ -d /var/lib/s6-rc ] && restorecon -R /var/lib/s6-rc || :
+    [ -p /run/service/s6-svscan-log/fifo ] && restorecon /run/service/s6-svscan-log/fifo || :
 fi
 
 %postun

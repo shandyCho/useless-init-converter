@@ -674,6 +674,8 @@ setup_selinux() {
     [ -d /var/lib/s6-rc ] && run restorecon -R /var/lib/s6-rc
     # On a running s6 boot this lets a stuck catch-all logger rotate again.
     [ -d /run/uncaught-logs ] && run restorecon -R /run/uncaught-logs
+    # ... and lets the services write their stderr to its fifo.
+    [ -p /run/service/s6-svscan-log/fifo ] && run restorecon /run/service/s6-svscan-log/fifo
     # ... and lets s6-rc-update (daemon-reload) rename in the live directory.
     local live
     mapfile -t live < <(compgen -G '/run/s6-rc:*'; [ -L /run/s6-rc ] && echo /run/s6-rc)

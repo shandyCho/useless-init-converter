@@ -239,6 +239,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | `s6 live install` from a shell | `sudo s6 set commit --no-snapshot && sudo s6 live install --no-snapshot`, then `ls -Z /run/service \| awk '{print $1}' \| sort \| uniq -c` and `sudo ausearch -m AVC -ts recent` | it returns; the links are `tmpfs_t` or `init_var_run_t`, no `user_tmp_t`; no denials |
 | Previous shutdown | after an s6 power-off and the next s6 boot: `sudo ls -l /var/log/sdcompat/last-shutdown-*.log; sudo grep -ci denied /var/log/sdcompat/last-shutdown-*.log` | both files from the power-off time, and `0` denials (send the files otherwise); the power-off took a few seconds, not 25 s or more; the console log is not empty and has no `unable to rename`, no `Failed to activate service ... timed out` and no `sdcompatd: stopping ... took`; the kernel log has no `services still not down after 180 s` |
 | Bus and userdb labels | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t` and `systemd_userdbd_runtime_t` |
+| Catch-all fifo label | `ls -Z /run/service/s6-svscan-log/fifo` and `sudo ausearch -m AVC -ts boot \| grep s6-svscan-log/fifo` | `sdcompat_log_fifo_t`, no denials on that fifo (as `initctl_t` the services' stderr became /dev/null) |
 | Overall state | `systemctl is-system-running` | `running` (`degraded` is OK; see next line) |
 | Failed units | `systemctl --failed` | ideally none; note any that are listed |
 | Journal | `journalctl -b \| head` | log lines from this boot |
