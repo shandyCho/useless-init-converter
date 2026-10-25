@@ -409,6 +409,19 @@ if [ -n "$SR" ]; then
     expect_eq "notify-reload waits for READY=1" "$(cat "$R/notreload.out" 2>/dev/null)" "reloaded"
     expect_state notreload.service active/running
     expect_eq "systemd-run -PGq --wait pipes stdio" "$(echo piped | run_sr -PGq --wait /bin/cat 2>&1)" "piped"
+    # stdin and stdout one socket, as sd-bus's unixexec socketpair for
+    # systemctl --user -M UID@: both must reach the unit.
+    out=$(SYSTEMCTL=$SR python3 -c '
+import socket, subprocess, sys
+a, b = socket.socketpair()
+p = subprocess.Popen(sys.argv[1:], stdin=b, stdout=b, stderr=subprocess.DEVNULL)
+b.close()
+a.sendall(b"piped\n")
+a.shutdown(socket.SHUT_WR)
+print(a.makefile().read().strip())
+p.wait()
+' "$(dirname "$0")/systemctl.sh" -PGq --wait /bin/sed 's/^/got /')
+    expect_eq "systemd-run -P with stdin and stdout one socket" "$out" "got piped"
     # The failed sr-wait.service stays loaded; a reload must not put it into
     # the s6-rc database (its service directory collided with the daemon's).
     call Reload && ok "daemon-reload with a failed transient unit loaded"

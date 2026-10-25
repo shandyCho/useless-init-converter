@@ -319,8 +319,10 @@ impl Store {
                 let list = map.entry(parts[1].clone()).or_default();
                 prune_hung_up(&parts[1], list);
                 // As systemd's service_add_fd_store(): the same open file
-                // passed again is stored once.
-                if list.iter().any(|(_, f)| same_file(f.as_raw_fd(), fd.as_raw_fd())) {
+                // passed again is stored once. Not for "#stdio": one socket can
+                // be both stdin and stdout (sd-bus unixexec: systemd-run --pipe),
+                // and each name must get its fd.
+                if !parts[1].ends_with("#stdio") && list.iter().any(|(_, f)| same_file(f.as_raw_fd(), fd.as_raw_fd())) {
                     return reply(b"OK");
                 }
                 if list.len() >= max {
@@ -418,6 +420,11 @@ mod tests {
         put(&sock, "j.service#stdio", "stdin", c.as_raw_fd(), 3).unwrap();
         drop(d);
         assert_eq!(get(&sock, "j.service#stdio").len(), 1);
+        // One socket as both stdin and stdout keeps both names.
+        let (e, _f) = std::os::unix::net::UnixStream::pair().unwrap();
+        put(&sock, "k.service#stdio", "stdin", e.as_raw_fd(), 3).unwrap();
+        put(&sock, "k.service#stdio", "stdout", e.as_raw_fd(), 3).unwrap();
+        assert_eq!(get(&sock, "k.service#stdio").len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

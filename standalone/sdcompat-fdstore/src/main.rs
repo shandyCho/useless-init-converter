@@ -145,6 +145,11 @@ mod tests {
         assert_eq!(request(&sock, "PUT\0j.service#stdio\0stdin", Some(c.as_raw_fd()))[0], b"OK");
         drop(d);
         assert_eq!(request(&sock, "GET\0j.service#stdio", None).len(), 2);
+        // One socket as both stdin and stdout keeps both names.
+        let (e, _f) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert_eq!(request(&sock, "PUT\0k.service#stdio\0stdin", Some(e.as_raw_fd()))[0], b"OK");
+        assert_eq!(request(&sock, "PUT\0k.service#stdio\0stdout", Some(e.as_raw_fd()))[0], b"OK");
+        assert_eq!(request(&sock, "GET\0k.service#stdio", None).len(), 3);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

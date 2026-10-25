@@ -215,8 +215,10 @@ impl Store {
                 let list = map.entry(parts[1].clone()).or_default();
                 prune_hung_up(&parts[1], list);
                 // As systemd's service_add_fd_store(): the same open file
-                // passed again is stored once.
-                if list.iter().any(|(_, f)| same_file(f.as_raw_fd(), fd.as_raw_fd())) {
+                // passed again is stored once. Not for "#stdio": one socket can
+                // be both stdin and stdout (sd-bus unixexec: systemd-run --pipe),
+                // and each name must get its fd.
+                if !parts[1].ends_with("#stdio") && list.iter().any(|(_, f)| same_file(f.as_raw_fd(), fd.as_raw_fd())) {
                     return reply(b"OK");
                 }
                 if list.len() >= max {
