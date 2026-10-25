@@ -5267,3 +5267,45 @@ the default"); the enforcing s6 boot is verified, so done now, opt-in.
    `ausearch -m AVC -ts boot | grep ftrig` check.
 3. Find the Broken pipe flake's cause.
 4. Optionally: report the s6-rc snapshot bug.
+
+## 2026-10-25: owner wants no systemd in the boot at all: s6 initramfs (design)
+
+No code changes. Owner clarified "only s6 in the boot process": the
+initramfs too. Answers (AskUserQuestion): the LUKS root is unlocked by a
+typed passphrase (no TPM2/FIDO2), and the initramfs's PID 1 should be s6
+(not dracut's shell init). This resolves the first session's open
+question 2 (systemd-free initramfs, waiting on the unlock method).
+
+Facts read: root btrfs subvol=root on LUKS nvme1n1p6, US keymap; nvme,
+dm_crypt, xhci_pci, hid_generic are modules, btrfs/i8042/atkbd/usbhid
+built in; dracut 111 still has 80base's non-systemd init; s6-svscan
+execs .s6-svscan/finish on exit; skarnet binaries link libskarnet.so;
+/boot 2.0G free; QEMU with a usable /dev/kvm, kernel images readable.
+
+Proposed design (awaiting the owner's go-ahead):
+- /init (execline) mounts proc/sys/devtmpfs/run and execs s6-svscan as
+  PID 1; a supervised `rootfs` service parses rd.luks.uuid/root/rootflags,
+  modprobes a host-only list, waits for the disk (blkid -U, 30 s),
+  cryptsetup open with a console passphrase (3 tries, DM_DISABLE_UDEV=1),
+  mounts /sysroot ro, checks init-selinux, s6-svscanctl -t; on failure a
+  bash rescue shell, retry on exit. .s6-svscan/finish moves /run and
+  `exec switch_root /sysroot /usr/sbin/init-selinux`.
+- Builder dist/sdcompat-mkinitramfs (shell), dracut-install only as a
+  copy helper (binaries+libs, modules+deps+firmware), early microcode
+  cpio, zstd; /boot/initramfs-<kver>-s6.img; module list from sysfs plus
+  /etc/sdcompat/initramfs-modules. The kernel-install plugin builds it
+  and points the s6 entry's initrd at it; setup option to enable. The
+  systemd entry keeps Fedora's initramfs.
+- Lost on the s6 entry: plymouth (already off), TPM2/FIDO2, resume.
+- Risks: dm nodes without udev; coldplug after switch_root without an
+  initramfs udev db. Test everything in QEMU (LUKS2+btrfs test disk)
+  before a real boot.
+- Open choice: fixed host module list (proposed) vs packaging skarnet's
+  mdevd for mdevd-coldplug.
+
+### Next steps
+
+1. Owner: approve the design and the module-list choice.
+2. Then implement and test in QEMU; then a real s6 boot.
+3. The earlier steps unchanged (RPMs, --default-s6 checks, logger and
+   is-enabled checks, Broken pipe flake).
