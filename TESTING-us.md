@@ -199,7 +199,7 @@ see the end of this file). That entry boots with SELinux in permissive mode.
 Check the result:
 
 ```sh
-ls /boot/loader/entries/ | grep sdcompat           # the new boot entry
+sudo ls /boot/loader/entries/ | grep sdcompat         # the new boot entry
 head -3 /var/lib/sdcompat/current/report.txt       # translation summary
 ```
 
@@ -393,12 +393,12 @@ sudo dist/setup-fedora.sh --enforcing --boot-only-s6 --rpms=$HOME/rpmbuild-skarn
 | What | Command | Expected |
 |---|---|---|
 | The image | `ls -l /boot/initramfs-*-s6.img` | one per installed kernel, built just now |
-| The entry uses it | `sudo grep ^initrd /boot/loader/entries/*~sdcompat.conf` | `initramfs-<kernel>-s6.img`; the systemd entries keep `initramfs-<kernel>.img` |
+| The entry uses it | `sudo sh -c 'grep ^initrd /boot/loader/entries/*~sdcompat.conf'` | `initramfs-<kernel>-s6.img`; the systemd entries keep `initramfs-<kernel>.img` |
 | The prompt | boot the s6 entry | a plain `Enter passphrase for /dev/nvme…:` prompt; the boot goes on after it |
 | No systemd ran | `sudo dmesg \| grep -E 'Run /init\|systemd\[1\]\|running in initrd'` | only `Run /init as init process` |
 | PID 1 | `cat /proc/1/comm` | `s6-svscan` |
 | The LUKS mapping's links | `ls -l /dev/disk/by-uuid/ \| grep dm-` and `udevadm info /dev/dm-0 \| grep -E 'DM_NAME\|ID_FS_TYPE'` | the root filesystem's UUID points at `../../dm-0`; `DM_NAME=luks-…`, `ID_FS_TYPE=btrfs` |
-| Mounts | `findmnt -n / /home` | both from the LUKS mapping, as before |
+| Mounts | `findmnt -n /; findmnt -n /home` | both from the LUKS mapping, as before |
 | Rescue (optional) | type a wrong passphrase three times | `initramfs: rescue shell …`; `exit` asks again |
 | A kernel update | `sudo dnf upgrade kernel*`, then the first two rows | the new kernel has its `-s6.img` and its s6 entry uses it |
 

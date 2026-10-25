@@ -188,7 +188,7 @@ permissive 모드로 부팅합니다.
 결과 확인:
 
 ```sh
-ls /boot/loader/entries/ | grep sdcompat           # 새 부팅 항목
+sudo ls /boot/loader/entries/ | grep sdcompat         # 새 부팅 항목
 head -3 /var/lib/sdcompat/current/report.txt       # 변환 요약
 ```
 
@@ -371,12 +371,12 @@ sudo dist/setup-fedora.sh --enforcing --boot-only-s6 --rpms=$HOME/rpmbuild-skarn
 | 항목 | 명령 | 기대 결과 |
 |---|---|---|
 | 이미지 | `ls -l /boot/initramfs-*-s6.img` | 설치된 커널마다 하나, 방금 만들어짐 |
-| 항목이 그것을 씀 | `sudo grep ^initrd /boot/loader/entries/*~sdcompat.conf` | `initramfs-<커널>-s6.img`. systemd 항목은 `initramfs-<커널>.img` 그대로 |
+| 항목이 그것을 씀 | `sudo sh -c 'grep ^initrd /boot/loader/entries/*~sdcompat.conf'` | `initramfs-<커널>-s6.img`. systemd 항목은 `initramfs-<커널>.img` 그대로 |
 | 암호 입력 | s6 항목으로 부팅 | 평범한 `Enter passphrase for /dev/nvme…:` 프롬프트, 입력 뒤 부팅이 계속됨 |
 | systemd가 실행되지 않음 | `sudo dmesg \| grep -E 'Run /init\|systemd\[1\]\|running in initrd'` | `Run /init as init process`만 나옴 |
 | PID 1 | `cat /proc/1/comm` | `s6-svscan` |
 | LUKS 매핑의 링크 | `ls -l /dev/disk/by-uuid/ \| grep dm-`와 `udevadm info /dev/dm-0 \| grep -E 'DM_NAME\|ID_FS_TYPE'` | 루트 파일 시스템의 UUID가 `../../dm-0`을 가리킴. `DM_NAME=luks-…`, `ID_FS_TYPE=btrfs` |
-| 마운트 | `findmnt -n / /home` | 둘 다 전처럼 LUKS 매핑에서 |
+| 마운트 | `findmnt -n /; findmnt -n /home` | 둘 다 전처럼 LUKS 매핑에서 |
 | 복구(선택) | 틀린 암호를 세 번 입력 | `initramfs: rescue shell …`. `exit`하면 다시 물음 |
 | 커널 업데이트 | `sudo dnf upgrade kernel*` 뒤 처음 두 줄 | 새 커널에 `-s6.img`가 있고 그 s6 항목이 그것을 씀 |
 

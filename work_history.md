@@ -5405,3 +5405,60 @@ Committed, QEMU-verified, not booted on hardware.
    all" (the dm links row matters most).
 2. The earlier steps (--default-s6 checks, logger/is-enabled check).
 3. Broken pipe flake; s6-rc snapshot bug report (optional).
+
+## 2026-10-26: first real boot with --boot-only-s6
+
+Owner booted the s6 entry with the s6 initramfs on the hardware (kernel
+7.2.11, LUKS2 passphrase, btrfs) and ran the TESTING "Booting with no
+systemd at all" rows plus tests/collect-diagnostics.sh.
+
+### Results
+
+- Images: `initramfs-<kver>-s6.img` for 7.2.9/7.2.10/7.2.11; all three s6
+  entries' initrd lines name them, `$tuned_initrd` kept (from the
+  diagnostics' boot-entry copies).
+- dmesg: only `Run /init as init process`, no systemd[1], no "running in
+  initrd". PID 1 `s6-svscan`.
+- The dm links row (the one the QEMU test could not show): the root's
+  UUID in /dev/disk/by-uuid points at ../../dm-0; `udevadm info` shows
+  DM_NAME=luks-a0990770-... and ID_FS_TYPE=btrfs. So the
+  /run/udev/data record written by rootfs works on the real system.
+- Mounts (checked here, from /proc/self/mountinfo): / is subvol=/root and
+  /home subvol=/home from the LUKS mapping, rw; /dev, /proc, /sys, /run
+  are the moved initramfs mounts, shared, /run once.
+- `systemctl --failed` empty, `is-system-running` running, no
+  warning-or-higher journal entries.
+- AVCs: only known ones. This boot has JOURNAL=no, so the
+  NetworkManager dispatcher scripts' (chronyc, iscsid) writes to the
+  s6-log pipe are the known JOURNAL=no item; hostnamed proc_psi_t is the
+  known policy-side one. Uncaught log: known home1-excluded noise,
+  user@60578 missing user, "stopping shutdown.target" (harmless).
+
+### Doc bugs fixed (TESTING pair)
+
+- `sudo grep ^initrd /boot/loader/entries/*~sdcompat.conf` failed: the
+  glob is expanded by the user's shell and /boot/loader/entries is not
+  readable for the user, so grep got the literal pattern. Now
+  `sudo sh -c '...'`; section 5's `ls /boot/loader/entries/` got `sudo`
+  for the same reason.
+- `findmnt -n / /home` prints nothing: with two arguments findmnt takes
+  them as source and target of one mount. Now `findmnt -n /; findmnt -n
+  /home`.
+
+### Not done
+
+Rescue row (wrong passphrase three times), a USB keyboard at the prompt,
+a kernel update with the s6 image, and an enforcing boot with JOURNAL=yes
+under the s6 initramfs.
+
+### Current state
+
+--boot-only-s6 boots the hardware with no systemd anywhere in the boot;
+the dm/udev handoff is verified on hardware.
+
+### Next steps
+
+1. Owner, optional: the rescue row, and the kernel-update row at the next
+   `dnf upgrade kernel*`.
+2. The earlier steps (--default-s6 checks, logger/is-enabled check,
+   Broken pipe flake, s6-rc snapshot bug report).
