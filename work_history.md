@@ -5034,3 +5034,26 @@ No code changes.
 3. Find the Broken pipe flake's cause (s6-ftrigrd's exit under
    s6-rc-update in the sandbox; JOURNAL=no reproduces it most often).
 4. Optionally: UnitFileState from the set; report the s6-rc snapshot bug.
+
+## 2026-10-25: owner's check of cups after a reboot into s6
+
+No code changes.
+
+- Owner rebooted into s6 (22:19:36); `systemctl is-active cups.service` ->
+  active. Checked on the machine: cups.path is `active` in the set and
+  enabled, cups.service is `usable` and disabled (preset), and cupsd was
+  started at 22:19:54 by cups.path (`TriggeredBy: cups.path`; PathExists
+  /var/cache/cups/org.cups.cupsd). /run/cups/cups.sock is listening. This
+  is what systemd does too, so the cups preset fix (`36e443d`) holds
+  across reboots. The set sources were last changed on 2026-10-23, so this
+  was not the `s6 set disable -p X` check.
+- Seen, not acted on: `systemctl status cups.socket` says inactive (dead)
+  while its socket is listening (the service's runner binds it, by design
+  sockets are not set entries); `s6 set status cups.socket` fails with
+  s6-rc-db's "not a valid identifier". Cosmetic.
+- For the `disable -p X` check, cups.service is a poor X: cups.path would
+  still start it.
+
+### Next steps
+
+Unchanged from the previous entry.
