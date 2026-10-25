@@ -241,8 +241,8 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 
 `--build-s6` installs them from source into `/usr` instead (not tracked by rpm).
 
-The script keeps the normal systemd boot as the default and **adds** a GRUB
-entry, "Fedora (s6 + sdcompat)". Backups of anything it overwrites go to
+The script **adds** a GRUB entry, "Fedora (s6 + sdcompat)", and keeps the
+normal systemd boot as the default unless you pass `--default-s6`. Backups of anything it overwrites go to
 `/var/lib/sdcompat/setup-backup/`. It does the following:
 
 1. Installs `dbus-daemon`, `earlyoom`, `chrony`, `NetworkManager`, and the
@@ -286,11 +286,20 @@ Other options:
 | `--no-resolved` / `--resolved` | No systemd-resolved on the s6 boot: NetworkManager handles DNS itself / back to resolved |
 | `--enforcing` | Don't add `enforcing=0` to the s6 boot entry |
 | `--no-grub` | Don't add the boot entry |
+| `--default-s6` / `--default-systemd` | Make the s6 entry the default boot entry, also for kernels installed later / make the systemd entry the default again. Without them a re-run keeps the choice (`/etc/sdcompat/boot-default`). The systemd entry stays in the menu either way |
 | `--uninstall [--remove-s6]` | Remove the entry and installed files (and the source-built skarnet tools); keeps your config |
 
 The journal and resolved options also switch an existing install (they set `JOURNAL=`/`RESOLVED=` in `/etc/sdcompat/sdcompat.conf`); without them a re-run keeps what is set there. With `--no-resolved`, the s6 oneshot `resolv` writes `/run/NetworkManager/conf.d/99-sdcompat-no-resolved.conf` (`dns=default`, `rc-manager=symlink`) at boot and points the resolved stub file that `/etc/resolv.conf` links to at `/run/NetworkManager/resolv.conf`. Everything is in `/run`, so the systemd boot keeps using resolved. A `dns=` setting in `/etc/NetworkManager` overrides it (NetworkManager reads `/run` first). nss-resolve in `/etc/nsswitch.conf` finds no resolved and falls through to `dns`.
 
-A kernel-install plugin adds the s6 entry for every new kernel.
+A kernel-install plugin adds the s6 entry for every new kernel. With
+`--default-s6` it also keeps the s6 entry the default: on a kernel update
+Fedora's `20-grub.install` names the new systemd entry as the next default
+(`tmp_saved_entry`) and `95-set-boot-entry.install` saves it; the plugin runs
+between them and names the new s6 entry instead. When the default s6 entry's
+kernel is removed, it picks the newest s6 entry left. `--uninstall` and
+`--default-systemd` move a saved s6 default back to the same kernel's systemd
+entry. To reach the systemd entry when the menu is hidden, hold Shift or
+press Esc while GRUB starts.
 
 What systemd components are replaced, and why logind and `systemd --user` stay
 (GNOME needs them; see the next section):

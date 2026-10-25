@@ -191,9 +191,10 @@ dist/setup-fedora.sh --dry-run --rpms=$HOME/rpmbuild-skarnet/rpms
 sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 ```
 
-The script prints a plan and asks before changing anything. It keeps the
-normal systemd boot as the default and adds a boot entry
-**"Fedora (s6 + sdcompat)"**. That entry boots with SELinux in permissive mode.
+The script prints a plan and asks before changing anything. It adds a boot
+entry **"Fedora (s6 + sdcompat)"** and keeps the normal systemd boot as the
+default (once the s6 boot works for you, `--default-s6` makes it the default;
+see the end of this file). That entry boots with SELinux in permissive mode.
 
 Check the result:
 
@@ -340,6 +341,29 @@ reinstall the s6 packages first (stage 2). Do that from the **normal systemd
 boot**: the new s6 and s6-rc programs then never act on a running s6 tree
 started by the old ones, and the next s6 boot compiles its database with the
 new s6-rc.
+
+## Making s6 the default boot
+
+Once the s6 boot works for you (the checks above pass, ideally enforcing),
+make its entry the default. From the source tree, with the same options as
+your install:
+
+```sh
+sudo dist/setup-fedora.sh --enforcing --default-s6 --rpms=$HOME/rpmbuild-skarnet/rpms
+```
+
+Check:
+
+| What | Command | Expected |
+|---|---|---|
+| The default | `sudo grubby --info=DEFAULT \| grep title` | `title="Fedora (s6 + sdcompat) <kernel>"` |
+| The choice is kept | `cat /etc/sdcompat/boot-default` | `s6` |
+| It boots | reboot without touching the menu; `cat /proc/1/comm` | `s6-svscan` |
+| After a kernel update | `sudo dnf upgrade kernel*`, then the first row again | the s6 entry of the new kernel |
+
+To reach the systemd entry once, hold Shift or press Esc while GRUB starts
+and pick it. To make systemd the default again:
+`sudo dist/setup-fedora.sh --default-systemd ...` (the same options as above).
 
 ## Removing it
 

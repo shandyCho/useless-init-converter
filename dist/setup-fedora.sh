@@ -2,9 +2,10 @@
 # Set up a Fedora (Workstation/GNOME) system to boot with s6-linux-init +
 # s6-rc + sdcompat instead of systemd as PID 1.
 #
-# The normal systemd boot entry stays the default and is left working:
-# this script only ADDS a GRUB entry "Fedora (s6 + sdcompat)". Packages and
-# settings it changes are listed in the plan it prints before doing anything.
+# The normal systemd boot entry is left working: this script ADDS a GRUB
+# entry "Fedora (s6 + sdcompat)", and makes it the default only with
+# --default-s6. Packages and settings it changes are listed in the plan it
+# prints before doing anything.
 #
 #   sudo dist/setup-fedora.sh            # interactive: shows the plan, asks
 #   sudo dist/setup-fedora.sh --yes      # no questions
@@ -15,6 +16,10 @@
 #   --enforcing     do not add enforcing=0 to the s6 boot entry (default: SELinux
 #                   permissive on that entry only, until you have a local policy)
 #   --no-grub       do not add the boot entry
+#   --default-s6    make the s6 entry the default boot entry, also for new
+#                   kernels (the systemd entry stays in the menu)
+#   --default-systemd  make the systemd entry the default again
+#                   Without these two, a re-run keeps the current choice.
 #   --rpms=DIR      install the skarnet tools (dist/skarnet.versions) from RPMs
 #                   built with dist/rpm/build-skarnet-rpms.sh (recommended:
 #                   Fedora does not package them)
@@ -64,6 +69,8 @@ RPM_DIR=""
 CORE_TOOLS=(sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd)
 STANDALONE=(sdcompat-fdstore sdcompat-notify sdcompat-journal-relay)
 WITHOUT=""
+BOOT_DEFAULT_FILE=/etc/sdcompat/boot-default
+BOOT_DEFAULT=""
 DRY=0 YES=0 ENFORCING=0 GRUB=1 BUILD_S6=0 REBUILD=0 UNINSTALL=0 JOURNAL="" RESOLVED="" REMOVE_S6=0
 KI_PLUGIN=/etc/kernel/install.d/90-sdcompat.install
 for a in "$@"; do
@@ -72,6 +79,8 @@ for a in "$@"; do
         --yes|-y) YES=1 ;;
         --enforcing) ENFORCING=1 ;;
         --no-grub) GRUB=0 ;;
+        --default-s6) BOOT_DEFAULT=s6 ;;
+        --default-systemd) BOOT_DEFAULT=systemd ;;
         --build-s6) BUILD_S6=1 ;;
         --rpms=*) RPM_DIR=${a#--rpms=} ;;
         --rebuild) REBUILD=1 ;;
@@ -82,7 +91,7 @@ for a in "$@"; do
         --no-resolved) RESOLVED=0 ;;
         --resolved) RESOLVED=1 ;;
         --remove-s6) REMOVE_S6=1 ;;
-        -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -95,6 +104,10 @@ conf_bool() {
     case ${v,,} in no|false|0|off|n|f) echo 0 ;; *) echo 1 ;; esac
 }
 JOURNAL=${JOURNAL:-$(conf_bool JOURNAL)}
+if [ -z "$BOOT_DEFAULT" ]; then
+    BOOT_DEFAULT=systemd
+    [ "$(sed -e 's/#.*//' "$BOOT_DEFAULT_FILE" 2>/dev/null | tr -d ' \t\n')" = s6 ] && BOOT_DEFAULT=s6
+fi
 RESOLVED=${RESOLVED:-$(conf_bool RESOLVED)}
 # wanted NAME: whether the standalone tool NAME is to be installed.
 wanted() { case $WITHOUT in *",$1,"*) return 1 ;; *) return 0 ;; esac; }
@@ -170,8 +183,9 @@ check_system() {
 uninstall() {
     say "Removing the s6 boot entry and sdcompat files"
     confirm "Remove the '$TITLE' boot entry, $S6LI_BASE and sdcompat's files?"
+    systemd_default
     remove_grub_entry
-    run rm -f "$KI_PLUGIN" /etc/sdcompat/boot-options
+    run rm -f "$KI_PLUGIN" /etc/sdcompat/boot-options "$BOOT_DEFAULT_FILE"
     if grep -q "written by sdcompat's" /etc/s6.conf 2>/dev/null; then
         run rm -f /etc/s6.conf
     fi
@@ -234,6 +248,25 @@ remove_grub_entry() {
     elif command -v grubby >/dev/null; then
         run grubby --remove-kernel="TITLE=$TITLE" || true
     fi
+}
+
+# The GRUB environment's saved_entry (GRUB_DEFAULT=saved), or nothing.
+saved_entry() { { grub2-editenv - list 2>/dev/null || true; } | sed -n 's/^saved_entry=//p'; }
+
+# If the default is an s6 entry, make it the same kernel's systemd entry
+# (the s6 entry's BLS id is the systemd one's with "~sdcompat" appended).
+systemd_default() {
+    local saved
+    saved=$(saved_entry)
+    case $saved in
+    *~sdcompat)
+        if [ -e "/boot/loader/entries/${saved%~sdcompat}.conf" ]; then
+            run grub2-editenv - set "saved_entry=${saved%~sdcompat}"
+        else
+            run grub2-editenv - unset saved_entry
+        fi
+        ;;
+    esac
 }
 
 # ---------------------------------------------------------------- steps
@@ -746,7 +779,36 @@ add_grub_entry() {
             --copy-default --title="$TITLE $kver" --args="$args"
         warn "no BLS entries: future kernels will not get an s6 entry automatically"
     fi
-    echo "  The systemd entry stays the default. Pick '$TITLE' in the GRUB menu."
+    set_boot_default "$kver"
+}
+
+# set_boot_default KVER: make KVER's s6 entry (--default-s6) or the systemd
+# entry the default. The kernel-install plugin reads the same file and keeps
+# the s6 entry the default when a kernel is added or removed.
+set_boot_default() {
+    local kver=$1 f id=""
+    if [ "$BOOT_DEFAULT" != s6 ]; then
+        [ -e "$BOOT_DEFAULT_FILE" ] && run rm -f "$BOOT_DEFAULT_FILE"
+        systemd_default
+        echo "  The systemd entry is the default. Pick '$TITLE' in the GRUB menu."
+        return 0
+    fi
+    printf '# s6: the "%s" entry is the default boot entry (setup-fedora.sh --default-s6).\ns6\n' "$TITLE" |
+        put "$BOOT_DEFAULT_FILE"
+    for f in /boot/loader/entries/*"$kver"~sdcompat.conf; do
+        [ -e "$f" ] || continue
+        id=${f##*/}
+        id=${id%.conf}
+    done
+    if [ -n "$id" ]; then
+        run grub2-editenv - set "saved_entry=$id"
+    elif [ "$DRY" = 1 ]; then
+        run grub2-editenv - set "saved_entry=ID-$kver~sdcompat"
+    else
+        warn "no s6 entry for $kver: the default is unchanged"
+        return 0
+    fi
+    echo "  '$TITLE' is the default; the systemd entry stays in the GRUB menu."
 }
 
 print_plan() {
@@ -765,10 +827,11 @@ This will set up booting Fedora with s6-linux-init + s6-rc + sdcompat:
   * logs:    $([ "$JOURNAL" = 1 ] && echo "systemd-journald as an s6 service (journalctl works)" || echo "rsyslog + s6-log directories, no journal")
   * DNS:     $([ "$RESOLVED" = 1 ] && echo "systemd-resolved as on the systemd boot" || echo "NetworkManager without systemd-resolved (s6 boot only)")
   * GRUB:    add "$TITLE" with init=/usr/sbin/init-selinux, no splash$([ "$ENFORCING" = 1 ] || echo ", SELinux permissive"),
-             and a kernel-install plugin that adds it for every new kernel
+             and a kernel-install plugin that adds it for every new kernel;
+             default entry: $([ "$BOOT_DEFAULT" = s6 ] && echo "$TITLE (--default-s6)" || echo "the systemd one")
 
 Nothing about the normal systemd boot changes: systemd, dbus-broker, journald
-and all your units stay installed; the new entry is not made the default.
+and all your units stay installed$([ "$BOOT_DEFAULT" = s6 ] && echo ", and the systemd entry stays in the menu" || echo "; the new entry is not made the default").
 Backups of overwritten files go to $BACKUP.
 
 EOF
@@ -793,7 +856,7 @@ next_steps() {
     cat <<EOF
 
 Done. Next:
-  1. Reboot and choose "$TITLE" in the GRUB menu.
+  1. Reboot$([ "$BOOT_DEFAULT" = s6 ] && echo " (\"$TITLE\" is the default)" || echo " and choose \"$TITLE\" in the GRUB menu").
   2. If stage 2 fails, log in on tty9 (Ctrl+Alt+F9) and look at:
        /run/uncaught-logs/current        (s6 catch-all log)
        s6-rc -a list                     (what is up)
@@ -803,7 +866,9 @@ $(selinux_step)
   5. If a new s6 database breaks booting, add this to the kernel command
      line in GRUB (press e):
        sdcompat.db=previous    boot the database from before the last change
-  6. To go back: boot the normal Fedora entry. To remove everything:
+  6. To go back: boot the normal Fedora entry (hold Shift or press Esc for the
+     GRUB menu); make it the default again with --default-systemd. To remove
+     everything:
        sudo $0 --uninstall [--remove-s6]
 EOF
 }

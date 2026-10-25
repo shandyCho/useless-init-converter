@@ -8,7 +8,17 @@ KVER=$2
 ENTRIES=${SDCOMPAT_BLS_DIR:-/boot/loader/entries}
 TITLE="Fedora (s6 + sdcompat)"
 OPTS_FILE=${SDCOMPAT_BOOT_OPTIONS:-/etc/sdcompat/boot-options}
+# "s6" here (setup-fedora.sh --default-s6) keeps the s6 entry the default.
+DEFAULT_FILE=${SDCOMPAT_BOOT_DEFAULT:-/etc/sdcompat/boot-default}
+EDITENV=${SDCOMPAT_GRUB_EDITENV:-grub2-editenv}
 [ -d "$ENTRIES" ] || exit 0
+
+s6_default() {
+    [ "$(sed -e 's/#.*//' "$DEFAULT_FILE" 2>/dev/null | tr -d ' \t\n')" = s6 ] &&
+        command -v "$EDITENV" >/dev/null
+}
+# envget VAR: VAR's value in the GRUB environment block.
+envget() { "$EDITENV" - list 2>/dev/null | sed -n "s/^$1=//p"; }
 
 case "$COMMAND" in
 add)
@@ -30,11 +40,33 @@ add)
     dest="${src%.conf}~sdcompat.conf"
     sed -e "s/^title .*/title $TITLE $KVER/" \
         -e "/^options /{s/ rhgb//; s/ quiet//; s|\$| $args|}" "$src" >"$dest"
+    # On a kernel update 20-grub.install names the new systemd entry in
+    # tmp_saved_entry, and 95-set-boot-entry.install makes that the
+    # saved_entry after checking the initrd. Name the s6 entry instead.
+    if s6_default; then
+        id=${src##*/}
+        id=${id%.conf}
+        [ "$(envget tmp_saved_entry)" = "$id" ] &&
+            "$EDITENV" - set "tmp_saved_entry=$id~sdcompat"
+    fi
     ;;
 remove)
+    saved=$(envget saved_entry 2>/dev/null)
     for f in "$ENTRIES"/*"$KVER"~sdcompat.conf "$ENTRIES"/*"$KVER"-sdcompat.conf; do
         [ -e "$f" ] && rm -f "$f"
     done
+    # The default s6 entry went with its kernel: the newest s6 entry left
+    # (GRUB would otherwise fall back to the first entry, a systemd one).
+    if s6_default && [ -n "$saved" ] && [ ! -e "$ENTRIES/$saved.conf" ]; then
+        case $saved in
+        *~sdcompat)
+            # shellcheck disable=SC2012 # BLS ids have no newlines; ls -v sorts versions
+            new=$(ls -v "$ENTRIES"/*~sdcompat.conf 2>/dev/null | tail -n 1)
+            new=${new##*/}
+            [ -n "$new" ] && "$EDITENV" - set "saved_entry=${new%.conf}"
+            ;;
+        esac
+    fi
     ;;
 esac
 exit 0

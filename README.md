@@ -218,8 +218,8 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 
 `--build-s6`를 쓰면 대신 소스에서 `/usr`로 설치합니다(rpm이 관리하지 않음).
 
-스크립트는 일반 systemd 부팅을 기본값으로 두고 GRUB 항목 "Fedora (s6 + sdcompat)"를
-**추가**만 합니다. 덮어쓰는 파일은 `/var/lib/sdcompat/setup-backup/`에 백업합니다.
+스크립트는 GRUB 항목 "Fedora (s6 + sdcompat)"를 **추가**하고, `--default-s6`을 주지
+않으면 일반 systemd 부팅을 기본값으로 둡니다. 덮어쓰는 파일은 `/var/lib/sdcompat/setup-backup/`에 백업합니다.
 하는 일은 다음과 같습니다.
 
 1. `dbus-daemon`, `earlyoom`, `chrony`, `NetworkManager`와 skarnet 도구를 직접 빌드한
@@ -260,11 +260,18 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 | `--no-resolved` / `--resolved` | s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / resolved로 되돌립니다 |
 | `--enforcing` | s6 부팅 항목에 `enforcing=0`을 추가하지 않습니다 |
 | `--no-grub` | 부팅 항목을 추가하지 않습니다 |
+| `--default-s6` / `--default-systemd` | s6 항목을 기본 부팅 항목으로 합니다(나중에 설치되는 커널에도) / systemd 항목을 다시 기본값으로 합니다. 둘 다 없으면 다시 실행해도 선택이 유지됩니다(`/etc/sdcompat/boot-default`). 어느 쪽이든 systemd 항목은 메뉴에 남습니다 |
 | `--uninstall [--remove-s6]` | 부팅 항목과 설치된 파일(그리고 소스로 빌드한 skarnet 도구)을 제거합니다. 설정은 남깁니다 |
 
 journal과 resolved 옵션은 이미 설치된 시스템도 전환합니다(`/etc/sdcompat/sdcompat.conf`의 `JOURNAL=`/`RESOLVED=`를 설정). 옵션 없이 다시 실행하면 거기 설정된 대로 유지합니다. `--no-resolved`이면 s6 oneshot `resolv`가 부팅 때 `/run/NetworkManager/conf.d/99-sdcompat-no-resolved.conf`(`dns=default`, `rc-manager=symlink`)를 쓰고, `/etc/resolv.conf`가 가리키는 resolved의 stub 파일을 `/run/NetworkManager/resolv.conf`로 연결합니다. 모두 `/run`에 있으므로 systemd 부팅은 계속 resolved를 씁니다. `/etc/NetworkManager`에 `dns=` 설정이 있으면 그것이 우선합니다(NetworkManager는 `/run`을 먼저 읽습니다). `/etc/nsswitch.conf`의 nss-resolve는 resolved가 없으면 `dns`로 넘어갑니다.
 
-kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다.
+kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `--default-s6`이면 s6 항목을
+기본값으로도 유지합니다. 커널을 업데이트하면 Fedora의 `20-grub.install`이 새 systemd 항목을
+다음 기본값(`tmp_saved_entry`)으로 정하고 `95-set-boot-entry.install`이 그것을 저장하는데,
+플러그인이 그 사이에 실행되어 새 s6 항목으로 바꿉니다. 기본 s6 항목의 커널이 제거되면 남은 s6
+항목 중 가장 새 것을 고릅니다. `--uninstall`과 `--default-systemd`는 저장된 s6 기본값을 같은
+커널의 systemd 항목으로 되돌립니다. 메뉴가 숨겨져 있을 때 systemd 항목을 고르려면 GRUB이
+시작할 때 Shift를 누르고 있거나 Esc를 누르세요.
 
 어떤 systemd 구성 요소를 대체하는지, 그리고 logind와 `systemd --user`를 왜 남기는지
 (GNOME에 필요합니다. 다음 절 참고):

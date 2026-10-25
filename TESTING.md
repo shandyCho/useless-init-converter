@@ -180,8 +180,9 @@ dist/setup-fedora.sh --dry-run --rpms=$HOME/rpmbuild-skarnet/rpms
 sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 ```
 
-스크립트는 계획을 보여주고, 무엇이든 바꾸기 전에 확인을 받습니다. 일반 systemd 부팅을
-기본값으로 두고 **"Fedora (s6 + sdcompat)"** 부팅 항목을 추가합니다. 이 항목은 SELinux를
+스크립트는 계획을 보여주고, 무엇이든 바꾸기 전에 확인을 받습니다. **"Fedora (s6 + sdcompat)"**
+부팅 항목을 추가하고 일반 systemd 부팅을 기본값으로 둡니다(s6 부팅이 잘 되면 `--default-s6`으로
+기본값으로 만들 수 있습니다. 이 문서 끝을 보세요). 이 항목은 SELinux를
 permissive 모드로 부팅합니다.
 
 결과 확인:
@@ -320,6 +321,28 @@ sudo semodule -l | grep -x sdcompat
 설치하세요(2단계). 이 작업은 **일반 systemd 부팅**에서 하세요. 그러면 새 s6, s6-rc 프로그램이
 이전 버전이 띄운 s6 트리를 건드리지 않고, 다음 s6 부팅에서 새 s6-rc로 데이터베이스를
 컴파일합니다.
+
+## s6 부팅을 기본값으로 만들기
+
+s6 부팅이 잘 되면(위의 확인 항목을 통과하고, 가능하면 enforcing으로) 그 항목을 기본값으로
+만드세요. 소스 트리에서, 설치할 때와 같은 옵션으로:
+
+```sh
+sudo dist/setup-fedora.sh --enforcing --default-s6 --rpms=$HOME/rpmbuild-skarnet/rpms
+```
+
+확인:
+
+| 항목 | 명령 | 기대 결과 |
+|---|---|---|
+| 기본값 | `sudo grubby --info=DEFAULT \| grep title` | `title="Fedora (s6 + sdcompat) <커널>"` |
+| 선택이 유지됨 | `cat /etc/sdcompat/boot-default` | `s6` |
+| 부팅됨 | 메뉴를 건드리지 않고 재부팅, `cat /proc/1/comm` | `s6-svscan` |
+| 커널 업데이트 후 | `sudo dnf upgrade kernel*`, 그다음 첫 줄을 다시 | 새 커널의 s6 항목 |
+
+systemd 항목으로 한 번만 부팅하려면 GRUB이 시작할 때 Shift를 누르고 있거나 Esc를 눌러 고르세요.
+systemd를 다시 기본값으로 하려면 `sudo dist/setup-fedora.sh --default-systemd ...`(위와 같은
+옵션)를 실행하세요.
 
 ## 제거하기
 
