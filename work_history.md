@@ -5665,11 +5665,11 @@ oneshot, and whether mdevd is only used at boot.
 
 ## 2026-10-26, part 5: the reload flake's cause, and the repair
 
-Owner asked to investigate the s6-rc-update "Broken pipe" reload flake
+Commits `af915a3` (fix), this entry in the next. Owner asked to
+investigate the s6-rc-update "Broken pipe" reload flake
 (open since session 7). Later in the session the owner said: don't report
 upstream and don't modify upstream source (memory updated; the s6-rc
-snapshot report is dropped from the next steps too). Changes not
-committed yet.
+snapshot report is dropped from the next steps too).
 
 ### Cause (read from s6 2.15.1.1 / skalibs 2.16.0.0, reproduced)
 
@@ -5737,6 +5737,6 @@ since the crash needs a subscribe.
 
 ### Next steps
 
-1. Owner: review and commit; rebuild RPMs at the next install.
+1. Owner: rebuild RPMs at the next install.
 2. Earlier steps: the rfkill row (part 4), SELinux access checks
    decision, part 3's checks.
