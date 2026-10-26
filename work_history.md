@@ -6338,9 +6338,12 @@ proc_psi_t denial.
 - Sandbox 231/231 (new: psi-off.service sees /dev/null; psi-auto.service
   sees it unset, as the unprivileged sandbox has no cgroup). bash -n and
   shellcheck clean. The JOURNAL/FDSTORE variants were not run (not touched).
-- Owner had not yet pasted hostnamed's environment on the systemd boot
-  (`sudo cat /proc/PID/environ`), which would confirm the exact values
-  systemd passes.
+- Owner, on the systemd boot, hostnamed's /proc/PID/environ:
+  `MEMORY_PRESSURE_WATCH=/sys/fs/cgroup/system.slice/systemd-hostnamed.service/memory.pressure`,
+  `MEMORY_PRESSURE_WRITE=c29tZSAyMDAwMDAgMjAwMDAwMAA=`: the same values
+  sdcompat now sets (the WRITE value is the unit test's). (`sudo` through
+  Claude Code's `!` prefix fails: no terminal for the password; run it in
+  a separate terminal.)
 
 ### Current state
 
