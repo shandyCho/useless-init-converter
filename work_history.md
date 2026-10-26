@@ -6180,3 +6180,43 @@ scripts). The newline fix is committed, not installed.
    change).
 3. Optional: standalone RPMs so dnf owns the tools in
    /usr/libexec/sdcompat.
+
+## 2026-10-26, part 15: the AVC line end checked on the s6 boot
+
+Owner rebuilt with `1df2507`, installed, rebooted into s6 (enforcing) and
+ran part 14's next steps. No code changes.
+
+### Results
+
+- `sudo runcon -r system_r -t insights_core_t -- env systemctl
+  daemon-reload`, then the grep of /run/uncaught-logs/current: two
+  separate lines, `avc:  denied  { reload } … insights_core_t … init_t
+  … tclass=system permissive=0` and `sdcompatd: SELinux access check …
+  perm=reload state=enforcing function=Reload path=n/a: Permission
+  denied (os error 13)`, 0.26 ms apart. The newline fix works. Nothing
+  else in the log, so normal use since boot caused no denial from the
+  checks.
+- Dispatcher rule: /etc/sdcompat/sdcompat.conf has `JOURNAL=no`; after
+  `nmcli networking off; nmcli networking on` the `ausearch -m AVC -ts
+  boot | grep NetworkManager_dispatcher` was empty. Conclusive: the rule
+  is in the loaded policy (`sesearch -A -s
+  networkmanager_dispatcher_plugin -t init_t -c fifo_file`), and
+  /var/log/sdcompat/NetworkManager-dispatcher.service has lines from
+  /usr/lib/NetworkManager/dispatcher.d/04-iscsi (label
+  NetworkManager_dispatcher_iscsid_script_t) at 20:45:22 and 20:45:27,
+  the toggle, written through the s6-log pipe without a denial.
+- Those lines are "Failed to reload iscsi.service: Unit iscsi.service is
+  not active.": the script runs `systemctl --no-block reload
+  iscsi.service || :` on up, iscsi.service is inactive, and sdcompatd
+  answers with systemd's own error (daemon/mod.rs E_INACTIVE). Same
+  message under systemd (into the journal); not a bug.
+
+### Current state
+
+All of part 12 has been checked on the real boot. No open items from the
+SELinux work.
+
+### Next steps
+
+1. Optional: standalone RPMs so dnf owns the tools in
+   /usr/libexec/sdcompat.
