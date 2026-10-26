@@ -6081,3 +6081,41 @@ callers on the s6 boot, to systemd's.
    the test's own denial).
 2. Optional: standalone RPMs so dnf owns the tools in
    /usr/libexec/sdcompat.
+
+## 2026-10-26, part 13: owner's first run of the part 12 TESTING rows
+
+Owner rebuilt, installed (sdcompat-0.1.0-1.20261026131046.gdca1194) and
+rebooted into s6, then ran the new rows.
+
+### Results
+
+- `runcon -r system_r -t insights_core_t -- systemctl …` failed with
+  `runcon: 'systemctl': Permission denied` for both commands, so the
+  daemon's checks were not exercised. Bug in the TESTING row, not in
+  sdcompatd: /usr/bin/systemctl is `systemd_systemctl_exec_t`, and
+  insights_core_t's only entrypoints are bin_t, usr_t and gpg_exec_t
+  (sesearch). Part 12 checked the domain had "a bin_t entrypoint" but
+  not systemctl's own label.
+- Fix: run it as `runcon … -- env systemctl …`. /usr/bin/env is bin_t,
+  insights_core_t may `execute execute_no_trans` any exec_type and has
+  no type_transition on systemd_systemctl_exec_t, so systemctl runs in
+  insights_core_t. unconfined_u has system_r; unconfined_t may
+  transition to any domain. TESTING pair changed.
+- `grep -E 'SELinux access check|avc: +denied' /run/uncaught-logs/current`:
+  empty. Expected, since the test never reached sdcompatd; it also
+  means normal use since boot produced no denial from the new checks.
+- `ausearch -m AVC -ts boot | grep NetworkManager_dispatcher`: empty.
+  Not conclusive on its own: it only shows the CIL rule works if the
+  dispatcher ran scripts with JOURNAL=no on this boot.
+
+### Current state
+
+The checks are installed and not yet tested as root under enforcing.
+
+### Next steps
+
+1. Owner: rerun the corrected row (`sudo runcon -r system_r -t
+   insights_core_t -- env systemctl show -p Version`, then `… env
+   systemctl daemon-reload`, then the grep).
+2. Optional: standalone RPMs so dnf owns the tools in
+   /usr/libexec/sdcompat.
