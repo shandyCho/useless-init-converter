@@ -6300,3 +6300,54 @@ proc_psi_t denial.
 
 1. Owner: on the systemd boot, `ausearch -m AVC -ts boot | grep
    proc_psi` to settle whether the hostnamed denial is Fedora's or ours.
+
+## 2026-10-26, part 18: the hostnamed proc_psi_t denial is ours (`43e3986`)
+
+### Systemd boot result
+
+- Owner, on the systemd boot: `ausearch -m AVC -ts boot | grep proc_psi`:
+  no matches, although `journalctl -b -u systemd-hostnamed` shows hostnamed
+  started four or more times. Same binary and domain, so the denial comes
+  from sdcompat's environment, not Fedora's policy. The earlier entries'
+  "policy-side, not sdcompat" (parts 1 onward) were wrong.
+- Cause (from systemd's code and the unit, not yet seen on an s6 boot):
+  hostnamed calls sd_event_add_memory_pressure(). PID 1 passes
+  `MEMORY_PRESSURE_WATCH=<cgroup>/memory.pressure` (hostnamed has
+  `MemoryAccounting=yes`, `MemoryPressureWatch=auto`); without the variable
+  sd-event checks /proc/pressure itself, the `proc_psi_t dir search`.
+
+### Changes (`43e3986`)
+
+- sdcompat-exec cgroup.rs `memory_pressure_env()`, called by the runner in
+  build_env() and prepare_start(): systemd's rules. `MemoryPressureWatch=`
+  auto/on with the cgroup's memory.pressure present: WATCH = that file,
+  WRITE = base64 of `some <threshold> 2000000\0`
+  (`MemoryPressureThresholdSec=`, default 200 ms, clamped to the 2 s
+  window). off: `/dev/null`, also when the unit has no cgroup (systemd sets
+  nothing then; /dev/null keeps sd-event out of /proc/pressure). skip or no
+  file: nothing. A User= service run by a root runner gets the file
+  chowned, as systemd does, so it can write its trigger.
+  `MemoryAccounting=no` is not read: auto means on whenever the file exists.
+- sdcompat-gen: the two keys are no longer reported as ignored.
+- README pair: one sentence under cgroup v2.
+
+### Tests
+
+- cargo build; cargo test all passed (new `cgroup::tests::memory_pressure`,
+  checked against `printf 'some 200000 2000000\0' | base64`).
+- Sandbox 231/231 (new: psi-off.service sees /dev/null; psi-auto.service
+  sees it unset, as the unprivileged sandbox has no cgroup). bash -n and
+  shellcheck clean. The JOURNAL/FDSTORE variants were not run (not touched).
+- Owner had not yet pasted hostnamed's environment on the systemd boot
+  (`sudo cat /proc/PID/environ`), which would confirm the exact values
+  systemd passes.
+
+### Current state
+
+Fix committed, not yet on an s6 boot. No other open items.
+
+### Next steps
+
+1. Owner: rebuild/install, boot s6, `ausearch -m AVC -ts boot | grep
+   proc_psi` (expect no matches) and check hostnamed's
+   MEMORY_PRESSURE_WATCH/WRITE in /proc/PID/environ.
