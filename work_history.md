@@ -5955,8 +5955,10 @@ under "Reload watchdog". bash -n and shellcheck -S warning pass; only
 the non-root and usage paths ran here (no root). The commands are the
 ones the owner ran successfully in part 10.
 
+Owner ran it on the s6 boot (enforcing): five ok lines, exit 0; the
+waiter was unblocked after 11 s, the plain wait timed out (99, 15 s).
+
 ### Next steps
 
-1. Owner: `sudo tests/linkwatch-check.sh` once on the s6 boot (five ok
-   lines, exit 0).
-2. Part 10's other steps unchanged.
+1. Part 10's steps unchanged (standalone RPMs optional; the JOURNAL=no
+   dispatcher-script pipe AVCs; the SELinux access checks decision).
