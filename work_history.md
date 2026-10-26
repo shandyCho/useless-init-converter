@@ -6220,3 +6220,50 @@ SELinux work.
 
 1. Optional: standalone RPMs so dnf owns the tools in
    /usr/libexec/sdcompat.
+
+## 2026-10-26, part 16: standalone RPM build scripts (`779abae`)
+
+Owner asked for the standalone RPMs. The four specs existed, but only
+with a comment on how to make the tarball by hand, and a fixed
+`Release: 1`, so a rebuild had the same NVR and `dnf upgrade` would skip
+it.
+
+### Changes
+
+- `standalone/NAME/build-rpm.sh [OUTDIR]` in each project, modelled on
+  packages/build-rpms.sh: vendored tarball, `rpmbuild -bb`, release
+  `1.YYYYMMDDHHMMSS.gCOMMIT[.dirty]` (dirty from the project's own files),
+  `SDCOMPAT_RELEASE` overrides. Version from the project's Cargo.toml;
+  dies if the spec's Version differs. Default OUTDIR
+  ~/rpmbuild-sdcompat-standalone, shared by the four (not the core's
+  ~/rpmbuild-sdcompat, whose script empties rpms/); each script replaces
+  only its own RPM in rpms/.
+- Four copies differing only in NAME: the standalone projects may not
+  share code (CLAUDE.md), and each stays buildable when taken out alone.
+- Specs: `Release: %{?build_release}%{!?build_release:1}%{?dist}`, so a
+  plain rpmbuild still works; header comment points at the script.
+- README pair of each project and packages/README pair updated.
+- sdcompat.spec's Recommends/Suggests on them are unversioned; nothing
+  to change. setup-fedora.sh already skips a tool whose RPM is installed.
+
+### Tests
+
+All four built here with the scripts (rpmbuild's %check ran each
+project's tests); each RPM holds only /usr/libexec/sdcompat/NAME (plus
+build-id). bash -n and shellcheck -S warning clean; cargo test of each
+project passes. Not installed (needs root). No core code changed, so the
+sandbox suite was not rerun.
+
+### Current state
+
+The four tools in /usr/libexec/sdcompat are still owned by no package
+until the owner installs the RPMs.
+
+### Next steps
+
+1. Owner: `for n in fdstore journal-relay linkwatch notify; do
+   standalone/sdcompat-$n/build-rpm.sh; done`, then `sudo dnf install
+   ~/rpmbuild-sdcompat-standalone/rpms/*.rpm` (it overwrites the unowned
+   files), then `rpm -qf /usr/libexec/sdcompat/*`: every file owned. The
+   running services keep the old binaries until restarted (`s6-svc -r`
+   on each, or the next boot).
