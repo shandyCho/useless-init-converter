@@ -5908,3 +5908,37 @@ The part 8 fix is verified on hardware.
    /usr/libexec/sdcompat.
 3. Earlier steps unchanged (SELinux access checks decision, the
    dispatcher-script pipe AVCs under JOURNAL=no).
+
+## 2026-10-26, part 10: Reload watchdog checked on hardware
+
+Owner ran part 6's TESTING "Reload watchdog" row plus two steps I gave
+(not in TESTING), s6 boot, enforcing, g86951b6:
+
+- `s6-svstat /run/service/sdcompat-linkwatch`: up 5066 s (since boot).
+  Its uncaught-log lines before the test: only s6-rc's start; no real
+  stuck wait was unblocked this boot.
+- Ten `timeout 120 systemctl daemon-reload` in a row: all exit 0, 1-2 s
+  each.
+- check.sh's linkwatch test by hand against the system instance
+  (defaults --after 10 --interval 2): a throwaway s6-supervise in
+  /run/sdcompat/lwtest (init_var_run_t, which init_t may open and write;
+  /tmp's user_tmp_t it may not), s6-ftrig-wait copied as `s6-rc-update`
+  waiting on its event/: exit 0 after 10 s, logged "s6-rc-update (pid
+  16425) waited 10 s for /run/sdcompat/lwtest/svc, whose supervisor runs:
+  sent its start event". A plain s6-ftrig-wait on the same directory
+  was left alone (exit 99 after its 15 s timeout). No AVC for lwtest or
+  ftrig. The linkwatch SELinux claim of part 6 (runs as init_t, no new
+  rules) holds under enforcing.
+
+### Current state
+
+linkwatch verified on hardware. Open: the JOURNAL=no dispatcher-script
+pipe AVCs, the SELinux access checks decision.
+
+### Next steps
+
+1. Optional: install the standalone RPMs so dnf owns the four tools in
+   /usr/libexec/sdcompat.
+2. Optional: add step 3 (the fake stuck wait) to the TESTING pair's
+   "Reload watchdog" row, if the owner wants an active check there.
+3. Earlier steps unchanged.
