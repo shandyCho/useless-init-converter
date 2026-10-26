@@ -6696,3 +6696,114 @@ Committed, sandbox-verified; not on a real boot.
    per boot; `ls /run/sdcompat/units | grep user@`) and the absence of
    `does not exist` in the next shutdown console log.
 2. Test unit cleanup from part 21 if not done.
+
+## 2026-10-27, part 26: `sdcompat init` replaces setup-fedora.sh; COPR source RPMs (a365750)
+
+### Goal (owner)
+
+Deploy the packages through Fedora COPR (the owner uploads the source RPMs
+by hand), and replace `dist/setup-fedora.sh` with an installed command,
+`sdcompat init --default-s6 --journal=no ...`.
+
+### Decisions (owner, asked 2026-10-27)
+
+- Keep the five core specs (not one spec with subpackages): 5 source RPMs
+  per core release, uploaded together (they Require each other's exact
+  version-release).
+- `sdcompat init` in Rust, in the `sdcompat` binary (the package that
+  already holds the boot setup): crates/sdcompat/src/init.rs. No new crate
+  or package.
+- Options in `--NAME=yes|no` style: `--journal=`, `--resolved=`,
+  `--boot-only-s6=`, `--grub=`, `--selinux=enforcing|permissive`, plus
+  `--default-s6`/`--default-systemd`, `--dry-run`, `--yes`, `--uninstall`.
+  The old spellings (`--no-journal`, `--enforcing`, ...) are refused with a
+  hint.
+- The build modes are dropped (`--rpms`, `--build-s6`, `--rebuild`,
+  `--without`, `--remove-s6`): init installs nothing. Packages come from dnf
+  (COPR or local RPMs).
+
+### What init does (a port of setup-fedora.sh without the install steps)
+
+- Checks: root (not for --dry-run), Fedora (`SDCOMPAT_INIT_ANY_OS=1` allows
+  a dry run elsewhere), the packaged files (skel, cil, s6.conf, rsyslog.conf,
+  sdcompat-gen), programs by package (s6-linux-init-maker, semanage, grubby,
+  grub2-editenv with --default-s6, rsyslogd + sdcompat-journal-relay with
+  --journal=no, mdevd with --boot-only-s6=yes). Missing ones end with "sudo
+  dnf install ...". It warns about gdm/gnome-shell, as before.
+- Same steps as before: version report (main.rs `version_report()`, shared
+  with `sdcompat --version`), sdcompat.conf keys (marker now `# set by
+  sdcompat init --journal=no`; the old script's marker is removed too),
+  /etc/sdcompat/rsyslog.conf, /etc/s6.conf from /usr/share/sdcompat/s6.conf
+  (new in the package), sysinit bundle members, unit enabling (chronyd and
+  NetworkManager only if their unit files exist), `sdcompat-gen reload
+  --no-update`, s6-linux-init-maker, SELinux labels, sdcompatd restart on
+  the s6 boot, boot entry and default.
+- Changed: the hand-written s6 services are the package's (no checksum
+  logic). The kernel-install plugin used is the packaged
+  /usr/lib/kernel/install.d one; the old script's /etc copy (which would
+  hide it) is backed up and removed. The SELinux mode is kept across runs
+  now (read from /etc/sdcompat/boot-options; first run permissive), like
+  the other choices.
+- --uninstall: the s6 BLS entries, the saved default, boot-options,
+  boot-default, boot-only-s6, the /etc plugin copy, /boot/initramfs-*-s6.img,
+  /etc/s6.conf if ours, /etc/s6-linux-init/current; then it prints the dnf
+  remove command (the module goes in the package's %postun).
+
+### Packaging
+
+- sdcompat.spec: installs dist/s6.conf to /usr/share/sdcompat; Requires
+  policycoreutils-python-utils and grubby; drops the duplicate
+  `Recommends: s6-linux-init`; changelog.
+- `--srpm` for packages/build-rpms.sh, standalone/*/build-rpm.sh (the
+  release now goes into the spec as `%global build_release`, also for
+  binary builds) and dist/rpm/build-skarnet-rpms.sh.
+- packages/copr-srpms.sh [OUTDIR] [core|standalone|skarnet...]: all
+  source RPMs into OUTDIR/srpms (default ~/sdcompat-srpms) and
+  BUILD-ORDER.txt. Skarnet stages come from the specs' -devel BuildRequires:
+  1 skalibs, 2 execline mdevd, 3 s6, 4 s6-rc s6-linux-init, 5 s6-frontend,
+  6 all Rust packages. It runs the standalone build scripts but shares no
+  code with them.
+- Docs: README pair (deployment, dependencies), TESTING pair (stage 5
+  builds/installs the RPMs then runs init; update, default, boot-only,
+  removal), packages/README pair (new COPR section, migration from
+  setup-fedora.sh), standalone READMEs, comments in dist/ and tests/.
+  `License: TBD` is still in the specs (noted in packages/README).
+
+### Tests
+
+- cargo build (no warnings), cargo test (sdcompat: 4 new unit tests:
+  options, conf keys, boot settings, LUKS), standalone tests passed.
+- Sandbox 257/257. bash -n / shellcheck -S warning on every changed script.
+- Dry run on this machine (s6 boot, sdcompat c8b83db RPMs installed):
+  `sdcompat init --dry-run --selinux=enforcing` vs the old `setup-fedora.sh
+  --dry-run --enforcing`: the same commands except the dropped install
+  steps, the packaged plugin path, and the removal of the /etc plugin copy.
+  It kept this machine's JOURNAL=no, RESOLVED=no and boot-only-s6.
+- copr-srpms.sh made all 16 source RPMs; `rpmbuild --rebuild` (no defines)
+  of the sdcompat, sdcompat-notify and skalibs ones succeeded (the core one
+  with its %check). The rebuilt sdcompat RPM has /usr/share/sdcompat/s6.conf
+  and the new Requires; its `sdcompat init --help`, a bad value (exit 2) and
+  a non-root run (refused) behave.
+- Not tested: a real `sudo sdcompat init` (or --uninstall), a build on COPR
+  itself (mock chroot), an upgrade from the RPMs installed now.
+
+### Current state
+
+Committed. Built from a365750 (clean, release 1.20261027002413.ga365750
+for the core) for the owner to test: ~/rpmbuild-sdcompat/rpms (5 core),
+~/rpmbuild-sdcompat-standalone/rpms (4 standalone); the skarnet RPMs
+installed now are unchanged. COPR source RPMs (all 16) in
+~/sdcompat-srpms/srpms with ~/sdcompat-srpms/BUILD-ORDER.txt.
+
+### Next steps
+
+1. Owner: `sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm
+   ~/rpmbuild-sdcompat-standalone/rpms/*.rpm`, `sdcompat init --dry-run`,
+   then `sudo sdcompat init` (it keeps the current choices); check that
+   /etc/kernel/install.d/90-sdcompat.install is gone, the s6 entries are
+   rewritten, `grep stop-instances
+   /etc/s6-linux-init/current/scripts/rc.shutdown`, then boot s6 (part 25's
+   check of user@GREETER-UID too).
+2. Owner: create the COPR project and upload `packages/copr-srpms.sh`'s
+   output stage by stage; then try `dnf copr enable` on a VM.
+3. Choose a license for the specs before publishing.
