@@ -137,6 +137,20 @@ ExecStart=/bin/sh -c 'echo once > $R/once.out'
 ExecStop=/bin/sh -c 'echo stopped >> $R/once.out'
 EOF
 
+# MEMORY_PRESSURE_WATCH=: /dev/null with MemoryPressureWatch=off; unset
+# by default here, as the unprivileged sandbox has no cgroup.
+cat > "$U/psi-off.service" <<EOF
+[Service]
+Type=oneshot
+MemoryPressureWatch=off
+ExecStart=/bin/sh -c 'echo \$\${MEMORY_PRESSURE_WATCH-unset} > $R/psi-off.out'
+EOF
+cat > "$U/psi-auto.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo \$\${MEMORY_PRESSURE_WATCH-unset} > $R/psi-auto.out'
+EOF
+
 # SystemCallFilter=: a deny list, fwupd's allow list (fwupd checks that
 # mlock fails) and a '+' command, which is not filtered.
 cat > "$U/scf-deny.service" <<EOF

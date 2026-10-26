@@ -181,6 +181,63 @@ pub fn enter(unit: &Unit, pid: u32, owner: Option<(u32, u32)>) -> Result<PathBuf
     Ok(dir)
 }
 
+/// MEMORY_PRESSURE_WATCH= and MEMORY_PRESSURE_WRITE= for the unit's
+/// processes, as systemd's exec_invoke() sets them (MemoryPressureWatch=,
+/// MemoryPressureThresholdSec=). Without them sd-event's
+/// sd_event_add_memory_pressure() looks for the file itself and first checks
+/// /proc/pressure, which the service's SELinux domain may not search
+/// (systemd_hostnamed_t and proc_psi_t on Fedora). `dir` is the unit's
+/// cgroup, None if it has none; "off" still gives /dev/null then.
+pub fn memory_pressure_env(unit: &Unit, dir: Option<&Path>) -> Vec<(String, String)> {
+    let sec = unit.type_section();
+    pressure_env(
+        unit.get(&sec, "MemoryPressureWatch").as_deref(),
+        unit.get(&sec, "MemoryPressureThresholdSec").as_deref(),
+        dir.map(|d| d.join("memory.pressure")).as_deref(),
+    )
+}
+
+fn pressure_env(watch: Option<&str>, threshold: Option<&str>, file: Option<&Path>) -> Vec<(String, String)> {
+    let watch = watch.unwrap_or("auto");
+    if watch == "skip" {
+        return Vec::new();
+    }
+    if crate::unit::parse_bool(watch) == Some(false) {
+        return vec![("MEMORY_PRESSURE_WATCH".into(), "/dev/null".into())];
+    }
+    // No file: no cgroup, no memory controller or no PSI; systemd sets nothing.
+    let Some(file) = file.filter(|f| f.exists()) else {
+        return Vec::new();
+    };
+    const WINDOW_USEC: u64 = 2_000_000;
+    let usec = match threshold.and_then(|v| crate::unit::parse_timespan_usec(v, 1_000_000)) {
+        None | Some(u64::MAX) => 200_000,
+        Some(u) => u.clamp(1, WINDOW_USEC),
+    };
+    // The trigger line is encoded with its trailing NUL, as systemd does.
+    let write = base64(format!("some {usec} {WINDOW_USEC}\0").as_bytes());
+    vec![
+        ("MEMORY_PRESSURE_WATCH".into(), file.display().to_string()),
+        ("MEMORY_PRESSURE_WRITE".into(), write),
+    ]
+}
+
+fn base64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 /// Signal every process in the unit's cgroup except `except`.
 pub fn kill_all(dir: &Path, sig: i32, except: u32) -> usize {
     if sig == libc::SIGKILL && except == 0 && dir.join("cgroup.kill").exists() {
@@ -233,5 +290,25 @@ mod tests {
             slice_path("system-getty.slice"),
             PathBuf::from("system.slice/system-getty.slice")
         );
+    }
+
+    #[test]
+    fn memory_pressure() {
+        let dir = std::env::temp_dir().join(format!("sdcompat-psi-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("memory.pressure");
+        assert!(pressure_env(None, None, Some(&file)).is_empty());
+        assert!(pressure_env(None, None, None).is_empty());
+        assert_eq!(pressure_env(Some("no"), None, None)[0].1, "/dev/null");
+        assert_eq!(pressure_env(Some("off"), None, Some(&file)), vec![("MEMORY_PRESSURE_WATCH".into(), "/dev/null".into())]);
+        fs::write(&file, "").unwrap();
+        assert!(pressure_env(Some("skip"), None, Some(&file)).is_empty());
+        let env = pressure_env(None, None, Some(&file));
+        assert_eq!(env[0].1, file.display().to_string());
+        // base64("some 200000 2000000\0"), the value systemd writes.
+        assert_eq!(env[1].1, "c29tZSAyMDAwMDAgMjAwMDAwMAA=");
+        assert_eq!(pressure_env(Some("on"), Some("10s"), Some(&file))[1].1, base64(b"some 2000000 2000000\0"));
+        assert_eq!(base64(b"ab"), "YWI=");
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

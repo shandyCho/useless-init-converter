@@ -176,6 +176,7 @@ impl Runner {
         if let Some(inv) = self.st.get(keys::INVOCATION) {
             self.setenv("INVOCATION_ID", &inv);
         }
+        self.memory_pressure_env();
         if let Some(u) = &self.user {
             let (name, home, shell) = (u.name.clone(), u.home.clone(), u.shell.clone());
             self.setenv("USER", &name);
@@ -862,6 +863,20 @@ impl Runner {
         self.st.get(keys::CGROUP).map(PathBuf::from)
     }
 
+    /// MEMORY_PRESSURE_WATCH=/WRITE= for the cgroup entered last. A User=
+    /// service gets the file, so it can write its trigger, as under systemd.
+    fn memory_pressure_env(&mut self) {
+        for (k, v) in cgroup::memory_pressure_env(&self.unit, self.cgroup_dir().as_deref()) {
+            if k == "MEMORY_PRESSURE_WATCH" && v != "/dev/null" && self.is_root {
+                if let Some(u) = self.user.as_ref().filter(|u| u.uid != 0) {
+                    let p = cstr(&v);
+                    unsafe { libc::chown(p.as_ptr(), u.uid, self.gid.unwrap_or(u.gid)) };
+                }
+            }
+            self.setenv(&k, &v);
+        }
+    }
+
     fn prepare_start(&mut self) -> Result<(), String> {
         for k in [
             keys::CONDITION_FAILED, keys::ASSERT_FAILED, keys::STATUS_TEXT, keys::MAIN_PID,
@@ -887,6 +902,7 @@ impl Runner {
             }
         }
         self.setenv("INVOCATION_ID", &inv);
+        self.memory_pressure_env();
         self.st.stamp(keys::INACTIVE_EXIT);
         self.create_directories()?;
         self.sandbox.prepare()?;

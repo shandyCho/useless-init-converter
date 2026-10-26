@@ -177,7 +177,7 @@ const SERVICE_KEYS: &[&str] = &[
     "RestrictRealtime", "RestrictSUIDSGID", "ProtectClock", "ProtectKernelModules", "ProtectKernelLogs",
     "ProtectKernelTunables", "ProtectControlGroups", "ProtectHostname", "ProtectProc", "ProcSubset",
     "PrivateDevices", "PrivateNetwork", "PrivateIPC", "PrivateMounts", "DevicePolicy", "DeviceAllow",
-    "IPAddressAllow", "IPAddressDeny",
+    "IPAddressAllow", "IPAddressDeny", "MemoryPressureWatch", "MemoryPressureThresholdSec",
 ];
 
 fn longrun_type(unit: &Unit) -> bool {

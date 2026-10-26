@@ -155,6 +155,14 @@ esac
 expect_state forking.service active/running
 expect_eq "forking MainPID from PIDFile" "$(prop forking.service Service MainPID)" "$(cat "$R/fork.pid")"
 
+section "MemoryPressureWatch="
+call StartUnit ss psi-off.service replace
+call StartUnit ss psi-auto.service replace
+expect_state psi-off.service inactive/dead
+expect_eq "off: MEMORY_PRESSURE_WATCH=/dev/null" "$(cat "$R/psi-off.out" 2>/dev/null)" "/dev/null"
+expect_state psi-auto.service inactive/dead
+expect_eq "auto without a cgroup: unset" "$(cat "$R/psi-auto.out" 2>/dev/null)" "unset"
+
 section "SystemCallFilter="
 call StartUnit ss scf-deny.service replace
 call StartUnit ss scf-allow.service replace
