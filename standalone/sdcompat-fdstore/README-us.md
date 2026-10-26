@@ -24,8 +24,11 @@ cargo test
 sudo install -Dm0755 target/release/sdcompat-fdstore /usr/libexec/sdcompat/sdcompat-fdstore
 ```
 
-RPM: `sdcompat-fdstore.spec` (the comment at its top says how to make the
-source tarball).
+RPM: `./build-rpm.sh [OUTDIR]` builds `sdcompat-fdstore.spec` into
+`~/rpmbuild-sdcompat-standalone/rpms` (no sudo; each rebuild gets a newer release, so
+`sudo dnf upgrade` takes it). Install it with
+`sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-fdstore-*.rpm`; `setup-fedora.sh` then leaves
+the tool to rpm.
 
 ## Run
 

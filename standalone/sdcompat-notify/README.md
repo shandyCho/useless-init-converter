@@ -21,7 +21,10 @@ cargo build --release
 sudo install -Dm0755 target/release/sdcompat-notify /usr/libexec/sdcompat/sdcompat-notify
 ```
 
-RPM: `sdcompat-notify.spec`.
+RPM: `./build-rpm.sh [OUTDIR]`가 `sdcompat-notify.spec`을 `~/rpmbuild-sdcompat-standalone/rpms`에
+빌드합니다(sudo 불필요. 빌드할 때마다 릴리스가 새로워져 `sudo dnf upgrade`로
+올릴 수 있습니다). 설치는 `sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-notify-*.rpm`이고,
+그 뒤로 `setup-fedora.sh`는 이 도구를 rpm에 맡깁니다.
 
 ## 실행
 

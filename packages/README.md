@@ -19,7 +19,8 @@
   `sdcompat` 패키지에 있으므로, s6로 부팅하려면 이 패키지가 있어야 합니다.
 - 도구 패키지는 따로 업데이트할 수 있습니다. 같은 버전끼리만 맞도록
   (`= 버전-릴리스`) 묶여 있습니다.
-- 독립 도구(`standalone/`)는 여기에 없습니다. 각 디렉터리에 자기 spec이 있고,
+- 독립 도구(`standalone/`)는 여기에 없습니다. 각 디렉터리에 자기 spec과
+  `build-rpm.sh`(결과: `~/rpmbuild-sdcompat-standalone/rpms`)가 있고,
   `sdcompat`은 이들을 `Recommends`/`Suggests`로만 가리킵니다.
 
 ## 빌드

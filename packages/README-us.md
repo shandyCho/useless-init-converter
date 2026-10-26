@@ -21,7 +21,8 @@ executables, so they are used only to build and are not packaged.
 - The tool packages can be updated on their own. They are tied to the same
   version (`= version-release`).
 - The standalone tools (`standalone/`) are not here. Each directory has its
-  own spec, and `sdcompat` only points at them with `Recommends`/`Suggests`.
+  own spec and `build-rpm.sh` (result: `~/rpmbuild-sdcompat-standalone/rpms`), and
+  `sdcompat` only points at them with `Recommends`/`Suggests`.
 
 ## Building
 

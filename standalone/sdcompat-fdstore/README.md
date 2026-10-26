@@ -23,7 +23,10 @@ cargo test
 sudo install -Dm0755 target/release/sdcompat-fdstore /usr/libexec/sdcompat/sdcompat-fdstore
 ```
 
-RPM: `sdcompat-fdstore.spec` (맨 위 주석에 소스 tarball 만드는 방법이 있습니다).
+RPM: `./build-rpm.sh [OUTDIR]`가 `sdcompat-fdstore.spec`을 `~/rpmbuild-sdcompat-standalone/rpms`에
+빌드합니다(sudo 불필요. 빌드할 때마다 릴리스가 새로워져 `sudo dnf upgrade`로
+올릴 수 있습니다). 설치는 `sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-fdstore-*.rpm`이고,
+그 뒤로 `setup-fedora.sh`는 이 도구를 rpm에 맡깁니다.
 
 ## 실행
 

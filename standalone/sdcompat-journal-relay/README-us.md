@@ -25,7 +25,11 @@ cargo test
 sudo install -Dm0755 target/release/sdcompat-journal-relay /usr/libexec/sdcompat/sdcompat-journal-relay
 ```
 
-RPM: `sdcompat-journal-relay.spec`.
+RPM: `./build-rpm.sh [OUTDIR]` builds `sdcompat-journal-relay.spec` into
+`~/rpmbuild-sdcompat-standalone/rpms` (no sudo; each rebuild gets a newer release, so
+`sudo dnf upgrade` takes it). Install it with
+`sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-journal-relay-*.rpm`; `setup-fedora.sh` then leaves
+the tool to rpm.
 
 ## Run
 

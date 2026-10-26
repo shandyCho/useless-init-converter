@@ -1,10 +1,11 @@
-# Build from a tarball that contains vendored crates:
-#   cargo vendor && tar czf sdcompat-linkwatch-0.1.0.tar.gz --transform 's,^,sdcompat-linkwatch-0.1.0/,' \
-#       Cargo.toml Cargo.lock src vendor .cargo
-# with .cargo/config.toml pointing [source.crates-io] at vendor/.
+# Build with ./build-rpm.sh, which makes the source tarball (Cargo.toml
+# Cargo.lock src vendor .cargo under sdcompat-linkwatch-VERSION/, with .cargo/config.toml
+# pointing [source.crates-io] at vendor/) and defines build_release from the
+# build time and git commit, so each rebuild is an upgrade for dnf. Plain
+# rpmbuild on such a tarball gives release 1.
 Name:           sdcompat-linkwatch
 Version:        0.1.0
-Release:        1%{?dist}
+Release:        %{?build_release}%{!?build_release:1}%{?dist}
 Summary:        Unblocks s6-rc-update waits that missed a supervisor's start
 # Choose a license before distributing.
 License:        TBD
