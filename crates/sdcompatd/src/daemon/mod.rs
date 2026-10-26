@@ -1918,6 +1918,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             rec.reconcile_beside().await;
+            rec.reconcile_stop_atoms().await;
         }
     });
 
@@ -1941,12 +1942,12 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
                 if !daemon.cfg.run_dir.join("shutting-down").exists() {
                     break;
                 }
-                // Keep answering the bus while the oneshots stop: their
+                // Keep answering the bus while the units stop: their
                 // ExecStop=, a PAM session close or a daemon stopping beside
                 // them may call us, and the bus would hold such a caller
                 // for its 25 s timeout (NetworkManager did, at power-off).
                 let d = daemon.clone();
-                stopping = Some(tokio::spawn(async move { d.stop_dynamic_oneshots().await }));
+                stopping = Some(tokio::spawn(async move { d.stop_dynamic_at_shutdown().await }));
             }
             _ = async { stopping.as_mut().unwrap().await }, if stopping.is_some() => {
                 stopped = true;
@@ -1988,7 +1989,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
             let _ = h.await;
         }
         Some(_) => {}
-        None if daemon.cfg.run_dir.join("shutting-down").exists() => daemon.stop_dynamic_oneshots().await,
+        None if daemon.cfg.run_dir.join("shutting-down").exists() => daemon.stop_dynamic_at_shutdown().await,
         None => {}
     }
     if let Some(flag) = &daemon.cfg.booted_flag {

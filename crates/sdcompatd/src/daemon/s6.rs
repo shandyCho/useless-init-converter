@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 
 use super::Daemon;
-use crate::gen::Kind;
+use crate::gen::{self, Kind};
 use crate::loader::Unit;
 use crate::state::{self, keys};
 use crate::util;
@@ -597,6 +597,56 @@ impl Daemon {
         }
     }
 
+    /// Bring up the .stop oneshot (sdcompat-gen) of each longrun s6-rc has
+    /// up, so that s6-rc stopping it runs its ExecStop=. A unit started by
+    /// name (our s6-rc changes, start_beside(), `s6 live start`) doesn't
+    /// pull it in, nor does the boot when the set has it usable, and an
+    /// s6-rc-update adds it down. Not while a change runs: one that stops
+    /// the longrun takes the oneshot down first, and starting it again
+    /// would bring the longrun back. Units with a job are left to it.
+    pub(super) async fn reconcile_stop_atoms(&self) {
+        if self.cfg.run_dir.join("shutting-down").exists() || self.s6rc_lock_held() {
+            return;
+        }
+        let order = self.atom_order().await;
+        if !order.iter().any(|a| a.ends_with(".stop")) {
+            return;
+        }
+        let Ok(_guard) = self.s6_lock.try_lock() else { return };
+        let active = self.active_atoms_live().await;
+        let mut names = Vec::new();
+        let mut job_guards = Vec::new();
+        for a in &order {
+            let Some(base) = a.strip_suffix(".stop") else { continue };
+            if gen::stop_atom(base) != *a || !active.contains(base) || active.contains(a) {
+                continue;
+            }
+            if let Ok(g) = self.unit_lock(base).try_lock_owned() {
+                job_guards.push(g);
+                names.push(a.clone());
+            }
+        }
+        if names.is_empty() {
+            return;
+        }
+        // Without -b: if a change took the lock since, fail and retry later
+        // with the state it leaves.
+        let out = Command::new("s6-rc")
+            .arg("-l")
+            .arg(&self.cfg.live_dir)
+            .args(["-u", "change"])
+            .args(&names)
+            .output()
+            .await;
+        match out {
+            Ok(o) if !o.status.success() && !self.s6rc_lock_held() => {
+                eprintln!("sdcompatd: starting {}: {}", names.join(" "), String::from_utf8_lossy(&o.stderr).trim());
+            }
+            Err(e) => eprintln!("sdcompatd: s6-rc: {e}"),
+            _ => {}
+        }
+    }
+
     /// Stop a longrun that start_beside() started and s6-rc does not know
     /// about yet (`s6-rc -d change` would do nothing). False if it is not one.
     async fn stop_beside(&self, id: &str, unit: &Unit) -> bool {
@@ -788,6 +838,20 @@ impl Daemon {
                     if active.contains("sdcompatd") {
                         names.push("sdcompatd".into());
                     }
+                    // -p stops what is outside the selection: also the .stop
+                    // oneshot of a longrun that stays, running its ExecStop=.
+                    let order = self.atom_order().await;
+                    let mut keep = BTreeSet::new();
+                    for n in &names {
+                        keep.extend(self.bundle_atoms(n).await);
+                        keep.extend(self.all_dependencies(n).await.unwrap_or_default());
+                    }
+                    for a in keep {
+                        let stop = gen::stop_atom(&a);
+                        if order.contains(&stop) {
+                            names.push(stop);
+                        }
+                    }
                 }
                 match self.s6rc(&args, &names).await {
                     Ok(()) => "done",
@@ -942,7 +1006,13 @@ impl Daemon {
                     return "done";
                 }
                 let waiting = state::for_unit(&self.cfg.run_dir, id).has(keys::SOCKET_WAIT);
-                if kind == Kind::Longrun && !waiting && !unit.get_all("Service", "ExecStop").is_empty() {
+                // With its .stop oneshot up, s6-rc runs ExecStop= (the
+                // oneshot goes down first).
+                if kind == Kind::Longrun
+                    && !waiting
+                    && !active.contains(&gen::stop_atom(id))
+                    && !unit.get_all("Service", "ExecStop").is_empty()
+                {
                     let pid = self.svstat(id).await.map(|s| s.pid).filter(|&p| p > 0);
                     self.run_runner("stop-exec", id, pid).await;
                 }

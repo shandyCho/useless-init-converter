@@ -124,6 +124,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 - 임시(transient) 유닛: `.scope`와 `.slice` 유닛에 대한 `StartTransientUnit`(`PIDs` 또는 `PIDFDs`; logind, podman, flatpak이 사용). `AttachProcessesToUnit`, `Scope.Abandon`, 참조 카운트 호출(수락만 함)도 지원합니다. scope와 slice는 `/run/sdcompat/units`에 기록되므로 다시 시작한 데몬이 넘겨받습니다(세션 scope가 계속 동작합니다).
 - **`systemd-run`**: 보조 유닛을 포함한 임시 `.service`, `.timer`, `.path` 유닛(`--on-calendar`/`--on-active`는 타이머와 서비스를 함께 보냅니다). 속성은 `/run/systemd/transient/`의 유닛 파일이 됩니다. `systemd-run --wait`는 `PropertiesChanged`와 종료 상태를 받습니다. 끝난 임시 유닛은 언로드됩니다.
 - 템플릿 인스턴스는 데이터베이스를 다시 컴파일하지 않고 필요할 때 만들어집니다(예: `user@1000.service`, `user-runtime-dir@1000.service`). 의존성이 먼저 시작되고, 멈춘 유닛을 필요로 하는 유닛은 함께 멈춥니다. 종료할 때 활성 상태인 oneshot 인스턴스를 멈춰 `ExecStop=`이 실행됩니다(systemd-backlight@가 밝기를 저장합니다). 이 인스턴스는 `/run/sdcompat/dyn-oneshot`에 기록되므로 데몬을 다시 시작한 뒤에도 마찬가지입니다. 다시 시작한 데몬은 실행 중인 인스턴스(`/run/sdcompat/dyn`의 서비스 디렉터리)도 넘겨받아 이전처럼 상태를 보고하고 멈춥니다.
+- 오래 실행되는 서비스의 `ExecStop=`은 s6-rc가 서비스를 직접 멈출 때도 실행됩니다: 종료 시, `s6 live stop`, `s6 live reset`, 패키지 업데이트로 서비스가 없어질 때. 이런 서비스마다 그 서비스에 의존하는 s6-rc oneshot `UNIT.stop`이 생기고(그래서 s6-rc가 이것을 먼저 내립니다), 그 `down`이 `TimeoutStopSec=` 안에서 `$MAINPID`와 함께 `ExecStop=`을 실행합니다. 데몬은 s6-rc가 서비스를 올려 두었으면 `UNIT.stop`도 올리고, `systemctl stop`은 `ExecStop=`을 이것에 맡깁니다(한 번만 실행). `RemainAfterExit=yes`인 oneshot은 원래부터 자기 `down`에서 실행했습니다. 차이점: 그 서비스에 의존하는 유닛은 `ExecStop=`보다 먼저가 아니라 나란히 멈춥니다(`UNIT.stop`에는 아무것도 의존하지 않습니다. 그렇게 하면 업그레이드 때 s6-rc-update가 새 서비스에 대한 의존성이 생긴 유닛을 모두 다시 시작합니다). 또 `s6 process restart`/`s6-svc`는 프로세스에만 작용하므로 그때는 `ExecStop=`이 실행되지 않습니다. `ExecStop=`이 있는 필요 시 인스턴스(longrun 포함)는 종료할 때 데몬이 멈춥니다.
 - `poweroff.target`, `reboot.target`, `halt.target`을 시작하면(logind가 전원을 끄는 방식) 설정된 종료 명령을 실행합니다.
 - D-Bus 활성화: dbus-daemon의 `ActivationRequest`에 응답하고, 시작이 실패하면 `ActivationFailure`로 답합니다.
 - 권한: 상태를 바꾸는 호출에는 root, `ALLOW_UIDS`에 있는 uid, 또는 systemd의 action ID(`manage-units`, `manage-unit-files`, `reload-daemon`, `set-environment`; 정책 파일은 systemd에 포함)에 대한 polkit 허가가 필요합니다. polkit이 없으면 root가 아닌 호출자는 거부됩니다. `ALLOW_UIDS`는 root와 같은 권한입니다. 유닛 하나에 대한 호출은 systemd처럼 polkit에 `unit`과 `verb` 세부 정보를 넘기므로, 그것으로 판단하는 규칙이 동작합니다. systemd와 같이 `AttachProcessesToUnit`의 유닛 이름이 비어 있으면 호출자 자신의 유닛이며, 권한 없는 호출자도 자신의 `Delegate=yes` 유닛 안에서 자기 프로세스는 옮길 수 있습니다(`user@UID.service`의 `systemd --user`).
@@ -143,7 +144,6 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 - `AccuracySec=`(타이머는 묶지 않고 제시간에 실행), `WakeSystem=`, `OnClockChange=`.
 - 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivateUsers=`, `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=`(systemd에서는 BPF LSM 프로그램), IP 사용량 집계(`IPAccounting=`).
 - 이미 실행 중인 작업의 취소.
-- `ExecStop=`은 데몬을 통해 유닛을 멈출 때(`systemctl stop`)만 실행되고, s6-rc가 직접 서비스를 멈출 때(예: 종료 시)는 실행되지 않습니다.
 
 ## 오프라인 업데이트와 커널 업데이트
 
@@ -409,7 +409,8 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
   활성화하고(커밋은 일관성 없는 세트를 거부합니다), 옮긴 것을 출력합니다. 서비스가 더는
   `active`가 아닌데 남아 있는 그 서비스의 로거(`s6 set disable -p`는 의존 대상인 로거를
   그대로 둡니다)는 `usable`이 됩니다. 로거는 여전히 서비스와 함께 시작되고, 서비스를
-  활성화하면 다시 `active`가 됩니다.
+  활성화하면 다시 `active`가 됩니다. 서비스의 `UNIT.stop` oneshot은 서비스와 같은 처방을
+  받습니다(`always`이면 `active`). 서비스를 `-p` 없이 옮겼을 때도 마찬가지입니다.
 - 부팅은 설치된 데이터베이스의 `default` 번들을 그대로 시작합니다. 부팅 때는 아무것도
   다시 만들지 않습니다. systemd 부팅에서 바꾼 유닛은 다음 reload 때 반영됩니다.
 
@@ -437,8 +438,8 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
   syslog, journal-relay, resolv에 대해 바꾸는 `sdcompat-sysinit` 소속) 정확히 `always`입니다.
   세트가 옮기면 reload가 되돌립니다.
 - `s6 live start/stop`과 `s6 process restart`는 sdcompat 아래에서 동작합니다. systemd
-  작업(job)이 없고 `ExecStop=`도 실행되지 않으므로(`s6-rc`를 직접 쓸 때와 같음), 유닛의
-  시작과 중지는 `systemctl`이 낫습니다.
+  작업(job)이 없으므로 유닛의 시작과 중지는 `systemctl`이 낫습니다. `s6 live stop`은
+  `ExecStop=`을 실행하고(`UNIT.stop`을 통해, 위 참고), `s6 process restart`는 실행하지 않습니다.
 - 타깃(번들)을 시작하면 `usable` 구성원까지 모두 시작합니다(`s6-rc`와 같음). udev의 장치
   타깃(`bluetooth.target` 등)이 여기에 기댑니다.
 - SELinux: `s6-rc-update`와 `s6-rc-format-upgrade`는 관리자 셸에서 실행되면 `init_t`로

@@ -212,6 +212,27 @@ expect_state dep.service inactive/dead
 call ResetFailedUnit s failing.service
 expect_state failing.service inactive/dead
 
+section "ExecStop= when s6-rc stops a longrun"
+L="s6-rc -l $R/live"
+in_s6rc() { $L -a list | grep -qx "$1"; }
+in_s6rc stopper.service.stop && ok "the .stop oneshot is up after boot" || bad "stopper.service.stop not up after boot"
+pid=$(prop stopper.service Service MainPID)
+$L -d change stopper.service
+expect_eq "s6-rc -d ran ExecStop= with \$MAINPID" "$(tail -1 "$R/stopper.out" 2>/dev/null)" "stop $pid"
+expect_state stopper.service inactive/dead
+$L -u change stopper.service
+tries=25
+while [ $tries -gt 0 ] && ! in_s6rc stopper.service.stop; do tries=$((tries - 1)); sleep 0.2; done
+in_s6rc stopper.service.stop && ok "started by name, its .stop oneshot follows" || bad "stopper.service.stop not brought up"
+n=$(lines "$R/stopper.out")
+call StopUnit ss stopper.service replace
+expect_state stopper.service inactive/dead
+expect_eq "StopUnit ran ExecStop= once" "$(($(lines "$R/stopper.out") - n))" "1"
+call StartUnit ss stopper.service replace
+expect_state stopper.service active/running
+$L -d change stopcond.service
+[ ! -e "$R/stopcond.out" ] && ok "no ExecStop= for a unit whose condition failed" || bad "stopcond.service ran ExecStop="
+
 section "markers (package updates)"
 # systemd-update-helper marks units at a package update and then enqueues
 # them: needs-restart try-restarts, needs-reload reloads if active.
@@ -662,6 +683,7 @@ DAEMON=$(dirname "$(sed -n 's/^RUNNER=//p' "$W/sdcompat.conf")")/sdcompatd
 # oneshot it is bound to, and a oneshot alone (like systemd-backlight@).
 call StartUnit ss inst@b.service replace
 call StartUnit ss prep@c.service replace
+call StartUnit ss prepl@d.service replace
 expect_state inst@b.service active/running
 expect_state prep@c.service active/exited
 # And a scope (like a logind session scope), where cgroups are writable.
@@ -792,6 +814,7 @@ sleep 0.5
 expect_eq "prep@c's ExecStop= ran once" "$(grep -cx "down c" "$R/prep.out")" "1"
 grep -qx "down c" "$R/prep.out" && ok "prep@c's ExecStop= ran, started by an earlier daemon" || bad "prep@c not stopped at shutdown"
 [ ! -e "$R/run/dyn-oneshot/prep@c.service" ] && ok "its marker is gone" || bad "prep@c marker left"
+expect_eq "on-demand longrun's ExecStop= ran at shutdown" "$(cat "$R/prepl.out" 2>/dev/null)" "down d"
 rm -f "$R/run/shutting-down"
 restart_daemon "$W/sdcompat.conf"
 expect_state prep@c.service inactive/dead
@@ -838,6 +861,15 @@ expect_eq "UnitFileState follows an s6 set change without a reload" "$(prop hell
 call Reload
 expect_eq "UnitFileState of an active service" "$(prop hello.service Unit UnitFileState)" "enabled"
 [ -n "$(rx hello.service.log)" ] && expect_eq "the logger is active again with its service" "$(rx hello.service.log)" "active"
+# A .stop oneshot follows its service, also when that was moved without -p.
+s6-rc-set-change -r "$W/repo" current usable stopper.service 2>/dev/null
+call Reload
+expect_eq "the .stop oneshot of a usable service is usable" "$(rx stopper.service.stop)" "usable"
+expect_eq "its service stays usable" "$(rx stopper.service)" "usable"
+s6-rc-set-change -r "$W/repo" current active stopper.service 2>/dev/null
+call Reload
+expect_eq "the .stop oneshot is active again with its service" "$(rx stopper.service.stop)" "active"
+in_default stopper.service.stop && ok "and in the default bundle" || bad "stopper.service.stop not in the default bundle"
 
 section "linkwatch"
 # A supervisor that started before anyone listened: its "s" went to nobody.

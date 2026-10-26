@@ -22,6 +22,7 @@ usage: sdcompat-runner [--config PATH] COMMAND [--config PATH] [--mainpid N] (--
                longrun `finish` script; cleanup and Restart= policy
   up | down    oneshot scripts (also mount and swap units)
   stop-exec    ExecStop= with $MAINPID (called by sdcompatd)
+  stop-atom    `down` of UNIT.stop: ExecStop= when s6-rc stops a longrun
   reload-exec  ExecReload= with $MAINPID (called by sdcompatd)
 ";
 
@@ -109,7 +110,7 @@ fn setup_failed(cfg: &Config, cmd: &str, unit: &str, e: &str) -> i32 {
             }
         }
         "finish" => 125,
-        "down" => 0,
+        "down" | "stop-atom" => 0,
         _ => 1,
     }
 }
@@ -157,6 +158,7 @@ fn main() {
         "up" => r.cmd_up(),
         "down" => r.cmd_down(),
         "stop-exec" => r.cmd_stop_exec(a.main_pid),
+        "stop-atom" => r.cmd_stop_atom(),
         "reload-exec" => r.cmd_reload(a.main_pid),
         other => die(&format!("unknown command {other} (see sdcompat-runner help)")),
     };

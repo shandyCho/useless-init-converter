@@ -32,6 +32,14 @@ impl Kind {
     }
 }
 
+/// The oneshot sdcompat-gen adds beside a longrun service with ExecStop=.
+/// It depends on the service, so s6-rc always takes it down first, and its
+/// `down` runs the ExecStop=. No unit type ends in ".stop", so no unit can
+/// have this name.
+pub fn stop_atom(id: &str) -> String {
+    format!("{id}.stop")
+}
+
 /// Argument form of a unit name that is safe for both sh and execline.
 pub fn unit_arg(name: &str) -> String {
     if name.bytes().all(|b| b.is_ascii_alphanumeric() || b"@:._-".contains(&b)) {

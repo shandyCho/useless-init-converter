@@ -137,6 +137,30 @@ ExecStart=/bin/sh -c 'echo once > $R/once.out'
 ExecStop=/bin/sh -c 'echo stopped >> $R/once.out'
 EOF
 
+# ExecStop= of a longrun when s6-rc stops it (its UNIT.stop oneshot), and
+# not for one whose condition failed. prepl@ is stopped at shutdown.
+cat > "$U/stopper.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+ExecStop=/bin/sh -c 'echo "stop \$MAINPID" >> $R/stopper.out'
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > "$U/stopcond.service" <<EOF
+[Unit]
+ConditionPathExists=$R/no-such-file
+[Service]
+ExecStart=/bin/sleep 1000
+ExecStop=/bin/sh -c 'echo stop >> $R/stopcond.out'
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > "$U/prepl@.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+ExecStop=/bin/sh -c 'echo down %i >> $R/prepl.out'
+EOF
+
 # MEMORY_PRESSURE_WATCH=: /dev/null with MemoryPressureWatch=off; unset
 # by default here, as the unprivileged sandbox has no cgroup.
 cat > "$U/psi-off.service" <<EOF
@@ -645,7 +669,7 @@ disable *
 EOF
 
 C="--config $W/sdcompat.conf"
-"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket watch.path chg.path bad.service after-bad.service >/dev/null
+"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket watch.path chg.path bad.service after-bad.service stopper.service stopcond.service >/dev/null
 
 # Stand-in for journald's stdout stream socket: records each connection.
 mkdir -p "$R/journal"

@@ -321,21 +321,26 @@ impl Daemon {
         "done"
     }
 
-    /// Shutdown: s6-rc doesn't know the on-demand oneshots, so run their
+    /// Shutdown: s6-rc doesn't know the on-demand instances, so run their
     /// ExecStop= here, as systemd stops every unit (systemd-backlight@ saves
-    /// the brightness then). sdcompatd goes down before the filesystems.
-    /// Instances started by an earlier daemon come from load_dynamic().
-    pub(super) async fn stop_dynamic_oneshots(&self) {
-        let ids: Vec<String> = self
+    /// the brightness then): active oneshots, and longruns that have one
+    /// (the others just get the final kill). sdcompatd goes down before the
+    /// filesystems. Instances started by an earlier daemon come from
+    /// load_dynamic().
+    pub(super) async fn stop_dynamic_at_shutdown(&self) {
+        let ids: Vec<(String, Kind)> = self
             .dynamic
             .lock()
             .unwrap()
             .iter()
-            .filter(|(_, d)| d.kind == Kind::Oneshot && d.active)
-            .map(|(n, _)| n.clone())
+            .filter(|(_, d)| d.kind == Kind::Longrun || d.active)
+            .map(|(n, d)| (n.clone(), d.kind))
             .collect();
-        for id in ids {
+        for (id, kind) in ids {
             let (_, unit) = self.load_unit(&id);
+            if kind == Kind::Longrun && unit.get_all("Service", "ExecStop").is_empty() {
+                continue;
+            }
             // The bus is still served: a StopUnit for the same unit must not
             // run its ExecStop= a second time beside us.
             let lock = self.unit_lock(&id);

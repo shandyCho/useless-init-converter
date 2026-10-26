@@ -136,6 +136,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 - Transient units: `StartTransientUnit` for `.scope` and `.slice` units, with `PIDs` or `PIDFDs` (used by logind, podman and flatpak). Also `AttachProcessesToUnit`, `Scope.Abandon`, and the reference-counting calls (accepted). Scopes and slices are recorded in `/run/sdcompat/units`, so a restarted daemon takes them over (session scopes keep working).
 - **`systemd-run`**: transient `.service`, `.timer` and `.path` units, including auxiliary units (`--on-calendar`/`--on-active` send a timer and its service). Properties become a unit file in `/run/systemd/transient/`. `systemd-run --wait` gets `PropertiesChanged` and the exit status. Finished transient units are unloaded.
 - Template instances are created on demand without recompiling the database, for example `user@1000.service` and `user-runtime-dir@1000.service`. Their dependencies start first, and units that require a stopped unit are stopped with it. At shutdown, the active oneshot instances are stopped, so their `ExecStop=` runs (systemd-backlight@ saves the brightness); they are recorded in `/run/sdcompat/dyn-oneshot`, so this also holds after the daemon was restarted. A restarted daemon also takes over the running instances (their service directories in `/run/sdcompat/dyn`), so it reports and stops them as before.
+- `ExecStop=` of a long-running service also runs when s6-rc stops it directly: at shutdown, `s6 live stop`, `s6 live reset`, a package update removing it. Each such service gets an s6-rc oneshot `UNIT.stop` that depends on it (so s6-rc takes it down first) and runs the `ExecStop=` with `$MAINPID` in its `down`, within `TimeoutStopSec=`. The daemon brings `UNIT.stop` up whenever s6-rc has the service up, and `systemctl stop` lets it run the `ExecStop=` (once). Oneshots with `RemainAfterExit=yes` always ran theirs from their own `down`. Differences: units that depend on the service are stopped beside its `ExecStop=`, not before it (nothing depends on `UNIT.stop`: on an upgrade s6-rc-update would restart every unit that gained a dependency on a new service); and `s6 process restart`/`s6-svc` act on the process alone, so no `ExecStop=` runs then. On-demand instances that have an `ExecStop=` (longruns too) are stopped by the daemon at shutdown.
 - Starting `poweroff.target`, `reboot.target` or `halt.target` (which is how logind powers off) runs the configured shutdown command.
 - D-Bus activation: answers dbus-daemon's `ActivationRequest` and replies with `ActivationFailure` when a start fails.
 - Authorization: mutating calls need root, a uid in `ALLOW_UIDS`, or a polkit
@@ -171,7 +172,6 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`.
 - Watchdog, credentials (`LoadCredential=`, `ImportCredential=`), `PrivateUsers=`, `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=` (a BPF LSM program in systemd), and IP accounting (`IPAccounting=`).
 - Cancelling a job that is already running.
-- `ExecStop=` only runs when a unit is stopped through the daemon (`systemctl stop`), not when s6-rc stops services directly, for example at shutdown.
 
 ## Offline updates and kernel updates
 
@@ -464,7 +464,9 @@ How it fits together:
   what they moved. A service's logger whose service is no longer `active`
   (`s6 set disable -p` leaves it, being a dependency) becomes `usable`; it
   still starts with its service, and enabling the service makes it
-  `active` again.
+  `active` again. A service's `UNIT.stop` oneshot takes its service's
+  prescription (`active` for `always`), also when the service was moved
+  without `-p`.
 - The boot starts the installed database's `default` bundle as it is;
   nothing is regenerated at boot. Units changed from a systemd boot are
   picked up by the next reload.
@@ -495,8 +497,9 @@ Notes:
   `setup-fedora.sh` changes for syslog, journal-relay and resolv); a reload
   puts them back if a set moves them.
 - `s6 live start/stop` and `s6 process restart` act below sdcompat: there is
-  no systemd job, and `ExecStop=` does not run (as with `s6-rc` itself), so
-  units are better started and stopped with `systemctl`.
+  no systemd job, so units are better started and stopped with `systemctl`.
+  `s6 live stop` runs `ExecStop=` (through `UNIT.stop`, see above);
+  `s6 process restart` doesn't.
 - Starting a target (a bundle) starts all of it, `usable` members included,
   as `s6-rc` does; udev's device targets (`bluetooth.target`, …) rely on it.
 - SELinux: `s6-rc-update` and `s6-rc-format-upgrade` enter `init_t` when run

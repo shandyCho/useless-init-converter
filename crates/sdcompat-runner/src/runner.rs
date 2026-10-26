@@ -59,6 +59,8 @@ pub struct Runner {
     is_root: bool,
     /// Start timeout for commands run by the runner itself (oneshots, forking).
     deadline: std::cell::Cell<Option<std::time::Instant>>,
+    /// What `deadline` limits, for the log: "start", or "stop" for ExecStop=.
+    deadline_what: std::cell::Cell<&'static str>,
     timed_out: std::cell::Cell<bool>,
 }
 
@@ -145,6 +147,7 @@ impl Runner {
             notify_fd: None,
             is_root,
             deadline: std::cell::Cell::new(None),
+            deadline_what: std::cell::Cell::new("start"),
             timed_out: std::cell::Cell::new(false),
         };
         r.build_env()?;
@@ -724,7 +727,8 @@ impl Runner {
         let Some(deadline) = self.deadline.get() else {
             return Status::from_wait(wait_pid(pid));
         };
-        // TimeoutStartSec=: SIGTERM at the deadline, SIGKILL 5 s later.
+        // TimeoutStartSec= (TimeoutStopSec=): SIGTERM at the deadline,
+        // SIGKILL 5 s later.
         let mut status = 0;
         let mut killed_at: Option<std::time::Instant> = None;
         loop {
@@ -738,7 +742,7 @@ impl Runner {
             let now = std::time::Instant::now();
             match killed_at {
                 None if now >= deadline => {
-                    log(self.id(), "start timeout, terminating");
+                    log(self.id(), &format!("{} timeout, terminating", self.deadline_what.get()));
                     self.timed_out.set(true);
                     unsafe { libc::kill(pid, libc::SIGTERM) };
                     killed_at = Some(now);
@@ -2079,6 +2083,54 @@ impl Runner {
             Ok(()) => 0,
             Err(st) => exit_code_for(st),
         }
+    }
+
+    /// `down` of the longrun's UNIT.stop oneshot (sdcompat-gen), which s6-rc
+    /// takes down before the longrun: ExecStop= with $MAINPID, as systemd
+    /// runs it before the KillSignal=, if the service runs. Skipped, as
+    /// systemd's stop of an inactive unit, when it was not started or waits
+    /// for socket activity. Always 0: s6-rc would keep a service whose
+    /// ExecStop= failed up.
+    pub fn cmd_stop_atom(self) -> i32 {
+        let skipped = [
+            keys::SOCKET_WAIT,
+            keys::CONDITION_FAILED,
+            keys::DEPENDENCY_FAILED,
+            keys::START_FAILED,
+            keys::PARKED,
+        ]
+        .into_iter()
+        .any(|k| self.st.has(k));
+        if skipped {
+            return 0;
+        }
+        let out = std::process::Command::new("s6-svstat")
+            .args(["-o", "up,pid"])
+            .arg(self.cfg.live_dir.join("scandir").join(self.id()))
+            .output();
+        let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+        let sv_pid = match text.split_whitespace().collect::<Vec<_>>().as_slice() {
+            ["true", pid] => pid.parse::<u32>().ok().filter(|&p| p > 0),
+            _ => return 0,
+        };
+        // The service's own PID: under PAMName= or Type=forking the
+        // supervised process is the runner around it.
+        let main_pid = self
+            .st
+            .get(keys::MAIN_PID)
+            .and_then(|p| p.parse::<u32>().ok())
+            .filter(|&p| p > 0 && unsafe { libc::kill(p as i32, 0) } == 0)
+            .or(sv_pid);
+        let env: Vec<(String, String)> = main_pid
+            .map(|p| vec![("MAINPID".to_string(), p.to_string())])
+            .unwrap_or_default();
+        let t = self.unit.stop_timeout_usec();
+        if t != u64::MAX {
+            self.deadline.set(Some(std::time::Instant::now() + std::time::Duration::from_micros(t)));
+            self.deadline_what.set("stop");
+        }
+        let _ = self.run_list("ExecStop", &env);
+        0
     }
 
     /// ExecReload=, or ReloadSignal for Type=notify-reload.

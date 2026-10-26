@@ -7,6 +7,7 @@
 //!   .target                  -> bundle   (contents = Wants/Requires + .wants/.requires dirs)
 //!   enabled .socket          -> its service is pulled in instead (sockets are bound by the runner)
 //!   dependencies             -> Requires/Requisite/BindsTo, plus Wants that are also ordered After
+//!   long-running ExecStop=   -> also a oneshot UNIT.stop that depends on it; its `down` runs ExecStop=
 
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use sdcompat_base::config::Config;
-pub use sdcompat_base::index::{unit_arg, Index, Kind};
+pub use sdcompat_base::index::{stop_atom, unit_arg, Index, Kind};
 use sdcompat_base::loader::{self, LoadState, Loader, Unit};
 use sdcompat_base::util;
 use sdcompat_install as install;
@@ -30,6 +31,9 @@ pub struct Planned {
     pub deps: BTreeSet<String>,
     /// Name of the s6-log consumer, when logging is enabled for this unit.
     pub log_atom: Option<String>,
+    /// The oneshot that runs a longrun's ExecStop= when s6-rc stops it
+    /// (see index::stop_atom).
+    pub stop_atom: Option<String>,
     pub warnings: Vec<String>,
     pub timings: Timings,
 }
@@ -521,6 +525,11 @@ pub fn plan(cfg: &Config) -> Plan {
             && cfg.log_dir.is_some()
             && !uses_tty_or_file(unit))
             .then(|| format!("{id}.log"));
+        let stop_atom = (kind == Kind::Longrun
+            && unit.utype() == "service"
+            && !unit.get_all("Service", "ExecStop").is_empty())
+        .then(|| stop_atom(id))
+        .filter(|n| !plan.extra_names.contains(n));
 
         plan.units.insert(
             id.clone(),
@@ -529,6 +538,7 @@ pub fn plan(cfg: &Config) -> Plan {
                 kind,
                 deps,
                 log_atom,
+                stop_atom,
                 warnings,
                 timings: Timings::of(unit),
             },
@@ -543,7 +553,7 @@ pub fn plan(cfg: &Config) -> Plan {
 }
 
 /// default.target and everything it reaches through bundle contents and
-/// dependencies, with their loggers.
+/// dependencies, with their loggers and `.stop` oneshots.
 fn boot_closure(plan: &Plan) -> BTreeSet<String> {
     let mut seen = BTreeSet::new();
     let mut stack: Vec<String> = plan.default_target.iter().cloned().collect();
@@ -555,6 +565,9 @@ fn boot_closure(plan: &Plan) -> BTreeSet<String> {
         stack.extend(p.deps.iter().cloned());
         if let Some(log) = &p.log_atom {
             seen.insert(log.clone());
+        }
+        if let Some(stop) = &p.stop_atom {
+            seen.insert(stop.clone());
         }
     }
     seen
@@ -686,6 +699,14 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
         fs::create_dir_all(sdir.join(list_dir))?;
         for d in &p.deps {
             fs::write(sdir.join(list_dir).join(d), "")?;
+            // A bundle brings up the `.stop` oneshots of its longruns too:
+            // `s6-rc -p change` would otherwise take one down alone and run
+            // the ExecStop= of a service that stays up.
+            if p.kind == Kind::Bundle {
+                if let Some(stop) = plan.units.get(d).and_then(|u| u.stop_atom.as_ref()) {
+                    fs::write(sdir.join(list_dir).join(stop), "")?;
+                }
+            }
         }
 
         if p.kind != Kind::Bundle && plan.boot.contains(&p.id) {
@@ -704,6 +725,9 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
             Kind::Longrun => {
                 for (name, text, exec) in longrun_files(cfg, &p.id, &p.timings) {
                     write_file(&sdir.join(name), &text, exec)?;
+                }
+                if let Some(stop) = &p.stop_atom {
+                    write_stop_atom(cfg, plan, p, &dir.join(stop))?;
                 }
                 if let (Some(log), Some(log_dir)) = (&p.log_atom, &cfg.log_dir) {
                     write_file(&sdir.join("producer-for"), &format!("{log}\n"), false)?;
@@ -734,8 +758,11 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
     write_file(&b.join("type"), "bundle\n", false)?;
     // logind too: update tools may ask it to reboot when they are done.
     for u in ["system-update.target", "systemd-logind.service"] {
-        if plan.units.contains_key(u) {
+        if let Some(p) = plan.units.get(u) {
             fs::write(b.join("contents.d").join(u), "")?;
+            if let Some(stop) = &p.stop_atom {
+                fs::write(b.join("contents.d").join(stop), "")?;
+            }
         }
     }
 
@@ -761,6 +788,31 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
     }
     fs::write(dir.join("..").join("index"), idx)?;
     fs::write(dir.join("..").join("report.txt"), report(plan))?;
+    Ok(())
+}
+
+/// The `.stop` oneshot of a longrun (see index::stop_atom). Nothing depends
+/// on it: s6-rc-update restarts a service that gains a dependency on a new
+/// service, and an upgrade would have restarted every dependent of such a
+/// longrun (gdm, with the session). So when s6-rc stops the longrun with
+/// units that depend on it, its ExecStop= runs beside their stops rather
+/// than after them; the longrun itself still goes down last.
+fn write_stop_atom(cfg: &Config, plan: &Plan, p: &Planned, sdir: &Path) -> std::io::Result<()> {
+    let runner = cfg.runner.display().to_string();
+    let args = cfg.runner_args();
+    fs::create_dir_all(sdir.join("dependencies.d"))?;
+    write_file(&sdir.join("type"), "oneshot\n", false)?;
+    fs::write(sdir.join("dependencies.d").join(&p.id), "")?;
+    // Empty: nothing to do when it comes up.
+    write_file(&sdir.join("up"), "", false)?;
+    write_file(&sdir.join("down"), &format!("{runner} stop-atom{args} {}\n", unit_arg(&p.id)), false)?;
+    // The runner ends ExecStop= at TimeoutStopSec= and always succeeds; a
+    // failed down would keep s6-rc from stopping the service.
+    let down = if p.timings.down_ms == 0 { 0 } else { p.timings.down_ms.saturating_add(10_000).min(u32::MAX as u64) };
+    write_file(&sdir.join("timeout-down"), &format!("{down}\n"), false)?;
+    if plan.boot.contains(&p.id) {
+        fs::write(sdir.join("flag-recommended"), "")?;
+    }
     Ok(())
 }
 
@@ -970,6 +1022,44 @@ fn sync_loggers(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// A longrun's `.stop` oneshot (see write_stop_atom) takes its service's
+/// prescription (active for always). `s6 set disable X` without -p leaves
+/// it active, and set-fix -u would then enable X again, as the oneshot
+/// depends on it; `s6 set enable X` leaves it usable, out of the default
+/// bundle, so `s6 live reset` would take it down alone and run X's
+/// ExecStop= while X stays up.
+fn sync_stop_atoms(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
+    let atomics = cfg.repo_dir.join("sources").join(".atomics");
+    let Ok(rd) = fs::read_dir(&atomics) else { return Ok(()) };
+    let mut moves: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(base) = name.strip_suffix(".stop") else { continue };
+        if stop_atom(base) != name || !atomics.join(base).exists() {
+            continue;
+        }
+        let want = match install::set_rx(cfg, base) {
+            Some("always" | "active") => "active",
+            Some(rx) => rx,
+            None => continue,
+        };
+        if install::set_rx(cfg, &name) != Some(want) {
+            moves.entry(want).or_default().push(name);
+        }
+    }
+    for (rx, mut names) in moves {
+        names.sort();
+        run(Command::new("s6-rc-set-change")
+            .arg("-r")
+            .arg(&cfg.repo_dir)
+            .arg(&cfg.set_name)
+            .arg(rx)
+            .args(&names))?;
+        changes.push(format!("{} -> {rx} (with its service)", names.join(" ")));
+    }
+    Ok(())
+}
+
 /// Commit the set and install it: as the boot database, and (with a live
 /// state) as the live one. s6-rc-set-fix -u first enables what active
 /// services depend on: a new package's service may need one the set has
@@ -981,6 +1071,8 @@ fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>
         out.lines()
             .filter_map(|l| l.split_once("moving service ").map(|(_, r)| r.to_string())),
     );
+    // Again for the services set-fix just enabled.
+    sync_stop_atoms(cfg, changes)?;
     // --no-snapshot for both: s6-rc 0.8.0.2's s6rc_repo_setuptodate()
     // terminates the snapshot's path one byte too late (an uninitialized
     // byte is left in it), so with snapshots set-install randomly finds a
@@ -1127,6 +1219,7 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
     let res = repo_sync(cfg)
         .and_then(|_| sync_essentials(cfg, &mut set_changes))
         .and_then(|_| sync_loggers(cfg, &mut set_changes))
+        .and_then(|_| sync_stop_atoms(cfg, &mut set_changes))
         .and_then(|_| commit_and_install(cfg, update_live, &mut set_changes));
     let updated_live = match res {
         Ok(r) => r,
@@ -1334,6 +1427,51 @@ mod tests {
         assert!(!src.join("off.service/flag-recommended").exists());
         assert!(!src.join("multi-user.target/flag-recommended").exists());
         assert!(!src.join(&cfg.default_bundle).exists());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A longrun with ExecStop= gets UNIT.stop: a oneshot that depends on
+    /// it, runs `stop-atom` as its down, and is in the bundles beside it.
+    /// Nothing depends on it, and oneshots and ExecStop=-less longruns get
+    /// none.
+    #[test]
+    fn stop_atom_for_longrun_exec_stop() {
+        let tmp = std::env::temp_dir().join(format!("sdcompat-gen-stop-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let units = tmp.join("units");
+        fs::create_dir_all(units.join("multi-user.target.wants")).unwrap();
+        let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
+        write("multi-user.target", "[Unit]\nDescription=m\n");
+        std::os::unix::fs::symlink("multi-user.target", units.join("default.target")).unwrap();
+        write("db.service", "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/sleep 9\nExecStop=/bin/true\nTimeoutStopSec=7\n");
+        write("app.service", "[Unit]\nDefaultDependencies=no\nRequires=db.service\nAfter=db.service\n[Service]\nExecStart=/bin/sleep 9\n");
+        write("once.service", "[Unit]\nDefaultDependencies=no\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\nExecStop=/bin/true\n");
+        for u in ["db.service", "app.service", "once.service"] {
+            std::os::unix::fs::symlink(format!("../{u}"), units.join("multi-user.target.wants").join(u)).unwrap();
+        }
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![units];
+        cfg.extra_source = vec![];
+
+        let plan = plan(&cfg);
+        assert_eq!(plan.units["db.service"].stop_atom.as_deref(), Some("db.service.stop"));
+        assert_eq!(plan.units["app.service"].stop_atom, None);
+        assert_eq!(plan.units["once.service"].stop_atom, None);
+        assert!(plan.boot.contains("db.service.stop"));
+        let src = tmp.join("source");
+        write_source(&cfg, &plan, &src).unwrap();
+        let stop = src.join("db.service.stop");
+        assert_eq!(fs::read_to_string(stop.join("type")).unwrap(), "oneshot\n");
+        assert!(stop.join("dependencies.d/db.service").exists());
+        assert_eq!(fs::read_dir(stop.join("dependencies.d")).unwrap().count(), 1);
+        assert_eq!(fs::read_to_string(stop.join("up")).unwrap(), "");
+        assert!(fs::read_to_string(stop.join("down")).unwrap().contains(" stop-atom -- db.service\n"));
+        assert_eq!(fs::read_to_string(stop.join("timeout-down")).unwrap(), "17000\n");
+        assert!(stop.join("flag-recommended").exists());
+        assert!(src.join("multi-user.target/contents.d/db.service.stop").exists());
+        assert!(src.join("app.service/dependencies.d/db.service").exists());
+        assert!(!src.join("app.service/dependencies.d/db.service.stop").exists());
+        assert!(!src.join("once.service.stop").exists());
         let _ = fs::remove_dir_all(&tmp);
     }
 }
