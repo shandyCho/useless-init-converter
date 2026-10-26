@@ -15,7 +15,7 @@ BuildRequires:  skalibs-devel
 %description
 mdevd is a small daemon managing kernel hotplug events, similarly to udevd,
 with the configuration file format of busybox's mdev. sdcompat's s6
-initramfs (setup-fedora.sh --boot-only-s6) uses it to load drivers.
+initramfs (sdcompat init --boot-only-s6=yes) uses it to load drivers.
 
 %prep
 %autosetup

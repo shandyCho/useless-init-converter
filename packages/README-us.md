@@ -14,7 +14,7 @@ executables, so they are used only to build and are not packaged.
 | `sdcompatd` | `sdcompatd`, the D-Bus policy (`sdcompat.conf`) | s6, s6-rc, dbus-daemon, `sdcompat-runner`. Recommends `sdcompat-timers` (`systemd-run --on-calendar`) |
 | `sdcompat-timers` | `sdcompat-timers` | `sdcompatd` (timers start units through the daemon) |
 | `sdcompat-gen` | `sdcompat-gen`, `/var/lib/sdcompat` | s6-rc, `sdcompat-runner`, `sdcompat-timers` (the generated services run them) |
-| `sdcompat` | the `sdcompat` command, `early`, configuration, s6 services, s6-linux-init skeleton, SELinux module, kernel-install plugin, `/var/log/sdcompat` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, and the four packages above |
+| `sdcompat` | the `sdcompat` command (with `sdcompat init`, the boot setup), `early`, configuration, s6 services, s6-linux-init skeleton, SELinux module, kernel-install plugin, `/var/log/sdcompat` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, and the four packages above |
 
 - `dnf install sdcompat` installs everything. The boot configuration and the
   SELinux module are in the `sdcompat` package, so booting with s6 needs it.
@@ -29,6 +29,7 @@ executables, so they are used only to build and are not packaged.
 ```sh
 packages/build-rpms.sh            # result: ~/rpmbuild-sdcompat/rpms
 packages/build-rpms.sh DIR        # somewhere else
+packages/build-rpms.sh --srpm     # source RPMs only: ~/rpmbuild-sdcompat/srpms (see COPR)
 ```
 
 The script packs the workspace (`Cargo.toml`, `Cargo.lock`, `crates`, `dist`)
@@ -57,12 +58,69 @@ this script (plain `rpmbuild` fails for lack of a version).
 - To set the release yourself, e.g. for a published release:
   `SDCOMPAT_RELEASE=1 packages/build-rpms.sh`.
 
-## Installing
+## COPR
+
+The packages can be built on [Fedora COPR](https://copr.fedorainfracloud.org)
+from source RPMs, so users install them with dnf:
+
+```sh
+packages/copr-srpms.sh                 # all 16 source RPMs: ~/sdcompat-srpms
+packages/copr-srpms.sh core            # only the five core ones (after a code change)
+packages/copr-srpms.sh DIR core standalone
+```
+
+It runs each build script with `--srpm` (`packages/build-rpms.sh --srpm`,
+`standalone/*/build-rpm.sh --srpm`, `dist/rpm/build-skarnet-rpms.sh --srpm`),
+which writes the version and release into the spec and puts the vendored
+crates (or the verified skarnet.org tarball) into the source RPM, so COPR
+builds them offline as they are. Results: `DIR/srpms/` and
+`DIR/BUILD-ORDER.txt`:
+
+```
+stage 1: skalibs-...src.rpm
+stage 2: execline-...src.rpm mdevd-...src.rpm
+stage 3: s6-...src.rpm
+stage 4: s6-rc-...src.rpm s6-linux-init-...src.rpm
+stage 5: s6-frontend-...src.rpm
+stage 6: sdcompat-...src.rpm sdcompatd-...src.rpm ... sdcompat-notify-...src.rpm
+```
+
+A skarnet package builds against the `-devel` packages of the ones before
+it, so start a stage once the earlier stages have succeeded in the COPR
+project (the stages come from the specs' `BuildRequires`). The Rust
+packages need only cargo and rust and can build in any order. The five core
+packages require each other's exact version-release: upload the five of one
+run together.
+
+One-time setup on copr.fedorainfracloud.org: New Project, pick the Fedora
+chroots (e.g. `fedora-45-x86_64`); no external repositories are needed.
+Then per build:
+
+- **Web:** the project's Builds > New Build > Upload, one source RPM at a
+  time, stage by stage.
+- **copr-cli** (`dnf install copr-cli`, API token in `~/.config/copr`):
+  `copr-cli build OWNER/sdcompat FILE...` per stage; it waits for the builds.
+
+The skarnet packages only need rebuilding when `dist/skarnet.versions`
+changes; after a code change upload `packages/copr-srpms.sh core` (and
+`standalone` when a standalone tool changed). Users then run:
+
+```sh
+sudo dnf copr enable OWNER/sdcompat
+sudo dnf install sdcompat
+sudo sdcompat init
+```
+
+The specs still say `License: TBD`; COPR builds them, but choose a license
+before publishing.
+
+## Installing local builds
 
 ```sh
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm      # skarnet tools (dist/rpm/build-skarnet-rpms.sh)
 sudo dnf install ~/rpmbuild-sdcompat/rpms/*.rpm
-sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
+sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/*.rpm   # optional (standalone/*/build-rpm.sh)
+sudo sdcompat init
 ```
 
 After the Rust code changed, rebuild and upgrade:
@@ -81,20 +139,25 @@ time a service starts, and sdcompat-gen at the next `sdcompat reload`
 daemon restarts). Nothing is regenerated at boot.
 
 Moving from a version without the s6-rc repository (before the `s6 set`
-change): rerun `dist/setup-fedora.sh`. It removes `/etc/sdcompat/s6/default`
+change): rerun `sudo sdcompat init`. It removes `/etc/sdcompat/s6/default`
 (the set's commit makes the `default` bundle now; a reload refuses to run
 while it exists), writes the new `/etc/s6.conf`, creates `/etc/s6/sources`,
 loads the new SELinux module and creates the repository with the set
 `current` from systemd's enable state.
 
 The s6-linux-init skeleton (`rc.init`, `rc.shutdown`, `rc.shutdown.final`)
-is different: the package installs the copy setup works from, but the boot
+is different: the package installs the copy init works from, but the boot
 uses `/etc/s6-linux-init/current`, which `s6-linux-init-maker` makes from it.
-When an upgrade changes the skeleton, rerun `sudo dist/setup-fedora.sh` (with
-the options of the first run) to rebuild it; `early` and the rest take effect
-at the next boot without that.
+When an upgrade changes the skeleton, rerun `sudo sdcompat init` (it keeps the
+choices of the last run) to rebuild it; `early` and the rest take effect at
+the next boot without that.
 
-When the `sdcompat` RPM is installed, `setup-fedora.sh` uses it instead of
-building the core. When only some tool RPMs are installed, it leaves those
-tools alone and installs the rest from source. To remove:
+Moving from an install made by the old `dist/setup-fedora.sh`: install the
+packages and run `sudo sdcompat init`. It removes the old script's copy of
+the kernel-install plugin in `/etc/kernel/install.d` (which would hide the
+packaged one) and reads the settings the script left. Source-built skarnet
+tools (`--build-s6`) are replaced by the RPMs' files; the old manifest
+`/var/lib/sdcompat/skarnet-files.txt` can be deleted.
+
+To remove: `sudo sdcompat init --uninstall`, then
 `dnf remove sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd`.

@@ -940,7 +940,7 @@ fn repo_sync(cfg: &Config) -> Result<(), String> {
 
 
 /// The early services are `always`: those with flag-essential, and the
-/// members of SYSINIT_BUNDLE (setup-fedora.sh adds or removes syslog,
+/// members of SYSINIT_BUNDLE (sdcompat init adds or removes syslog,
 /// journal-relay and resolv there, so they carry no flag of their own).
 /// A repository sync reads flags only for services it hasn't seen before,
 /// so this keeps the set in step when they change; a service that is no

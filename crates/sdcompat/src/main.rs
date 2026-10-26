@@ -7,11 +7,15 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{exit, Command};
 
+mod init;
+
 const USAGE: &str = "\
 usage: sdcompat [--config PATH] COMMAND [ARGS]
        sdcompat --version     this build and the installed tools' builds
 
-Each command is handled by one sdcompat tool (in /usr/libexec/sdcompat):
+  sdcompat init [OPTIONS]  set up booting with s6 (see sdcompat init --help)
+
+Each other command is handled by one sdcompat tool (in /usr/libexec/sdcompat):
 
   sdcompat-gen        reload, plan, enable, disable, mask, unmask, preset, is-enabled
   sdcompatd           daemon, start, stop, restart, log
@@ -58,11 +62,11 @@ const CORE_TOOLS: [&str; 4] = ["sdcompat-gen", "sdcompat-runner", "sdcompat-time
 /// The standalone tools: separate projects with their own versions.
 const STANDALONE: [&str; 4] = ["sdcompat-fdstore", "sdcompat-journal-relay", "sdcompat-linkwatch", "sdcompat-notify"];
 
-/// `sdcompat --version`: this build, each core tool's (from its own
-/// --version) and whether the standalone tools are installed. Exits 1 when a
-/// core tool is missing or from another build.
-fn version() -> ! {
-    sdcompat_version::print("sdcompat");
+/// The lines of `sdcompat --version`: this build, each core tool's (from
+/// its own --version) and whether the standalone tools are installed; and
+/// whether every core tool is installed and from this build.
+fn version_report() -> (Vec<String>, bool) {
+    let mut lines = vec![format!("sdcompat {}", sdcompat_version::VERSION)];
     let mut ok = true;
     for tool in CORE_TOOLS {
         let path = tool_path(tool);
@@ -74,23 +78,33 @@ fn version() -> ! {
         };
         let theirs = line.strip_prefix(tool).map(str::trim);
         if theirs == Some(sdcompat_version::VERSION) {
-            println!("  {line}");
+            lines.push(format!("  {line}"));
         } else {
             ok = false;
             if theirs.is_some_and(|v| !v.starts_with('(') && !v.starts_with("not ")) {
-                println!("  {line}  (differs from sdcompat)");
+                lines.push(format!("  {line}  (differs from sdcompat)"));
             } else {
-                println!("  {line}");
+                lines.push(format!("  {line}"));
             }
         }
     }
     for tool in STANDALONE {
         let path = tool_path(tool);
         if path.is_file() {
-            println!("  {tool} installed (standalone)");
+            lines.push(format!("  {tool} installed (standalone)"));
         } else {
-            println!("  {tool} not installed (standalone, optional)");
+            lines.push(format!("  {tool} not installed (standalone, optional)"));
         }
+    }
+    (lines, ok)
+}
+
+/// `sdcompat --version`. Exits 1 when a core tool is missing or from
+/// another build.
+fn version() -> ! {
+    let (lines, ok) = version_report();
+    for l in lines {
+        println!("{l}");
     }
     exit(if ok { 0 } else { 1 })
 }
@@ -112,6 +126,9 @@ fn main() {
     }
     if sdcompat_version::wanted(cmd) {
         version();
+    }
+    if cmd == "init" {
+        init::main(&args[i + 1..]);
     }
     let Some((tool, with_cmd)) = tool_for(cmd) else {
         eprintln!("sdcompat: unknown command {cmd} (see sdcompat help)");

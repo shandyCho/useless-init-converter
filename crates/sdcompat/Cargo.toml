@@ -6,3 +6,4 @@ description = "The sdcompat command: runs the sdcompat tool that handles a subco
 
 [dependencies]
 sdcompat-version.workspace = true
+libc.workspace = true

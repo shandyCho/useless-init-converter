@@ -1,5 +1,5 @@
 #!/usr/bin/execlineb -S0
-# PID 1 of the s6 initramfs (setup-fedora.sh --boot-only-s6). Mounts the
+# PID 1 of the s6 initramfs (sdcompat init --boot-only-s6=yes). Mounts the
 # kernel filesystems, keeps the kernel's arguments for the real init, and
 # execs s6-svscan on /service: mdevd loads the drivers, rootfs unlocks and
 # mounts the root, and .s6-svscan/finish switches to it.

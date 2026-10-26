@@ -2,9 +2,12 @@
 # Build the sdcompat-linkwatch RPM from this project. The source tarball has
 # the crates vendored, so rpmbuild needs no network.
 #
-#   ./build-rpm.sh [OUTDIR]        # default: ~/rpmbuild-sdcompat-standalone
+#   ./build-rpm.sh [OUTDIR]          # default: ~/rpmbuild-sdcompat-standalone
+#   ./build-rpm.sh --srpm [OUTDIR]   # the source RPM only (e.g. for COPR)
 #
-# Nothing is installed and no sudo is needed. Afterwards:
+# With --srpm the source RPM goes to OUTDIR/srpms, with the release in its
+# spec and the vendored tarball inside, so a builder such as COPR builds it
+# as it is. Nothing is installed and no sudo is needed. Afterwards:
 #   sudo dnf install OUTDIR/rpms/*.rpm       (first time)
 #   sudo dnf upgrade OUTDIR/rpms/*.rpm       (after a rebuild)
 #
@@ -16,6 +19,11 @@ set -euo pipefail
 
 NAME=sdcompat-linkwatch
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+SRPM=0
+if [ "${1:-}" = --srpm ]; then
+    SRPM=1
+    shift
+fi
 OUT=${1:-$HOME/rpmbuild-sdcompat-standalone}
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -36,7 +44,7 @@ else
     fi
 fi
 
-mkdir -p "$OUT"/{SOURCES,SPECS,SRPMS,RPMS,BUILD,rpms}
+mkdir -p "$OUT"/{SOURCES,SPECS,SRPMS,RPMS,BUILD,rpms,srpms}
 
 echo "==> $NAME $VERSION-$RELEASE: making $NAME-$VERSION.tar.gz with vendored crates"
 stage=$(mktemp -d)
@@ -54,10 +62,25 @@ directory = "vendor"
 EOF
 tar czf "$OUT/SOURCES/$NAME-$VERSION.tar.gz" -C "$stage" "$NAME-$VERSION"
 
+# The release goes into the spec, so a source RPM carries it too.
+{
+    printf '%%global build_release %s\n' "$RELEASE"
+    cat "$HERE/$NAME.spec"
+} >"$OUT/SPECS/$NAME.spec"
+
+if [ "$SRPM" = 1 ]; then
+    echo "==> Source RPM $NAME"
+    rpmbuild --define "_topdir $OUT" -bs "$OUT/SPECS/$NAME.spec" >"$OUT/$NAME.log" 2>&1 \
+        || die "failed, see $OUT/$NAME.log"
+    rm -f "$OUT/srpms/$NAME-"[0-9]*.src.rpm
+    find "$OUT/SRPMS" -name "$NAME-$VERSION-$RELEASE.*src.rpm" -exec cp {} "$OUT/srpms/" \;
+    echo "==> Source RPM in $OUT/srpms:"
+    ls "$OUT/srpms/$NAME-$VERSION-$RELEASE".*src.rpm
+    exit 0
+fi
+
 echo "==> Building $NAME"
-cp "$HERE/$NAME.spec" "$OUT/SPECS/"
-rpmbuild --define "_topdir $OUT" --define "build_release $RELEASE" \
-    -bb "$OUT/SPECS/$NAME.spec" >"$OUT/$NAME.log" 2>&1 \
+rpmbuild --define "_topdir $OUT" -bb "$OUT/SPECS/$NAME.spec" >"$OUT/$NAME.log" 2>&1 \
     || die "failed, see $OUT/$NAME.log"
 # rpms/ holds the last build of each standalone tool; debuginfo stays in RPMS/.
 rm -f "$OUT/rpms/$NAME-"[0-9]*.rpm

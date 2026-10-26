@@ -193,7 +193,7 @@ rfkill | rfkill-save)
     done
     ;;
 resolv)
-    # RESOLVED=no (setup-fedora.sh --no-resolved): systemd-resolved does not
+    # RESOLVED=no (sdcompat init --resolved=no): systemd-resolved does not
     # run on this boot. NetworkManager handles DNS itself, and the stub file
     # /etc/resolv.conf links to points at NetworkManager's copy. All of it
     # is in /run, so the systemd boot keeps using resolved.

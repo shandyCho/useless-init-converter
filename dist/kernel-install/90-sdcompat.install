@@ -2,7 +2,7 @@
 # kernel-install plugin: keep a "Fedora (s6 + sdcompat)" boot entry for every
 # installed kernel. It copies the BLS entry that 20-grub.install just wrote
 # and adds the s6 options. Options come from /etc/sdcompat/boot-options.
-# With /etc/sdcompat/boot-only-s6 (setup-fedora.sh --boot-only-s6) it also
+# With /etc/sdcompat/boot-only-s6 (sdcompat init --boot-only-s6=yes) it also
 # builds the s6 initramfs (initramfs-VERSION-s6.img, PID 1 s6-svscan, no
 # systemd) and boots the s6 entry with it; the systemd entry keeps Fedora's.
 #   kernel-install add VERSION IMAGE  /  kernel-install remove VERSION
@@ -11,7 +11,7 @@ KVER=$2
 ENTRIES=${SDCOMPAT_BLS_DIR:-/boot/loader/entries}
 TITLE="Fedora (s6 + sdcompat)"
 OPTS_FILE=${SDCOMPAT_BOOT_OPTIONS:-/etc/sdcompat/boot-options}
-# "s6" here (setup-fedora.sh --default-s6) keeps the s6 entry the default.
+# "s6" here (sdcompat init --default-s6) keeps the s6 entry the default.
 DEFAULT_FILE=${SDCOMPAT_BOOT_DEFAULT:-/etc/sdcompat/boot-default}
 EDITENV=${SDCOMPAT_GRUB_EDITENV:-grub2-editenv}
 ONLY_S6_FILE=${SDCOMPAT_BOOT_ONLY_S6:-/etc/sdcompat/boot-only-s6}

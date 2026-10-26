@@ -26,8 +26,8 @@ sudo install -Dm0755 target/release/sdcompat-journal-relay /usr/libexec/sdcompat
 
 RPM: `./build-rpm.sh [OUTDIR]`가 `sdcompat-journal-relay.spec`을 `~/rpmbuild-sdcompat-standalone/rpms`에
 빌드합니다(sudo 불필요. 빌드할 때마다 릴리스가 새로워져 `sudo dnf upgrade`로
-올릴 수 있습니다). 설치는 `sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-journal-relay-*.rpm`이고,
-그 뒤로 `setup-fedora.sh`는 이 도구를 rpm에 맡깁니다.
+올릴 수 있습니다). 설치는 `sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-journal-relay-*.rpm`입니다. `./build-rpm.sh --srpm`은
+COPR 같은 빌드 서비스에 올릴 소스 RPM만 만듭니다.
 
 ## 실행
 
@@ -41,7 +41,7 @@ sdcompat-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
 
 journald가 도는 시스템에서는 실행하지 마세요(같은 소켓을 씁니다). sdcompat을
 `JOURNAL=no`로 설치하면 `journal-relay` s6 서비스가 이것을 실행하며, 이때는 꼭
-설치되어 있어야 합니다(`setup-fedora.sh --no-journal`이 확인합니다).
+설치되어 있어야 합니다(`sdcompat init --journal=no`가 확인합니다).
 
 MESSAGE, PRIORITY, SYSLOG_FACILITY, SYSLOG_IDENTIFIER, SYSLOG_PID만 넘기고 나머지
 필드는 버립니다. syslog가 없거나 따라오지 못하면 메시지를 버립니다. 클라이언트를

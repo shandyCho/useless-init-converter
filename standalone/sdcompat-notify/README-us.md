@@ -24,8 +24,8 @@ sudo install -Dm0755 target/release/sdcompat-notify /usr/libexec/sdcompat/sdcomp
 RPM: `./build-rpm.sh [OUTDIR]` builds `sdcompat-notify.spec` into
 `~/rpmbuild-sdcompat-standalone/rpms` (no sudo; each rebuild gets a newer release, so
 `sudo dnf upgrade` takes it). Install it with
-`sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-notify-*.rpm`; `setup-fedora.sh` then leaves
-the tool to rpm.
+`sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-notify-*.rpm`. `./build-rpm.sh --srpm` makes only
+the source RPM, for a build service such as COPR.
 
 ## Run
 

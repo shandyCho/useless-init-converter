@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the s6 initramfs (setup-fedora.sh --boot-only-s6): s6-svscan is its
+# Build the s6 initramfs (sdcompat init --boot-only-s6=yes): s6-svscan is its
 # PID 1, mdevd loads the drivers, and a bash script opens LUKS and mounts the
 # root (see root/ beside this script, installed as /usr/share/sdcompat/initramfs).
 # No systemd and no dracut run at boot; dracut-install only copies binaries

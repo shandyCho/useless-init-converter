@@ -168,7 +168,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 
 ## Not implemented (yet)
 
-- Encrypted volumes in `/etc/crypttab` that the initramfs does not unlock (systemd opens them with `systemd-cryptsetup@` units). The LUKS root disk is unlocked by the initramfs and works; `setup-fedora.sh` warns about the others.
+- Encrypted volumes in `/etc/crypttab` that the initramfs does not unlock (systemd opens them with `systemd-cryptsetup@` units). The LUKS root disk is unlocked by the initramfs and works; `sdcompat init` warns about the others.
 - `Accept=yes` sockets, and on-demand activation at first start: services are started eagerly, with their sockets (only a later restart waits for activity).
 - autofs: `.automount` units mount eagerly.
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`.
@@ -183,24 +183,26 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
   transaction. This is the same switch systemd's system-update generator makes.
   `OnFailure=`/`SuccessAction=` in those units are honored, and the
   reboot at the end goes through sdcompat's `Reboot`.
-- **New kernels:** `/etc/kernel/install.d/90-sdcompat.install` copies the BLS
+- **New kernels:** the kernel-install plugin
+  `/usr/lib/kernel/install.d/90-sdcompat.install` copies the BLS
   entry that Fedora's grub plugin writes for each kernel and adds the s6
   options from `/etc/sdcompat/boot-options`. The s6 entry follows kernel
   updates, and removed kernels lose theirs.
 
 ## Dependencies
 
-**Required** (`dist/setup-fedora.sh` installs these):
+**Required** (the `sdcompat` packages require these, so dnf installs them):
 
 | Package | Used for |
 |---|---|
-| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, supervision, the service database. Fedora doesn't package them: `--rpms=DIR` or `--build-s6` |
-| s6-frontend (optional) | The `s6` command (see [The `s6` command](#the-s6-command-s6-frontend)); built with the others |
-| mdevd (optional) | Loads the drivers in the s6 initramfs (`--boot-only-s6`); built with the others |
+| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, supervision, the service database. Fedora doesn't package them: they come from the sdcompat COPR, or build them with `dist/rpm/build-skarnet-rpms.sh` |
+| s6-frontend (recommended) | The `s6` command (see [The `s6` command](#the-s6-command-s6-frontend)); built with the others |
+| mdevd (recommended) | Loads the drivers in the s6 initramfs (`--boot-only-s6=yes`); built with the others |
 | systemd | Stays installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | The system bus (`--systemd-activation`); dbus-broker stays for the user bus |
 | util-linux | `mount`, `swapon`, `mountpoint` for mount units and early boot; `rfkill` for the radio state |
-| policycoreutils | `restorecon` and `semodule` for the SELinux module |
+| policycoreutils, policycoreutils-python-utils | `restorecon` and `semodule` for the SELinux module; `semanage` for `sdcompat init` |
+| grubby | The boot entry (`sdcompat init`) |
 
 **Libraries loaded at run time (recommended).** sdcompat `dlopen()`s them, so
 none is needed to build. Without one, the matching feature is missing:
@@ -243,69 +245,77 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 ## Deploying on Fedora (do it in a VM first)
 
-Fedora doesn't package skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend or mdevd, so build
-RPMs for them first (specs in `dist/rpm/`, sources checked against pinned SHA-256 sums):
+Install the packages, then let `sdcompat init` set up the boot:
 
 ```sh
-dist/rpm/build-skarnet-rpms.sh                        # uses mock if you're in the mock group
-dist/setup-fedora.sh --dry-run --rpms=$HOME/rpmbuild-skarnet/rpms
-sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
+sudo dnf copr enable OWNER/sdcompat       # the COPR project; see packages/README-us.md
+sudo dnf install sdcompat
+sudo sdcompat init --dry-run              # what it would do (works without root too)
+sudo sdcompat init
 ```
 
-`--build-s6` installs them from source into `/usr` instead (not tracked by rpm).
+`dnf install sdcompat` brings the four tool packages and the skarnet
+packages (skalibs, execline, s6, s6-rc, s6-linux-init), and as recommended
+packages s6-frontend, mdevd, earlyoom, rsyslog and the standalone tools.
+Without the COPR, build the RPMs yourself (`dist/rpm/build-skarnet-rpms.sh`,
+`packages/build-rpms.sh`, `standalone/*/build-rpm.sh`) and `dnf install`
+them; see [packages/README-us.md](packages/README-us.md).
 
-The script **adds** a GRUB entry, "Fedora (s6 + sdcompat)", and keeps the
-normal systemd boot as the default unless you pass `--default-s6`. Backups of anything it overwrites go to
-`/var/lib/sdcompat/setup-backup/`. It does the following:
+`sdcompat init` **adds** a GRUB entry, "Fedora (s6 + sdcompat)", and keeps the
+normal systemd boot as the default unless you pass `--default-s6`. It installs
+nothing: when a setting needs a package that is missing, it stops and prints
+the `dnf install` command. Backups of anything it overwrites go to
+`/var/lib/sdcompat/setup-backup/`. It shows its plan, asks, and then:
 
-1. Installs `dbus-daemon`, `earlyoom`, `chrony`, `NetworkManager`, and the
-   skarnet tools from your RPMs (`--rpms=DIR`) or from source (`--build-s6`).
-   Their versions and checksums are pinned in one file, `dist/skarnet.versions`,
-   which `build-skarnet-rpms.sh` and `--build-s6` both read: to move to new
-   releases, edit that file only. execline is built as one multicall binary,
-   `/usr/bin/execline`, so the SELinux module does not list its commands.
-2. Builds and installs sdcompat. If the sdcompat RPMs from `packages/build-rpms.sh` are installed, it uses them instead.
-3. Writes `/etc/sdcompat/`: the config, the s6 services (early boot, dbus-daemon,
-   the daemon, earlyoom) and the boot options, and `/etc/s6.conf` for the `s6` command. systemd-journald runs as an s6
-   service. With `--no-journal`, an s6-only rsyslog config is used instead, so the
-   systemd boot, where journald owns `/dev/log`, is unaffected; the s6 service
-   `journal-relay` then serves journald's client sockets and forwards to rsyslog
-   (only MESSAGE, priority and identifier are kept).
-4. Enables chronyd, NetworkManager and gdm, and sets `graphical.target` as the default.
-5. Runs `sdcompat reload --no-update`, which creates the s6-rc repository and its set `current` (from systemd's enable state) and installs the boot database, and prints the translation summary. It also creates `/etc/s6/sources` for your own s6-rc services.
-6. Generates `/etc/s6-linux-init/current` with a rescue getty on tty9.
-7. SELinux: labels `bin/init` as `init_exec_t` and loads the policy module
-   `dist/selinux/sdcompat.cil`, which labels the s6, s6-rc, s6-linux-init and
+1. Shows the installed builds (`sdcompat --version`): the core packages must
+   come from one build.
+2. Writes the settings in `/etc/sdcompat/` (`JOURNAL=`, `RESOLVED=` in
+   `sdcompat.conf`, the s6 services in the `sdcompat-sysinit` bundle) and
+   `/etc/s6.conf` for the `s6` command. The package installs the s6 services
+   (early boot, dbus-daemon, the daemon, earlyoom). systemd-journald runs as
+   an s6 service. With `--journal=no`, an s6-only rsyslog config is used
+   instead, so the systemd boot, where journald owns `/dev/log`, is
+   unaffected; the s6 service `journal-relay` then serves journald's client
+   sockets and forwards to rsyslog (only MESSAGE, priority and identifier are
+   kept).
+3. Enables chronyd, NetworkManager and gdm, and sets `graphical.target` as the default.
+4. Runs `sdcompat reload --no-update`, which creates the s6-rc repository and its set `current` (from systemd's enable state) and installs the boot database, and prints the translation summary. It also creates `/etc/s6/sources` for your own s6-rc services.
+5. Generates `/etc/s6-linux-init/current` with a rescue getty on tty9.
+6. SELinux: labels `bin/init` as `init_exec_t` and loads the policy module
+   (`/usr/share/sdcompat/selinux/sdcompat.cil`, from `dist/selinux/`), which labels the s6, s6-rc, s6-linux-init and
    execline programs and sdcompat's binaries `init_exec_t`, so that the whole
    s6 tree stays in `init_t` as systemd does. It also allows the few things
    s6 does that systemd does not (the catch-all logger's fifo, links in
    `/run/service`, the run scripts of `user@UID.service` in /run/sdcompat).
-   `--uninstall` removes the module.
-8. Installs the kernel-install plugin and uses it to copy the default boot entry with `init=/usr/sbin/init-selinux` added. It removes the
+   The package loads the module when it is installed and removes it when it is removed.
+7. On the s6 boot, restarts sdcompatd so the installed build takes over.
+8. Runs the package's kernel-install plugin for every installed kernel, which copies the boot entry with `init=/usr/sbin/init-selinux` added. It removes the
    splash (`rhgb quiet`, `plymouth.enable=0`), because plymouth's quit unit is
-   systemd-only. It also adds `enforcing=0`; pass `--enforcing` to leave that out.
+   systemd-only. On the first run it also adds `enforcing=0`; `--selinux=enforcing` leaves that out.
 
-Other options:
+Options:
 
 | Option | Effect |
 |---|---|
 | `--dry-run` | Print every command, change nothing (works without root) |
 | `--yes` | Don't ask before starting |
-| `--rpms=DIR` | Install the skarnet tools from RPMs built with `dist/rpm/build-skarnet-rpms.sh` |
-| `--build-s6` | Build the skarnet tools from source into `/usr` instead (not tracked by rpm) |
-| `--rebuild` | Rebuild sdcompat and the standalone tools even if they are built |
-| `--without=LIST` | Do not install these standalone tools (comma-separated: `sdcompat-fdstore`, `sdcompat-notify`, `sdcompat-linkwatch`, `sdcompat-journal-relay`; the last is needed with `--no-journal`) |
-| `--no-journal` / `--journal` | No systemd-journald: rsyslog plus one s6-log directory per service / back to journald |
-| `--no-resolved` / `--resolved` | No systemd-resolved on the s6 boot: NetworkManager handles DNS itself / back to resolved |
-| `--enforcing` | Don't add `enforcing=0` to the s6 boot entry |
-| `--no-grub` | Don't add the boot entry |
-| `--boot-only-s6` / `--no-boot-only-s6` | Boot the s6 entry with sdcompat's own initramfs instead of Fedora's, so no systemd runs at all (see below) / back to Fedora's. Without them a re-run keeps the choice (`/etc/sdcompat/boot-only-s6`) |
-| `--default-s6` / `--default-systemd` | Make the s6 entry the default boot entry, also for kernels installed later / make the systemd entry the default again. Without them a re-run keeps the choice (`/etc/sdcompat/boot-default`). The systemd entry stays in the menu either way |
-| `--uninstall [--remove-s6]` | Remove the entry and installed files (and the source-built skarnet tools); keeps your config |
+| `--journal=yes\|no` | `no`: no systemd-journald, rsyslog plus one s6-log directory per service (needs `rsyslog` and `sdcompat-journal-relay`) / `yes`: back to journald |
+| `--resolved=yes\|no` | `no`: no systemd-resolved on the s6 boot, NetworkManager handles DNS itself / `yes`: back to resolved |
+| `--selinux=enforcing\|permissive` | SELinux mode of the s6 entry (`permissive` adds `enforcing=0`). The first run uses permissive |
+| `--boot-only-s6=yes\|no` | `yes`: boot the s6 entry with sdcompat's own initramfs instead of Fedora's, so no systemd runs at all (see below; needs `mdevd`) / `no`: back to Fedora's |
+| `--default-s6` / `--default-systemd` | Make the s6 entry the default boot entry, also for kernels installed later / make the systemd entry the default again. The systemd entry stays in the menu either way |
+| `--grub=no` | Don't add or update the boot entry |
+| `--uninstall` | Remove the boot entries, the s6 initramfs images, `/etc/s6-linux-init/current`, `/etc/s6.conf` (if init wrote it) and the boot settings; keeps `/etc/sdcompat`. Then `dnf remove` the packages |
 
-The journal and resolved options also switch an existing install (they set `JOURNAL=`/`RESOLVED=` in `/etc/sdcompat/sdcompat.conf`); without them a re-run keeps what is set there. With `--no-resolved`, the s6 oneshot `resolv` writes `/run/NetworkManager/conf.d/99-sdcompat-no-resolved.conf` (`dns=default`, `rc-manager=symlink`) at boot and points the resolved stub file that `/etc/resolv.conf` links to at `/run/NetworkManager/resolv.conf`. Everything is in `/run`, so the systemd boot keeps using resolved. A `dns=` setting in `/etc/NetworkManager` overrides it (NetworkManager reads `/run` first). nss-resolve in `/etc/nsswitch.conf` finds no resolved and falls through to `dns`.
+An option left out keeps what the last run set: `JOURNAL=`/`RESOLVED=` in
+`/etc/sdcompat/sdcompat.conf`, the SELinux mode in
+`/etc/sdcompat/boot-options`, `/etc/sdcompat/boot-only-s6` and
+`/etc/sdcompat/boot-default`. So a plain `sudo sdcompat init` after a package
+upgrade redoes the setup with the same choices.
 
-A kernel-install plugin adds the s6 entry for every new kernel. With
+The journal and resolved options also switch an existing install. With `--resolved=no`, the s6 oneshot `resolv` writes `/run/NetworkManager/conf.d/99-sdcompat-no-resolved.conf` (`dns=default`, `rc-manager=symlink`) at boot and points the resolved stub file that `/etc/resolv.conf` links to at `/run/NetworkManager/resolv.conf`. Everything is in `/run`, so the systemd boot keeps using resolved. A `dns=` setting in `/etc/NetworkManager` overrides it (NetworkManager reads `/run` first). nss-resolve in `/etc/nsswitch.conf` finds no resolved and falls through to `dns`.
+
+The kernel-install plugin adds the s6 entry for every new kernel. With
 `--default-s6` it also keeps the s6 entry the default: on a kernel update
 Fedora's `20-grub.install` names the new systemd entry as the next default
 (`tmp_saved_entry`) and `95-set-boot-entry.install` saves it; the plugin runs
@@ -315,7 +325,7 @@ kernel is removed, it picks the newest s6 entry left. `--uninstall` and
 entry. To reach the systemd entry when the menu is hidden, hold Shift or
 press Esc while GRUB starts.
 
-**`--boot-only-s6`: no systemd at all.** Fedora's initramfs is built by dracut
+**`--boot-only-s6=yes`: no systemd at all.** Fedora's initramfs is built by dracut
 and runs systemd as its PID 1 until it switches to the root. With this
 option the s6 entry boots with sdcompat's own initramfs instead
 (`/boot/initramfs-KVER-s6.img`, built by `/usr/libexec/sdcompat/mkinitramfs`
@@ -348,11 +358,11 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 
 | Role | Under s6 + sdcompat |
 |---|---|
-| Initramfs | Fedora's (dracut, systemd as its PID 1); with `--boot-only-s6` sdcompat's: s6-svscan, mdevd, cryptsetup |
+| Initramfs | Fedora's (dracut, systemd as its PID 1); with `--boot-only-s6=yes` sdcompat's: s6-svscan, mdevd, cryptsetup |
 | PID 1 / services | s6-linux-init, s6-rc, sdcompat |
 | System bus | dbus-daemon (dbus-broker stays for the user bus) |
-| Logging | systemd-journald as an s6 service (`--no-journal`: rsyslog + s6-log) |
-| Network / DNS / time | NetworkManager, systemd-resolved (`--no-resolved`: NetworkManager alone), chrony |
+| Logging | systemd-journald as an s6 service (`--journal=no`: rsyslog + s6-log) |
+| Network / DNS / time | NetworkManager, systemd-resolved (`--resolved=no`: NetworkManager alone), chrony |
 | OOM handling | earlyoom instead of systemd-oomd |
 | Radio state (rfkill) | util-linux `rfkill` from an s6 oneshot instead of systemd-rfkill |
 | Devices | systemd-udevd as a plain service |
@@ -374,11 +384,11 @@ s6-rc stop its services (this first step has its own limit of 2 minutes).
 Services still not down 3 minutes after s6-rc began are killed, so a stop that
 never finishes can't keep the machine up.
 
-The skarnet tarballs are verified against pinned SHA-256 sums (taken from the
-releases on 2026-10-18), both by the RPM build script and by `--build-s6`. When
-built from source, the installed files are recorded in
-`/var/lib/sdcompat/skarnet-files.txt` for `--uninstall --remove-s6`; RPM
-installs are removed with `dnf remove` as usual.
+The skarnet versions and the SHA-256 sums of their tarballs (taken from the
+releases on 2026-10-18) are pinned in one file, `dist/skarnet.versions`,
+which the RPM build script reads: to move to new releases, edit that file
+only. execline is built as one multicall binary, `/usr/bin/execline`, so the
+SELinux module does not list its commands.
 
 ### Running the tests on Fedora
 
@@ -499,7 +509,7 @@ Notes:
   skarnet's sources.
 - **Early-boot services** are `always` exactly when their store says so
   (`flag-essential`, or membership in `sdcompat-sysinit`, which
-  `setup-fedora.sh` changes for syslog, journal-relay and resolv); a reload
+  `sdcompat init` changes for syslog, journal-relay and resolv); a reload
   puts them back if a set moves them.
 - `s6 live start/stop` and `s6 process restart` act below sdcompat: there is
   no systemd job, so units are better started and stopped with `systemctl`.
@@ -525,7 +535,7 @@ and defaults). The most important keys:
 - `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: the repository (s6.conf's `repodir`), the generated store, the set a reload commits and installs, and the bundle its commit makes for the boot (`default`).
 - `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR` and excludes the distribution's `rsyslog.service`, since the s6 `syslog` service is the rsyslogd (`INCLUDE` brings it back).
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
-- `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `sdcompat-sysinit` too, as `setup-fedora.sh --no-resolved` does, or DNS breaks).
+- `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `sdcompat-sysinit` too, as `sdcompat init --resolved=no` does, or DNS breaks).
 - `ALLOW_UIDS`: non-root users allowed to manage units.
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
 - `INCLUDE`: by default lets through the systemd services that work under sdcompat: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight (screen/keyboard brightness kept across boots) and the sleep services. The radio state (rfkill) is kept by the `rfkill` s6 oneshot instead of systemd-rfkill: util-linux `rfkill` restores each device's soft block at boot and the state is saved at shutdown, in systemd-rfkill's own files (`/var/lib/systemd/rfkill/ID_PATH:TYPE`), so the systemd boot entry shares it. Unlike systemd-rfkill it saves only at a clean shutdown, and a device that appears after the boot's udev settle keeps its state.
@@ -561,15 +571,15 @@ crates/                    the core (one Cargo workspace)
                            on-demand instances (dynamic.rs), systemd-run (transient.rs),
                            units wanted by devices (devices.rs), SELinux access
                            checks (access.rs) (tool sdcompatd)
-  sdcompat/                the sdcompat command, which runs the right tool
+  sdcompat/                the sdcompat command, which runs the right tool, and `sdcompat init`
 standalone/                separate projects, each with its own README and spec
   sdcompat-fdstore/        file descriptor store server
   sdcompat-journal-relay/  journald's client sockets to syslog (JOURNAL=no)
   sdcompat-linkwatch/      unblocks s6-rc-update waits that missed a start event
   sdcompat-notify/         systemd-notify replacement
-dist/                      setup-fedora.sh, config, D-Bus policy, s6 services, early-boot helper,
+dist/                      config, D-Bus policy, s6 services, early-boot helper,
                            s6-linux-init skeleton, kernel-install plugin
-packages/                  RPM specs for the core tools (one per tool) and their build script
+packages/                  RPM specs for the core tools (one per tool), their build script, copr-srpms.sh
 dist/rpm/                  specs and build script for the skarnet packages in dist/skarnet.versions
 tests/                     unprivileged sandbox, scenario checks, systemctl wrapper
 ```

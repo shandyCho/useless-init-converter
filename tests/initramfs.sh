@@ -1,5 +1,5 @@
 #!/bin/bash
-# Boot the s6 initramfs (dist/initramfs, setup-fedora.sh --boot-only-s6) in
+# Boot the s6 initramfs (dist/initramfs, sdcompat init --boot-only-s6=yes) in
 # QEMU, unprivileged: a LUKS2 disk with a btrfs root in subvol=root, opened
 # with a passphrase typed on the serial console.
 #

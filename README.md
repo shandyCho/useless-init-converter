@@ -140,7 +140,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 
 ## 아직 구현되지 않은 것
 
-- initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `setup-fedora.sh`가 경고합니다.
+- initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `sdcompat init`이 경고합니다.
 - `Accept=yes` 소켓과 첫 시작의 요청 시(on-demand) 활성화. 서비스는 소켓과 함께 미리 시작됩니다(그 뒤의 재시작만 소켓 활동을 기다립니다).
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
 - `AccuracySec=`(타이머는 묶지 않고 제시간에 실행), `WakeSystem=`, `OnClockChange=`.
@@ -154,23 +154,24 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
   그리고 `system-update.target`이 포함되며, 이 타깃이 원하는 유닛들이 트랜잭션을
   실행합니다. systemd의 system-update 생성기가 하는 전환과 같습니다. 이 유닛들의
   `OnFailure=`/`SuccessAction=`도 따르며, 마지막 재부팅은 sdcompat의 `Reboot`을 거칩니다.
-- **새 커널:** `/etc/kernel/install.d/90-sdcompat.install`이 Fedora의 grub 플러그인이 커널마다
+- **새 커널:** kernel-install 플러그인 `/usr/lib/kernel/install.d/90-sdcompat.install`이 Fedora의 grub 플러그인이 커널마다
   만드는 BLS 항목을 복사하고 `/etc/sdcompat/boot-options`의 s6 옵션을 추가합니다. s6 항목은
   커널 업데이트를 따라가고, 제거된 커널의 항목은 함께 지워집니다.
 
 ## 의존성
 
-**필수** (`dist/setup-fedora.sh`가 설치합니다):
+**필수** (`sdcompat` 패키지들이 요구하므로 dnf가 설치합니다):
 
 | 패키지 | 용도 |
 |---|---|
-| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, 서비스 감독, 서비스 데이터베이스. Fedora에 패키지가 없으므로 `--rpms=DIR` 또는 `--build-s6` |
-| s6-frontend (선택) | `s6` 명령([`s6` 명령](#s6-명령-s6-frontend) 참고). 나머지와 함께 빌드됩니다 |
-| mdevd (선택) | s6 initramfs(`--boot-only-s6`)에서 드라이버를 로드합니다. 나머지와 함께 빌드됩니다 |
+| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, 서비스 감독, 서비스 데이터베이스. Fedora에 패키지가 없으므로 sdcompat COPR에서 받거나 `dist/rpm/build-skarnet-rpms.sh`로 빌드합니다 |
+| s6-frontend (권장) | `s6` 명령([`s6` 명령](#s6-명령-s6-frontend) 참고). 나머지와 함께 빌드됩니다 |
+| mdevd (권장) | s6 initramfs(`--boot-only-s6=yes`)에서 드라이버를 로드합니다. 나머지와 함께 빌드됩니다 |
 | systemd | 설치된 채로 둡니다: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | 시스템 버스(`--systemd-activation`). 사용자 버스는 dbus-broker가 계속 맡습니다 |
 | util-linux | 마운트 유닛과 초기 부팅의 `mount`, `swapon`, `mountpoint`, 무선 상태의 `rfkill` |
-| policycoreutils | SELinux 모듈용 `restorecon`, `semodule` |
+| policycoreutils, policycoreutils-python-utils | SELinux 모듈용 `restorecon`, `semodule`. `sdcompat init`용 `semanage` |
+| grubby | 부팅 항목(`sdcompat init`) |
 
 **실행 중에 불러오는 라이브러리 (권장).** sdcompat이 `dlopen()`으로 불러오므로
 빌드에는 필요 없습니다. 없으면 해당 기능만 빠집니다:
@@ -213,64 +214,68 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 ## Fedora에 배포하기 (먼저 VM에서 해 보세요)
 
-Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd를 패키지로 제공하지 않으므로 먼저
-RPM을 빌드합니다(spec은 `dist/rpm/`에 있으며, 소스는 고정된 SHA-256 값으로 검증합니다).
+패키지를 설치한 뒤 `sdcompat init`으로 부팅을 설정합니다.
 
 ```sh
-dist/rpm/build-skarnet-rpms.sh                        # mock 그룹에 속해 있으면 mock 사용
-dist/setup-fedora.sh --dry-run --rpms=$HOME/rpmbuild-skarnet/rpms
-sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
+sudo dnf copr enable OWNER/sdcompat       # COPR 프로젝트. packages/README.md 참고
+sudo dnf install sdcompat
+sudo sdcompat init --dry-run              # 무엇을 할지 보기(root 없이도 됩니다)
+sudo sdcompat init
 ```
 
-`--build-s6`를 쓰면 대신 소스에서 `/usr`로 설치합니다(rpm이 관리하지 않음).
+`dnf install sdcompat`은 도구 패키지 넷과 skarnet 패키지(skalibs, execline, s6, s6-rc,
+s6-linux-init)를 설치하고, 권장 패키지로 s6-frontend, mdevd, earlyoom, rsyslog와 독립 도구도
+설치합니다. COPR 없이 쓰려면 RPM을 직접 빌드해서(`dist/rpm/build-skarnet-rpms.sh`,
+`packages/build-rpms.sh`, `standalone/*/build-rpm.sh`) `dnf install`하세요.
+[packages/README.md](packages/README.md)를 참고하세요.
 
-스크립트는 GRUB 항목 "Fedora (s6 + sdcompat)"를 **추가**하고, `--default-s6`을 주지
-않으면 일반 systemd 부팅을 기본값으로 둡니다. 덮어쓰는 파일은 `/var/lib/sdcompat/setup-backup/`에 백업합니다.
-하는 일은 다음과 같습니다.
+`sdcompat init`은 GRUB 항목 "Fedora (s6 + sdcompat)"를 **추가**하고, `--default-s6`을 주지
+않으면 일반 systemd 부팅을 기본값으로 둡니다. 아무것도 설치하지 않습니다. 설정에 필요한 패키지가
+없으면 멈추고 `dnf install` 명령을 알려 줍니다. 덮어쓰는 파일은 `/var/lib/sdcompat/setup-backup/`에
+백업합니다. 계획을 보여 주고 물은 뒤 다음을 합니다.
 
-1. `dbus-daemon`, `earlyoom`, `chrony`, `NetworkManager`와 skarnet 도구를 직접 빌드한
-   RPM(`--rpms=DIR`) 또는 소스(`--build-s6`)에서 설치합니다. 버전과 체크섬은
-   `build-skarnet-rpms.sh`와 `--build-s6`가 함께 읽는 파일 하나, `dist/skarnet.versions`에
-   고정되어 있습니다. 새 릴리스로 옮길 때는 그 파일만 고치면 됩니다. execline은 multicall
-   바이너리 하나(`/usr/bin/execline`)로 빌드하므로 SELinux 모듈에 명령 목록이 없습니다.
-2. sdcompat을 빌드하고 설치합니다. `packages/build-rpms.sh`로 만든 sdcompat RPM이 설치되어 있으면 그것을 씁니다.
-3. `/etc/sdcompat/`에 설정, s6 서비스(초기 부팅, dbus-daemon, 데몬, earlyoom), 부팅 옵션을
-   쓰고, `s6` 명령용 `/etc/s6.conf`를 씁니다. systemd-journald는 s6 서비스로 실행됩니다. `--no-journal`을 주면 s6 전용 rsyslog
-   설정을 쓰므로, journald가 `/dev/log`를 쓰는 systemd 부팅에는 영향이 없습니다. 이때 s6 서비스
-   `journal-relay`가 journald의 클라이언트 소켓을 대신 열고 rsyslog로 넘깁니다(MESSAGE, 우선순위, 식별자만 남습니다).
-4. chronyd, NetworkManager, gdm을 활성화하고 `graphical.target`을 기본값으로 설정합니다.
-5. `sdcompat reload --no-update`를 실행해 s6-rc 저장소와 세트 `current`(systemd의 활성화 상태에서 시작)를 만들고 부팅 데이터베이스를 설치한 뒤, 변환 요약을 출력합니다. 직접 작성할 s6-rc 서비스용 `/etc/s6/sources`도 만듭니다.
-6. tty9에 복구용 getty가 있는 `/etc/s6-linux-init/current`를 생성합니다.
-7. SELinux: `bin/init`에 `init_exec_t` 레이블을 붙이고 정책 모듈
-   `dist/selinux/sdcompat.cil`을 불러옵니다. 이 모듈은 s6, s6-rc, s6-linux-init,
+1. 설치된 빌드를 보여 줍니다(`sdcompat --version`). 본체 패키지들은 한 빌드에서 나온 것이어야 합니다.
+2. `/etc/sdcompat/`의 설정(`sdcompat.conf`의 `JOURNAL=`, `RESOLVED=`, `sdcompat-sysinit` 번들의
+   s6 서비스)과 `s6` 명령용 `/etc/s6.conf`를 씁니다. s6 서비스(초기 부팅, dbus-daemon, 데몬,
+   earlyoom)는 패키지가 설치합니다. systemd-journald는 s6 서비스로 실행됩니다. `--journal=no`를
+   주면 s6 전용 rsyslog 설정을 쓰므로, journald가 `/dev/log`를 쓰는 systemd 부팅에는 영향이
+   없습니다. 이때 s6 서비스 `journal-relay`가 journald의 클라이언트 소켓을 대신 열고 rsyslog로
+   넘깁니다(MESSAGE, 우선순위, 식별자만 남습니다).
+3. chronyd, NetworkManager, gdm을 활성화하고 `graphical.target`을 기본값으로 설정합니다.
+4. `sdcompat reload --no-update`를 실행해 s6-rc 저장소와 세트 `current`(systemd의 활성화 상태에서 시작)를 만들고 부팅 데이터베이스를 설치한 뒤, 변환 요약을 출력합니다. 직접 작성할 s6-rc 서비스용 `/etc/s6/sources`도 만듭니다.
+5. tty9에 복구용 getty가 있는 `/etc/s6-linux-init/current`를 생성합니다.
+6. SELinux: `bin/init`에 `init_exec_t` 레이블을 붙이고 정책 모듈
+   (`/usr/share/sdcompat/selinux/sdcompat.cil`, 원본은 `dist/selinux/`)을 불러옵니다. 이 모듈은 s6, s6-rc, s6-linux-init,
    execline 프로그램과 sdcompat 바이너리를 `init_exec_t`로 표시해서, systemd처럼
    s6 트리 전체가 `init_t`에 머물게 합니다. 또 systemd에는 없고 s6만 하는 몇 가지
    동작(catch-all 로거의 fifo, `/run/service`의 링크, /run/sdcompat에 있는
-   `user@UID.service`의 run 스크립트)을 허용합니다. `--uninstall`이 모듈을 제거합니다.
-8. kernel-install 플러그인을 설치하고, 이를 이용해 기본 부팅 항목을 복사하면서
+   `user@UID.service`의 run 스크립트)을 허용합니다. 모듈은 패키지를 설치할 때 불러오고 제거할 때 지웁니다.
+7. s6 부팅 중이면 sdcompatd를 다시 시작해 설치된 빌드로 바꿉니다.
+8. 설치된 커널마다 패키지의 kernel-install 플러그인을 실행해 부팅 항목을 복사하면서
    `init=/usr/sbin/init-selinux`를 추가합니다. plymouth의 종료 유닛은 systemd 전용이라
-   스플래시를 제거합니다(`rhgb quiet`, `plymouth.enable=0`). `enforcing=0`도 추가하며,
-   빼려면 `--enforcing`을 주세요.
+   스플래시를 제거합니다(`rhgb quiet`, `plymouth.enable=0`). 처음 실행할 때는 `enforcing=0`도
+   추가하며, `--selinux=enforcing`을 주면 빠집니다.
 
-그 밖의 옵션:
+옵션:
 
 | 옵션 | 효과 |
 |---|---|
 | `--dry-run` | 모든 명령을 출력만 하고 아무것도 바꾸지 않습니다(root 불필요) |
 | `--yes` | 시작 전에 묻지 않습니다 |
-| `--rpms=DIR` | `dist/rpm/build-skarnet-rpms.sh`로 빌드한 RPM에서 skarnet 도구를 설치합니다 |
-| `--build-s6` | 대신 skarnet 도구를 소스에서 `/usr`로 빌드합니다(rpm이 관리하지 않음) |
-| `--rebuild` | 이미 빌드되어 있어도 sdcompat과 독립 도구를 다시 빌드합니다 |
-| `--without=목록` | 이 독립 도구를 설치하지 않습니다(쉼표로 구분: `sdcompat-fdstore`, `sdcompat-notify`, `sdcompat-linkwatch`, `sdcompat-journal-relay`. 마지막 것은 `--no-journal`에 필요합니다) |
-| `--no-journal` / `--journal` | systemd-journald 없이 rsyslog와 서비스별 s6-log 디렉터리를 씁니다 / journald로 되돌립니다 |
-| `--no-resolved` / `--resolved` | s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / resolved로 되돌립니다 |
-| `--enforcing` | s6 부팅 항목에 `enforcing=0`을 추가하지 않습니다 |
-| `--no-grub` | 부팅 항목을 추가하지 않습니다 |
-| `--boot-only-s6` / `--no-boot-only-s6` | s6 항목을 Fedora의 initramfs 대신 sdcompat의 initramfs로 부팅해 systemd가 전혀 실행되지 않게 합니다(아래 참고) / Fedora의 것으로 되돌립니다. 둘 다 없으면 다시 실행해도 선택이 유지됩니다(`/etc/sdcompat/boot-only-s6`) |
-| `--default-s6` / `--default-systemd` | s6 항목을 기본 부팅 항목으로 합니다(나중에 설치되는 커널에도) / systemd 항목을 다시 기본값으로 합니다. 둘 다 없으면 다시 실행해도 선택이 유지됩니다(`/etc/sdcompat/boot-default`). 어느 쪽이든 systemd 항목은 메뉴에 남습니다 |
-| `--uninstall [--remove-s6]` | 부팅 항목과 설치된 파일(그리고 소스로 빌드한 skarnet 도구)을 제거합니다. 설정은 남깁니다 |
+| `--journal=yes\|no` | `no`: systemd-journald 없이 rsyslog와 서비스별 s6-log 디렉터리를 씁니다(`rsyslog`와 `sdcompat-journal-relay` 필요) / `yes`: journald로 되돌립니다 |
+| `--resolved=yes\|no` | `no`: s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / `yes`: resolved로 되돌립니다 |
+| `--selinux=enforcing\|permissive` | s6 항목의 SELinux 모드(`permissive`이면 `enforcing=0` 추가). 처음 실행할 때는 permissive |
+| `--boot-only-s6=yes\|no` | `yes`: s6 항목을 Fedora의 initramfs 대신 sdcompat의 initramfs로 부팅해 systemd가 전혀 실행되지 않게 합니다(아래 참고, `mdevd` 필요) / `no`: Fedora의 것으로 되돌립니다 |
+| `--default-s6` / `--default-systemd` | s6 항목을 기본 부팅 항목으로 합니다(나중에 설치되는 커널에도) / systemd 항목을 다시 기본값으로 합니다. 어느 쪽이든 systemd 항목은 메뉴에 남습니다 |
+| `--grub=no` | 부팅 항목을 추가하거나 고치지 않습니다 |
+| `--uninstall` | 부팅 항목, s6 initramfs 이미지, `/etc/s6-linux-init/current`, (init이 썼다면) `/etc/s6.conf`, 부팅 설정을 지웁니다. `/etc/sdcompat`은 남깁니다. 그다음 패키지를 `dnf remove`하세요 |
 
-journal과 resolved 옵션은 이미 설치된 시스템도 전환합니다(`/etc/sdcompat/sdcompat.conf`의 `JOURNAL=`/`RESOLVED=`를 설정). 옵션 없이 다시 실행하면 거기 설정된 대로 유지합니다. `--no-resolved`이면 s6 oneshot `resolv`가 부팅 때 `/run/NetworkManager/conf.d/99-sdcompat-no-resolved.conf`(`dns=default`, `rc-manager=symlink`)를 쓰고, `/etc/resolv.conf`가 가리키는 resolved의 stub 파일을 `/run/NetworkManager/resolv.conf`로 연결합니다. 모두 `/run`에 있으므로 systemd 부팅은 계속 resolved를 씁니다. `/etc/NetworkManager`에 `dns=` 설정이 있으면 그것이 우선합니다(NetworkManager는 `/run`을 먼저 읽습니다). `/etc/nsswitch.conf`의 nss-resolve는 resolved가 없으면 `dns`로 넘어갑니다.
+빠진 옵션은 지난 실행의 선택을 유지합니다. `/etc/sdcompat/sdcompat.conf`의
+`JOURNAL=`/`RESOLVED=`, `/etc/sdcompat/boot-options`의 SELinux 모드,
+`/etc/sdcompat/boot-only-s6`, `/etc/sdcompat/boot-default`를 읽습니다. 그래서 패키지를
+업그레이드한 뒤 `sudo sdcompat init`만 실행하면 같은 선택으로 설정을 다시 합니다.
+
+journal과 resolved 옵션은 이미 설치된 시스템도 전환합니다. `--resolved=no`이면 s6 oneshot `resolv`가 부팅 때 `/run/NetworkManager/conf.d/99-sdcompat-no-resolved.conf`(`dns=default`, `rc-manager=symlink`)를 쓰고, `/etc/resolv.conf`가 가리키는 resolved의 stub 파일을 `/run/NetworkManager/resolv.conf`로 연결합니다. 모두 `/run`에 있으므로 systemd 부팅은 계속 resolved를 씁니다. `/etc/NetworkManager`에 `dns=` 설정이 있으면 그것이 우선합니다(NetworkManager는 `/run`을 먼저 읽습니다). `/etc/nsswitch.conf`의 nss-resolve는 resolved가 없으면 `dns`로 넘어갑니다.
 
 kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `--default-s6`이면 s6 항목을
 기본값으로도 유지합니다. 커널을 업데이트하면 Fedora의 `20-grub.install`이 새 systemd 항목을
@@ -280,7 +285,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 커널의 systemd 항목으로 되돌립니다. 메뉴가 숨겨져 있을 때 systemd 항목을 고르려면 GRUB이
 시작할 때 Shift를 누르고 있거나 Esc를 누르세요.
 
-**`--boot-only-s6`: systemd 없이 부팅.** Fedora의 initramfs는 dracut이 만들며, 루트로 전환할
+**`--boot-only-s6=yes`: systemd 없이 부팅.** Fedora의 initramfs는 dracut이 만들며, 루트로 전환할
 때까지 systemd를 PID 1로 실행합니다. 이 옵션을 주면 s6 항목은 sdcompat의 initramfs로
 부팅합니다(`/boot/initramfs-KVER-s6.img`. kernel-install 플러그인이 커널마다
 `/usr/libexec/sdcompat/mkinitramfs`로 만들고, sdcompat 패키지를 업데이트하면 이미지가 있는
@@ -306,11 +311,11 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 
 | 역할 | s6 + sdcompat에서 |
 |---|---|
-| Initramfs | Fedora의 것(dracut, systemd가 PID 1). `--boot-only-s6`이면 sdcompat의 것: s6-svscan, mdevd, cryptsetup |
+| Initramfs | Fedora의 것(dracut, systemd가 PID 1). `--boot-only-s6=yes`이면 sdcompat의 것: s6-svscan, mdevd, cryptsetup |
 | PID 1 / 서비스 | s6-linux-init, s6-rc, sdcompat |
 | 시스템 버스 | dbus-daemon (사용자 버스용으로 dbus-broker는 유지) |
-| 로그 | s6 서비스로 실행되는 systemd-journald (`--no-journal`: rsyslog + s6-log) |
-| 네트워크 / DNS / 시간 | NetworkManager, systemd-resolved(`--no-resolved`: NetworkManager만), chrony |
+| 로그 | s6 서비스로 실행되는 systemd-journald (`--journal=no`: rsyslog + s6-log) |
+| 네트워크 / DNS / 시간 | NetworkManager, systemd-resolved(`--resolved=no`: NetworkManager만), chrony |
 | OOM 처리 | systemd-oomd 대신 earlyoom |
 | 무선 상태(rfkill) | systemd-rfkill 대신 s6 oneshot에서 util-linux `rfkill` |
 | 장치 | 일반 서비스로 실행되는 systemd-udevd |
@@ -328,10 +333,10 @@ systemd-backlight@ 등)를 logind와 D-Bus가 아직 실행 중일 때 `After=`�
 s6-rc가 서비스를 멈춥니다(이 첫 단계에는 따로 2분 제한이 있습니다). s6-rc가 시작하고 3분이 지나도
 멈추지 않은 서비스는 강제로 종료되므로, 끝나지 않는 정지 때문에 기계가 꺼지지 않는 일은 없습니다.
 
-skarnet 타르볼은 RPM 빌드 스크립트와 `--build-s6` 모두에서 고정된 SHA-256 값(2026-10-18
-릴리스 기준)으로 검증합니다. 소스로 빌드한 경우 설치된 파일은 `--uninstall --remove-s6`을
-위해 `/var/lib/sdcompat/skarnet-files.txt`에 기록되며, RPM으로 설치한 경우에는 평소처럼
-`dnf remove`로 제거합니다.
+skarnet 버전과 타르볼의 SHA-256 값(2026-10-18 릴리스 기준)은 RPM 빌드 스크립트가 읽는
+파일 하나, `dist/skarnet.versions`에 고정되어 있습니다. 새 릴리스로 옮길 때는 그 파일만 고치면
+됩니다. execline은 multicall 바이너리 하나(`/usr/bin/execline`)로 빌드하므로 SELinux 모듈에
+명령 목록이 없습니다.
 
 ### Fedora에서 테스트 실행하기
 
@@ -438,7 +443,7 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
   한 바이트 늦게 끝냅니다). 그래서 이 옵션이 없으면 방금 커밋한 세트를 무작위로
   "not up-to-date"라며 거부합니다. sdcompat은 항상 이 옵션을 넘깁니다. 업스트림 버그이며,
   sdcompat은 skarnet의 소스를 패치하지 않습니다.
-- **초기 부팅 서비스**는 스토어가 그렇다고 할 때(`flag-essential`, 또는 `setup-fedora.sh`가
+- **초기 부팅 서비스**는 스토어가 그렇다고 할 때(`flag-essential`, 또는 `sdcompat init`이
   syslog, journal-relay, resolv에 대해 바꾸는 `sdcompat-sysinit` 소속) 정확히 `always`입니다.
   세트가 옮기면 reload가 되돌립니다.
 - `s6 live start/stop`과 `s6 process restart`는 sdcompat 아래에서 동작합니다. systemd
@@ -463,7 +468,7 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 - `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: 저장소(s6.conf의 `repodir`), 생성된 스토어, reload가 커밋하고 설치하는 세트, 그 커밋이 부팅용으로 만드는 번들(`default`).
 - `JOURNAL`: `yes`(기본값)이면 systemd-journald를 실행하고 서비스 출력을 보냅니다. `no`이면 `LOG_DIR` 아래 서비스별 s6-log 디렉터리를 쓰고, s6 `syslog` 서비스가 rsyslogd이므로 배포판의 `rsyslog.service`는 제외합니다(`INCLUDE`로 되살릴 수 있습니다).
 - `LOG_DIR`: `JOURNAL=no`일 때 s6-log 디렉터리가 들어갈 위치.
-- `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`setup-fedora.sh --no-resolved`처럼 `resolv` s6 서비스도 `sdcompat-sysinit`에 넣어야 DNS가 동작합니다).
+- `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`sdcompat init --resolved=no`처럼 `resolv` s6 서비스도 `sdcompat-sysinit`에 넣어야 DNS가 동작합니다).
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 원하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
 - `INCLUDE`: 기본값으로 sdcompat에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight(화면·키보드 밝기를 부팅 사이에 유지), 절전 서비스)를 통과시킵니다. 무선 상태(rfkill)는 systemd-rfkill 대신 `rfkill` s6 oneshot이 유지합니다. 부팅 때 util-linux `rfkill`로 장치마다 soft block을 되살리고, 종료할 때 상태를 systemd-rfkill 자신의 파일(`/var/lib/systemd/rfkill/ID_PATH:TYPE`)에 저장하므로 systemd 부팅 항목과 상태를 공유합니다. systemd-rfkill과 달리 정상 종료할 때만 저장하며, 부팅 중 udev settle 뒤에 나타난 장치는 상태를 그대로 둡니다.
@@ -499,15 +504,15 @@ crates/                    본체 (Cargo 작업공간 하나)
                            요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs),
                            장치가 원하는 유닛(devices.rs), SELinux 접근 검사
                            (access.rs) (도구 sdcompatd)
-  sdcompat/                알맞은 도구를 실행하는 sdcompat 명령
+  sdcompat/                알맞은 도구를 실행하는 sdcompat 명령과 `sdcompat init`
 standalone/                별도 프로젝트. 각각 README와 spec이 있습니다
   sdcompat-fdstore/        파일 디스크립터 저장소 서버
   sdcompat-journal-relay/  journald 클라이언트 소켓을 syslog로 전달(JOURNAL=no)
   sdcompat-linkwatch/      시작 이벤트를 놓친 s6-rc-update 대기를 풀어 줌
   sdcompat-notify/         systemd-notify 대체
-dist/                      setup-fedora.sh, 설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
+dist/                      설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
                            s6-linux-init 골격, kernel-install 플러그인
-packages/                  본체 도구의 RPM spec(도구마다 하나)과 빌드 스크립트
+packages/                  본체 도구의 RPM spec(도구마다 하나), 빌드 스크립트, copr-srpms.sh
 dist/rpm/                  dist/skarnet.versions에 있는 skarnet 패키지의 spec과 빌드 스크립트
 tests/                     비특권 샌드박스, 시나리오 검사, systemctl 래퍼
 ```

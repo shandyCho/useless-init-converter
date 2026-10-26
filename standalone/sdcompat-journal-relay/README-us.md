@@ -28,8 +28,8 @@ sudo install -Dm0755 target/release/sdcompat-journal-relay /usr/libexec/sdcompat
 RPM: `./build-rpm.sh [OUTDIR]` builds `sdcompat-journal-relay.spec` into
 `~/rpmbuild-sdcompat-standalone/rpms` (no sudo; each rebuild gets a newer release, so
 `sudo dnf upgrade` takes it). Install it with
-`sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-journal-relay-*.rpm`; `setup-fedora.sh` then leaves
-the tool to rpm.
+`sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-journal-relay-*.rpm`. `./build-rpm.sh --srpm` makes only
+the source RPM, for a build service such as COPR.
 
 ## Run
 
@@ -43,7 +43,7 @@ sdcompat-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
 
 Don't run it where journald runs (they use the same sockets). With sdcompat
 installed as `JOURNAL=no`, the `journal-relay` s6 service runs it, and then it
-must be installed (`setup-fedora.sh --no-journal` checks).
+must be installed (`sdcompat init --journal=no` checks).
 
 Only MESSAGE, PRIORITY, SYSLOG_FACILITY, SYSLOG_IDENTIFIER and SYSLOG_PID are
 forwarded; other fields are dropped. Messages are dropped too when syslog is

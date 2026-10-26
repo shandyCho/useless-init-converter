@@ -2,8 +2,9 @@
 # All of them build from the same tarball, which packages/build-rpms.sh makes:
 #   Cargo.toml Cargo.lock crates dist vendor .cargo  under sdcompat-VERSION/
 # with .cargo/config.toml pointing [source.crates-io] at vendor/.
-# This one holds the sdcompat command and the boot setup, and pulls in the
-# tools as their own packages.
+# This one holds the sdcompat command (with `sdcompat init`, the boot
+# setup) and the files it sets up from, and pulls in the tools as their own
+# packages.
 Name:           sdcompat
 # Version comes from Cargo.toml and release from the build time and git
 # commit (build-rpms.sh defines them); build with that script, not with
@@ -23,6 +24,9 @@ Requires:       s6-rc
 Requires:       execline
 Requires:       dbus-daemon
 Requires:       util-linux
+# sdcompat init: SELinux file labels and the boot entry.
+Requires:       policycoreutils-python-utils
+Requires:       grubby
 # The tools, each its own RPM from this source.
 Requires:       sdcompat-gen = %{version}-%{release}
 Requires:       sdcompat-runner = %{version}-%{release}
@@ -30,15 +34,15 @@ Requires:       sdcompat-timers = %{version}-%{release}
 Requires:       sdcompatd = %{version}-%{release}
 Requires(post): policycoreutils
 Requires(postun): policycoreutils
-Recommends:     s6-linux-init
 Recommends:     rsyslog
 Recommends:     earlyoom
-# The s6 command; setup-fedora.sh writes /etc/s6.conf for it.
+# The s6 command; sdcompat init writes /etc/s6.conf for it.
 Recommends:     s6-frontend
-# The s6 initramfs (setup-fedora.sh --boot-only-s6) loads drivers with it.
+# The s6 initramfs (sdcompat init --boot-only-s6=yes) loads drivers with it.
 Recommends:     mdevd
 # Separate projects (standalone/), each its own package; sdcompat works
-# without them. sdcompat-journal-relay is needed for JOURNAL=no.
+# without them. sdcompat-journal-relay is needed for JOURNAL=no
+# (sdcompat init --journal=no).
 Recommends:     sdcompat-fdstore
 Recommends:     sdcompat-notify
 Recommends:     sdcompat-linkwatch
@@ -47,9 +51,9 @@ Suggests:       sdcompat-journal-relay
 %description
 Runs Fedora's systemd units with s6 as the init system. This package holds
 the sdcompat command, which passes each subcommand to the tool that handles
-it, and the boot setup: configuration, hand-written s6-rc services, the
-s6-linux-init skeleton, the SELinux policy module and the kernel-install
-plugin. The tools come in their own packages: sdcompat-gen, sdcompat-runner,
+it, and the boot setup: `sudo sdcompat init` adds a GRUB entry that boots
+with s6, from this package's configuration, hand-written s6-rc services,
+s6-linux-init skeleton, SELinux policy module and kernel-install plugin. The tools come in their own packages: sdcompat-gen, sdcompat-runner,
 sdcompat-timers and sdcompatd.
 
 %prep
@@ -77,6 +81,7 @@ cp -a dist/s6 %{buildroot}%{_sysconfdir}/sdcompat/s6
 install -d %{buildroot}%{_datadir}/sdcompat/s6-linux-init
 cp -a dist/s6-linux-init/skel %{buildroot}%{_datadir}/sdcompat/s6-linux-init/skel
 install -Dm0644 dist/rsyslog.conf %{buildroot}%{_datadir}/sdcompat/rsyslog.conf
+install -Dm0644 dist/s6.conf %{buildroot}%{_datadir}/sdcompat/s6.conf
 cp -a dist/initramfs/root %{buildroot}%{_datadir}/sdcompat/initramfs
 install -Dm0755 dist/s6-linux-init/init-selinux %{buildroot}%{_sbindir}/init-selinux
 install -Dm0644 dist/selinux/sdcompat.cil %{buildroot}%{_datadir}/sdcompat/selinux/sdcompat.cil
@@ -99,7 +104,7 @@ if [ -x /usr/sbin/semodule ]; then
 fi
 
 %posttrans
-# The s6 initramfs (setup-fedora.sh --boot-only-s6) holds this package's
+# The s6 initramfs (sdcompat init --boot-only-s6=yes) holds this package's
 # initramfs scripts: rebuild the images there are, so an update reaches the
 # next boot and not only the next kernel. The plugin falls back to Fedora's
 # image if a build fails.
@@ -137,6 +142,10 @@ fi
 %dir %{_localstatedir}/log/sdcompat
 
 %changelog
+* Tue Oct 27 2026 sdcompat developers
+- sdcompat init replaces dist/setup-fedora.sh; ships s6.conf for it
+- Requires policycoreutils-python-utils and grubby (used by sdcompat init)
+
 * Wed Oct 21 2026 sdcompat developers
 - The tools moved to their own packages: sdcompat-gen, sdcompat-runner,
   sdcompat-timers, sdcompatd

@@ -3,9 +3,14 @@
 # sdcompat-timers, sdcompatd) from the core workspace. They share one source
 # tarball with the crates vendored, so rpmbuild needs no network.
 #
-#   packages/build-rpms.sh [OUTDIR]        # default: ~/rpmbuild-sdcompat
+#   packages/build-rpms.sh [OUTDIR]          # default: ~/rpmbuild-sdcompat
+#   packages/build-rpms.sh --srpm [OUTDIR]   # source RPMs only (for COPR)
 #
-# Nothing is installed and no sudo is needed. Afterwards:
+# With --srpm the five source RPMs go to OUTDIR/srpms, each with the version
+# and release in its spec and the vendored tarball inside, so a builder
+# such as COPR builds them as they are (packages/copr-srpms.sh makes them
+# with the other packages'). Nothing is installed and no sudo is needed.
+# Afterwards:
 #   sudo dnf install OUTDIR/rpms/*.rpm       (first time)
 #   sudo dnf upgrade OUTDIR/rpms/*.rpm       (after a rebuild)
 #
@@ -18,6 +23,11 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
+SRPM=0
+if [ "${1:-}" = --srpm ]; then
+    SRPM=1
+    shift
+fi
 OUT=${1:-$HOME/rpmbuild-sdcompat}
 PACKAGES=(sdcompat-runner sdcompatd sdcompat-timers sdcompat-gen sdcompat)
 
@@ -37,7 +47,7 @@ else
     fi
 fi
 
-mkdir -p "$OUT"/{SOURCES,SPECS,SRPMS,RPMS,BUILD,rpms}
+mkdir -p "$OUT"/{SOURCES,SPECS,SRPMS,RPMS,BUILD,rpms,srpms}
 TOP=(--define "_topdir $OUT")
 
 echo "==> sdcompat $VERSION-$RELEASE: making sdcompat-$VERSION.tar.gz with vendored crates"
@@ -57,17 +67,35 @@ EOF
 tar czf "$OUT/SOURCES/sdcompat-$VERSION.tar.gz" -C "$stage" "sdcompat-$VERSION"
 
 for p in "${PACKAGES[@]}"; do
-    echo "==> Building $p"
     {
         printf '%%global sdcompat_version %s\n%%global sdcompat_release %s\n' "$VERSION" "$RELEASE"
         cat "$HERE/$p.spec"
     } >"$OUT/SPECS/$p.spec"
+done
+
+if [ "$SRPM" = 1 ]; then
+    # Only this build's source RPMs in srpms/: the five go to the builder
+    # together (they require each other's version-release).
+    rm -f "$OUT"/srpms/*.src.rpm
+    for p in "${PACKAGES[@]}"; do
+        echo "==> Source RPM $p"
+        rpmbuild "${TOP[@]}" -bs "$OUT/SPECS/$p.spec" >"$OUT/$p.log" 2>&1 \
+            || die "$p failed, see $OUT/$p.log"
+        find "$OUT/SRPMS" -name "$p-$VERSION-$RELEASE.*src.rpm" -exec cp {} "$OUT/srpms/" \;
+    done
+    echo "==> Source RPMs in $OUT/srpms:"
+    ls "$OUT/srpms"
+    exit 0
+fi
+
+for p in "${PACKAGES[@]}"; do
+    echo "==> Building $p"
     rpmbuild "${TOP[@]}" -bb "$OUT/SPECS/$p.spec" >"$OUT/$p.log" 2>&1 \
         || die "$p failed, see $OUT/$p.log"
 done
-# debuginfo and debugsource stay in RPMS/.
 # Only this build's RPMs in rpms/, so `dnf upgrade rpms/*.rpm` gets one set
-# (the five are tied to one version-release); debuginfo stays in RPMS/.
+# (the five are tied to one version-release); debuginfo and debugsource
+# stay in RPMS/.
 rm -f "$OUT"/rpms/*.rpm
 find "$OUT/RPMS" -name "*-$VERSION-$RELEASE.*.rpm" ! -name '*-debuginfo-*' ! -name '*-debugsource-*' \
     -exec cp {} "$OUT/rpms/" \;
