@@ -28,6 +28,9 @@ pub async fn connect(cfg: &Config) -> Result<Connection, String> {
     b.build().await.map_err(|e| format!("connecting to D-Bus: {e}"))
 }
 
+/// sdcompat's own methods, on the manager's object path (not systemd's).
+pub const SDCOMPAT_IFACE: &str = "org.sdcompat.Manager";
+
 pub async fn manager_call<B>(conn: &Connection, method: &str, body: &B) -> Result<zbus::Message, String>
 where
     B: serde::Serialize + zbus::zvariant::DynamicType,

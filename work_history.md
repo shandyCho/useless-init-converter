@@ -6517,3 +6517,70 @@ power-off (one per logged-in UID).
 3. Cleanup of the test unit: `sudo rm
    /etc/systemd/system/sdc-stoptest.service /var/tmp/sdc-stop.log; sudo
    systemctl daemon-reload`.
+
+## 2026-10-26, part 22: on-demand instances stop before s6-rc's services
+
+### Cause confirmed (owner copied the logs to ~/sdcompat-logs/2239)
+
+- Console log: `sdcompat[user@0.service]: closing the PAM session took
+  45.0 s` (22:40:44.88), then the same for user@1000 (22:41:30.20). No
+  dbus-daemon activation or other bus traffic in either 45 s. So the wait
+  is inside pam_close_session, and 45.0 s is sd-varlink's default
+  timeout: pam_systemd (systemd 262) releases the session over varlink on
+  /run/systemd/io.systemd.Login. logind was down since 22:39:59.91, but
+  its listening socket stays in sdcompat's fd store (the runner keeps a
+  service's sockets there across stops; no RemoveOnStop=), so the connect
+  succeeds and nobody answers. The part 21 hypothesis holds.
+- Root cause is the order: user@/user-runtime-dir@ are
+  `After=systemd-logind.service`, but as on-demand instances s6-rc doesn't
+  know them, and sdcompatd stopped them only when s6-rc took sdcompatd
+  down, after logind.
+
+### Fix (owner chose "reorder the stops" over closing held sockets)
+
+- New `sdcompatd stop-instances`: calls `StopInstances` on interface
+  `org.sdcompat.Manager` (sdcompat_client::SDCOMPAT_IFACE) at the manager
+  path, no D-Bus call timeout. The daemon runs stop_dynamic_at_shutdown
+  and replies when it is done. mac_check "halt" + require_privileged;
+  refused unless the `shutting-down` marker exists.
+- rc.shutdown: after the marker and the kmsg line, `timeout -s KILL 120
+  /usr/libexec/sdcompat/sdcompatd stop-instances` (kmsg line on 137 or
+  failure), then `s6-rc -bDa` as before. What it leaves, the daemon's
+  SIGTERM path still stops (dyn_stop entries are removed once stopped, so
+  nothing stops twice).
+- Why not a s6-rc oneshot depending on logind/dbus: it would have to
+  depend on the template units' After= services, and bringing it up
+  would start those (s6-rc starts dependencies). The early call keeps
+  every s6-rc service up while the instances stop, which is systemd's
+  order for these leaf units.
+- README/README-us: the shutdown paragraph.
+
+### Tests
+
+- cargo build (no warnings), cargo test passed; standalone tests passed.
+- Sandbox 250/250, SANDBOX_JOURNAL=no 257/257, SANDBOX_FDSTORE=no
+  250/250. New: stop-instances exits 0 with no output, the daemon still
+  runs after it, prep@c's ExecStop= (with a concurrent StopUnit and an
+  activation) runs once and within 5 s; refused without the marker; a
+  prep@e left over is stopped by the daemon's SIGTERM; prep@c's ExecStop=
+  not repeated.
+- bash -n and shellcheck -S warning on rc.shutdown and check.sh.
+- Not tested: rc.shutdown itself (fixed path), SELinux on init_t ->
+  sdcompatd private socket at shutdown, a real power-off.
+
+### Current state
+
+Committed, sandbox-verified; not on a real boot. The new rc.shutdown
+reaches /etc/s6-linux-init/current only when setup reruns
+s6-linux-init-maker (the RPM's %post doesn't).
+
+### Next steps
+
+1. Owner: rebuild/upgrade RPMs, rerun setup (`sudo dist/setup-fedora.sh
+   --enforcing`), check `grep stop-instances
+   /etc/s6-linux-init/current/scripts/rc.shutdown`. Boot s6, log in,
+   `sudo true` (root session), power off, boot s6: TESTING "Previous
+   shutdown" (no `stopping ... took`, no `closing the PAM session took`,
+   kernel log without `stop-instances failed`), and `ausearch -m AVC -ts
+   boot`.
+2. Test unit cleanup from part 21 if not done.

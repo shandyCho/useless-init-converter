@@ -11,8 +11,18 @@
 # limit: a change that never ends (the boot's, or a start sdcompatd began
 # before the marker, of a unit with TimeoutStartSec=infinity) would hold
 # it for good. So timeout(1) bounds the whole call (137: killed).
+# First sdcompatd stops the on-demand instances (user@UID, ...), which
+# s6-rc doesn't know: they are ordered after s6-rc services such as logind
+# (stopped after it, each user@'s PAM close waited 45 s). Bounded too; what
+# it leaves, sdcompatd stops again when s6-rc takes it down.
 mkdir -p /run/sdcompat && : > /run/sdcompat/shutting-down
 echo "sdcompat: shutdown starts" > /dev/kmsg 2>/dev/null
+timeout -s KILL 120 /usr/libexec/sdcompat/sdcompatd stop-instances
+case $? in
+0) ;;
+137) echo "sdcompat: on-demand instances still not down after 120 s" > /dev/kmsg 2>/dev/null ;;
+*) echo "sdcompat: sdcompatd stop-instances failed" > /dev/kmsg 2>/dev/null ;;
+esac
 timeout -s KILL 180 s6-rc -v2 -t 180000 -bDa change
 rc=$?
 case $rc in

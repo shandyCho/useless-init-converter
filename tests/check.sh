@@ -801,13 +801,17 @@ fi
 sleep 0.5
 [ ! -e "$R/late.out" ] && ok "nothing started during shutdown" || bad "late.service started during shutdown"
 t0=$(date +%s)
-kill "$(cat "$W/daemon.pid")"
+# As rc.shutdown: first stop-instances, while the daemon (and, on a real
+# system, logind) still runs.
+"$DAEMON" --config "$W/sdcompat.conf" stop-instances > "$W/stop-instances.out" 2>&1 &
+sipid=$!
 # A StopUnit for the same unit while the daemon stops it (the bus is still
 # served then) waits for that stop instead of running ExecStop= again.
 call StopUnit ss prep@c.service replace >/dev/null 2>&1
-tries=60
-while [ $tries -gt 0 ] && ! grep -qx "down c" "$R/prep.out"; do tries=$((tries - 1)); sleep 0.2; done
+wait $sipid
+expect_eq "stop-instances" "$?:$(cat "$W/stop-instances.out")" "0:"
 t1=$(date +%s)
+kill -0 "$(cat "$W/daemon.pid")" && ok "the daemon still runs after stop-instances" || bad "daemon gone after stop-instances"
 # Its ExecStop= made an activation: answered while the daemon stops units.
 [ $((t1 - t0)) -lt 5 ] && ok "bus answered while stopping at shutdown" || bad "prep@c's stop took $((t1 - t0)) s"
 sleep 0.5
@@ -815,6 +819,22 @@ expect_eq "prep@c's ExecStop= ran once" "$(grep -cx "down c" "$R/prep.out")" "1"
 grep -qx "down c" "$R/prep.out" && ok "prep@c's ExecStop= ran, started by an earlier daemon" || bad "prep@c not stopped at shutdown"
 [ ! -e "$R/run/dyn-oneshot/prep@c.service" ] && ok "its marker is gone" || bad "prep@c marker left"
 expect_eq "on-demand longrun's ExecStop= ran at shutdown" "$(cat "$R/prepl.out" 2>/dev/null)" "down d"
+rm -f "$R/run/shutting-down"
+if "$DAEMON" --config "$W/sdcompat.conf" stop-instances 2>/dev/null; then
+    bad "stop-instances accepted outside a shutdown"
+else
+    ok "stop-instances refused outside a shutdown"
+fi
+# What stop-instances left (it failed, or was killed after its time limit),
+# the daemon stops when s6-rc takes it down.
+call StartUnit ss prep@e.service replace
+expect_state prep@e.service active/exited
+: > "$R/run/shutting-down"
+kill "$(cat "$W/daemon.pid")"
+tries=60
+while [ $tries -gt 0 ] && ! grep -qx "down e" "$R/prep.out"; do tries=$((tries - 1)); sleep 0.2; done
+grep -qx "down e" "$R/prep.out" && ok "the daemon's SIGTERM stops what is left" || bad "prep@e not stopped at the daemon's SIGTERM"
+expect_eq "prep@c's ExecStop= not run again" "$(grep -cx "down c" "$R/prep.out")" "1"
 rm -f "$R/run/shutting-down"
 restart_daemon "$W/sdcompat.conf"
 expect_state prep@c.service inactive/dead

@@ -324,9 +324,10 @@ impl Daemon {
     /// Shutdown: s6-rc doesn't know the on-demand instances, so run their
     /// ExecStop= here, as systemd stops every unit (systemd-backlight@ saves
     /// the brightness then): active oneshots, and longruns that have one
-    /// (the others just get the final kill). sdcompatd goes down before the
-    /// filesystems. Instances started by an earlier daemon come from
-    /// load_dynamic().
+    /// (the others just get the final kill). rc.shutdown asks for this first
+    /// (StopInstances), while logind and the bus still run; the SIGTERM from
+    /// s6-rc runs it again for what is left. Instances started by an earlier
+    /// daemon come from load_dynamic().
     pub(super) async fn stop_dynamic_at_shutdown(&self) {
         let ids: Vec<(String, Kind)> = self
             .dynamic

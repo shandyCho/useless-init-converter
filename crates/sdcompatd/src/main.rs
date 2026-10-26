@@ -25,6 +25,10 @@ usage: sdcompatd [--config PATH] [COMMAND] [ARGS]
                 when ready. This is also what sdcompatd does with no command.
   start|stop|restart UNIT...
                 ask the running daemon (private socket or bus)
+  stop-instances
+                at shutdown (the shutting-down marker exists): ask the
+                daemon to stop the on-demand instances (user@UID, ...) now,
+                before s6-rc stops the services they are ordered after
   log UNIT [-f] show (or follow) a service's log: journalctl -u, or its
                 s6-log directory with JOURNAL=no
 ";
@@ -77,6 +81,31 @@ fn client(cfg: &Config, cmd: &str, units: &[String]) -> i32 {
             }
         }
         code
+    })
+}
+
+/// rc.shutdown: stop the on-demand instances while the s6-rc services they
+/// are ordered after still run. Waits for them (no D-Bus call timeout).
+fn stop_instances(cfg: &Config) -> i32 {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    rt.block_on(async {
+        let conn = sdcompat_client::connect(cfg).await.unwrap_or_else(|e| die(&e));
+        let r = conn
+            .call_method(
+                Some("org.freedesktop.systemd1"),
+                "/org/freedesktop/systemd1",
+                Some(sdcompat_client::SDCOMPAT_IFACE),
+                "StopInstances",
+                &(),
+            )
+            .await;
+        match r {
+            Ok(_) => 0,
+            Err(e) => {
+                eprintln!("sdcompatd: stop-instances: {e}");
+                1
+            }
+        }
     })
 }
 
@@ -133,6 +162,7 @@ fn main() {
         "daemon" => serve(cfg, rest),
         o if o.starts_with("--") => serve(cfg, &args),
         "start" | "stop" | "restart" => client(&cfg, &cmd, rest),
+        "stop-instances" => stop_instances(&cfg),
         "log" => log(&cfg, rest),
         other => die(&format!("unknown command {other} (see sdcompatd help)")),
     };

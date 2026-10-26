@@ -59,6 +59,7 @@ const E_INVALID_ARGS: &str = "org.freedesktop.DBus.Error.InvalidArgs";
 const E_READ_ONLY: &str = "org.freedesktop.DBus.Error.PropertyReadOnly";
 const E_NOT_SUPPORTED: &str = "org.freedesktop.DBus.Error.NotSupported";
 const E_FAILED: &str = "org.freedesktop.DBus.Error.Failed";
+use sdcompat_client::SDCOMPAT_IFACE;
 
 pub struct Job {
     pub id: u32,
@@ -1319,6 +1320,20 @@ impl Daemon {
                 };
             }
             _ => {}
+        }
+        if path == MANAGER_PATH && iface == SDCOMPAT_IFACE && member == "StopInstances" {
+            // rc.shutdown, before s6-rc stops anything: the on-demand
+            // instances are ordered after s6-rc services (user@ and
+            // user-runtime-dir@ After=systemd-logind.service), which s6-rc
+            // doesn't know. Stopped after logind, user@'s PAM close waited
+            // 45 s on logind's varlink socket, per user.
+            self.mac_check(c, msg, None, "halt").await?;
+            self.require_privileged(c, msg).await?;
+            if !self.cfg.run_dir.join("shutting-down").exists() {
+                return Err(err(E_FAILED, "the system is not shutting down".to_string()));
+            }
+            self.stop_dynamic_at_shutdown().await;
+            return self.reply(c, msg, &()).await;
         }
         if path == MANAGER_PATH && (iface.is_empty() || iface == MANAGER_IFACE) {
             return self.manager_method(c, msg, member).await;
