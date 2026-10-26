@@ -32,7 +32,8 @@
 #   --build-s6      instead build them from source into /usr (untracked by rpm)
 #   --rebuild       rebuild sdcompat and its tools even if they are built
 #   --without=LIST  do not install these standalone tools (comma-separated):
-#                   sdcompat-fdstore, sdcompat-notify, sdcompat-journal-relay
+#                   sdcompat-fdstore, sdcompat-notify, sdcompat-journal-relay,
+#                   sdcompat-linkwatch
 #                   (the last one is needed with --no-journal)
 #   --remove-s6     with --uninstall: also remove the skarnet tools this script built
 #   --no-journal    no systemd-journald: rsyslog + per-service s6-log directories
@@ -74,7 +75,7 @@ RPM_DIR=""
 # The core's tools (the Cargo workspace in $REPO) and the standalone ones
 # (each its own project in $REPO/standalone).
 CORE_TOOLS=(sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd)
-STANDALONE=(sdcompat-fdstore sdcompat-notify sdcompat-journal-relay)
+STANDALONE=(sdcompat-fdstore sdcompat-notify sdcompat-journal-relay sdcompat-linkwatch)
 WITHOUT=""
 BOOT_DEFAULT_FILE=/etc/sdcompat/boot-default
 BOOT_DEFAULT=""
@@ -671,8 +672,13 @@ build_database() {
 # takes over without a reboot. The daemon keeps dynamic units, the fd store
 # and device state across a restart. sdcompat-fdstore and journal-relay are
 # left alone: restarting them would drop held fds and log sockets, so they
-# keep the old binary until the next boot.
+# keep the old binary until the next boot. sdcompat-linkwatch keeps no
+# state: it is restarted too.
 restart_daemon() {
+    local lw=/run/s6-rc/servicedirs/sdcompat-linkwatch
+    if [ -d "$lw" ] && { [ "$DRY" = 1 ] || s6-svok "$lw" 2>/dev/null; }; then
+        run s6-svc -r "$lw"
+    fi
     local svc=/run/s6-rc/servicedirs/sdcompatd
     [ -d "$svc" ] || return 0
     [ "$DRY" = 1 ] || s6-svok "$svc" 2>/dev/null || return 0

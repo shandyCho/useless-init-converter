@@ -831,6 +831,29 @@ call Reload
 expect_eq "UnitFileState of an active service" "$(prop hello.service Unit UnitFileState)" "enabled"
 [ -n "$(rx hello.service.log)" ] && expect_eq "the logger is active again with its service" "$(rx hello.service.log)" "active"
 
+section "linkwatch"
+# A supervisor that started before anyone listened: its "s" went to nobody.
+# A waiter named s6-rc-update (s6-ftrig-wait under that name) waits on it as
+# s6_supervise_link_names() would; the sandbox's sdcompat-linkwatch
+# (--after 3) sends the missed event. Under its own name it is left alone.
+mkdir -p "$R/lw/svc" "$W/lw-bin"
+printf '#!/bin/sh\nexec sleep 1000\n' > "$R/lw/svc/run"
+chmod +x "$R/lw/svc/run"
+touch "$R/lw/svc/down"
+s6-supervise "$R/lw/svc" >"$W/lw-supervise.log" 2>&1 &
+tries=25
+while [ $tries -gt 0 ] && ! s6-svok "$R/lw/svc" 2>/dev/null; do tries=$((tries - 1)); sleep 0.2; done
+cp "$(command -v s6-ftrig-wait)" "$W/lw-bin/s6-rc-update"
+t0=$(date +%s)
+"$W/lw-bin/s6-rc-update" -t 20000 "$R/lw/svc/event" s >/dev/null 2>&1
+rc=$? took=$(($(date +%s) - t0))
+[ $rc = 0 ] && [ $took -lt 15 ] && ok "a missed start event is sent to a waiting s6-rc-update (${took} s)" \
+    || bad "waiting s6-rc-update: exit $rc after $took s (see $W/linkwatch.log)"
+s6-ftrig-wait -t 5000 "$R/lw/svc/event" s >/dev/null 2>&1 \
+    && bad "linkwatch sent to a waiter that is not s6-rc-update or s6-svlink" \
+    || ok "other waiters are left alone"
+s6-svc -x "$R/lw/svc"
+
 section "end state"
 # A job that never finishes (logind's stop of user@0 did) holds everyone
 # waiting behind it.

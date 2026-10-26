@@ -58,10 +58,12 @@ are not packaged. The packages and how to build them:
 |---|---|---|
 | `sdcompat-fdstore` | Holds `FDSTORE=` fds and listening sockets in a process of its own. Reads no configuration or unit files. | sdcompatd holds them itself; they are lost when sdcompatd restarts. |
 | `sdcompat-journal-relay` | With `JOURNAL=no`: listens on journald's client sockets (`/run/systemd/journal/socket` and `stdout`) and forwards to rsyslog. dbus-broker, the session bus of `systemd --user`, refuses to start without them. | Needed for `JOURNAL=no`; nothing with `JOURNAL=yes` (the default). |
+| `sdcompat-linkwatch` | Unblocks a daemon-reload (`s6-rc-update`) or an `s6-svlink` that waits for a new supervisor's start event which came before it listened (an s6 race; the wait has no end and holds s6-rc's lock). Looks at `/proc` every 2 s and acts on a wait older than 10 s. | Such a reload hangs, and every s6-rc command after it, until the stuck `s6-rc-update` is killed. |
 | `sdcompat-notify` | `systemd-notify` replacement; works under any service manager that sets `$NOTIFY_SOCKET`. | Use `systemd-notify`, which stays installed. |
 
 How each one is built, installed and run: [standalone/sdcompat-fdstore](standalone/sdcompat-fdstore/README-us.md),
 [standalone/sdcompat-journal-relay](standalone/sdcompat-journal-relay/README-us.md),
+[standalone/sdcompat-linkwatch](standalone/sdcompat-linkwatch/README-us.md),
 [standalone/sdcompat-notify](standalone/sdcompat-notify/README-us.md).
 
 ## What is implemented
@@ -282,7 +284,7 @@ Other options:
 | `--rpms=DIR` | Install the skarnet tools from RPMs built with `dist/rpm/build-skarnet-rpms.sh` |
 | `--build-s6` | Build the skarnet tools from source into `/usr` instead (not tracked by rpm) |
 | `--rebuild` | Rebuild sdcompat and the standalone tools even if they are built |
-| `--without=LIST` | Do not install these standalone tools (comma-separated: `sdcompat-fdstore`, `sdcompat-notify`, `sdcompat-journal-relay`; the last is needed with `--no-journal`) |
+| `--without=LIST` | Do not install these standalone tools (comma-separated: `sdcompat-fdstore`, `sdcompat-notify`, `sdcompat-linkwatch`, `sdcompat-journal-relay`; the last is needed with `--no-journal`) |
 | `--no-journal` / `--journal` | No systemd-journald: rsyslog plus one s6-log directory per service / back to journald |
 | `--no-resolved` / `--resolved` | No systemd-resolved on the s6 boot: NetworkManager handles DNS itself / back to resolved |
 | `--enforcing` | Don't add `enforcing=0` to the s6 boot entry |
@@ -546,6 +548,7 @@ crates/                    the core (one Cargo workspace)
 standalone/                separate projects, each with its own README and spec
   sdcompat-fdstore/        file descriptor store server
   sdcompat-journal-relay/  journald's client sockets to syslog (JOURNAL=no)
+  sdcompat-linkwatch/      unblocks s6-rc-update waits that missed a start event
   sdcompat-notify/         systemd-notify replacement
 dist/                      setup-fedora.sh, config, D-Bus policy, s6 services, early-boot helper,
                            s6-linux-init skeleton, kernel-install plugin

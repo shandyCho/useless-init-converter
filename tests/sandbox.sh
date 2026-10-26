@@ -9,19 +9,21 @@
 # daemon then holds the fds itself).
 #
 # Needs `cargo build` in this workspace; the standalone tools it uses
-# (sdcompat-notify, sdcompat-fdstore, sdcompat-journal-relay) are built here.
+# (sdcompat-notify, sdcompat-fdstore, sdcompat-journal-relay,
+# sdcompat-linkwatch) are built here.
 set -eu
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 BIN=$TOP/target/debug
 GEN=$BIN/sdcompat-gen
 DAEMON=$BIN/sdcompatd
-for p in sdcompat-notify sdcompat-fdstore sdcompat-journal-relay; do
+for p in sdcompat-notify sdcompat-fdstore sdcompat-journal-relay sdcompat-linkwatch; do
     cargo build --quiet --manifest-path "$TOP/standalone/$p/Cargo.toml"
 done
 NOTIFY=$TOP/standalone/sdcompat-notify/target/debug/sdcompat-notify
 FDSTORE=$TOP/standalone/sdcompat-fdstore/target/debug/sdcompat-fdstore
 RELAY=$TOP/standalone/sdcompat-journal-relay/target/debug/sdcompat-journal-relay
+LINKWATCH=$TOP/standalone/sdcompat-linkwatch/target/debug/sdcompat-linkwatch
 W=${1:-${TMPDIR:-/tmp}/sdcompat-sandbox}
 # Sockets need short paths (sun_path is 108 bytes).
 R=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sdc-test
@@ -680,6 +682,10 @@ with open(sys.argv[2], "ab", buffering=0) as f:
 fi
 
 s6-svscan "$W/scan" >"$W/svscan.log" 2>&1 &
+echo $! >> "$W/pids"
+# As the sdcompat-linkwatch service, quicker, and only for this sandbox's
+# service directories.
+"$LINKWATCH" --after 3 --interval 1 --under "$R" >"$W/linkwatch.log" 2>&1 &
 echo $! >> "$W/pids"
 sleep 0.3
 s6-rc-init -c "$W/state/compiled" -l "$R/live" "$W/scan"

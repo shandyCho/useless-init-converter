@@ -55,10 +55,12 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 |---|---|---|
 | `sdcompat-fdstore` | `FDSTORE=` fd와 리스닝 소켓을 별도 프로세스에서 보관합니다. 설정 파일과 유닛 파일을 읽지 않습니다. | sdcompatd가 직접 보관합니다. sdcompatd를 다시 시작하면 사라집니다. |
 | `sdcompat-journal-relay` | `JOURNAL=no`일 때 journald의 클라이언트 소켓(`/run/systemd/journal/socket`과 `stdout`)을 열고 받은 내용을 rsyslog로 넘깁니다. `systemd --user`의 세션 버스인 dbus-broker는 이 소켓이 없으면 시작하지 않습니다. | `JOURNAL=no`에는 꼭 필요합니다. `JOURNAL=yes`(기본값)에서는 영향이 없습니다. |
+| `sdcompat-linkwatch` | 새 감독자(supervisor)의 시작 이벤트가 듣기 전에 와 버려서 기다리기만 하는 daemon-reload(`s6-rc-update`)나 `s6-svlink`를 풀어 줍니다(s6의 경쟁 조건입니다. 이 대기는 끝나지 않고 s6-rc의 잠금을 쥐고 있습니다). 2초마다 `/proc`를 보고 10초 넘은 대기에 손을 씁니다. | 그런 reload가 멈추고, 그 뒤의 모든 s6-rc 명령도 멈춘 `s6-rc-update`를 죽일 때까지 멈춥니다. |
 | `sdcompat-notify` | `systemd-notify` 대체입니다. `$NOTIFY_SOCKET`을 설정하는 어떤 서비스 관리자 아래에서도 동작합니다. | 계속 설치되어 있는 `systemd-notify`를 쓰면 됩니다. |
 
 각각의 빌드·설치·실행 방법: [standalone/sdcompat-fdstore](standalone/sdcompat-fdstore/README.md),
 [standalone/sdcompat-journal-relay](standalone/sdcompat-journal-relay/README.md),
+[standalone/sdcompat-linkwatch](standalone/sdcompat-linkwatch/README.md),
 [standalone/sdcompat-notify](standalone/sdcompat-notify/README.md).
 
 ## 구현된 기능
@@ -256,7 +258,7 @@ sudo dist/setup-fedora.sh --rpms=$HOME/rpmbuild-skarnet/rpms
 | `--rpms=DIR` | `dist/rpm/build-skarnet-rpms.sh`로 빌드한 RPM에서 skarnet 도구를 설치합니다 |
 | `--build-s6` | 대신 skarnet 도구를 소스에서 `/usr`로 빌드합니다(rpm이 관리하지 않음) |
 | `--rebuild` | 이미 빌드되어 있어도 sdcompat과 독립 도구를 다시 빌드합니다 |
-| `--without=목록` | 이 독립 도구를 설치하지 않습니다(쉼표로 구분: `sdcompat-fdstore`, `sdcompat-notify`, `sdcompat-journal-relay`. 마지막 것은 `--no-journal`에 필요합니다) |
+| `--without=목록` | 이 독립 도구를 설치하지 않습니다(쉼표로 구분: `sdcompat-fdstore`, `sdcompat-notify`, `sdcompat-linkwatch`, `sdcompat-journal-relay`. 마지막 것은 `--no-journal`에 필요합니다) |
 | `--no-journal` / `--journal` | systemd-journald 없이 rsyslog와 서비스별 s6-log 디렉터리를 씁니다 / journald로 되돌립니다 |
 | `--no-resolved` / `--resolved` | s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / resolved로 되돌립니다 |
 | `--enforcing` | s6 부팅 항목에 `enforcing=0`을 추가하지 않습니다 |
@@ -494,6 +496,7 @@ crates/                    본체 (Cargo 작업공간 하나)
 standalone/                별도 프로젝트. 각각 README와 spec이 있습니다
   sdcompat-fdstore/        파일 디스크립터 저장소 서버
   sdcompat-journal-relay/  journald 클라이언트 소켓을 syslog로 전달(JOURNAL=no)
+  sdcompat-linkwatch/      시작 이벤트를 놓친 s6-rc-update 대기를 풀어 줌
   sdcompat-notify/         systemd-notify 대체
 dist/                      setup-fedora.sh, 설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
                            s6-linux-init 골격, kernel-install 플러그인

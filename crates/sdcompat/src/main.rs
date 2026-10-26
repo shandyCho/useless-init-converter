@@ -20,6 +20,7 @@ Each command is handled by one sdcompat tool (in /usr/libexec/sdcompat):
   sdcompat-fdstore    fdstore           (standalone, optional)
   sdcompat-journal-relay  journal-relay (standalone, optional)
   sdcompat-notify     notify            (standalone, optional)
+  sdcompat-linkwatch  linkwatch         (standalone, optional)
 
 Run `sdcompat COMMAND --help` or see the tool's own usage for details.
 ";
@@ -35,6 +36,7 @@ fn tool_for(cmd: &str) -> Option<(&'static str, bool)> {
         "fdstore" => ("sdcompat-fdstore", false),
         "journal-relay" => ("sdcompat-journal-relay", false),
         "notify" => ("sdcompat-notify", false),
+        "linkwatch" => ("sdcompat-linkwatch", false),
         _ => return None,
     })
 }
@@ -54,7 +56,7 @@ fn tool_path(name: &str) -> PathBuf {
 /// The core tools, whose builds should match this one.
 const CORE_TOOLS: [&str; 4] = ["sdcompat-gen", "sdcompat-runner", "sdcompat-timers", "sdcompatd"];
 /// The standalone tools: separate projects with their own versions.
-const STANDALONE: [&str; 3] = ["sdcompat-fdstore", "sdcompat-journal-relay", "sdcompat-notify"];
+const STANDALONE: [&str; 4] = ["sdcompat-fdstore", "sdcompat-journal-relay", "sdcompat-linkwatch", "sdcompat-notify"];
 
 /// `sdcompat --version`: this build, each core tool's (from its own
 /// --version) and whether the standalone tools are installed. Exits 1 when a

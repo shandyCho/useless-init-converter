@@ -41,6 +41,7 @@ Recommends:     mdevd
 # without them. sdcompat-journal-relay is needed for JOURNAL=no.
 Recommends:     sdcompat-fdstore
 Recommends:     sdcompat-notify
+Recommends:     sdcompat-linkwatch
 Suggests:       sdcompat-journal-relay
 
 %description
