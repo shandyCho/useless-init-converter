@@ -127,5 +127,5 @@
 ; systemd-rfkill's own files, so the systemd boot shares them. It runs in
 ; init_t, which may only stat that directory's files.
 (allow init_t systemd_rfkill_var_lib_t (dir (getattr search open read write add_name remove_name)))
-(allow init_t systemd_rfkill_var_lib_t (file (create getattr open read write append truncate setattr)))
+(allow init_t systemd_rfkill_var_lib_t (file (create getattr open read write append setattr)))
 (typetransition init_t init_var_lib_t dir "rfkill" systemd_rfkill_var_lib_t)
