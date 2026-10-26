@@ -6267,3 +6267,31 @@ until the owner installs the RPMs.
    files), then `rpm -qf /usr/libexec/sdcompat/*`: every file owned. The
    running services keep the old binaries until restarted (`s6-svc -r`
    on each, or the next boot).
+
+## 2026-10-26, part 17: standalone RPMs installed and booted
+
+Owner built the four standalone RPMs at `6060b2b`, installed them, re-ran
+setup-fedora.sh and rebooted into s6. No code changes.
+
+### Results
+
+- `rpm -qf /usr/libexec/sdcompat/*`: every file owned (core at
+  `1df2507`, standalone at `6060b2b`); `rpm -V` of the four: clean, so
+  setup-fedora.sh left the RPM-owned files alone.
+- `tests/linkwatch-check.sh`: five `ok:`, no denials.
+  `systemctl is-system-running`: `running`; no failed units; no
+  `is not installed` in /run/uncaught-logs/current.
+- `ausearch -m AVC -ts boot | audit2allow`: only `systemd_hostnamed_t
+  proc_psi_t:dir search`, the /proc/pressure denial known since part 1
+  and attributed to Fedora's policy, never checked on a systemd boot.
+- Not yet checked (wrong commands in the instructions given): s6-svstat
+  takes one service dir, so only the first was shown (fdstore up);
+  `pgrep -x` cannot match names over 15 characters.
+
+### Next steps
+
+1. Owner: s6-svstat each of sdcompat-fdstore, sdcompat-linkwatch,
+   journal-relay separately, and `readlink /proc/PID/exe` with the pid
+   from `s6-svstat -p`: /usr/libexec/sdcompat/NAME, not `(deleted)`.
+2. Owner: on the systemd boot, `ausearch -m AVC -ts boot | grep
+   proc_psi` to settle whether the hostnamed denial is Fedora's or ours.
