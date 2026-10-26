@@ -24,6 +24,20 @@ struct Lib {
     getfilecon_raw: unsafe extern "C" fn(*const c_char, *mut *mut c_char) -> c_int,
     check_access: unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *mut c_void) -> c_int,
     getenforce: unsafe extern "C" fn() -> c_int,
+    string_to_av_perm: unsafe extern "C" fn(u16, *const c_char) -> u32,
+    compute_av_raw: unsafe extern "C" fn(*const c_char, *const c_char, u16, u32, *mut AvDecision) -> c_int,
+}
+
+/// struct av_decision.
+#[repr(C)]
+#[derive(Default)]
+struct AvDecision {
+    allowed: u32,
+    decided: u32,
+    auditallow: u32,
+    auditdeny: u32,
+    seqno: u32,
+    flags: u32,
 }
 
 fn lib() -> Option<&'static Lib> {
@@ -63,6 +77,8 @@ fn open() -> Option<Lib> {
             getfilecon_raw: std::mem::transmute::<*mut c_void, _>(sym(c"getfilecon_raw")?),
             check_access: std::mem::transmute::<*mut c_void, _>(sym(c"selinux_check_access")?),
             getenforce: std::mem::transmute::<*mut c_void, _>(sym(c"security_getenforce")?),
+            string_to_av_perm: std::mem::transmute::<*mut c_void, _>(sym(c"string_to_av_perm")?),
+            compute_av_raw: std::mem::transmute::<*mut c_void, _>(sym(c"security_compute_av_flags_raw")?),
         })
     }
 }
@@ -186,6 +202,11 @@ pub fn file_context(path: &str) -> Option<String> {
 /// (the userspace AVC answers so and logs the denial). Err carries errno's
 /// text. libselinux's AVC takes no locks of its own here, so calls are
 /// serialised.
+///
+/// The AVC logs a denial (or an auditallow grant) to stderr without a final
+/// newline (avc_audit's `avc_log(SELINUX_AVC, "%s", buf)`); systemd ends it
+/// in its variadic log callback, which Rust can't define. So we ask the
+/// kernel whether the check is audited and end the line ourselves.
 pub fn check_access(scon: &str, tcon: &str, tclass: &str, perm: &str) -> Result<(), String> {
     static LOCK: Mutex<()> = Mutex::new(());
     let Some(lib) = lib() else { return Ok(()) };
@@ -194,7 +215,30 @@ pub fn check_access(scon: &str, tcon: &str, tclass: &str, perm: &str) -> Result<
         return Err("invalid context".into());
     };
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    check_access_with(lib, &s, &t, &c, &p)
+    let r = check_access_with(lib, &s, &t, &c, &p);
+    if audited(lib, &s, &t, &c, &p) {
+        use std::io::Write;
+        let _ = std::io::stderr().write_all(b"\n");
+    }
+    r
+}
+
+/// Whether the AVC logged the check SCON TCON TCLASS PERM (avc_audit's test).
+fn audited(lib: &Lib, s: &CStr, t: &CStr, c: &CStr, p: &CStr) -> bool {
+    let class = unsafe { (lib.string_to_security_class)(c.as_ptr()) };
+    if class == 0 {
+        return false;
+    }
+    let requested = unsafe { (lib.string_to_av_perm)(class, p.as_ptr()) };
+    if requested == 0 {
+        return false;
+    }
+    let mut avd = AvDecision::default();
+    if unsafe { (lib.compute_av_raw)(s.as_ptr(), t.as_ptr(), class, requested, &mut avd) } < 0 {
+        return false;
+    }
+    let denied = requested & !avd.allowed;
+    if denied != 0 { denied & avd.auditdeny != 0 } else { requested & avd.auditallow != 0 }
 }
 
 fn check_access_with(lib: &Lib, s: &CStr, t: &CStr, c: &CStr, p: &CStr) -> Result<(), String> {
@@ -244,6 +288,8 @@ mod tests {
         if unsafe { (lib.getenforce)() } == 1 {
             assert!(denied.is_err(), "chronyd_t reboot allowed");
         }
+        assert!(audited(&lib, chronyd, init, c"system", c"reboot"));
+        assert!(!audited(&lib, me, init, c"system", c"status"));
     }
 
     /// label_as on a scratch directory and symlink (any user may relabel

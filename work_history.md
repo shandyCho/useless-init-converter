@@ -6119,3 +6119,64 @@ The checks are installed and not yet tested as root under enforcing.
    systemctl daemon-reload`, then the grep).
 2. Optional: standalone RPMs so dnf owns the tools in
    /usr/libexec/sdcompat.
+
+## 2026-10-26, part 14: the caller check passes on the s6 boot; AVC line end
+
+Owner reran the corrected row (part 13) on the s6 boot, enforcing.
+
+### Results
+
+- `env systemctl show -p Version` and `env systemctl daemon-reload` both
+  printed nothing. The reason: insights_core_t has no rule on
+  `user_devpts_t` (sesearch), so systemctl's writes to the terminal
+  are denied (and not audited). Not an sdcompatd problem.
+- The uncaught log had exactly the expected denial:
+  `avc: denied { reload } … insights_core_t … init_t … tclass=system
+  permissive=0` and `sdcompatd: SELinux access check … perm=reload
+  state=enforcing function=Reload … Permission denied`. Nothing for the
+  `show` (its `system status` was granted) and nothing from normal use.
+  So the daemon's checks work as root under enforcing: part 12's
+  open item is done.
+- Bug: both messages were on one log line. libselinux 3.11's avc_audit
+  logs with `avc_log(SELINUX_AVC, "%s", buf)` and the default callback
+  is `vfprintf(stderr, …)`: no newline (sources fetched for 3.11).
+  systemd ends the line in its own SELINUX_CB_LOG callback, which is
+  variadic; Rust can't define one on stable and the workspace builds no
+  C. The SELINUX_CB_AUDIT hook writes into the middle of the message,
+  not the end.
+
+### Fix (sdcompat-exec selinux.rs)
+
+check_access, after selinux_check_access and still under its lock, asks
+the kernel (security_compute_av_flags_raw, string_to_av_perm) whether
+the check is one avc_audit logs (denied & auditdeny, or granted &
+auditallow, as in avc_audit) and if so writes the "\n". One extra
+selinuxfs query per check; only as root with SELinux on. Another thread's
+stderr line could still land between the two; accepted. Test: `audited`
+true for chronyd_t -> init_t system reboot, false for unconfined_t
+status.
+
+TESTING pair: the row now says that neither command prints anything and
+the grep is the result, with the two lines separate.
+
+### Tests
+
+cargo test (workspace) passes; sandbox default 227/227 (the change is
+root-only, so not exercised there). Not tested: the newline on the real
+boot (needs reinstall).
+
+### Current state
+
+All of part 12 has been checked on the real boot except the CIL
+dispatcher rule (needs a JOURNAL=no boot where the dispatcher runs
+scripts). The newline fix is committed, not installed.
+
+### Next steps
+
+1. Owner: with the next rebuild, the same grep should show the AVC line
+   and the sdcompatd line separately.
+2. Optional: the dispatcher rule on a JOURNAL=no boot (`ausearch -m AVC
+   -ts boot | grep NetworkManager_dispatcher` empty after a network
+   change).
+3. Optional: standalone RPMs so dnf owns the tools in
+   /usr/libexec/sdcompat.

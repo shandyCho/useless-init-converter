@@ -216,7 +216,7 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | s6가 PID 1 | `cat /proc/1/comm` | `s6-svscan` |
 | SELinux 도메인 | `ps -eZ \| grep -E ' (s6-svscan\|chronyd\|gdm\|systemd-logind)$'` | `init_t`, `chronyd_t`, `xdm_t`, `systemd_logind_t` (`unconfined_service_t`가 아님) |
 | SELinux 거부 | `sudo ausearch -m AVC -ts boot \| audit2allow` | 없는 것이 좋습니다. 있으면 출력을 보내 주세요 |
-| D-Bus 호출자의 SELinux 검사 | `sudo runcon -r system_r -t insights_core_t -- env systemctl show -p Version`, 그다음 `sudo runcon -r system_r -t insights_core_t -- env systemctl daemon-reload`, 그다음 `sudo grep -E 'SELinux access check\|avc: +denied' /run/uncaught-logs/current` | 첫 명령은 `Version=…`을 출력합니다(그 도메인에는 `status`가 허용됨). 두 번째는 root로 실행해도 systemd에서처럼 `SELinux policy denies access`로 실패합니다. grep에는 그 거부(`tclass=system perm=reload`)가 나오고, 평소 사용에서 생긴 다른 줄은 없습니다(있으면 보내 주세요) |
+| D-Bus 호출자의 SELinux 검사 | `sudo runcon -r system_r -t insights_core_t -- env systemctl show -p Version`, 그다음 `sudo runcon -r system_r -t insights_core_t -- env systemctl daemon-reload`, 그다음 `sudo grep -E 'SELinux access check\|avc: +denied' /run/uncaught-logs/current` | 두 명령 모두 아무것도 출력하지 않습니다. insights_core_t는 터미널에 쓸 수 없으므로(`user_devpts_t`에 대한 규칙 없음) 결과는 grep으로 봅니다. AVC의 `avc:  denied  { reload } … tclass=system permissive=0`과, 그다음 별도 줄에 `sdcompatd: SELinux access check … perm=reload state=enforcing function=Reload`가 나옵니다(두 번째 명령은 root로 실행해도 systemd에서처럼 거부됨). 첫 명령에 대한 줄은 없고(그 도메인에는 `status`가 허용됨), 평소 사용에서 생긴 다른 줄도 없습니다(있으면 보내 주세요) |
 | 디스패처 스크립트의 출력(`--no-journal`일 때만) | 재부팅 후 `sudo ausearch -m AVC -ts boot \| grep NetworkManager_dispatcher` | 아무것도 없음(전에는 s6-log 파이프에 쓰기가 거부됨) |
 | fwupd | `fwupdmgr get-devices` | 장치 목록(fwupd가 시스템 콜 필터를 켠 채 시작됩니다) |
 | 바쁜 러너 없음 | `top -b -n1 -o %CPU \| head -15` | CPU를 100 % 가까이 쓰는 `sdcompat` 프로세스가 없습니다 |
