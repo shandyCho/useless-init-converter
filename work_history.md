@@ -6456,3 +6456,64 @@ Committed, sandbox-verified; not yet on a real boot.
    then the TESTING row "ExecStop= of longruns" and "Previous shutdown".
 2. Remaining "Not implemented" items: socket activation/Accept=yes,
    crypttab volumes, watchdog/credentials, cancelling running jobs.
+
+## 2026-10-26, part 21: ExecStop= of longruns confirmed; 2 × 45 s at power-off
+
+### Result (owner, s6 boot, build `9cb7c61`)
+
+- Upgrade: `systemctl daemon-reload` restarted nothing (s6-svstat pids of
+  every /run/service entry identical before and after). `.stop` atoms
+  present: alsa-state's up, the others down with their services.
+- TESTING "ExecStop= of longruns" passes: `sdc-stoptest.service.stop` up;
+  `s6 live stop` -> `stop 10227` (= MainPID); `systemctl stop` -> a second
+  line; power-off -> `stop 10480` (= MainPID). Console log: `.stop` down
+  at 22:39:59.651, the service at .787, i.e. ExecStop= before the stop.
+- No AVC denials (`ausearch -m AVC -ts boot`, both shutdown logs: 0).
+- **"Previous shutdown" fails:** `sdcompatd: stopping
+  user-runtime-dir@0.service took 45.3 s` (22:40:45.13) and
+  `user-runtime-dir@1000.service took 45.3 s` (22:41:30.45): ~90 s.
+  The same 45 s as 2026-10-21 (user@1000 only) and 2026-10-22, never
+  explained.
+
+### Findings (read-only; the shutdown logs are root-only, not read)
+
+- The owner powered off with `sudo systemctl poweroff` (logind: session
+  c516 of root at 22:39:59.41, which started user@0 at .57; logind
+  stopped at .647).
+- stop_dynamic_at_shutdown is serial: user@0's manager got exit.target at
+  22:39:59.80, user@1000's only at 22:40:45.13, the moment
+  user-runtime-dir@0's stop ended. Both user managers' logs end right
+  after exit.target; no `closing the PAM session took` line in either.
+- 45.3 s matches sd-varlink's default method timeout (45 s), not the
+  bus's 25 s. systemd is 262; logind has a varlink socket,
+  /run/systemd/io.systemd.Login (systemd-logind-varlink.socket, inode
+  3580, created beside /run/systemd/private at boot, so likely held by
+  sdcompat's socket handling rather than logind; not checked whether it
+  still listens once logind is down). **Hypothesis, unconfirmed:** after logind stopped, something
+  in the user@/user-runtime-dir@ stop (pam_systemd's session release, or
+  systemd-user-runtime-dir stop) connects to io.systemd.Login, the
+  connect succeeds into the backlog, nobody accepts, and the call times
+  out after 45 s. Under systemd user@ and user-runtime-dir@ are
+  `After=systemd-logind.service` and stop before logind; here the
+  on-demand instances stop only when s6-rc stops sdcompatd, after logind.
+
+### Current state
+
+ExecStop= of longruns verified on a real boot. Open: the 2 × 45 s at
+power-off (one per logged-in UID).
+
+### Next steps
+
+1. Owner: copy the logs so they can be read without root:
+   `mkdir -p ~/sdcompat-logs/2239 && sudo install -m 644 -o "$USER"
+   /var/log/sdcompat/last-shutdown-*.log ~/sdcompat-logs/2239/`. Read
+   22:39:59.6-22:41:31 for what ran in each 45 s (dbus-daemon, sdcompatd,
+   runner lines) to confirm or drop the varlink hypothesis.
+2. If confirmed, the fix direction (owner's decision): stop the on-demand
+   instances before s6-rc stops the services they are ordered after
+   (e.g. a oneshot depending on logind/dbus whose `down` asks sdcompatd
+   to stop them, as UNIT.stop does for ExecStop=), or close a socket
+   unit's listener when its service is stopped at shutdown.
+3. Cleanup of the test unit: `sudo rm
+   /etc/systemd/system/sdc-stoptest.service /var/tmp/sdc-stop.log; sudo
+   systemctl daemon-reload`.
