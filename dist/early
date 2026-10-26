@@ -53,6 +53,17 @@ mount-api)
         mknod -m 0000 /run/systemd/inaccessible/chr c 0 0
         mknod -m 0000 /run/systemd/inaccessible/blk b 0 0
     fi
+    # Also PID 1's (systemd's mount-setup): devtmpfs has no /dev/fd and
+    # stdio links. A systemd initramfs leaves them in the /dev it hands
+    # over; the s6 one (--boot-only-s6) doesn't, and without /dev/fd every
+    # bash process substitution fails ("/dev/fd/63: No such file").
+    for l in fd:/proc/self/fd stdin:/proc/self/fd/0 stdout:/proc/self/fd/1 stderr:/proc/self/fd/2; do
+        [ -e "/dev/${l%%:*}" ] || [ -L "/dev/${l%%:*}" ] || ln -s "${l#*:}" "/dev/${l%%:*}" \
+            || warn "can't create /dev/${l%%:*}"
+    done
+    if [ -e /proc/kcore ] && [ ! -L /dev/core ] && [ ! -e /dev/core ]; then
+        ln -s /proc/kcore /dev/core
+    fi
     # kmod-static-nodes and systemd-tmpfiles-setup-dev-early, which EXCLUDE
     # drops: the nodes of modules that load when their node is first opened
     # (/dev/net/tun for podman and VPNs, /dev/uinput, /dev/vhost-net). The
