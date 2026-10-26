@@ -6371,9 +6371,8 @@ Fix committed, not yet on an s6 boot. No other open items.
 
 ### Current state
 
-No open items. The proc_psi_t denial, the only one left in part 17's
-`audit2allow`, is gone; the full `ausearch -m AVC -ts boot | audit2allow`
-was not rerun on this boot.
+No open items. Owner, same boot: `ausearch -m AVC -ts boot | audit2allow`:
+`<no matches>`, `Nothing to do`. The s6 boot has no AVC denials at all.
 
 ### Next steps
 
