@@ -6284,14 +6284,19 @@ setup-fedora.sh and rebooted into s6. No code changes.
 - `ausearch -m AVC -ts boot | audit2allow`: only `systemd_hostnamed_t
   proc_psi_t:dir search`, the /proc/pressure denial known since part 1
   and attributed to Fedora's policy, never checked on a systemd boot.
-- Not yet checked (wrong commands in the instructions given): s6-svstat
-  takes one service dir, so only the first was shown (fdstore up);
-  `pgrep -x` cannot match names over 15 characters.
+- My first instructions were wrong: s6-svstat takes one service dir,
+  and `pgrep -x` cannot match names over 15 characters. Rerun per
+  service with `s6-svstat -p`: sdcompat-fdstore, sdcompat-linkwatch and
+  journal-relay all `up` (~420 s, the boot), each exe
+  /usr/libexec/sdcompat/NAME, not deleted: the services run the RPM
+  binaries.
+
+### Current state
+
+The standalone RPM step is done. Only open item: the hostnamed
+proc_psi_t denial.
 
 ### Next steps
 
-1. Owner: s6-svstat each of sdcompat-fdstore, sdcompat-linkwatch,
-   journal-relay separately, and `readlink /proc/PID/exe` with the pid
-   from `s6-svstat -p`: /usr/libexec/sdcompat/NAME, not `(deleted)`.
-2. Owner: on the systemd boot, `ausearch -m AVC -ts boot | grep
+1. Owner: on the systemd boot, `ausearch -m AVC -ts boot | grep
    proc_psi` to settle whether the hostnamed denial is Fedora's or ours.
