@@ -6610,3 +6610,44 @@ Part 22's fix verified on a real boot; the 2 x 45 s at power-off is gone.
 
 1. Test unit cleanup from part 21 if not done.
 2. Optional: what requested user@60578 (60578 isn't a local user).
+
+## 2026-10-26, part 24: `user@60578.service: user 60578 does not exist`
+
+### Findings (read-only, current s6 boot and ~/sdcompat-logs/retest2)
+
+- 60578 is GDM's greeter user: `gnome-shell --mode=gdm` runs as uid
+  60578. GDM 51 registers it as a dynamic user over userdb
+  (/run/systemd/userdb/org.gnome.DisplayManager, nss-systemd in
+  nsswitch) only while the greeter runs; `getent passwd 60578` is empty
+  now.
+- After login the greeter ends, GDM drops the user, then logind stops
+  user@60578. The runner's `finish` for it calls `Runner::new`, which
+  resolves `User=%i` for every command, not only for starts. The lookup
+  fails, so `setup_failed` logs the line and returns 125. All of
+  cmd_finish is skipped.
+- Effect on the current boot: /run/sdcompat/units/user@60578.service has
+  no active-exit, inactive-enter or result. `systemctl status` shows
+  "inactive (dead)" (s6 reports it down) but still shows Main PID 2362,
+  Status "Activating special unit exit.target..." and Memory 610.7M, and
+  no "since". Anything else finish does (ExecStopPost=, cleanup) would
+  also be skipped; user@.service has no ExecStopPost=, so nothing more
+  is lost here. user-runtime-dir@60578 (runs as root) stopped normally.
+  The PAM session is closed by the `run` process, which resolved the user
+  at start, so that part is fine.
+- The same applies to `down`, `stop-atom` (they return 0 without doing
+  their work) and `stop-exec` (returns 1) for any unit whose User= has
+  disappeared. systemd resolves User= only when it spawns a process, so
+  stopping such a unit works and only an ExecStop*= running as that user
+  fails (217/USER).
+
+### Proposed fix (not done; owner's decision)
+
+Resolve User=/Group=/SupplementaryGroups= only for start-side commands
+(`run`, `up`), or lazily when a command spawns a process with those
+credentials. Then `finish`/`down`/`stop-atom`/`stop-exec` do their
+bookkeeping, and only a spawn that needs the missing user fails.
+
+### Next steps
+
+1. Owner: decide on the fix above.
+2. Test unit cleanup from part 21 if not done.
