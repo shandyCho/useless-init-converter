@@ -137,6 +137,14 @@ ExecStart=/bin/sh -c 'echo once > $R/once.out'
 ExecStop=/bin/sh -c 'echo stopped >> $R/once.out'
 EOF
 
+# A User= that is gone when the unit stops (GDM's greeter user): the stop
+# still records the exit. check.sh points User= elsewhere while it runs.
+cat > "$U/userless.service" <<EOF
+[Service]
+User=$(id -un)
+ExecStart=/bin/sleep 1000
+EOF
+
 # ExecStop= of a longrun when s6-rc stops it (its UNIT.stop oneshot), and
 # not for one whose condition failed. prepl@ is stopped at shutdown.
 cat > "$U/stopper.service" <<EOF

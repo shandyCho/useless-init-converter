@@ -77,8 +77,8 @@ fn parse_internal(args: &[String]) -> Internal {
     }
 }
 
-/// The unit could not be set up (User= or Group= that does not exist, a
-/// missing EnvironmentFile=, the unit file gone). As for any other failed
+/// The unit could not be set up (User= or Group= that does not exist when
+/// starting, a missing EnvironmentFile=, the unit file gone). As for any other failed
 /// start, s6-rc must still see it as done (every start is reported as
 /// successful; the result goes to the state files), or the boot's change
 /// waits for its timeout and skips the units after it: `run` records the
@@ -144,7 +144,7 @@ fn main() {
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
     let a = parse_internal(&args[1..]);
-    let r = match runner::Runner::new(cfg.clone(), &a.unit) {
+    let r = match runner::Runner::new(cfg.clone(), &a.unit, matches!(cmd.as_str(), "run" | "up")) {
         Ok(r) => r,
         Err(e) => exit(setup_failed(&cfg, &cmd, &a.unit, &e)),
     };

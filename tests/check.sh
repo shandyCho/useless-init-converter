@@ -233,6 +233,20 @@ expect_state stopper.service active/running
 $L -d change stopcond.service
 [ ! -e "$R/stopcond.out" ] && ok "no ExecStop= for a unit whose condition failed" || bad "stopcond.service ran ExecStop="
 
+section "User= gone before the stop"
+call StartUnit ss userless.service replace
+expect_state userless.service active/running
+sed -i 's/^User=.*/User=sdc-no-such-user/' "$W/units/userless.service"
+call StopUnit ss userless.service replace
+expect_state userless.service inactive/dead
+expect_eq "the stop recorded the exit (MainPID)" "$(prop userless.service Service MainPID)" "0"
+expect_eq "the stop recorded the exit (Result)" "$(prop userless.service Service Result)" "success"
+[ "$(prop userless.service Unit InactiveEnterTimestamp)" != 0 ] && ok "InactiveEnterTimestamp set" || bad "InactiveEnterTimestamp not set"
+call StartUnit ss userless.service replace 2>/dev/null
+expect_state userless.service failed/failed
+expect_eq "a start still needs the user" "$(prop userless.service Service Result)" "resources"
+call ResetFailedUnit s userless.service
+
 section "markers (package updates)"
 # systemd-update-helper marks units at a package update and then enqueues
 # them: needs-restart try-restarts, needs-reload reloads if active.

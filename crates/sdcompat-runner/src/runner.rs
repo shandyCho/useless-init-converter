@@ -52,6 +52,9 @@ pub struct Runner {
     user: Option<UserInfo>,
     gid: Option<u32>,
     groups: Vec<u32>,
+    /// Why User=/Group= didn't resolve, for a command other than a start:
+    /// the exit code and message for any process spawned.
+    cred_error: Option<(i32, String)>,
     pub env: Vec<(String, String)>,
     writable_dirs: Vec<String>,
     sandbox: Sandbox,
@@ -102,7 +105,9 @@ fn log(unit: &str, msg: &str) {
 }
 
 impl Runner {
-    pub fn new(cfg: Config, name: &str) -> Result<Runner, String> {
+    /// `starting`: the command starts the unit (`run`, `up`), so a User=,
+    /// Group= or SupplementaryGroups= that doesn't resolve fails it.
+    pub fn new(cfg: Config, name: &str, starting: bool) -> Result<Runner, String> {
         let unit = Loader::new(&cfg).load(name);
         if unit.load_state != LoadState::Loaded {
             return Err(format!("unit {name}: {}", unit.load_state.as_str()));
@@ -111,28 +116,15 @@ impl Runner {
         st.ensure();
         let is_root = unsafe { libc::geteuid() } == 0;
 
-        let mut user = None;
-        if let Some(u) = unit.get("Service", "User") {
-            user = Some(match util::lookup_user(&u) {
-                Some(info) => info,
-                None if unit.get_bool("Service", "DynamicUser", false) => ensure_system_user(&u)?,
-                None => return Err(format!("user {u} does not exist")),
-            });
-        } else if unit.get_bool("Service", "DynamicUser", false) {
-            let name = unit.id.trim_end_matches(".service").replace(['@', '.'], "-");
-            user = Some(ensure_system_user(&name)?);
-        }
-        let gid = match unit.get("Service", "Group") {
-            Some(g) => Some(util::lookup_group(&g).ok_or_else(|| format!("group {g} does not exist"))?),
-            None => user.as_ref().map(|u| u.gid),
+        // Only a start needs the credentials. For the other commands a user
+        // that is gone by now (GDM's greeter user, dropped from userdb before
+        // its user@ stops) must not skip the stop's bookkeeping; as systemd,
+        // only a process spawned with them fails (217/USER, 216/GROUP).
+        let (user, gid, groups, cred_error) = match resolve_credentials(&unit) {
+            Ok((user, gid, groups)) => (user, gid, groups, None),
+            Err((_, e)) if starting => return Err(e),
+            Err(e) => (None, None, Vec::new(), Some(e)),
         };
-        let mut groups = Vec::new();
-        if let (Some(u), Some(g)) = (&user, gid) {
-            groups = group_list(&u.name, g);
-        }
-        for g in unit.get_words("Service", "SupplementaryGroups") {
-            groups.push(util::lookup_group(&g).ok_or_else(|| format!("group {g} does not exist"))?);
-        }
 
         let mut r = Runner {
             sandbox: Sandbox::from_unit(&unit, &st.dir, Vec::new()),
@@ -142,6 +134,7 @@ impl Runner {
             user,
             gid,
             groups,
+            cred_error,
             env: Vec::new(),
             writable_dirs: Vec::new(),
             notify_fd: None,
@@ -327,6 +320,9 @@ impl Runner {
 
         if let Err(e) = self.setup_stdio(cmd) {
             return e;
+        }
+        if let Some(e) = &self.cred_error {
+            return e.clone();
         }
 
         let sandboxed = !cmd.privileged && self.is_root;
@@ -2389,6 +2385,36 @@ fn group_list(user: &str, gid: u32) -> Vec<u32> {
     }
     groups.truncate(n.max(0) as usize);
     groups
+}
+
+/// User= (DynamicUser= creates it), Group= and SupplementaryGroups=; the
+/// error carries systemd's exit code for it.
+fn resolve_credentials(unit: &Unit) -> Result<(Option<UserInfo>, Option<u32>, Vec<u32>), (i32, String)> {
+    let user_err = |e| (EXIT_USER, e);
+    let group_err = |g: &str| (EXIT_GROUP, format!("group {g} does not exist"));
+    let mut user = None;
+    if let Some(u) = unit.get("Service", "User") {
+        user = Some(match util::lookup_user(&u) {
+            Some(info) => info,
+            None if unit.get_bool("Service", "DynamicUser", false) => ensure_system_user(&u).map_err(user_err)?,
+            None => return Err(user_err(format!("user {u} does not exist"))),
+        });
+    } else if unit.get_bool("Service", "DynamicUser", false) {
+        let name = unit.id.trim_end_matches(".service").replace(['@', '.'], "-");
+        user = Some(ensure_system_user(&name).map_err(user_err)?);
+    }
+    let gid = match unit.get("Service", "Group") {
+        Some(g) => Some(util::lookup_group(&g).ok_or_else(|| group_err(&g))?),
+        None => user.as_ref().map(|u| u.gid),
+    };
+    let mut groups = Vec::new();
+    if let (Some(u), Some(g)) = (&user, gid) {
+        groups = group_list(&u.name, g);
+    }
+    for g in unit.get_words("Service", "SupplementaryGroups") {
+        groups.push(util::lookup_group(&g).ok_or_else(|| group_err(&g))?);
+    }
+    Ok((user, gid, groups))
 }
 
 /// DynamicUser= approximation: a persistent system user.

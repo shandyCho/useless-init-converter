@@ -97,6 +97,8 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 - `Type=simple|exec|notify|notify-reload|dbus|forking|oneshot|idle`. 유형마다 준비 완료(readiness) 신호를 s6의 notification fd에 연결합니다.
 - `ExecStartPre/Post`, `ExecCondition`, `ExecStop`, `ExecStopPost`, `ExecReload`와 `-@+!:` 접두사, `$VAR`/`${VAR}` 확장.
 - `User=`, `Group=`, `SupplementaryGroups=`. `DynamicUser=`는 영구 시스템 사용자로 근사합니다.
+  systemd처럼 시작할 때 사용자를 확인합니다. 정지할 때 이미 사라진 사용자(GDM의 greeter 사용자)는
+  그 사용자로 실행할 ExecStop*= 명령만 실패시키고(217/USER) 정지 자체는 막지 않습니다.
 - `PAMName=`: systemd처럼 PAM 세션을 열고 자식 프로세스에서 서비스를 실행한 뒤, 종료되면 세션을 닫습니다. libpam은 실행 시점에 불러옵니다.
 - `Delegate=`와 `DelegateSubgroup=`: 유닛의 cgroup을 서비스 사용자에게 넘깁니다(`systemd --user`에 필요).
 - `Environment=`, `EnvironmentFile=`, `PassEnvironment=`, `UnsetEnvironment=`, `WorkingDirectory=`, `RootDirectory=`, `UMask=`, `Nice=`, `OOMScoreAdjust=`, `Limit*=`.
