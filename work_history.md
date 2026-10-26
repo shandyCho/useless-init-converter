@@ -6377,3 +6377,82 @@ No open items. Owner, same boot: `ausearch -m AVC -ts boot | audit2allow`:
 ### Next steps
 
 None pending. New work only at the owner's request.
+
+## 2026-10-26, part 20: ExecStop= when s6-rc stops a longrun (`e569be5`)
+
+The owner picked the first item of the README's "Not implemented" list.
+
+### Scope found
+
+- Static oneshots with `RemainAfterExit=yes` already ran `ExecStop=` from
+  their s6-rc `down` (runner `down`), at shutdown too. The gap was
+  longruns only: s6 has no hook before it sends the down signal, and the
+  runner execs the main process, so `s6-rc -d` (shutdown's `-bDa`,
+  `s6 live stop/reset`, s6-rc-update removing a service) only signalled
+  them. On-demand longrun instances were just killed at shutdown.
+
+### Design (and why)
+
+- gen adds `UNIT.stop` (index::stop_atom) for each longrun service with
+  `ExecStop=`: a oneshot depending on the service, empty `up`, `down` =
+  `sdcompat-runner stop-atom`, `timeout-down` = TimeoutStopSec + 10 s,
+  flag-recommended with its service. s6-rc takes it down before the
+  service, so ExecStop= runs while the service is still up, as in systemd.
+- **Nothing depends on `UNIT.stop`.** Redirecting dependents to it would
+  order their stops before the ExecStop=, but s6-rc-update restarts a
+  service that gains a dependency on a new (or down) service: the first
+  upgrade would have restarted every dependent (gdm and the session). So
+  dependents stop beside the ExecStop=, the service itself still last.
+  Documented as a difference.
+- Bundles list `UNIT.stop` beside the service: an `s6-rc -p change` of a
+  bundle (isolate) would otherwise take it down alone and run ExecStop=
+  on a service that stays up. The daemon's isolate adds the `.stop` atoms
+  of the whole closure for the same reason.
+- Set: `sync_stop_atoms()` gives `UNIT.stop` its service's prescription
+  (always -> active), before set-fix (a `disable` without -p would leave
+  it active and set-fix would re-enable the service) and again after it
+  (services set-fix enabled).
+- Runner `stop-atom`: skipped when SOCKET_WAIT, CONDITION_FAILED,
+  DEPENDENCY_FAILED, START_FAILED or PARKED, or when s6-svstat says down;
+  `$MAINPID` from the state's MAIN_PID if alive (PAMName=/forking: the
+  supervised pid is the runner), else s6-svstat's pid; deadline =
+  TimeoutStopSec= (log says "stop timeout"); always exits 0, as a failed
+  down would keep s6-rc from stopping the service.
+- Daemon: `reconcile_stop_atoms()` every second brings up `UNIT.stop` of
+  each longrun s6-rc has up (started by name, by start_beside, by an
+  older database: s6-rc-update adds new services down). Not while
+  s6-rc's lock is held or `shutting-down` exists, nor for a unit whose
+  job holds its unit lock, and with s6-rc without `-b`: a change that
+  stops the service takes UNIT.stop down first, and bringing it back up
+  would restart the service. `do_stop` leaves ExecStop= to UNIT.stop
+  when it is up (ran once, checked). Shutdown: `stop_dynamic_oneshots`
+  became `stop_dynamic_at_shutdown` and also stops on-demand longruns
+  that have an ExecStop=.
+
+### Tests
+
+- cargo build (no warnings); cargo test all passed (new
+  `stop_atom_for_longrun_exec_stop`); standalone tests passed.
+- Sandbox 244/244, SANDBOX_JOURNAL=no 251/251, SANDBOX_FDSTORE=no
+  244/244. New: stopper.service (`.stop` up after boot; `s6-rc -d` runs
+  ExecStop= with the right $MAINPID; started by name, `.stop` follows;
+  StopUnit runs ExecStop= once), stopcond.service (condition failed: no
+  ExecStop=), prepl@d (on-demand longrun's ExecStop= at shutdown), set
+  rx of `stopper.service.stop` following usable/active.
+- bash -n and shellcheck -S warning clean on check.sh and sandbox.sh.
+- Not tested: a real s6 boot (power-off with UNIT.stop, SELinux on the
+  oneshot path, the upgrade from a database without `.stop` atoms).
+  New TESTING row "ExecStop= of longruns" covers it.
+
+### Current state
+
+Committed, sandbox-verified; not yet on a real boot.
+
+### Next steps
+
+1. Owner: rebuild RPMs, upgrade (the first daemon-reload adds the
+   `.stop` atoms down; the daemon brings them up within a second, and no
+   service should restart: check `s6 live status` uptimes of e.g. gdm),
+   then the TESTING row "ExecStop= of longruns" and "Previous shutdown".
+2. Remaining "Not implemented" items: socket activation/Accept=yes,
+   crypttab volumes, watchdog/credentials, cancelling running jobs.
