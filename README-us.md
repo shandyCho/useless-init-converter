@@ -147,6 +147,14 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
   with an empty unit name means the caller's own unit, and an unprivileged
   caller may move its own processes within its own `Delegate=yes` unit
   (`systemd --user` in `user@UID.service`).
+- SELinux access checks as systemd 262 makes them, before polkit and for
+  root too: the caller's label (from the bus, or `SO_PEERSEC` on the private
+  socket) needs the method's permission in class `service` on the unit
+  file's label (`start`, `stop`, `reload`, `status`), or in class `system` on
+  sdcompatd's own label (`reload`, `status`, `halt`, `reboot`, `enable`,
+  `start`) for manager calls and units without a unit file. `ListUnits`
+  leaves out the units the caller may not see. Permissive mode and
+  permissive domains only log the denial (to sdcompatd's stderr).
 - D-Bus activation is accepted only from the bus daemon itself, and never makes
   the daemon regenerate its database.
 - Jobs on the same unit run one after another; queued jobs can be cancelled.
@@ -198,7 +206,7 @@ none is needed to build. Without one, the matching feature is missing:
 | Library (Fedora package) | Without it |
 |---|---|
 | `libpam.so.0` (pam) | Units with `PAMName=` fail (exit 224), so `user@.service` and GNOME do not start |
-| `libselinux.so.1` (libselinux) | No labelling of `RuntimeDirectory=` & co., socket files and socket-unit sockets; services may get wrong labels |
+| `libselinux.so.1` (libselinux) | No labelling of `RuntimeDirectory=` & co., socket files and socket-unit sockets; services may get wrong labels. No SELinux access checks on D-Bus callers |
 | `libseccomp.so.2` (libseccomp) | `SystemCallFilter=` is skipped with a message, as in systemd without seccomp. fwupd refuses to start |
 
 **Recommended packages:** earlyoom (replaces systemd-oomd), chrony,
@@ -533,7 +541,7 @@ crates/                    the core (one Cargo workspace)
     seccomp.rs             SystemCallFilter= and the other seccomp-based settings (libseccomp)
     bpf.rs                 DevicePolicy=/DeviceAllow= and IPAddressDeny=/IPAddressAllow= (cgroup eBPF)
     cgroup.rs              systemd-compatible cgroup layout and resource control
-    selinux.rs, pam.rs     labels (libselinux), PAMName= (libpam), both via dlopen
+    selinux.rs, pam.rs     labels and access checks (libselinux), PAMName= (libpam), both via dlopen
     socket.rs              socket units (sd_listen_fds)
     execcmd.rs, conditions.rs   Exec*= command lines, Condition*/Assert*
   sdcompat-client/         small D-Bus client for the daemon
@@ -543,7 +551,8 @@ crates/                    the core (one Cargo workspace)
   sdcompat-timers/         timer and path unit runners (tool sdcompat-timers)
   sdcompatd/               D-Bus API: dispatch, properties, s6 backend, private socket,
                            on-demand instances (dynamic.rs), systemd-run (transient.rs),
-                           units wanted by devices (devices.rs) (tool sdcompatd)
+                           units wanted by devices (devices.rs), SELinux access
+                           checks (access.rs) (tool sdcompatd)
   sdcompat/                the sdcompat command, which runs the right tool
 standalone/                separate projects, each with its own README and spec
   sdcompat-fdstore/        file descriptor store server

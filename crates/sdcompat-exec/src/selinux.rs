@@ -1,11 +1,12 @@
 //! The SELinux labelling systemd does as PID 1, with libselinux loaded at run
 //! time: directories and socket files get their file_contexts label, and
 //! sockets of socket units are created with the label of the service that
-//! will use them. Only as root with SELinux enabled; otherwise every
+//! will use them. And the access checks systemd makes on D-Bus callers
+//! (selinux-access.c). Only as root with SELinux enabled; otherwise every
 //! function does nothing.
 
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 struct Lib {
     restorecon: unsafe extern "C" fn(*const c_char, c_uint) -> c_int,
@@ -19,6 +20,10 @@ struct Lib {
     selabel_lookup: unsafe extern "C" fn(*mut c_void, *mut *mut c_char, *const c_char, c_int) -> c_int,
     selabel_close: unsafe extern "C" fn(*mut c_void),
     lsetfilecon: unsafe extern "C" fn(*const c_char, *const c_char) -> c_int,
+    getcon_raw: unsafe extern "C" fn(*mut *mut c_char) -> c_int,
+    getfilecon_raw: unsafe extern "C" fn(*const c_char, *mut *mut c_char) -> c_int,
+    check_access: unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *mut c_void) -> c_int,
+    getenforce: unsafe extern "C" fn() -> c_int,
 }
 
 fn lib() -> Option<&'static Lib> {
@@ -54,6 +59,10 @@ fn open() -> Option<Lib> {
             selabel_lookup: std::mem::transmute::<*mut c_void, _>(sym(c"selabel_lookup")?),
             selabel_close: std::mem::transmute::<*mut c_void, _>(sym(c"selabel_close")?),
             lsetfilecon: std::mem::transmute::<*mut c_void, _>(sym(c"lsetfilecon")?),
+            getcon_raw: std::mem::transmute::<*mut c_void, _>(sym(c"getcon_raw")?),
+            getfilecon_raw: std::mem::transmute::<*mut c_void, _>(sym(c"getfilecon_raw")?),
+            check_access: std::mem::transmute::<*mut c_void, _>(sym(c"selinux_check_access")?),
+            getenforce: std::mem::transmute::<*mut c_void, _>(sym(c"security_getenforce")?),
         })
     }
 }
@@ -141,6 +150,61 @@ pub fn set_socket_label(label: Option<&str>) {
     unsafe { (lib.setsockcreatecon)(c.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null())) };
 }
 
+/// Whether access checks are made: as root with SELinux enabled.
+pub fn access_checks() -> bool {
+    lib().is_some()
+}
+
+/// Enforcing mode (security_getenforce); false without SELinux.
+pub fn enforcing() -> bool {
+    lib().is_some_and(|lib| unsafe { (lib.getenforce)() } == 1)
+}
+
+/// Our own context, raw (getcon_raw), the target of the "system" class
+/// checks, as systemd's get_our_contexts().
+pub fn own_context() -> Option<String> {
+    static OWN: OnceLock<Option<String>> = OnceLock::new();
+    OWN.get_or_init(|| {
+        let lib = lib()?;
+        let mut p = std::ptr::null_mut();
+        (unsafe { (lib.getcon_raw)(&mut p) } >= 0 && !p.is_null()).then(|| take(lib, p))
+    })
+    .clone()
+}
+
+/// The raw context of a file, following symlinks (systemd reads the unit
+/// file's from the open file, so the target's).
+pub fn file_context(path: &str) -> Option<String> {
+    let lib = lib()?;
+    let c = CString::new(path).ok()?;
+    let mut p = std::ptr::null_mut();
+    (unsafe { (lib.getfilecon_raw)(c.as_ptr(), &mut p) } >= 0 && !p.is_null()).then(|| take(lib, p))
+}
+
+/// selinux_check_access(SCON, TCON, TCLASS, PERM): Ok when the policy allows
+/// it, or when it doesn't but SELinux or the caller's domain is permissive
+/// (the userspace AVC answers so and logs the denial). Err carries errno's
+/// text. libselinux's AVC takes no locks of its own here, so calls are
+/// serialised.
+pub fn check_access(scon: &str, tcon: &str, tclass: &str, perm: &str) -> Result<(), String> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    let Some(lib) = lib() else { return Ok(()) };
+    let args = (CString::new(scon), CString::new(tcon), CString::new(tclass), CString::new(perm));
+    let (Ok(s), Ok(t), Ok(c), Ok(p)) = args else {
+        return Err("invalid context".into());
+    };
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    check_access_with(lib, &s, &t, &c, &p)
+}
+
+fn check_access_with(lib: &Lib, s: &CStr, t: &CStr, c: &CStr, p: &CStr) -> Result<(), String> {
+    if unsafe { (lib.check_access)(s.as_ptr(), t.as_ptr(), c.as_ptr(), p.as_ptr(), std::ptr::null_mut()) } < 0 {
+        let e = std::io::Error::last_os_error();
+        return Err(if e.raw_os_error().unwrap_or(0) == 0 { "Permission denied".into() } else { e.to_string() });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +219,31 @@ mod tests {
         let label = exec_label_with(&lib, "/bin/sh").expect("security_compute_create");
         assert_eq!(label.split(':').count() >= 4, true, "{label}");
         assert_eq!(exec_label_with(&lib, "/nonexistent"), None);
+    }
+
+    /// selinux_check_access as systemd calls it, on this host's policy: an
+    /// unconfined caller may query the manager, a made-up domain may not.
+    #[test]
+    fn check_access_on_this_host() {
+        let Some(lib) = open() else {
+            eprintln!("SELinux not enabled, skipping");
+            return;
+        };
+        let init = c"system_u:system_r:init_t:s0";
+        let me = c"unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023";
+        if check_access_with(&lib, me, init, c"system", c"status").is_err() {
+            eprintln!("no unconfined_t here, skipping");
+            return;
+        }
+        assert!(check_access_with(&lib, me, init, c"system", c"reload").is_ok());
+        let unit = c"system_u:object_r:systemd_unit_file_t:s0";
+        assert!(check_access_with(&lib, me, unit, c"service", c"start").is_ok());
+        // chronyd_t may not reboot the machine.
+        let chronyd = c"system_u:system_r:chronyd_t:s0";
+        let denied = check_access_with(&lib, chronyd, init, c"system", c"reboot");
+        if unsafe { (lib.getenforce)() } == 1 {
+            assert!(denied.is_err(), "chronyd_t reboot allowed");
+        }
     }
 
     /// label_as on a scratch directory and symlink (any user may relabel

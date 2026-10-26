@@ -5,6 +5,7 @@
 //! Dispatch is done by hand (no zbus ObjectServer) because systemd clients
 //! rely on details such as Properties.GetAll("") returning every interface.
 
+mod access;
 mod devices;
 mod dynamic;
 mod introspect;
@@ -75,6 +76,8 @@ pub struct Peer {
     pub conn: Connection,
     pub uid: Option<u32>,
     pub pid: Option<u32>,
+    /// SO_PEERSEC of a private socket peer (bus callers: asked of the bus).
+    pub label: Option<String>,
 }
 
 #[derive(Clone)]
@@ -101,6 +104,8 @@ pub struct Daemon {
     pub transient: Mutex<BTreeMap<String, Transient>>,
     pub manager_env: Mutex<Vec<String>>,
     uid_cache: Mutex<HashMap<String, u32>>,
+    /// Bus callers' SELinux labels, by unique name (see access.rs).
+    label_cache: Mutex<HashMap<String, String>>,
     pub started: (u64, u64),
     pub boot_done: AtomicBool,
     pub boot_finished: Mutex<Option<(u64, u64)>>,
@@ -749,6 +754,7 @@ impl Daemon {
     async fn job_method(&self, c: &Peer, msg: &Message, name: &str, mode: &str, jtype: &str) -> R<()> {
         Self::valid_name(name)?;
         let id = self.index.read().unwrap().resolve(name).to_string();
+        self.mac_unit(c, msg, &id, access::job_access(jtype)).await?;
         self.require_unit(c, msg, &id, jtype).await?;
         let (id, unit) = self.check_job(name, jtype, true, true).await?;
         let job = self.new_job(&id, jtype);
@@ -763,6 +769,7 @@ impl Daemon {
     async fn set_unit_properties(&self, c: &Peer, msg: &Message, name: &str, props: &[(String, OwnedValue)]) -> R<()> {
         Self::valid_name(name)?;
         let id = self.index.read().unwrap().resolve(name).to_string();
+        self.mac_unit(c, msg, &id, "start").await?;
         self.require_unit(c, msg, &id, "set-property").await?;
         for (key, v) in props {
             if key != "Markers" {
@@ -791,11 +798,17 @@ impl Daemon {
     /// active ones marked only needs-reload, and clear the markers. Package
     /// updates restart their services this way (systemd-update-helper).
     async fn enqueue_marked(&self, c: &Peer, msg: &Message) -> R<()> {
+        self.mac_check(c, msg, None, "start").await?;
         self.require_privileged(c, msg).await?;
         let marked = std::mem::take(&mut *self.markers.lock().unwrap());
         let mut queued = Vec::new();
         for (name, m) in marked {
             let jtype = if m.contains("needs-restart") { "try-restart" } else { "reload" };
+            // As systemd: a unit the caller may not act on is skipped.
+            if let Err(e) = self.mac_unit(c, msg, &name, access::job_access(jtype)).await {
+                eprintln!("sdcompatd: {name}: failed to enqueue marked job: {}", e.msg);
+                continue;
+            }
             match self.check_job(&name, jtype, true, false).await {
                 Ok((id, unit)) => queued.push((self.new_job(&id, jtype), id, unit, jtype)),
                 // A reload of an inactive unit is a no-op for systemd too.
@@ -926,6 +939,7 @@ impl Daemon {
     }
 
     async fn start_transient(&self, c: &Peer, msg: &Message) -> R<()> {
+        self.mac_check(c, msg, None, "start").await?;
         self.require_privileged(c, msg).await?;
         type Aux = Vec<(String, Vec<(String, OwnedValue)>)>;
         let (name, mode, props, aux): (String, String, Vec<(String, OwnedValue)>, Aux) = Self::args(msg)?;
@@ -1072,6 +1086,7 @@ impl Daemon {
         };
         Self::valid_name(&name)?;
         let (id, unit) = self.load_unit(&name);
+        self.mac_check(c, msg, Some(&unit), "start").await?;
         let caller = self.caller_uid(c, msg).await;
         let caller_unit = match self.caller_pid(c, msg).await {
             Some(p) => util::proc_cgroup(p).and_then(|cg| unit_of_cgroup(&cg)),
@@ -1286,6 +1301,13 @@ impl Daemon {
     }
 
     async fn dispatch(&self, c: &Peer, msg: &Message, path: &str, iface: &str, member: &str) -> R<()> {
+        // systemd's mac_selinux_filter: the built-in interfaces of every
+        // object below the manager are checked against the manager.
+        let builtin = matches!(iface, PROPS_IFACE | "org.freedesktop.DBus.Introspectable" | "org.freedesktop.DBus.Peer");
+        if builtin && access::path_below(path, MANAGER_PATH) {
+            let perm = if iface == PROPS_IFACE && member == "Set" { "reload" } else { "status" };
+            self.mac_check(c, msg, None, perm).await?;
+        }
         match iface {
             PROPS_IFACE => return self.properties(c, msg, path, member).await,
             "org.freedesktop.DBus.Introspectable" => return self.introspect(c, msg, path).await,
@@ -1303,6 +1325,7 @@ impl Daemon {
         }
         if let Some(name) = self.unit_from_path(path) {
             if iface == "org.freedesktop.systemd1.Scope" && member == "Abandon" {
+                self.mac_unit(c, msg, &name, "stop").await?;
                 self.require_privileged(c, msg).await?;
                 return self.reply(c, msg, &()).await;
             }
@@ -1315,6 +1338,9 @@ impl Daemon {
                 return Err(err(E_UNKNOWN_OBJECT, format!("Unknown object '{path}'.")));
             }
             if member == "Cancel" {
+                if let Some(u) = self.job_unit(job) {
+                    self.mac_unit(c, msg, &u, "stop").await?;
+                }
                 self.require_privileged(c, msg).await?;
                 self.cancel_job(job)?;
                 return self.reply(c, msg, &()).await;
@@ -1338,6 +1364,7 @@ impl Daemon {
             }
             "ResetFailed" => {
                 let id = self.index.read().unwrap().resolve(name).to_string();
+                self.mac_unit(c, msg, &id, "reload").await?;
                 self.require_unit(c, msg, &id, "reset-failed").await?;
                 self.reset_failed(name);
                 return self.reply(c, msg, &()).await;
@@ -1348,6 +1375,7 @@ impl Daemon {
             }
             // Reference counting is accepted and ignored.
             "Ref" | "Unref" => {
+                self.mac_unit(c, msg, name, "start").await?;
                 self.require_privileged(c, msg).await?;
                 return self.reply(c, msg, &()).await;
             }
@@ -1388,6 +1416,7 @@ impl Daemon {
     async fn kill_unit(&self, c: &Peer, msg: &Message, name: &str, whom: &str, sig: i32) -> R<()> {
         Self::valid_name(name)?;
         let (id, unit) = self.load_unit(name);
+        self.mac_check(c, msg, Some(&unit), "stop").await?;
         self.require_unit(c, msg, &id, "kill").await?;
         // The supervised pid is a wrapper for PAMName=, Type=forking and
         // MAINPID=; the runner records the real main process.
@@ -1458,12 +1487,14 @@ impl Daemon {
                 if !known && (unit.load_state == LoadState::NotFound || crate::loader::parse_name(&name).is_none()) {
                     return Err(err(E_NO_UNIT, format!("Unit {name} not loaded.")));
                 }
+                self.mac_check(c, msg, Some(&unit), "status").await?;
                 self.reply(c, msg, &(op(unit_path(&id)),)).await
             }
             "LoadUnit" => {
                 let (name,): (String,) = Self::args(msg)?;
                 Self::valid_name(&name)?;
-                let (id, _) = self.load_unit(&name);
+                let (id, unit) = self.load_unit(&name);
+                self.mac_check(c, msg, Some(&unit), "status").await?;
                 self.reply(c, msg, &(op(unit_path(&id)),)).await
             }
             "GetUnitByPID" => {
@@ -1472,7 +1503,10 @@ impl Daemon {
                     pid = self.caller_pid(c, msg).await.unwrap_or(0);
                 }
                 match util::proc_cgroup(pid).and_then(|cg| unit_of_cgroup(&cg)) {
-                    Some(u) => self.reply(c, msg, &(op(unit_path(&u)),)).await,
+                    Some(u) => {
+                        self.mac_unit(c, msg, &u, "status").await?;
+                        self.reply(c, msg, &(op(unit_path(&u)),)).await
+                    }
                     None => Err(err(E_NO_UNIT_FOR_PID, format!("PID {pid} does not belong to any loaded unit."))),
                 }
             }
@@ -1498,11 +1532,13 @@ impl Daemon {
                 let (name,): (String,) = Self::args(msg)?;
                 Self::valid_name(&name)?;
                 let id = self.index.read().unwrap().resolve(&name).to_string();
+                self.mac_unit(c, msg, &id, "reload").await?;
                 self.require_unit(c, msg, &id, "reset-failed").await?;
                 self.reset_failed(&name);
                 self.reply(c, msg, &()).await
             }
             "ResetFailed" => {
+                self.mac_check(c, msg, None, "reload").await?;
                 self.require_privileged(c, msg).await?;
                 for u in self.known_units() {
                     self.reset_failed(&u);
@@ -1515,6 +1551,7 @@ impl Daemon {
                     return Err(err(E_NO_UNIT, format!("Unit {name} not loaded.")));
                 }
                 let (id, unit) = self.load_unit(&name);
+                self.mac_check(c, msg, Some(&unit), "status").await?;
                 let dir = self.cgroup_dir_of(&id, &unit);
                 let procs: Vec<(String, u32, String)> = util::cgroup_pids(&dir)
                     .into_iter()
@@ -1531,25 +1568,35 @@ impl Daemon {
             "EnqueueMarkedJobs" => self.enqueue_marked(c, msg).await,
             // Reference counting is accepted and ignored.
             "RefUnit" | "UnrefUnit" | "AbandonScope" => {
+                let (name,): (String,) = Self::args(msg)?;
+                self.mac_unit(c, msg, &name, if member == "AbandonScope" { "stop" } else { "start" }).await?;
                 self.require_privileged(c, msg).await?;
                 self.reply(c, msg, &()).await
             }
             "GetJob" => {
                 let (id,): (u32,) = Self::args(msg)?;
-                if self.jobs.lock().unwrap().contains_key(&id) {
+                if let Some(u) = self.job_unit(id) {
+                    self.mac_unit(c, msg, &u, "status").await?;
                     self.reply(c, msg, &(op(job_path(id)),)).await
                 } else {
                     Err(err(E_NO_JOB, format!("Job {id} does not exist.")))
                 }
             }
             "CancelJob" => {
-                self.require_privileged(c, msg).await?;
                 let (id,): (u32,) = Self::args(msg)?;
+                if let Some(u) = self.job_unit(id) {
+                    self.mac_unit(c, msg, &u, "stop").await?;
+                }
+                self.require_privileged(c, msg).await?;
                 self.cancel_job(id)?;
                 self.reply(c, msg, &()).await
             }
-            "ClearJobs" => self.reply(c, msg, &()).await,
+            "ClearJobs" => {
+                self.mac_check(c, msg, None, "reload").await?;
+                self.reply(c, msg, &()).await
+            }
             "ListJobs" => {
+                self.mac_check(c, msg, None, "status").await?;
                 let jobs: Vec<(u32, String, String, String, ObjectPath<'static>, ObjectPath<'static>)> = self
                     .jobs
                     .lock()
@@ -1560,17 +1607,17 @@ impl Daemon {
                 self.reply(c, msg, &(jobs,)).await
             }
             "ListUnits" => {
-                let v = self.list_units(&[], &[], None).await;
+                let v = self.visible_units(c, msg, self.list_units(&[], &[], None).await).await;
                 self.reply(c, msg, &(v,)).await
             }
             "ListUnitsFiltered" => {
                 let (states,): (Vec<String>,) = Self::args(msg)?;
-                let v = self.list_units(&states, &[], None).await;
+                let v = self.visible_units(c, msg, self.list_units(&states, &[], None).await).await;
                 self.reply(c, msg, &(v,)).await
             }
             "ListUnitsByPatterns" => {
                 let (states, patterns): (Vec<String>, Vec<String>) = Self::args(msg)?;
-                let v = self.list_units(&states, &patterns, None).await;
+                let v = self.visible_units(c, msg, self.list_units(&states, &patterns, None).await).await;
                 self.reply(c, msg, &(v,)).await
             }
             "ListUnitsByNames" => {
@@ -1580,13 +1627,18 @@ impl Daemon {
                 let v = self.list_units(&[], &[], Some(&names)).await;
                 self.reply(c, msg, &(v,)).await
             }
-            "Subscribe" | "Unsubscribe" => self.reply(c, msg, &()).await,
+            "Subscribe" | "Unsubscribe" => {
+                self.mac_check(c, msg, None, "status").await?;
+                self.reply(c, msg, &()).await
+            }
             "Reload" | "Reexecute" => {
+                self.mac_check(c, msg, None, "reload").await?;
                 self.authorize(c, msg, "org.freedesktop.systemd1.reload-daemon").await?;
                 self.reload_db().await.map_err(|e| err(E_FAILED, e))?;
                 self.reply(c, msg, &()).await
             }
             "PowerOff" | "Reboot" | "Halt" => {
+                self.mac_check(c, msg, None, if member == "Reboot" { "reboot" } else { "halt" }).await?;
                 self.require_privileged(c, msg).await?;
                 let cmd = match member {
                     "PowerOff" => self.cfg.poweroff_cmd.clone(),
@@ -1601,6 +1653,7 @@ impl Daemon {
                 Err(err(E_NOT_SUPPORTED, format!("{member} is not supported by sdcompat")))
             }
             "SetEnvironment" | "UnsetEnvironment" | "UnsetAndSetEnvironment" => {
+                self.mac_check(c, msg, None, "reload").await?;
                 self.authorize(c, msg, "org.freedesktop.systemd1.set-environment").await?;
                 let (unset, set): (Vec<String>, Vec<String>) = match member {
                     "SetEnvironment" => (Vec::new(), Self::args::<(Vec<String>,)>(msg)?.0),
@@ -1622,10 +1675,12 @@ impl Daemon {
                 self.reply(c, msg, &()).await
             }
             "ListUnitFiles" => {
+                self.mac_check(c, msg, None, "status").await?;
                 let v = self.list_unit_files();
                 self.reply(c, msg, &(v,)).await
             }
             "ListUnitFilesByPatterns" => {
+                self.mac_check(c, msg, None, "status").await?;
                 let (states, patterns): (Vec<String>, Vec<String>) = Self::args(msg)?;
                 let v: Vec<(String, String)> = self
                     .list_unit_files()
@@ -1639,6 +1694,7 @@ impl Daemon {
                 self.reply(c, msg, &(v,)).await
             }
             "GetUnitFileState" => {
+                self.mac_check(c, msg, None, "status").await?;
                 let (name,): (String,) = Self::args(msg)?;
                 let st = install::unit_file_state(&self.cfg, &name).map_err(|e| err(E_NO_UNIT, e))?;
                 let st = install::set_file_state(&self.cfg, &name, st);
@@ -1709,6 +1765,7 @@ impl Daemon {
                 Ok(())
             }
             "PresetAllUnitFiles" => {
+                self.mac_check(c, msg, None, "enable").await?;
                 self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files").await?;
                 let (mode, runtime, force): (String, bool, bool) = Self::args(msg)?;
                 let names: Vec<String> = install::list_unit_files(&self.cfg)
@@ -1722,10 +1779,12 @@ impl Daemon {
                 Ok(())
             }
             "GetDefaultTarget" => {
+                self.mac_check(c, msg, None, "status").await?;
                 let t = install::get_default_target(&self.cfg).ok_or_else(|| err(E_NO_UNIT, "No default target"))?;
                 self.reply(c, msg, &(t,)).await
             }
             "SetDefaultTarget" => {
+                self.mac_check(c, msg, None, "enable").await?;
                 self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files").await?;
                 let (name, _force): (String, bool) = Self::args(msg)?;
                 let ch = install::set_default_target(&self.cfg, &name).map_err(|e| err(E_FAILED, e))?;
@@ -1733,7 +1792,10 @@ impl Daemon {
                 self.file_op_done().await;
                 Ok(())
             }
-            "Dump" => self.reply(c, msg, &("sdcompat does not implement Dump\n".to_string(),)).await,
+            "Dump" => {
+                self.mac_check(c, msg, None, "status").await?;
+                self.reply(c, msg, &("sdcompat does not implement Dump\n".to_string(),)).await
+            }
             _ => Err(err(E_UNKNOWN_METHOD, format!("Unknown method {member} or interface {MANAGER_IFACE}."))),
         }
     }
@@ -1784,6 +1846,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         transient: Mutex::new(BTreeMap::new()),
         manager_env: Mutex::new(manager_env),
         uid_cache: Mutex::new(HashMap::new()),
+        label_cache: Mutex::new(HashMap::new()),
         started: (util::now_realtime_usec(), util::now_monotonic_usec()),
         boot_done: AtomicBool::new(true),
         boot_finished: Mutex::new(Some((util::now_realtime_usec(), util::now_monotonic_usec()))),
@@ -1895,7 +1958,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
                 match msg.message_type() {
                     MsgType::MethodCall => {
                         let d = daemon.clone();
-                        let peer = Peer { conn: d.conn.clone(), uid: None, pid: None };
+                        let peer = Peer { conn: d.conn.clone(), uid: None, pid: None, label: None };
                         tokio::spawn(d.handle_call(peer, msg));
                     }
                     MsgType::Signal => {

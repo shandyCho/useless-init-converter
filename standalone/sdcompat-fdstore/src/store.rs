@@ -131,6 +131,38 @@ fn same_file(a: RawFd, b: RawFd) -> bool {
     stat(a).is_some() && stat(a) == stat(b) && flags(a) == flags(b)
 }
 
+/// Under SELinux only peers in the store's own domain may use it. Its
+/// clients are the service manager's own processes (sdcompatd and the
+/// runner, init_t on the s6 boot), and it holds every service's
+/// descriptors; root alone is not enough, as the policy lets many confined
+/// root daemons connect to init_t's sockets. Keep in step with
+/// crates/sdcompat-base/src/fdstore.rs (no shared code).
+fn same_domain(fd: RawFd, own: Option<&str>) -> bool {
+    let Some(own) = own else { return true };
+    peer_label(fd).as_deref() == Some(own)
+}
+
+/// Our SELinux context; None without SELinux (no selinuxfs).
+fn own_label() -> Option<String> {
+    if !Path::new("/sys/fs/selinux/enforce").exists() {
+        return None;
+    }
+    let s = std::fs::read_to_string("/proc/self/attr/current").ok()?;
+    let s = s.trim_end_matches(['\0', '\n']).to_string();
+    (!s.is_empty()).then_some(s)
+}
+
+/// The peer's SELinux context (SO_PEERSEC).
+fn peer_label(fd: RawFd) -> Option<String> {
+    let mut buf = [0u8; 4096];
+    let mut len = buf.len() as libc::socklen_t;
+    if unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERSEC, buf.as_mut_ptr().cast(), &mut len) } < 0 {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&buf[..len as usize]).trim_end_matches('\0').to_string();
+    (!s.is_empty()).then_some(s)
+}
+
 /// The serving side.
 #[derive(Clone, Default)]
 pub struct Store {
@@ -167,6 +199,7 @@ impl Store {
             OwnedFd::from_raw_fd(fd)
         };
         let me = unsafe { libc::geteuid() };
+        let own = own_label();
         let store = self.clone();
         std::thread::spawn(move || loop {
             let c = unsafe { libc::accept4(lfd.as_raw_fd(), std::ptr::null_mut(), std::ptr::null_mut(), libc::SOCK_CLOEXEC) };
@@ -183,6 +216,9 @@ impl Store {
                 libc::getsockopt(c, libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut _ as *mut libc::c_void, &mut len);
             }
             if cred.uid != 0 && cred.uid != me {
+                continue;
+            }
+            if !same_domain(c, own.as_deref()) {
                 continue;
             }
             // One thread serves everyone: a client that connects and then
@@ -258,6 +294,22 @@ impl Store {
                 reply(b"OK");
             }
             _ => reply(b"ERR bad request"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_stores_own_domain() {
+        let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        // Without SELinux everyone passes (root-only is checked before).
+        assert!(same_domain(a.as_raw_fd(), None));
+        assert!(!same_domain(a.as_raw_fd(), Some("system_u:system_r:other_t:s0")));
+        if let Some(own) = own_label() {
+            assert!(same_domain(a.as_raw_fd(), Some(&own)));
         }
     }
 }

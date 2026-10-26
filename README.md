@@ -127,6 +127,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 - `poweroff.target`, `reboot.target`, `halt.target`을 시작하면(logind가 전원을 끄는 방식) 설정된 종료 명령을 실행합니다.
 - D-Bus 활성화: dbus-daemon의 `ActivationRequest`에 응답하고, 시작이 실패하면 `ActivationFailure`로 답합니다.
 - 권한: 상태를 바꾸는 호출에는 root, `ALLOW_UIDS`에 있는 uid, 또는 systemd의 action ID(`manage-units`, `manage-unit-files`, `reload-daemon`, `set-environment`; 정책 파일은 systemd에 포함)에 대한 polkit 허가가 필요합니다. polkit이 없으면 root가 아닌 호출자는 거부됩니다. `ALLOW_UIDS`는 root와 같은 권한입니다. 유닛 하나에 대한 호출은 systemd처럼 polkit에 `unit`과 `verb` 세부 정보를 넘기므로, 그것으로 판단하는 규칙이 동작합니다. systemd와 같이 `AttachProcessesToUnit`의 유닛 이름이 비어 있으면 호출자 자신의 유닛이며, 권한 없는 호출자도 자신의 `Delegate=yes` 유닛 안에서 자기 프로세스는 옮길 수 있습니다(`user@UID.service`의 `systemd --user`).
+- SELinux 접근 검사를 systemd 262와 같이 polkit보다 먼저, root에게도 합니다. 호출자의 레이블(버스에서, 또는 private 소켓의 `SO_PEERSEC`)이 유닛 파일 레이블에 대해 클래스 `service`의 해당 권한(`start`, `stop`, `reload`, `status`)을, 매니저 호출과 유닛 파일이 없는 유닛은 sdcompatd 자신의 레이블에 대해 클래스 `system`의 권한(`reload`, `status`, `halt`, `reboot`, `enable`, `start`)을 가져야 합니다. `ListUnits`는 호출자가 볼 수 없는 유닛을 빼고 보여 줍니다. permissive 모드와 permissive 도메인에서는 거부를 기록만 합니다(sdcompatd의 stderr).
 - D-Bus 활성화 요청은 버스 데몬 자신이 보낸 것만 받아들이며, 활성화 때문에 데이터베이스를 다시 만들지 않습니다.
 - 같은 유닛의 작업은 차례로 실행되며, 대기 중인 작업은 취소할 수 있습니다.
 - 장치가 원하는 유닛(udev의 `SYSTEMD_WANTS`, 예: 블루투스 어댑터의 `bluetooth.target`,
@@ -175,7 +176,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 | 라이브러리 (Fedora 패키지) | 없을 때 |
 |---|---|
 | `libpam.so.0` (pam) | `PAMName=`이 있는 유닛이 실패(exit 224)하므로 `user@.service`와 GNOME이 시작되지 않습니다 |
-| `libselinux.so.1` (libselinux) | `RuntimeDirectory=` 등, 소켓 파일, 소켓 유닛의 소켓에 레이블을 붙이지 않습니다. 서비스가 잘못된 레이블을 받을 수 있습니다 |
+| `libselinux.so.1` (libselinux) | `RuntimeDirectory=` 등, 소켓 파일, 소켓 유닛의 소켓에 레이블을 붙이지 않습니다. 서비스가 잘못된 레이블을 받을 수 있습니다. D-Bus 호출자에 대한 SELinux 접근 검사를 하지 않습니다 |
 | `libseccomp.so.2` (libseccomp) | systemd가 seccomp 없이 빌드됐을 때처럼 `SystemCallFilter=`를 메시지와 함께 건너뜁니다. fwupd는 시작을 거부합니다 |
 
 **권장 패키지:** earlyoom(systemd-oomd 대신), chrony, NetworkManager,
@@ -481,7 +482,7 @@ crates/                    본체 (Cargo 작업공간 하나)
     seccomp.rs             SystemCallFilter=와 나머지 seccomp 기반 설정(libseccomp)
     bpf.rs                 DevicePolicy=/DeviceAllow=, IPAddressDeny=/IPAddressAllow=(cgroup eBPF)
     cgroup.rs              systemd 호환 cgroup 구조와 자원 제어
-    selinux.rs, pam.rs     레이블(libselinux), PAMName=(libpam), 둘 다 dlopen으로
+    selinux.rs, pam.rs     레이블과 접근 검사(libselinux), PAMName=(libpam), 둘 다 dlopen으로
     socket.rs              소켓 유닛(sd_listen_fds)
     execcmd.rs, conditions.rs   Exec*= 명령줄, Condition*/Assert*
   sdcompat-client/         데몬용 작은 D-Bus 클라이언트
@@ -491,7 +492,8 @@ crates/                    본체 (Cargo 작업공간 하나)
   sdcompat-timers/         타이머와 path 유닛 러너 (도구 sdcompat-timers)
   sdcompatd/               D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓,
                            요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs),
-                           장치가 원하는 유닛(devices.rs) (도구 sdcompatd)
+                           장치가 원하는 유닛(devices.rs), SELinux 접근 검사
+                           (access.rs) (도구 sdcompatd)
   sdcompat/                알맞은 도구를 실행하는 sdcompat 명령
 standalone/                별도 프로젝트. 각각 README와 spec이 있습니다
   sdcompat-fdstore/        파일 디스크립터 저장소 서버

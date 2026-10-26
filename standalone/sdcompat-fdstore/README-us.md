@@ -36,7 +36,10 @@ sdcompat-fdstore [--socket PATH] [--ready-fd N]
 - `--socket PATH`: where to listen (default `/run/sdcompat/fdstore`).
 - `--ready-fd N`: write a newline to fd N once listening (s6 readiness).
 
-Only root and the user running the server may use it. With sdcompat, the
+Only root and the user running the server may use it, and under SELinux only
+peers in the server's own domain (with sdcompat: `init_t`, the domain of
+sdcompatd and the runner, its only clients; many confined root daemons may
+connect to `init_t`'s sockets). With sdcompat, the
 `/etc/sdcompat/s6/sdcompat-fdstore` s6 service runs it; when this tool is not
 installed that service idles and sdcompatd holds the fds itself.
 

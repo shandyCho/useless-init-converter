@@ -34,7 +34,10 @@ sdcompat-fdstore [--socket PATH] [--ready-fd N]
 - `--socket PATH`: 기다릴 소켓(기본값 `/run/sdcompat/fdstore`).
 - `--ready-fd N`: 소켓을 연 뒤 fd N에 줄바꿈을 씁니다(s6의 준비 완료 알림).
 
-root와, 서버를 실행한 사용자만 쓸 수 있습니다. sdcompat과 함께 쓸 때는
+root와, 서버를 실행한 사용자만 쓸 수 있고, SELinux에서는 서버와 같은 도메인의
+상대만 쓸 수 있습니다(sdcompat에서는 유일한 클라이언트인 sdcompatd와 러너의 도메인
+`init_t`. 제한된 root 데몬 상당수가 `init_t`의 소켓에 연결할 수 있기 때문입니다).
+sdcompat과 함께 쓸 때는
 `/etc/sdcompat/s6/sdcompat-fdstore` s6 서비스가 이것을 실행합니다. 이 도구가
 없으면 그 서비스는 아무것도 하지 않고, sdcompatd가 fd를 직접 보관합니다.
 

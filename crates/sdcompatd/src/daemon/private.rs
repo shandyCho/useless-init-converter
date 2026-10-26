@@ -98,6 +98,10 @@ async fn serve(d: Arc<Daemon>, mut stream: UnixStream) {
         return;
     }
     let pid = cred.pid().map(|p| p as u32);
+    let label = {
+        use std::os::fd::AsRawFd;
+        super::access::peer_label(stream.as_raw_fd())
+    };
     let guid = zbus::Guid::generate();
     if let Err(e) = handshake(&mut stream, guid.as_str()).await {
         eprintln!("sdcompatd: private socket handshake: {e}");
@@ -125,7 +129,7 @@ async fn serve(d: Arc<Daemon>, mut stream: UnixStream) {
     while let Some(m) = msgs.next().await {
         let Ok(msg) = m else { break };
         if msg.message_type() == MsgType::MethodCall {
-            let peer = Peer { conn: conn.clone(), uid: Some(uid), pid };
+            let peer = Peer { conn: conn.clone(), uid: Some(uid), pid, label: label.clone() };
             tokio::spawn(d.clone().handle_call(peer, msg));
         }
     }

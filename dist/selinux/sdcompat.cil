@@ -80,6 +80,15 @@
 (allow init_t sdcompat_log_fifo_t (fifo_file (create open read write append ioctl getattr setattr lock unlink)))
 (allow domain sdcompat_log_fifo_t (fifo_file (write append ioctl getattr)))
 ;
+; With JOURNAL=no a service's stdout and stderr are its s6-log pipe, made by
+; s6-rc's fdholder (init_t pipefs). Daemons may write init_t's pipes (the
+; policy's daemon -> initrc_domain rule); NetworkManager's dispatcher
+; scripts, which run in their own domains (04-iscsi, 20-chrony-*), may not:
+; their output was dropped with a write denial each. The policy lets them
+; write init_t's stream socket, which is journald's stdout under systemd;
+; the same for its pipe.
+(allow networkmanager_dispatcher_plugin init_t (fifo_file (write append ioctl getattr)))
+;
 ; A service directory's event/ is s6's fifodir: s6-svc -w, s6-svwait,
 ; s6-svlisten and s6-rc's waits (s6-ftrigr) create a fifo in it that
 ; s6-supervise (init_t) writes the events to. Created by init_t in the /run

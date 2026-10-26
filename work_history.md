@@ -5962,3 +5962,122 @@ waiter was unblocked after 11 s, the plain wait timed out (99, 15 s).
 
 1. Part 10's steps unchanged (standalone RPMs optional; the JOURNAL=no
    dispatcher-script pipe AVCs; the SELinux access checks decision).
+
+## 2026-10-26, part 12: SELinux access checks; dispatcher pipe AVCs
+
+Owner asked to fix both open items: the JOURNAL=no dispatcher-script
+pipe AVCs and part 3's "SELinux access checks in sdcompatd and the fd
+stores" (decided: do it).
+
+### Dispatcher scripts' pipe AVCs (dist/selinux/sdcompat.cil)
+
+- Cause: with JOURNAL=no a service's stdout/stderr is its s6-log pipe,
+  an init_t pipefs object (s6-rc's fdholder). Daemons may write it
+  through the policy's `daemon -> initrc_domain:fifo_file` rule.
+  NetworkManager's dispatcher scripts run in their own domains, all in
+  the attribute `networkmanager_dispatcher_plugin` (12 types), which is
+  not `daemon`; the policy only gives it `init_t:unix_stream_socket
+  { append connectto getattr ioctl }`, i.e. journald's stdout under
+  systemd. Each script's write was denied and its output lost.
+- Fix: `(allow networkmanager_dispatcher_plugin init_t (fifo_file
+  (write append ioctl getattr)))`, the same four permissions as the
+  catch-all fifo rule. Attribute, type, class and permissions checked
+  with seinfo against the loaded policy (part 7's lesson). Not loaded
+  (needs root).
+
+### sdcompatd: systemd's SELinux access checks
+
+- Ported from systemd 262's sources (selinux-access.c, dbus.c
+  mac_selinux_filter, dbus-manager.c, dbus-unit.c, dbus-job.c, fetched
+  for the installed version). Target: the unit file's raw label
+  (getfilecon_raw on the fragment; none when masked, transient or not
+  found) in class `service`, else sdcompatd's own (getcon_raw) in class
+  `system`. Source: the bus's LinuxSecurityLabel
+  (GetConnectionCredentials, cached per unique name like the uid) or
+  SO_PEERSEC on the private socket. Before polkit, for root too.
+- Per method, as systemd: job methods start/restart/try-restart/
+  reload-or-restart/reload-or-try-restart -> `start`, stop -> `stop`,
+  reload -> `reload` (job_type_to_access_method; ReloadOrRestart is a
+  restart job there); Kill, AbandonScope, Job.Cancel/CancelJob ->
+  `stop`; ResetFailedUnit -> `reload`; SetProperties/SetUnitProperties,
+  Ref/Unref, AttachProcessesToUnit -> `start`; GetUnit, LoadUnit,
+  GetUnitByPID, GetUnitProcesses, GetJob -> `status` (unit). Manager:
+  StartTransientUnit, EnqueueMarkedJobs -> `start` (then per marked unit,
+  skipped and logged when denied); Reload/Reexecute, ResetFailed,
+  ClearJobs, Set/UnsetEnvironment -> `reload`; PowerOff/Halt -> `halt`,
+  Reboot -> `reboot`; ListJobs, Subscribe, ListUnitFiles*,
+  GetUnitFileState, GetDefaultTarget, Dump -> `status`;
+  SetDefaultTarget, PresetAllUnitFiles -> `enable`. ListUnits* drop the
+  units the caller may not `status`; ListUnitsByNames and the per-file
+  Enable/Disable/Mask/Preset calls have no check in 262, nor here.
+  Properties/Introspectable/Peer on any path below
+  /org/freedesktop/systemd1: `system` `status` (`reload` for Set);
+  systemd's object_path_startswith makes its unit branch dead code, so
+  the manager is the target for unit objects too.
+- libselinux via the existing dlopen binding (sdcompat-exec selinux.rs:
+  getcon_raw, getfilecon_raw, selinux_check_access,
+  security_getenforce), only as root with SELinux on, so the sandbox is
+  unaffected. The userspace AVC answers permissive mode and permissive
+  domains itself and logs denials to stderr (sdcompatd has no logger:
+  /run/uncaught-logs); calls are serialised (no AVC lock callbacks).
+  sdcompatd adds a "SELinux access check scon= tcon= tclass= perm=" line
+  as systemd does. Not sent to audit as USER_AVC (no libaudit), so
+  `ausearch` doesn't show these; the uncaught log does.
+- When the caller's or our own label is unknown: denied under enforcing,
+  allowed in permissive (systemd denies in both; lenient where it
+  can't matter).
+- Policy check before writing it: init_t has every `system` permission
+  and `service` on systemd_unit_file_type, so sdcompat's own init_t
+  clients (timers, runner) keep working; other callers get what systemd
+  gives them under the same policy (same unit files, same init_t).
+
+### fd stores (sdcompat-base fdstore.rs, standalone sdcompat-fdstore)
+
+- systemd has no such socket (its fd store is internal). The clients are
+  sdcompatd and the runner, both init_t on the s6 boot (ps -eZ). Under
+  SELinux (selinuxfs present) a peer must now have the store's own
+  context (SO_PEERSEC == /proc/self/attr/current), after the existing
+  root-or-own-uid check; without SELinux nothing changes. Not a policy
+  query: a confined root daemon may connect to init_t sockets
+  (nsswitch_domain), and the store holds every service's fds. Both
+  copies kept in step (no shared code), README pair of the standalone
+  updated.
+
+### Docs
+
+README pair (authorization: the checks; dependency table: libselinux
+also does the checks; layout: access.rs, selinux.rs). TESTING pair: rows
+"SELinux checks on D-Bus callers" (runcon -r system_r -t
+insights_core_t: a non-permissive system_r domain with a bin_t
+entrypoint, connectto init_t sockets, write on init_var_run_t sockets
+and only `status` on init_t; `systemctl show` must work, `daemon-reload`
+must be refused) and "Dispatcher scripts' output".
+
+### Tests
+
+- cargo test: new sdcompat-exec `check_access_on_this_host` (unconfined_t
+  -> init_t system status/reload, systemd_unit_file_t service start;
+  chronyd_t reboot denied under enforcing: the denial was logged here),
+  sdcompatd access tests (job type mapping, path prefix, SO_PEERSEC of a
+  socketpair equals /proc/self/attr/current), fd store same-domain test
+  in both copies. Whole workspace and the fdstore project pass.
+- Sandbox: default 227/227, SANDBOX_FDSTORE=no 227/227,
+  SANDBOX_JOURNAL=no 234/234 (the store's check runs there: all
+  unconfined_t; the daemon's checks don't, not root).
+- Not tested: the daemon's checks as root under enforcing, the CIL rule
+  loaded (both need root and the real boot).
+
+### Current state
+
+Committed, not installed. The checks change behaviour only for confined
+callers on the s6 boot, to systemd's.
+
+### Next steps
+
+1. Owner: rebuild the RPMs and dnf upgrade (the %post semodule must
+   print no error), reboot into s6, then the two new TESTING rows and
+   `sudo grep -E 'SELinux access check|avc: +denied'
+   /run/uncaught-logs/current` after normal use (expected: nothing but
+   the test's own denial).
+2. Optional: standalone RPMs so dnf owns the tools in
+   /usr/libexec/sdcompat.
