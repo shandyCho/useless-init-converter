@@ -6354,3 +6354,27 @@ Fix committed, not yet on an s6 boot. No other open items.
 1. Owner: rebuild/install, boot s6, `ausearch -m AVC -ts boot | grep
    proc_psi` (expect no matches) and check hostnamed's
    MEMORY_PRESSURE_WATCH/WRITE in /proc/PID/environ.
+
+## 2026-10-26, part 19: proc_psi_t fix confirmed on an s6 boot
+
+### Result
+
+- Owner, on the s6 boot (`/proc/1/comm`: `s6-svscan`), with the build
+  containing `43e3986` installed:
+  - `ausearch -m AVC -ts boot | grep proc_psi`: no matches.
+  - After `hostnamectl` (to start hostnamed), its /proc/PID/environ:
+    `MEMORY_PRESSURE_WATCH=/sys/fs/cgroup/system.slice/systemd-hostnamed.service/memory.pressure`,
+    `MEMORY_PRESSURE_WRITE=c29tZSAyMDAwMDAgMjAwMDAwMAA=`: identical to
+    the systemd boot's values (part 18).
+- So the denial was the missing MEMORY_PRESSURE_WATCH, and sdcompat now
+  passes what PID 1 does. No code changes this part.
+
+### Current state
+
+No open items. The proc_psi_t denial, the only one left in part 17's
+`audit2allow`, is gone; the full `ausearch -m AVC -ts boot | audit2allow`
+was not rerun on this boot.
+
+### Next steps
+
+None pending. New work only at the owner's request.
