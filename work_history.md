@@ -5942,3 +5942,21 @@ pipe AVCs, the SELinux access checks decision.
 2. Optional: add step 3 (the fake stuck wait) to the TESTING pair's
    "Reload watchdog" row, if the owner wants an active check there.
 3. Earlier steps unchanged.
+
+## 2026-10-26, part 11: the watchdog check as a script
+
+Owner asked to add part 10's step 3 to the TESTING docs. Too long for a
+table cell, so it is tests/linkwatch-check.sh (root; `ok:`/`FAIL:` lines,
+exit 0 when all pass): linkwatch up, the fake stuck `s6-rc-update` wait
+in /run/sdcompat/lwtest unblocked in < 25 s, a plain s6-ftrig-wait left
+alone, linkwatch's log line, no lwtest/ftrig AVCs; cleanup on exit
+(s6-svc -x, rm). New TESTING pair row "Reload watchdog unblocks a wait"
+under "Reload watchdog". bash -n and shellcheck -S warning pass; only
+the non-root and usage paths ran here (no root). The commands are the
+ones the owner ran successfully in part 10.
+
+### Next steps
+
+1. Owner: `sudo tests/linkwatch-check.sh` once on the s6 boot (five ok
+   lines, exit 0).
+2. Part 10's other steps unchanged.
