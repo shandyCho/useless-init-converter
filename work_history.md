@@ -5740,3 +5740,73 @@ since the crash needs a subscribe.
 1. Owner: rebuild RPMs at the next install.
 2. Earlier steps: the rfkill row (part 4), SELinux access checks
    decision, part 3's checks.
+
+## 2026-10-26, part 6: the wait that never ends; sdcompat-linkwatch
+
+Owner asked to check part 5's claim that a crash during the wait for the
+new supervisors (which would kill them) can't happen, then to implement a
+watchdog as its own package and record it here. Commit `836404c`.
+
+### The claim, checked in the sources
+
+- The kill path (do_unlink with killopts 3) needs ftrigr_wait_and() to
+  fail. The client sends nothing to s6-ftrigrd while waiting
+  (ftrigr_update/ack/peek only read), so the subscribe-after-fire crash
+  can't happen there; a second "s" on an already-fired fifo is answered
+  with a stale id and a harmless double free of a handle (no
+  subscriptions follow); a second supervisor for a directory dies on
+  supervise/lock before its "s". Neither s6-rc-set-install nor sdcompat
+  passes -t to s6-rc-update, so no ETIMEDOUT either. The claim holds.
+- The same race has another outcome: a supervisor that starts after
+  s6_supervise_link_names() noted the directory as unsupervised but
+  before it subscribed sends its "s" to nobody. The wait then never ends
+  (infinite deadline) and holds s6-rc's lock: the reload and every s6-rc
+  command after it hang. Inferred from the code and part 5's timings,
+  not caught in a trace; it fits the 2026-10-21 check.sh hang in `s6-rc
+  -u change hold2.service` and the 2026-10-22 JOURNAL=no "waiting for
+  s6rc-fdholder" hangs, which were blamed on the failed update then.
+- `-t` for s6-rc-update would be worse: on a timeout it kills every new
+  supervisor and brings their services down.
+
+### standalone/sdcompat-linkwatch (new project, own RPM)
+
+- Every --interval (2 s) it finds an s6-ftrigrd whose parent's comm is
+  s6-rc-update or s6-svlink and which has run --after (10 s) seconds
+  (subscribing takes milliseconds, so it is waiting). For each
+  `event/ftrig1:*` fifo in its /proc/PID/fd whose service directory has
+  supervise/lock held, it writes "s" into that fifo, once per (pid,
+  fifo), and logs it. Other waiters (s6-rc on a service, s6-svwait) are
+  never touched; it writes only to the waiting s6-ftrigrd's own fifos,
+  and only after the subscriptions are over (an extra event during them
+  is what crashes s6-ftrigrd). --under DIR limits it to one tree
+  (the sandbox), --once for a single look. Depends only on libc; its
+  own lock_held() (no shared code with the core).
+- Core side: s6 longrun dist/s6/sdcompat-linkwatch (after mount-api, in
+  sdcompat-sysinit), idle when the tool isn't installed; setup's
+  STANDALONE list and --without; restart_daemon restarts it too (no
+  state); `sdcompat linkwatch`; sdcompat.spec Recommends it; README pair
+  (table, layout, --without), TESTING pair (a row).
+- SELinux: /usr/libexec/sdcompat is init_exec_t, so it runs as init_t,
+  as s6-rc-update and s6-ftrigrd do; no new rules. Not tried enforcing.
+
+### Tests
+
+cargo test for the project (stat parsing, fifo paths, a fake /proc: sent
+once, only to the supervised directory, not below another --under, not to
+an s6-rc's s6-ftrigrd). By hand with real s6: a supervisor started first,
+then s6-ftrig-wait copied as `s6-rc-update` waiting on its event/:
+times out alone (exit 99), returns 0 after ~2 s with the watcher.
+check.sh section "linkwatch" (2 checks) does the same against the
+sandbox's instance (`--after 3 --interval 1 --under $R`, started by
+sandbox.sh). Sandbox: default 227/227, SANDBOX_JOURNAL=no 234/234,
+SANDBOX_FDSTORE=no 227/227 (the machine was suspended for most of the
+JOURNAL=no run; the run itself was normal). bash -n and shellcheck -S
+warning on the changed scripts. cargo build/test for the core.
+
+### Next steps
+
+1. Owner: build and install the new RPM
+   (standalone/sdcompat-linkwatch/sdcompat-linkwatch.spec) with the
+   others, rerun setup, then the TESTING "Reload watchdog" row.
+2. Earlier steps: the rfkill row (part 4), SELinux access checks
+   decision, part 3's checks.
