@@ -6584,3 +6584,29 @@ s6-linux-init-maker (the RPM's %post doesn't).
    kernel log without `stop-instances failed`), and `ausearch -m AVC -ts
    boot`.
 2. Test unit cleanup from part 21 if not done.
+
+## 2026-10-26, part 23: power-off without the 45 s waits (real boot)
+
+### Results (owner; logs in ~/sdcompat-logs/retest2)
+
+- `/etc/s6-linux-init/current/scripts/rc.shutdown` has `stop-instances`.
+- TESTING "Previous shutdown" passes: no `stopping ... took`, no `closing
+  the PAM session took`, no `stop-instances failed` in the kernel log, no
+  `services still not down`. AVC: 0 in both logs, `ausearch -m AVC -ts
+  boot` has no matches.
+- Timing: `poweroff.target requested` 23:44:10.42, s6-rc starts stopping
+  at 12.54 (so stop-instances took ~2 s, user@/user-runtime-dir@
+  included), last s6-rc line 13.59. Kernel: `sdcompat: shutdown starts`
+  85.34 s, root unmount 91.53 s. The owner timed ~7 s to power-off, down
+  from ~90 s in part 21.
+- Unrelated, not investigated: `sdcompat-runner: user@60578.service: user
+  60578 does not exist` at 23:43:33 (during the session, not at shutdown).
+
+### Current state
+
+Part 22's fix verified on a real boot; the 2 x 45 s at power-off is gone.
+
+### Next steps
+
+1. Test unit cleanup from part 21 if not done.
+2. Optional: what requested user@60578 (60578 isn't a local user).
