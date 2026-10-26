@@ -5856,3 +5856,55 @@ checks didn't either.
    the labels, GRUB entries and the rest).
 2. Rebuild/upgrade the RPMs with this fix (early is in the sdcompat
    RPM), reboot, `ls -l /dev/fd`, then part 6's checks.
+
+## 2026-10-26, part 9: status after the g86951b6 reboot
+
+Status check only, no code change. As the unprivileged user (no sudo):
+s6-svscan is PID 1 with s6 init-selinux, SELinux enforcing, all
+g86951b6 RPMs installed 11:01, booted ~11:19. Part 8's fix works: /dev/fd,
+/dev/std{in,out,err} and /dev/core exist, created at boot. sdcompatd,
+sdcompat-fdstore, journal-relay and linkwatch are running (linkwatch since
+boot, no s6-rc-update waiting). The standalone binaries in
+/usr/libexec/sdcompat are owned by no package (installed by setup from
+the 10:49 build, not from the standalone RPMs). rfkill restore matches the
+saved state (bluetooth blocked, wlan not). Network and DNS work
+(RESOLVED=no). GNOME session up. /etc/sdcompat/sdcompat.conf.rpmnew is
+only the newer commented defaults; the owner's JOURNAL=no and RESOLVED=no
+are kept.
+
+Then by the owner, as root:
+
+- `s6-rc -da list` filtered by `s6-rc-db atomics default`: empty, every
+  member of the boot bundle is up. (I first gave `s6-rc -d list`, which
+  prints the whole database: -d inverts the empty selection. Use -da.)
+  The `<(...)` in that command (the owner's shell) ran: /dev/fd works.
+- `ausearch -m avc -ts boot`: only the known two. NetworkManager
+  dispatcher scripts (NetworkManager_dispatcher_iscsid_t/_chronyc_t)
+  denied writing their service's s6-log pipe (init_t fifo_file), the
+  open JOURNAL=no item; systemd_hostnamed_t searching /proc/pressure
+  (proc_psi_t), Fedora's policy.
+- 11:03 shutdown logs: only known items. home1 excluded by
+  configuration; dbus-daemon "Rejected send message" (bus policy);
+  "Transaction ... is destructive (the system is shutting down)" for
+  dbus activations during shutdown (intended, as systemd); PAM
+  session_close/setcred res=failed for gdm's and user@1000's sessions
+  (logind already stopped; known). Two "Broken pipe" lines from clients
+  of a restarted sdcompatd: cups.path at 10:49:22 (setup's daemon
+  restart) and snapper-timeline.timer at 11:00:00 (its connection had
+  died earlier and was found at the elapse). Both drop the connection and
+  retry (pathunit.rs re-fires while the level holds; timer.rs trigger()
+  returns false, so the elapse is retried); cupsd runs now. Nothing to
+  fix.
+
+### Current state
+
+This boot is clean apart from the known JOURNAL=no dispatcher AVCs.
+The part 8 fix is verified on hardware.
+
+### Next steps
+
+1. Part 6's TESTING "Reload watchdog" row (linkwatch is running).
+2. Optional: install the standalone RPMs so dnf owns the four tools in
+   /usr/libexec/sdcompat.
+3. Earlier steps unchanged (SELinux access checks decision, the
+   dispatcher-script pipe AVCs under JOURNAL=no).
