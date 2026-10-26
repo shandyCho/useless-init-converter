@@ -5810,3 +5810,49 @@ warning on the changed scripts. cargo build/test for the core.
    others, rerun setup, then the TESTING "Reload watchdog" row.
 2. Earlier steps: the rfkill row (part 4), SELinux access checks
    decision, part 3's checks.
+
+## 2026-10-26, part 7: the rfkill policy rule did not load
+
+Owner's `dnf upgrade` of the g8695765 RPMs: the sdcompat %post semodule
+failed, "Failed to resolve permission truncate ... cil:130". Part 4's
+rule for init_t on systemd_rfkill_var_lib_t files named `truncate`,
+which the file class doesn't have here (O_TRUNC needs write, truncating
+setattr: both already in the rule). Removed it. Checked every allow
+rule's class and permissions (all 7) against the loaded policy with
+seinfo, and the two types: no other problem. The old module stayed
+loaded (semodule changes nothing on failure). Lesson: check a new rule's
+permissions with seinfo before committing; the module can't be compiled
+here without root.
+
+### Next steps
+
+1. Owner: rebuild the RPMs, `dnf upgrade` them (the %post must print no
+   semodule error), then part 6's steps (setup with --rebuild, reboot,
+   checks).
+
+## 2026-10-26, part 8: no /dev/fd on the --boot-only-s6 boot
+
+The owner's setup rerun on the s6 boot (s6 initramfs) died in
+setup_selinux: `line 730: /dev/fd/63: No such file or directory` (the
+`mapfile < <(skarnet_files)` process substitution), after semodule -i.
+/dev/fd, /dev/stdin, /dev/stdout, /dev/stderr and /dev/core don't exist
+on this boot: systemd's mount-setup (PID 1 of Fedora's initramfs) makes
+them and they came along with the moved /dev; the s6 initramfs mounts a
+bare devtmpfs and nothing made them. Every bash `<(...)` on the system
+fails, and programs opening /dev/stdin.
+
+Fix: dist/early mount-api creates the four links (and /dev/core when
+/proc/kcore exists) when missing, before its `restorecon -R /dev`
+(device_t, as matchpathcon says). With a systemd initramfs they exist and
+nothing changes. sh -n, shellcheck -S warning; the loop run twice
+against a scratch directory (creates all five, then exits 0 with no
+change). Not on a boot yet. The QEMU test (tests/initramfs.sh) never
+used /dev/fd, so it couldn't show this; the 2026-10-26 hardware boot
+checks didn't either.
+
+### Next steps
+
+1. Owner, now: create the links by hand, rerun setup (it stopped before
+   the labels, GRUB entries and the rest).
+2. Rebuild/upgrade the RPMs with this fix (early is in the sdcompat
+   RPM), reboot, `ls -l /dev/fd`, then part 6's checks.
