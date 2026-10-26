@@ -6651,3 +6651,48 @@ bookkeeping, and only a spawn that needs the missing user fails.
 
 1. Owner: decide on the fix above.
 2. Test unit cleanup from part 21 if not done.
+
+## 2026-10-27, part 25: User=/Group= resolved only for a start (3752774)
+
+### Change (owner chose part 24's fix)
+
+- sdcompat-runner: `Runner::new(cfg, name, starting)`; main passes
+  `starting` for `run`/`up`. New `resolve_credentials` (User=,
+  DynamicUser=, Group=, SupplementaryGroups=) returns the error with
+  systemd's exit code. A start fails as before (setup_failed, Result
+  "resources"). For other commands (`finish`, `down`, `stop-atom`,
+  `stop-exec`, `reload-exec`) the error is kept in `cred_error` and
+  `exec_command` returns it after setup_stdio, so only a spawned process
+  fails (217/USER, 216/GROUP) and the command's bookkeeping runs.
+- README/README-us: a note under User=.
+
+### Tests
+
+- cargo build (no warnings), cargo test, standalone tests passed.
+- Sandbox 257/257 (new section "User= gone before the stop":
+  userless.service started with User=$(id -un), User= changed to a
+  missing user in the unit file, StopUnit -> inactive/dead, MainPID 0,
+  Result success, InactiveEnterTimestamp set; a start with the missing
+  user -> failed, Result resources).
+- With the old runner the new section fails at InactiveEnterTimestamp
+  (256/257). MainPID was 0 there even without the fix, unlike the real
+  boot's user@60578 (MainPID 2362 kept), so that assertion alone
+  wouldn't catch it.
+- bash -n and shellcheck -S warning on check.sh and sandbox.sh.
+  SANDBOX_JOURNAL=no / SANDBOX_FDSTORE=no not rerun (those parts not
+  touched). cargo clippy isn't installed.
+- Not tested: a real boot (GDM login, then `systemctl status
+  user@60578.service` should show "inactive (dead) since ...", no Main
+  PID/Status, and no `user 60578 does not exist` line).
+
+### Current state
+
+Committed, sandbox-verified; not on a real boot.
+
+### Next steps
+
+1. Owner: rebuild/upgrade RPMs, boot s6, log in through GDM, then check
+   `systemctl status user@60578.service` (the greeter's uid can differ
+   per boot; `ls /run/sdcompat/units | grep user@`) and the absence of
+   `does not exist` in the next shutdown console log.
+2. Test unit cleanup from part 21 if not done.
