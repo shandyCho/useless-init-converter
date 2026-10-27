@@ -7015,3 +7015,24 @@ This machine still runs the old sdcompat RPMs (ga365750) on its s6 boot.
   link to "Moving from sdcompat".
 - No other sentence was made wrong by the rename; English has no "an
   uinitconverter".
+
+## 2026-10-27, part 33: README/TESTING checked against the source (see the docs commit after 4ebef55)
+
+Owner asked to compare the README with the code and update README and
+TESTING. Checked: source layout, Cargo dependencies, config keys and
+defaults (config.rs vs dist/uinitconverter.conf vs README), each tool's
+subcommands (main.rs dispatch), init's options and steps, the D-Bus methods
+listed, the directive lists (implemented / not implemented), the s6
+initramfs's kernel options, rc.init/rc.shutdown limits, spec Requires, the
+sandbox's programs, and the expected results of check.sh, initramfs.sh,
+linkwatch-check.sh, bpf-root.sh, memcompare.sh, plan's output.
+
+Fixed (both languages): missing subcommands (stop-instances, stop-atom,
+init, forwarding to the standalone tools); OnTimezoneChange= not
+implemented and the timer keys accepted silently; shadow-utils dependency;
+check counts (~260, was 119/120); init's conditional unit enabling, -y,
+--grub=yes|no; rd.luks=0; initramfs.sh's by-uuid case; s6-frontend/s6.conf
+without a "setup script"; SELinux permissive only on the first run; GNOME
+status limited to what is recorded (GDM login, GNOME session, power off from
+the GNOME menu on one Fedora 45 machine, enforcing); source layout entries.
+Everything else matched the code.
