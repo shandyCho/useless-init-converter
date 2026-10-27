@@ -26,6 +26,8 @@ usage: uinitconverter-runner [--config PATH] COMMAND [--config PATH] [--mainpid 
   stop-exec    ExecStop= with $MAINPID (called by uinitconverterd)
   stop-atom    `down` of UNIT.stop: ExecStop= when s6-rc stops a longrun
   reload-exec  ExecReload= with $MAINPID (called by uinitconverterd)
+  notify-helper ...
+               internal: the Type=notify helper `run` starts
 ";
 
 fn die(msg: &str) -> ! {
@@ -147,6 +149,10 @@ fn main() {
     if uinitconverter_version::wanted(&cmd) {
         uinitconverter_version::print("uinitconverter-runner");
         exit(0);
+    }
+    // Internal: `run` re-executes into it; it loads no config or unit.
+    if cmd == "notify-helper" {
+        exit(runner::notify_helper_main(&args[1..]));
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
     let a = parse_internal(&args[1..]);

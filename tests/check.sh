@@ -111,10 +111,20 @@ section "boot state"
 expect_state hello.service active/running
 expect_state notifier.service active/running
 expect_eq "notify STATUS= relayed" "$(prop notifier.service Service StatusText)" "all good"
+# The notify helper re-executes the runner, so it doesn't keep the whole
+# runner's memory, and keeps only its socket (not the service's fds).
+helper=$(pgrep -u "$(id -u)" -f 'uinitconverter-runner notify-helper .*--unit notifier\.service$' | head -1)
+[ -n "$helper" ] && ok "notify helper re-executed" || bad "no notify-helper process for notifier.service"
+anon=$(awk '/^RssAnon:/ {print $2}' "/proc/$helper/status" 2>/dev/null)
+[ "${anon:-99999}" -lt 1024 ] && ok "notify helper small (RssAnon ${anon} kB)" || bad "notify helper RssAnon ${anon:-?} kB"
+nfd=$(find "/proc/$helper/fd" -mindepth 1 2>/dev/null | wc -l)
+# stdio, its socket and the main process's pidfd.
+[ "$nfd" -le 5 ] && ok "notify helper holds $nfd fds" || bad "notify helper holds $nfd fds: $(ls -l "/proc/$helper/fd" 2>&1 | tail -n +2)"
+expect_eq "ExecStartPost= ran with \$MAINPID" "$(cat "$R/notifier-post.out" 2>/dev/null)" "post $(prop notifier.service Service MainPID)"
 # The notify helper must block in poll() after READY=1, not spin.
 ticks() {
     t=0
-    for p in $(pgrep -u "$(id -u)" -f 'uinitconverter-runner run .*-- notifier\.service$'); do
+    for p in $(pgrep -u "$(id -u)" -f 'uinitconverter-runner notify-helper .*--unit notifier\.service$'); do
         t=$((t + $(awk '{print $14 + $15}' "/proc/$p/stat" 2>/dev/null || echo 0)))
     done
     echo "$t"

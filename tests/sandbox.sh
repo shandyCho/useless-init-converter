@@ -115,6 +115,7 @@ Description=Type=notify service
 [Service]
 Type=notify
 ExecStart=/bin/sh -c 'sleep 0.3; $NOTIFY --ready --status="all good"; exec sleep 1000'
+ExecStartPost=/bin/sh -c 'echo "post \$MAINPID" > $R/notifier-post.out'
 [Install]
 WantedBy=multi-user.target
 EOF
