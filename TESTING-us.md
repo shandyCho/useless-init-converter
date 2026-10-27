@@ -320,6 +320,34 @@ memory differs most. With root it compares PSS (shared pages split between
 the processes that use them); without root it falls back to private
 anonymous memory.
 
+**Or let every boot measure itself.** Install the snapshot service once (on
+either boot):
+
+```sh
+sudo tests/memtest.sh install        # --wait SECS (600), --max-diff MIB (50)
+```
+
+Then just reboot into the systemd entry and the s6 entry as often as you
+like. On each boot, type the LUKS passphrase but don't log in for ten
+minutes: the service waits 600 s after it starts (the time at the passphrase
+prompt doesn't count), takes the snapshot at the GDM greeter into
+`~/uinitconverter-mem/memtest/` and rewrites `report.txt` there:
+
+```sh
+tests/memtest.sh report              # the same, on demand
+```
+
+The report has the median of each init's snapshots (a few boots of each
+smooth out the noise), one line per snapshot, the latest pair in
+`memcompare.sh compare` detail, and `Result: PASS` when the s6 boot's
+"total - available" is at most 50 MiB above the systemd boot's (exit 0;
+`FAIL` exits 1, `INCOMPLETE` 2 until both inits have a snapshot). Delete
+the old `.tsv` files to start over. `sudo tests/memtest.sh run` takes a
+snapshot by hand; `sudo tests/memtest.sh uninstall` removes the service
+(the snapshots stay). The service's own processes are left out of the
+snapshots; its log is `/var/lib/uinitconverter-memtest/log`.
+`tests/memtest-check.sh` checks the script itself, unprivileged.
+
 ## If the s6 boot fails
 
 1. Press **Ctrl+Alt+F9**. A rescue login prompt runs there even when the rest

@@ -299,6 +299,33 @@ tests/memcompare.sh compare ~/uinitconverter-mem/mem-systemd-*.tsv ~/uinitconver
 PSS(공유 페이지를 쓰는 프로세스들에 나눠 계산한 값)를 비교하고, root가 아니면
 개인 익명 메모리로 비교합니다.
 
+**또는 부팅할 때마다 스스로 측정하게 하세요.** 스냅샷 서비스를 한 번 설치합니다
+(어느 부팅에서든):
+
+```sh
+sudo tests/memtest.sh install        # --wait 초(600), --max-diff MiB(50)
+```
+
+그다음에는 systemd 항목과 s6 항목으로 원하는 만큼 재부팅하기만 하면 됩니다.
+부팅할 때마다 LUKS 암호를 입력하고 10분 동안 로그인하지 마세요. 서비스는 시작한
+뒤 600초를 기다리고(암호 입력 화면에서 보낸 시간은 세지 않습니다), GDM 로그인
+화면 상태에서 `~/uinitconverter-mem/memtest/`에 스냅샷을 찍고 그곳의
+`report.txt`를 다시 씁니다.
+
+```sh
+tests/memtest.sh report              # 같은 보고서를 언제든
+```
+
+보고서에는 init별 스냅샷의 중앙값(각각 몇 번씩 부팅하면 잡음이 줄어듭니다),
+스냅샷마다 한 줄, 가장 최근 한 쌍의 `memcompare.sh compare` 상세 내용이 있고,
+s6 부팅의 "total - available"이 systemd 부팅보다 50 MiB 이하로 많으면
+`Result: PASS`입니다(종료 코드 0, `FAIL`은 1, 두 init 모두 스냅샷이 생기기
+전에는 `INCOMPLETE`로 2). 처음부터 다시 하려면 이전 `.tsv` 파일을 지우세요.
+`sudo tests/memtest.sh run`은 손으로 스냅샷을 찍고, `sudo tests/memtest.sh
+uninstall`은 서비스를 제거합니다(스냅샷은 남습니다). 서비스 자신의 프로세스는
+스냅샷에서 빠지며, 로그는 `/var/lib/uinitconverter-memtest/log`입니다.
+`tests/memtest-check.sh`는 스크립트 자체를 root 없이 검사합니다.
+
 ## s6 부팅이 실패할 때
 
 1. **Ctrl+Alt+F9**를 누르세요. 나머지 부팅이 실패해도 그곳에서는 복구용 로그인

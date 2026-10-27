@@ -1,7 +1,8 @@
 #!/bin/bash
 # Compare memory use between the s6 boot and the systemd boot.
 #
-#   sudo tests/memcompare.sh snap [--wait SECS] [DIR]   # once on each boot
+#   sudo tests/memcompare.sh snap [--wait SECS] [--exclude-cgroup UNIT] [DIR]
+#                                                       # once on each boot
 #   tests/memcompare.sh compare FILE_A FILE_B           # afterwards, on either
 #
 # snap waits until the system has been up SECS seconds (default 300) so both
@@ -9,11 +10,12 @@
 # DIR/mem-<init>-<date>.tsv (DIR defaults to ~/uinitconverter-mem of the user who
 # ran sudo). Without root it still works, but other users' processes have no
 # PSS and the comparison falls back to private anonymous memory (RssAnon).
-# It only reads; nothing is changed.
+# --exclude-cgroup leaves out the processes of a unit's cgroup (the
+# measuring service of tests/memtest.sh). It only reads; nothing is changed.
 set -u
 
 usage() {
-    sed -n '2,12s/^# \{0,1\}//p' "$0" >&2
+    sed -n '2,15s/^# \{0,1\}//p' "$0" >&2
     exit 2
 }
 
@@ -35,10 +37,11 @@ group_of() { # group_of PID COMM
 }
 
 snap() {
-    local wait=300 dir="" owner=""
+    local wait=300 dir="" owner="" exclude=""
     while [ $# -gt 0 ]; do
         case $1 in
             --wait) [ $# -ge 2 ] || usage; wait=$2; shift 2 ;;
+            --exclude-cgroup) [ $# -ge 2 ] || usage; exclude=$2; shift 2 ;;
             -*) usage ;;
             *) dir=$1; shift ;;
         esac
@@ -102,6 +105,11 @@ snap() {
                 esac
             done 2>/dev/null <"$d/status"
             [ -n "$name" ] || continue  # exited meanwhile
+            if [ -n "$exclude" ]; then
+                case $(cat "$d/cgroup" 2>/dev/null) in
+                    */"$exclude"|*/"$exclude"/*) continue ;;
+                esac
+            fi
             if [ -z "$rss" ]; then      # kernel thread
                 kthreads=$((kthreads + 1))
                 continue
