@@ -41,9 +41,11 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | | `enable/disable/mask/unmask/preset/is-enabled` | 오프라인 유닛 파일 관리입니다. |
 | `uinitconverterd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | 데몬용 최소 클라이언트(private 소켓 또는 버스)와, 서비스 로그 보기(`journalctl -u`, `JOURNAL=no`이면 s6-log 디렉터리)입니다. |
-| `uinitconverter-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. |
+| | `stop-instances` | `rc.shutdown`이 실행합니다. s6-rc가 서비스를 멈추기 전에, 그 서비스들 뒤에 순서가 잡힌 요청 시 인스턴스(`user@UID` 등)를 멈추라고 데몬에 요청합니다. |
+| `uinitconverter-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 롱런의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. |
 | `uinitconverter-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
-| `uinitconverter` | 위의 모든 명령 | 사용자가 쓰는 명령(`/usr/bin/uinitconverter`)입니다. 명령을 맡은 도구를 실행하므로 `uinitconverter reload`도 그대로 동작합니다. |
+| `uinitconverter` | 위의 모든 명령(`stop-instances`/`stop-atom` 제외) | 사용자가 쓰는 명령(`/usr/bin/uinitconverter`)입니다. 명령을 맡은 도구를 실행하므로 `uinitconverter reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
+| | `init` | s6 부팅 항목을 설정합니다([Fedora에 배포하기](#fedora에-배포하기-먼저-vm에서-해-보세요) 참고). |
 | | `--version` | 자기 빌드와 설치된 각 도구의 빌드를 보여 줍니다. 본체 도구가 서로 다른 빌드이면 그렇게 표시하고 1로 끝납니다. 도구마다 `--version`도 있습니다. |
 
 본체 도구는 각각 RPM 패키지가 되고, 패키지끼리 `Requires`로 의존합니다. 소스는 작업공간
@@ -145,7 +147,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `uinitconverter init`이 경고합니다.
 - `Accept=yes` 소켓과 첫 시작의 요청 시(on-demand) 활성화. 서비스는 소켓과 함께 미리 시작됩니다(그 뒤의 재시작만 소켓 활동을 기다립니다).
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
-- `AccuracySec=`(타이머는 묶지 않고 제시간에 실행), `WakeSystem=`, `OnClockChange=`.
+- `AccuracySec=`(타이머는 묶지 않고 제시간에 실행), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. 이 타이머 키들은 받기만 하고 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.
 - 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivateUsers=`, `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=`(systemd에서는 BPF LSM 프로그램), IP 사용량 집계(`IPAccounting=`).
 - 이미 실행 중인 작업의 취소.
 
@@ -172,6 +174,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | systemd | 설치된 채로 둡니다: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | 시스템 버스(`--systemd-activation`). 사용자 버스는 dbus-broker가 계속 맡습니다 |
 | util-linux | 마운트 유닛과 초기 부팅의 `mount`, `swapon`, `mountpoint`, 무선 상태의 `rfkill` |
+| shadow-utils | `DynamicUser=` 대신 쓰는 시스템 사용자를 만드는 `useradd` |
 | policycoreutils, policycoreutils-python-utils | SELinux 모듈용 `restorecon`, `semodule`. `uinitconverter init`용 `semanage` |
 | grubby | 부팅 항목(`uinitconverter init`) |
 
@@ -204,7 +207,7 @@ skarnet RPM을 빌드하세요. 다음 절 참고). root로 실행되는 것은 
 ```sh
 cargo build                           # 본체. 독립 도구는 sandbox.sh가 빌드합니다
 tests/sandbox.sh ~/sdc-sandbox        # 별도의 s6-svscan, s6-rc, D-Bus 버스
-tests/check.sh ~/sdc-sandbox          # 시나리오 검사 119개, 마지막은 비특권 호출자 단계 (샌드박스마다 한 번)
+tests/check.sh ~/sdc-sandbox          # 시나리오 검사 약 260개, 마지막은 비특권 호출자 단계 (샌드박스마다 한 번)
 tests/systemctl.sh status hello.service   # 네임스페이스 안에서 진짜 systemctl 실행
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop
@@ -285,7 +288,8 @@ uinitconverter RPM을 직접 빌드할 수도 있습니다(`packages/build-rpms.
    주면 s6 전용 rsyslog 설정을 쓰므로, journald가 `/dev/log`를 쓰는 systemd 부팅에는 영향이
    없습니다. 이때 s6 서비스 `journal-relay`가 journald의 클라이언트 소켓을 대신 열고 rsyslog로
    넘깁니다(MESSAGE, 우선순위, 식별자만 남습니다).
-3. chronyd, NetworkManager, gdm을 활성화하고 `graphical.target`을 기본값으로 설정합니다.
+3. chronyd와 NetworkManager가 설치되어 있으면 활성화하고(없으면 경고만 합니다), gdm이
+   설치되어 있으면 gdm을 활성화하고 `graphical.target`을 기본값으로 설정합니다.
 4. `uinitconverter reload --no-update`를 실행해 s6-rc 저장소와 세트 `current`(systemd의 활성화 상태에서 시작)를 만들고 부팅 데이터베이스를 설치한 뒤, 변환 요약을 출력합니다. 직접 작성할 s6-rc 서비스용 `/etc/s6/sources`도 만듭니다.
 5. tty9에 복구용 getty가 있는 `/etc/s6-linux-init/current`를 생성합니다.
 6. SELinux: `bin/init`에 `init_exec_t` 레이블을 붙이고 정책 모듈
@@ -305,13 +309,13 @@ uinitconverter RPM을 직접 빌드할 수도 있습니다(`packages/build-rpms.
 | 옵션 | 효과 |
 |---|---|
 | `--dry-run` | 모든 명령을 출력만 하고 아무것도 바꾸지 않습니다(root 불필요). 끝에 적용할 명령(같은 옵션에서 `--dry-run`만 뺀 `sudo uinitconverter init ...`)을 보여줍니다 |
-| `--yes` | 시작 전에 묻지 않습니다 |
+| `-y`, `--yes` | 시작 전에 묻지 않습니다 |
 | `--journal=yes\|no` | `no`: systemd-journald 없이 rsyslog와 서비스별 s6-log 디렉터리를 씁니다(`rsyslog`와 `uinitconverter-journal-relay` 필요) / `yes`: journald로 되돌립니다 |
 | `--resolved=yes\|no` | `no`: s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / `yes`: resolved로 되돌립니다 |
 | `--selinux=enforcing\|permissive` | s6 항목의 SELinux 모드(`permissive`이면 `enforcing=0` 추가). 처음 실행할 때는 permissive |
 | `--boot-only-s6=yes\|no` | `yes`: s6 항목을 Fedora의 initramfs 대신 uinitconverter의 initramfs로 부팅해 systemd가 전혀 실행되지 않게 합니다(아래 참고, `mdevd` 필요) / `no`: Fedora의 것으로 되돌립니다 |
 | `--default-s6` / `--default-systemd` | s6 항목을 기본 부팅 항목으로 합니다(나중에 설치되는 커널에도) / systemd 항목을 다시 기본값으로 합니다. 어느 쪽이든 systemd 항목은 메뉴에 남습니다 |
-| `--grub=no` | 부팅 항목을 추가하거나 고치지 않습니다 |
+| `--grub=yes\|no` | `no`: 부팅 항목을 추가하거나 고치지 않습니다(다음 실행에 이어지지 않습니다) |
 | `--uninstall` | 부팅 항목, s6 initramfs 이미지, `/etc/s6-linux-init/current`, (init이 썼다면) `/etc/s6.conf`, 부팅 설정을 지웁니다. `/etc/uinitconverter`는 남깁니다. 그다음 패키지를 `dnf remove`하세요 |
 
 빠진 옵션은 지난 실행의 선택을 유지합니다. `/etc/uinitconverter/uinitconverter.conf`의
@@ -337,7 +341,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 `/init`(execline)은 **s6-svscan을 PID 1로** 실행하고, s6-svscan은 **mdevd**(skarnet의 uevent
 데몬. `mdevd-coldplug`로 발견된 하드웨어의 드라이버를 장치의 modalias에 따라 로드합니다)와
 `rootfs` 서비스를 감독합니다. 이 서비스는 커널 명령줄의 `root=`, `rootflags=`, `rootfstype=`,
-`ro`/`rw`, `init=`, `rd.luks.uuid=`, `rd.luks.name=`을 읽고, 콘솔에서 LUKS 암호를 묻고(3회,
+`ro`/`rw`, `init=`, `rd.luks.uuid=`, `rd.luks.name=`, `rd.luks=0`을 읽고, 콘솔에서 LUKS 암호를 묻고(3회,
 `/etc/crypttab`의 `discard`를 따릅니다), 루트를 `/sysroot`에 마운트한 뒤 s6-svscan을 멈춥니다.
 그러면 s6-svscan의 `.s6-svscan/finish`가 `/dev`, `/proc`, `/sys`, `/run`을 옮기고 `init=`
 (`/usr/sbin/init-selinux`)로 `switch_root`합니다. 실패하면 복구 셸을 열고, 셸을 나가면 다시
@@ -426,17 +430,20 @@ systemctl set-default graphical.target
 
 **상태:** 이 흐름의 D-Bus 쪽(`BindsTo=`가 있는 요청 시 인스턴스, 충돌, `Service=` 소켓,
 종료 타깃)은 샌드박스 테스트로 확인했습니다. root가 필요한 부분(cgroup 위임, PAM 세션,
-cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 구현되어 있지만
-**시험하지 않았습니다**. Fedora VM에서 시험해 보세요. 로그인이 실패하면
+cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 샌드박스 테스트에
+없습니다. 대신 Fedora 45 Workstation 머신 한 대에서 SELinux enforcing으로 실제 부팅해
+확인했습니다: GDM 로그인, 사용자 매니저가 있는 GNOME 세션, GNOME 메뉴에서 전원 끄기. 다른
+머신은 시험하지 않았으니 먼저 VM에서 해 보세요. 로그인이 실패하면
 `journalctl -u systemd-logind`와 `journalctl -u user@1000.service`(또는 `JOURNAL=no`에서도
 동작하는 `uinitconverter log UNIT`)를 확인하세요.
 
 ## `s6` 명령 (s6-frontend)
 
-시스템은 s6 자체의 도구로 관리합니다. 설정 스크립트는 `s6` 명령을 제공하는
-[s6-frontend](https://skarnet.org/software/s6-frontend/)(버전은 `dist/skarnet.versions`)를
-설치하고, uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베이스를 적은
-`/etc/s6.conf`(`dist/s6.conf`)를 씁니다. 서비스 이름은 s6-rc의 이름입니다:
+시스템은 s6 자체의 도구로 관리합니다. `s6` 명령은
+[s6-frontend](https://skarnet.org/software/s6-frontend/)(버전은 `dist/skarnet.versions`.
+다른 skarnet 패키지와 함께 빌드합니다)가 제공하고, `uinitconverter init`이
+uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베이스를 적은
+`/etc/s6.conf`(`dist/s6.conf`에서)를 씁니다. 서비스 이름은 s6-rc의 이름입니다:
 `sshd.service`, `gdm.service` 등과 uinitconverter 자체의 s6 서비스(`dbus`, `uinitconverterd`,
 `earlyoom`, `udevd` 등).
 
@@ -525,6 +532,7 @@ crates/                    본체 (Cargo 작업공간 하나)
     unit.rs                유닛 파일 파서, 단어 분리, 시간 간격
     loader.rs              검색 경로, 별칭, 템플릿, 드롭인, 지정자
     config.rs, envfile.rs  uinitconverter.conf, EnvironmentFile= 형식
+    util.rs                작은 도우미(glob 일치 등)
     state.rs               유닛별 상태 파일(RUN_DIR/units/<유닛>/)
     index.rs               생성된 데이터베이스의 색인(유닛 → s6-rc 서비스)
     fdstore.rs             fd 저장소 클라이언트와, 데몬이 대신 쓰는 저장소
@@ -555,8 +563,11 @@ standalone/                별도 프로젝트. 각각 README와 spec이 있습�
   uinitconverter-linkwatch/      시작 이벤트를 놓친 s6-rc-update 대기를 풀어 줌
   uinitconverter-notify/         systemd-notify 대체
 dist/                      설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
-                           s6-linux-init 골격, kernel-install 플러그인
+                           s6-linux-init 골격, kernel-install 플러그인,
+                           SELinux 모듈(selinux/), s6 initramfs(initramfs/)
 packages/                  본체 도구의 RPM spec(도구마다 하나), 빌드 스크립트, github-release.sh
 dist/rpm/                  dist/skarnet.versions에 있는 skarnet 패키지의 spec과 빌드 스크립트
-tests/                     비특권 샌드박스, 시나리오 검사, systemctl 래퍼
+tests/                     비특권 샌드박스, 시나리오 검사, systemctl 래퍼,
+                           root/QEMU 검사(bpf-root, linkwatch-check, initramfs),
+                           진단 수집, 메모리 비교
 ```

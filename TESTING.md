@@ -96,7 +96,7 @@ tests/sandbox.sh ~/sdc
 tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 ```
 
-**기대 결과:** 마지막 줄이 `passed: N  failed: 0`입니다(N은 120개 정도). 다음 줄은
+**기대 결과:** 마지막 줄이 `passed: N  failed: 0`입니다(N은 260개 정도, `SANDBOX_JOURNAL=no`이면 조금 더 많습니다). 다음 줄은
 정상이며 실패가 아닙니다.
 - `SKIP transient scope (needs a writable cgroup …)`. cgroup을 만들려면 root가 필요합니다.
 - `Call failed: Job type reload is not applicable …`. 오류가 제대로 반환되는지 확인하는 검사입니다.
@@ -197,8 +197,8 @@ run:`과 적용할 명령(`sudo uinitconverter init`, 옵션을 주었다면 같
 
 `uinitconverter init`은 계획을 보여주고, 무엇이든 바꾸기 전에 확인을 받습니다. **"Fedora (s6 + uinitconverter)"**
 부팅 항목을 추가하고 일반 systemd 부팅을 기본값으로 둡니다(s6 부팅이 잘 되면 `--default-s6`으로
-기본값으로 만들 수 있습니다. 이 문서 끝을 보세요). 이 항목은 SELinux를
-permissive 모드로 부팅합니다.
+기본값으로 만들 수 있습니다. 이 문서 끝을 보세요). 첫 실행에서는 이 항목이 SELinux를
+permissive 모드로 부팅하고, 다음 실행부터는 `--selinux=`를 주지 않는 한 그 모드를 유지합니다.
 
 결과 확인:
 
@@ -219,7 +219,7 @@ GRUB 메뉴에서 **Fedora (s6 + uinitconverter) …**를 고르세요. 스플�
 **LUKS로 암호화했다면** s6 항목은 plymouth를 끄기 때문에, 비밀번호 입력란이 부팅 메시지
 사이에 텍스트(`Please enter passphrase for disk …`)로 나타납니다. 평소처럼 그곳에
 비밀번호를 입력하세요. 루트 디스크는 일반 부팅과 똑같이 initramfs가 엽니다. initramfs가
-열지 않는 추가 암호화 볼륨은 s6에서 열리지 않으며, 설정 스크립트가 5단계에서 이를 경고합니다.
+열지 않는 추가 암호화 볼륨은 s6에서 열리지 않으며, `uinitconverter init`이 5단계에서 이를 경고합니다.
 
 **GDM까지 가지 못하면** [s6 부팅이 실패할 때](#s6-부팅이-실패할-때)를 보세요.
 
@@ -387,8 +387,8 @@ tests/initramfs.sh /tmp/sdc-initramfs
 ```
 
 btrfs 루트를 `subvol=root`에 둔 LUKS2 디스크를 만들고, 실행 중인 커널을 s6 initramfs로 부팅해
-시리얼 콘솔에서 암호를 입력합니다. 기대 결과: `passed: 6  failed: 0`(암호 입력, mdevd가
-드라이버를 로드해야 하는 NVMe 디스크, 틀린 암호 세 번 뒤 복구 셸과 재시도, `rd.break`, 디스크
+시리얼 콘솔에서 암호를 입력합니다. 기대 결과: `passed: 6  failed: 0`(암호 입력, udev 링크
+없는 `root=/dev/disk/by-uuid/…`, mdevd가 드라이버를 로드해야 하는 NVMe 디스크, 틀린 암호 세 번 뒤 복구 셸과 재시도, `rd.break`, 디스크
 없음).
 
 그다음 머신에서:

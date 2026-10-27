@@ -99,7 +99,8 @@ tests/sandbox.sh ~/sdc
 tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 ```
 
-**Expected:** the last line is `passed: N  failed: 0` (N is about 120). These
+**Expected:** the last line is `passed: N  failed: 0` (N is about 260, a few
+more with `SANDBOX_JOURNAL=no`). These
 lines are normal and not failures:
 - `SKIP transient scope (needs a writable cgroup …)`. Creating cgroups needs root.
 - `Call failed: Job type reload is not applicable …`. That one is a check that an error is returned.
@@ -214,7 +215,8 @@ install ...` hint.
 `uinitconverter init` prints a plan and asks before changing anything. It adds a boot
 entry **"Fedora (s6 + uinitconverter)"** and keeps the normal systemd boot as the
 default (once the s6 boot works for you, `--default-s6` makes it the default;
-see the end of this file). That entry boots with SELinux in permissive mode.
+see the end of this file). The first run makes that entry boot with SELinux
+in permissive mode; later runs keep the mode unless you pass `--selinux=`.
 
 Check the result:
 
@@ -236,8 +238,8 @@ boot messages instead of the splash screen, then the GDM login screen.
 (`Please enter passphrase for disk …`) among the boot messages, because the s6
 entry disables plymouth. Type the passphrase there as usual. The root disk is
 unlocked by the initramfs exactly as on a normal boot. Additional encrypted
-volumes that the initramfs does not unlock are not opened under s6; the setup
-script warns about them in stage 5.
+volumes that the initramfs does not unlock are not opened under s6;
+`uinitconverter init` warns about them in stage 5.
 
 **If it never reaches GDM,** see [If the s6 boot fails](#if-the-s6-boot-fails).
 
@@ -415,9 +417,9 @@ tests/initramfs.sh /tmp/sdc-initramfs
 
 It makes a LUKS2 disk with a btrfs root in `subvol=root`, boots the running
 kernel with the s6 initramfs and types the passphrase on the serial console.
-Expected: `passed: 6  failed: 0` (passphrase, an NVMe disk whose driver mdevd
-must load, three wrong passphrases then the rescue shell and a retry,
-`rd.break`, no disk).
+Expected: `passed: 6  failed: 0` (passphrase, a `root=/dev/disk/by-uuid/…`
+without udev's links, an NVMe disk whose driver mdevd must load, three wrong
+passphrases then the rescue shell and a retry, `rd.break`, no disk).
 
 Then on the machine:
 

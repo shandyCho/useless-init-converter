@@ -44,9 +44,11 @@ on its own, and the core works without them.
 | | `enable/disable/mask/unmask/preset/is-enabled` | Offline unit file management. |
 | `uinitconverterd` | `daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | Minimal client for the daemon (private socket or bus); a service's log (`journalctl -u`, or the s6-log directory with `JOURNAL=no`). |
-| `uinitconverter-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. |
+| | `stop-instances` | Run by `rc.shutdown`: asks the daemon to stop the on-demand instances (`user@UID`, ...) before s6-rc stops the services they are ordered after. |
+| `uinitconverter-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. `stop-atom` is the `down` of a longrun's `UNIT.stop` oneshot (its `ExecStop=`). |
 | `uinitconverter-timers` | `timer-run`, `path-run` | Runs one `.timer` (computes elapses) or `.path` unit (inotify) as an s6 longrun and asks the daemon to start the unit. |
-| `uinitconverter` | any of the above | The command users know (`/usr/bin/uinitconverter`): runs the tool that handles the command, so `uinitconverter reload` still works. |
+| `uinitconverter` | any of the above (not `stop-instances`/`stop-atom`) | The command users know (`/usr/bin/uinitconverter`): runs the tool that handles the command, so `uinitconverter reload` still works. `fdstore`, `journal-relay`, `linkwatch` and `notify` run the standalone tools when they are installed. |
+| | `init` | Sets up the s6 boot entry (see [Deploying on Fedora](#deploying-on-fedora-do-it-in-a-vm-first)). |
 | | `--version` | This build and each installed tool's build. Says so and exits 1 when the core tools are from different builds. Each tool also has `--version`. |
 
 Each core tool is its own RPM package, and the packages depend on each other
@@ -174,7 +176,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - Encrypted volumes in `/etc/crypttab` that the initramfs does not unlock (systemd opens them with `systemd-cryptsetup@` units). The LUKS root disk is unlocked by the initramfs and works; `uinitconverter init` warns about the others.
 - `Accept=yes` sockets, and on-demand activation at first start: services are started eagerly, with their sockets (only a later restart waits for activity).
 - autofs: `.automount` units mount eagerly.
-- `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`.
+- `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. These timer keys are accepted without effect, so the report doesn't list them as ignored.
 - Watchdog, credentials (`LoadCredential=`, `ImportCredential=`), `PrivateUsers=`, `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=` (a BPF LSM program in systemd), and IP accounting (`IPAccounting=`).
 - Cancelling a job that is already running.
 
@@ -204,6 +206,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 | systemd | Stays installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | The system bus (`--systemd-activation`); dbus-broker stays for the user bus |
 | util-linux | `mount`, `swapon`, `mountpoint` for mount units and early boot; `rfkill` for the radio state |
+| shadow-utils | `useradd` for the system users that stand in for `DynamicUser=` |
 | policycoreutils, policycoreutils-python-utils | `restorecon` and `semodule` for the SELinux module; `semanage` for `uinitconverter init` |
 | grubby | The boot entry (`uinitconverter init`) |
 
@@ -236,7 +239,7 @@ host's init system is never touched.
 ```sh
 cargo build                           # the core; sandbox.sh builds the standalone tools
 tests/sandbox.sh ~/sdc-sandbox        # private s6-svscan, s6-rc and D-Bus bus
-tests/check.sh ~/sdc-sandbox          # 119 scenario checks, ending with an unprivileged-caller phase (once per sandbox)
+tests/check.sh ~/sdc-sandbox          # about 260 scenario checks, ending with an unprivileged-caller phase (once per sandbox)
 tests/systemctl.sh status hello.service   # the real systemctl, in a namespace
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop
@@ -329,7 +332,9 @@ the `dnf install` command. Backups of anything it overwrites go to
    unaffected; the s6 service `journal-relay` then serves journald's client
    sockets and forwards to rsyslog (only MESSAGE, priority and identifier are
    kept).
-3. Enables chronyd, NetworkManager and gdm, and sets `graphical.target` as the default.
+3. Enables chronyd and NetworkManager when they are installed (a missing one
+   is only a warning) and, when gdm is installed, enables gdm and sets
+   `graphical.target` as the default.
 4. Runs `uinitconverter reload --no-update`, which creates the s6-rc repository and its set `current` (from systemd's enable state) and installs the boot database, and prints the translation summary. It also creates `/etc/s6/sources` for your own s6-rc services.
 5. Generates `/etc/s6-linux-init/current` with a rescue getty on tty9.
 6. SELinux: labels `bin/init` as `init_exec_t` and loads the policy module
@@ -349,13 +354,13 @@ Options:
 | Option | Effect |
 |---|---|
 | `--dry-run` | Print every command, change nothing (works without root). It ends with the command that applies it: `sudo uinitconverter init` with the same options minus `--dry-run` |
-| `--yes` | Don't ask before starting |
+| `-y`, `--yes` | Don't ask before starting |
 | `--journal=yes\|no` | `no`: no systemd-journald, rsyslog plus one s6-log directory per service (needs `rsyslog` and `uinitconverter-journal-relay`) / `yes`: back to journald |
 | `--resolved=yes\|no` | `no`: no systemd-resolved on the s6 boot, NetworkManager handles DNS itself / `yes`: back to resolved |
 | `--selinux=enforcing\|permissive` | SELinux mode of the s6 entry (`permissive` adds `enforcing=0`). The first run uses permissive |
 | `--boot-only-s6=yes\|no` | `yes`: boot the s6 entry with uinitconverter's own initramfs instead of Fedora's, so no systemd runs at all (see below; needs `mdevd`) / `no`: back to Fedora's |
 | `--default-s6` / `--default-systemd` | Make the s6 entry the default boot entry, also for kernels installed later / make the systemd entry the default again. The systemd entry stays in the menu either way |
-| `--grub=no` | Don't add or update the boot entry |
+| `--grub=yes\|no` | `no`: don't add or update the boot entry (not kept for the next run) |
 | `--uninstall` | Remove the boot entries, the s6 initramfs images, `/etc/s6-linux-init/current`, `/etc/s6.conf` (if init wrote it) and the boot settings; keeps `/etc/uinitconverter`. Then `dnf remove` the packages |
 
 An option left out keeps what the last run set: `JOURNAL=`/`RESOLVED=` in
@@ -386,7 +391,7 @@ Fedora's). Its `/init` (execline) execs **s6-svscan as PID 1**, which
 supervises **mdevd** (skarnet's uevent daemon: `mdevd-coldplug` makes it load
 the drivers for the hardware found, from each device's modalias) and a
 `rootfs` service. That service reads `root=`, `rootflags=`, `rootfstype=`,
-`ro`/`rw`, `init=`, `rd.luks.uuid=` and `rd.luks.name=` from the kernel
+`ro`/`rw`, `init=`, `rd.luks.uuid=`, `rd.luks.name=` and `rd.luks=0` from the kernel
 command line, asks for the LUKS passphrase on the console (3 tries;
 `discard` from `/etc/crypttab` is honoured), mounts the root on `/sysroot`
 and stops s6-svscan, whose `.s6-svscan/finish` moves `/dev`, `/proc`, `/sys`
@@ -489,17 +494,20 @@ systemctl set-default graphical.target
 conflicts, `Service=` sockets, shutdown targets) is covered by the sandbox
 tests. The parts that need root (cgroup delegation, PAM sessions,
 `StartTransientUnit` creating cgroups, the real logind and `systemd --user`)
-are implemented but **untested**. Try them on Fedora in a VM. If login fails,
-check `journalctl -u systemd-logind` and `journalctl -u user@1000.service`
-(or `uinitconverter log UNIT`, which also works with `JOURNAL=no`).
+are not in the sandbox tests; they have been checked on real boots of one
+Fedora 45 Workstation machine with SELinux enforcing: GDM login, a GNOME
+session with its user manager, and power off from the GNOME menu. Other
+machines are untested, so try it in a VM first. If login fails, check `journalctl -u
+systemd-logind` and `journalctl -u user@1000.service` (or `uinitconverter
+log UNIT`, which also works with `JOURNAL=no`).
 
 ## The `s6` command (s6-frontend)
 
-The system is managed with s6's own tools. The setup script installs
+The system is managed with s6's own tools.
 [s6-frontend](https://skarnet.org/software/s6-frontend/) (version in
-`dist/skarnet.versions`), which provides the `s6` command, and writes
-`/etc/s6.conf` (`dist/s6.conf`) with uinitconverter's repository, stores and boot
-database. Service names are the s6-rc names: `sshd.service`, `gdm.service`,
+`dist/skarnet.versions`, built with the other skarnet packages) provides the
+`s6` command, and `uinitconverter init` writes `/etc/s6.conf` (from
+`dist/s6.conf`) with uinitconverter's repository, stores and boot database. Service names are the s6-rc names: `sshd.service`, `gdm.service`,
 … and uinitconverter's own s6 services (`dbus`, `uinitconverterd`, `earlyoom`, `udevd`, …).
 
 How it fits together:
@@ -599,6 +607,7 @@ crates/                    the core (one Cargo workspace)
     unit.rs                unit file parser, word splitting, time spans
     loader.rs              search path, aliases, templates, drop-ins, specifiers
     config.rs, envfile.rs  uinitconverter.conf, EnvironmentFile= format
+    util.rs                small helpers (glob matching, ...)
     state.rs               per-unit state files (RUN_DIR/units/<unit>/)
     index.rs               the generated database's index (unit → s6-rc service)
     fdstore.rs             fd store client and the daemon's fallback store
@@ -629,8 +638,11 @@ standalone/                separate projects, each with its own README and spec
   uinitconverter-linkwatch/      unblocks s6-rc-update waits that missed a start event
   uinitconverter-notify/         systemd-notify replacement
 dist/                      config, D-Bus policy, s6 services, early-boot helper,
-                           s6-linux-init skeleton, kernel-install plugin
+                           s6-linux-init skeleton, kernel-install plugin,
+                           SELinux module (selinux/), s6 initramfs (initramfs/)
 packages/                  RPM specs for the core tools (one per tool), their build script, github-release.sh
 dist/rpm/                  specs and build script for the skarnet packages in dist/skarnet.versions
-tests/                     unprivileged sandbox, scenario checks, systemctl wrapper
+tests/                     unprivileged sandbox, scenario checks, systemctl wrapper,
+                           root/QEMU checks (bpf-root, linkwatch-check, initramfs),
+                           diagnostics and memory comparison
 ```
