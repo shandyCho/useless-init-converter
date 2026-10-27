@@ -7165,3 +7165,55 @@ socket-activated daemons ran on the s6 boot only).
    or `virsh` with a VM, LVM (`lvs`, dmeventd monitoring).
 2. Then `sudo tests/memcompare.sh snap` again on s6 (same uptime as the
    systemd snapshot, ~580 s: `--wait 580`) and compare.
+
+## 2026-10-27, part 37: memory test on every boot (1ec4ba2)
+
+Owner asked for an automated memory comparison on this machine, "just an
+executable thing when I reboot both". First draft rebooted by itself
+(grub2-reboot alternating entries, a state machine of N rounds); the owner
+then said they only need something that runs on the reboots they do, so it
+became a snapshot service.
+
+- `tests/memtest.sh install [--wait 600] [--dir] [--max-diff 50]` (root):
+  copies memtest.sh and memcompare.sh to /usr/local/libexec/
+  uinitconverter-memtest (restorecon: bin_t, a /home script can't run as a
+  service under enforcing), writes /etc/systemd/system/
+  uinitconverter-memtest.service (Type=simple, WantedBy=multi-user,
+  StandardOutput=append: so no s6-log under JOURNAL=no), `systemctl
+  enable`, then the s6 database: systemd boot `uinitconverter reload
+  --no-update`, s6 boot daemon-reload (new service seen enabled -> active
+  in the set). Options are baked into ExecStart=.
+- Each boot: sleeps --wait from the service's start, not uptime (uptime
+  includes the LUKS prompt, which the owner types by hand; the s6 entry
+  uses the s6 initramfs, passphrase only), then `memcompare.sh snap --wait
+  0 --exclude-cgroup uinitconverter-memtest.service` into
+  ~/uinitconverter-mem/memtest, report.txt rewritten. Measure at the GDM
+  greeter (don't log in) so both inits are alike.
+- report: medians per init (total - available, used, AnonPages, Shmem,
+  SUnreclaim, KernelStack, PageTables, PSS by group, process count),
+  per-snapshot lines, the latest pair through memcompare compare; PASS
+  (exit 0) when s6's total - available median is at most --max-diff MiB
+  above systemd's, FAIL 1, INCOMPLETE 2. On the part-35 snapshots it gives
+  the same numbers as memcompare compare (-17.4: PASS).
+- memcompare snap --exclude-cgroup UNIT (matches the cgroup path's last
+  components); the runner uses system.slice/UNIT on s6 as systemd does.
+- tests/memtest-check.sh: unprivileged, fake systemctl/uinitconverter/
+  restorecon; install on both boots, the service's snapshot and report,
+  run, uninstall, --dir with spaces refused, report medians/PASS/FAIL/
+  INCOMPLETE on made-up snapshots. 22/22. --exclude-cgroup checked against
+  a snapshot without it (own PID present, then absent). shellcheck/bash -n
+  pass. Not run: install as root, a real boot of either init.
+- Docs: TESTING pair, memory comparison section.
+- Found uncommitted changes in tests/check.sh and tests/sandbox.sh
+  (SANDBOX_BUS=broker) that are not from this session; left untouched and
+  out of the commit.
+
+### Next steps
+
+1. Owner: `sudo tests/memtest.sh install` (after installing the f930166
+   RPMs and reloading, so on-demand activation is measured), then reboot
+   into each entry a few times, not logging in for 10 minutes; read
+   ~/uinitconverter-mem/memtest/report.txt. Check the service ran on s6:
+   `tail /var/lib/uinitconverter-memtest/log`, `sudo ausearch -m AVC -ts
+   boot | grep memtest`.
+2. Earlier next steps from part 36 (on-demand services on a real boot).
