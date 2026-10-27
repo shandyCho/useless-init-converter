@@ -6844,3 +6844,67 @@ RPMs are unchanged. ~/sdcompat-srpms was not rebuilt (still a365750).
 1. Owner: `sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm`, then
    `sdcompat init --dry-run` and `sudo sdcompat init`, and part 26's checks.
 2. Rerun `packages/copr-srpms.sh` before uploading to COPR.
+
+## 2026-10-27, part 28: GitHub releases instead of COPR; skarnet sources by hand (7d4ec0f, 5d76f03, a7f0104, 0def011)
+
+### Decisions (owner, 2026-10-27)
+
+- Publish the RPMs as files on GitHub releases (asked: Pages repo, Releases
+  or Actions; owner chose Releases). COPR is replaced, not kept beside it.
+- The skarnet.org packages are not in a release: each user builds them.
+- build-skarnet-rpms.sh downloads nothing; the user downloads the tarballs
+  by hand. The README guides that without direct download URLs (only
+  skarnet.org's software page and the file names).
+
+### What changed
+
+- 7d4ec0f: packages/github-release.sh [OUTDIR] (default ~/sdcompat-release)
+  replaces packages/copr-srpms.sh. Needs a committed tree; builds in a fresh
+  OUTDIR/work; OUTDIR/assets = binary RPMs (no debuginfo) + SHA256SUMS;
+  OUTDIR/NOTES.md = release text (commit, Fedora release/arch, install
+  steps, package list); prints the `gh release create vVERSION ...`
+  command (tag from [workspace.package] version, so bump it per release).
+  The --srpm options of the build scripts stay (comments no longer mention
+  COPR). sdcompat init's hints point at the releases page.
+- 5d76f03: skarnet left out of the release; NOTES.md and docs give the
+  skarnet build first. init: missing s6-linux-init/mdevd -> build them with
+  dist/rpm/build-skarnet-rpms.sh; missing sdcompat-journal-relay -> release.
+- a7f0104: build-skarnet-rpms.sh reads tarballs from ~/skarnet-sources
+  (`--sources DIR` / `--sources=DIR`), checks each against
+  dist/skarnet.versions, stops on a mismatch, lists missing ones; no curl.
+- 0def011: README pair "Deploying on Fedora" is three steps (1 get the
+  sources: clone the tag, a loop printing NAME-VERSION.tar.gz from
+  skarnet.versions, download from https://skarnet.org/software/ pages into
+  ~/skarnet-sources; 2 build/install skarnet; 3 install the release RPMs).
+  TESTING stage 2, packages/README pair, NOTES.md and the script's error
+  name files only, no tarball URLs. Spec Source0 lines and the maintainer
+  comment in skarnet.versions keep their URLs.
+
+### Tests
+
+- cargo build (no warnings), cargo test, standalone tests, sandbox 257/257
+  (after 7d4ec0f; later commits change scripts/docs only and init's hint
+  text). bash -n / shellcheck -S warning on the changed scripts.
+- build-skarnet-rpms.sh: empty sources dir (lists 7 names, exit 1), a
+  corrupt mdevd tarball (checksum error, exit 1), good tarballs with --srpm
+  (7 source RPMs). A full binary skarnet build with local tarballs was not
+  run.
+- github-release.sh on 0def011: exit 0, 9 RPMs (5 core, 4 standalone),
+  `sha256sum -c SHA256SUMS` passes, NOTES.md as intended.
+- Not tested: a real GitHub release (no credentials here), installing from
+  the release files.
+
+### Current state
+
+Committed through 0def011 (plus this entry), not pushed. Release files for
+v0.1.0 in ~/sdcompat-release/assets with ~/sdcompat-release/NOTES.md.
+~/rpmbuild-sdcompat/rpms has the 4db6aef build from part 27; the installed
+RPMs are still ga365750. ~/sdcompat-srpms (COPR, part 26) is obsolete.
+
+### Next steps
+
+1. Owner: push, choose a license (specs say `License: TBD`), then
+   `gh release create v0.1.0 ...` as printed (or the web UI).
+2. Owner: on this machine `sudo dnf upgrade` to a new build and run
+   `sudo sdcompat init` (part 26's checks).
+3. Try the README's install steps on a fresh Fedora VM from the release.
