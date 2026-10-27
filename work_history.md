@@ -6807,3 +6807,32 @@ installed now are unchanged. COPR source RPMs (all 16) in
 2. Owner: create the COPR project and upload `packages/copr-srpms.sh`'s
    output stage by stage; then try `dnf copr enable` on a VM.
 3. Choose a license for the specs before publishing.
+
+## 2026-10-27, part 27: dry-run ending message (8b8ecec)
+
+### What changed
+
+- `sdcompat init --dry-run` printed the next-steps text ("Done. Next:
+  1. Reboot ..."), which read as if something had been applied. Found while
+  running the dry run on this machine (installed RPM ga365750; output as in
+  part 26, no warnings, the same choices kept). A dry run (also with
+  --uninstall) now ends with "Dry run: nothing was changed. To apply this,
+  run: sudo sdcompat init OPTIONS" (its own options without --dry-run),
+  instead of the next steps. crates/sdcompat/src/init.rs `dry_run_end()`,
+  with a unit test.
+
+### Tests
+
+- cargo build (no warnings), cargo test (all passed; sdcompat 5 tests),
+  sandbox 257/257. Both dry runs checked by hand with target/debug/sdcompat.
+- No docs quoted the old ending; none changed.
+
+### Current state
+
+Committed. The installed RPMs (ga365750) still have the old message; the
+RPMs in ~/rpmbuild-sdcompat/rpms and ~/sdcompat-srpms were not rebuilt.
+
+### Next steps
+
+As in part 26 (rebuild the RPMs/SRPMs first if this fix should be in them),
+then `sudo sdcompat init` on this machine.
