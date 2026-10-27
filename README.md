@@ -1,5 +1,7 @@
 # useless-init-converter
 
+> **이 소프트웨어는 AI 슬롭으로 설치와 실행에 대한 책임은 사용자에게 있습니다.**
+
 [English](README-us.md) | **한국어**
 
 명령, 패키지, 경로의 이름은 `uinitconverter`입니다(`uinitconverter init`, `/etc/uinitconverter`, RPM 패키지).

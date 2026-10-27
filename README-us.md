@@ -1,5 +1,7 @@
 # useless-init-converter
 
+> **This software is AI slop: you install and run it at your own risk.**
+
 **English** | [한국어](README.md)
 
 The commands, packages and paths are named `uinitconverter` (`uinitconverter init`,
