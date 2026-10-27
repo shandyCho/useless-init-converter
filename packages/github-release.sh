@@ -16,7 +16,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 OUT=${1:-$HOME/sdcompat-release}
-GITHUB_REPO=shandyCho/sdcompat
+GITHUB_REPO=shandyCho/useless-init-converter
 
 die() { echo "error: $*" >&2; exit 1; }
 command -v sha256sum >/dev/null || die "sha256sum missing: sudo dnf install coreutils"
@@ -62,7 +62,7 @@ find "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm' \
     echo '```sh'
     echo "sudo dnf install git rpm-build gcc make cpio"
     echo "git clone --branch $TAG https://github.com/$GITHUB_REPO.git"
-    echo "sdcompat/dist/rpm/build-skarnet-rpms.sh"
+    echo "useless-init-converter/dist/rpm/build-skarnet-rpms.sh"
     echo "sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm"
     echo '```'
     echo

@@ -33,7 +33,7 @@ const SYSINIT_CONTENTS: &str = "/etc/sdcompat/s6/sdcompat-sysinit/contents.d";
 const BLS_DIR: &str = "/boot/loader/entries";
 const CORE_PACKAGES: &str = "sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd";
 /// Where the packages Fedora does not have come from.
-const RELEASES: &str = "https://github.com/shandyCho/sdcompat/releases";
+const RELEASES: &str = "https://github.com/shandyCho/useless-init-converter/releases";
 /// The packages init may ask for that Fedora does not have: built with
 /// dist/rpm/build-skarnet-rpms.sh, or in a release.
 const SKARNET_PACKAGES: [&str; 2] = ["s6-linux-init", "mdevd"];
@@ -46,8 +46,9 @@ usage: sdcompat init [OPTIONS]
 Set up this Fedora system to boot with s6-linux-init + s6-rc + sdcompat.
 Install the packages first: the skarnet ones built with
 dist/rpm/build-skarnet-rpms.sh, then the RPMs of a release from
-https://github.com/shandyCho/sdcompat/releases. The systemd boot entry
-keeps working: init adds a GRUB entry \"Fedora (s6 + sdcompat)\". It shows
+https://github.com/shandyCho/useless-init-converter/releases.
+The systemd boot entry keeps working: init adds a GRUB entry
+\"Fedora (s6 + sdcompat)\". It shows
 its plan and asks before changing anything.
 
   --dry-run             print every command, change nothing (no root needed)

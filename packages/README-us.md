@@ -61,7 +61,7 @@ this script (plain `rpmbuild` fails for lack of a version).
 ## GitHub releases
 
 The packages are published as files on the project's
-[GitHub releases](https://github.com/shandyCho/sdcompat/releases):
+[GitHub releases](https://github.com/shandyCho/useless-init-converter/releases):
 
 ```sh
 packages/github-release.sh             # result: ~/sdcompat-release
@@ -92,16 +92,16 @@ want to support. Users first build and install the skarnet.org packages
 from the release's tag:
 
 ```sh
-git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
+git clone --branch vVERSION https://github.com/shandyCho/useless-init-converter.git
 sudo dnf install git rpm-build gcc make cpio
-sdcompat/dist/rpm/build-skarnet-rpms.sh            # tarballs downloaded into ~/skarnet-sources first (README-us.md)
+useless-init-converter/dist/rpm/build-skarnet-rpms.sh            # tarballs downloaded into ~/skarnet-sources first (README-us.md)
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 ```
 
 then, in an empty directory:
 
 ```sh
-gh release download vVERSION -R shandyCho/sdcompat    # or download the files in a browser
+gh release download vVERSION -R shandyCho/useless-init-converter    # or download the files in a browser
 sha256sum -c SHA256SUMS
 sudo dnf install ./*.rpm
 sdcompat init --dry-run

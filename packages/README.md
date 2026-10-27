@@ -56,7 +56,7 @@ spec에는 버전을 적지 않습니다. 스크립트가 정해서 넘겨 주�
 
 ## GitHub 릴리스
 
-패키지는 프로젝트의 [GitHub 릴리스](https://github.com/shandyCho/sdcompat/releases)에
+패키지는 프로젝트의 [GitHub 릴리스](https://github.com/shandyCho/useless-init-converter/releases)에
 파일로 올립니다.
 
 ```sh
@@ -84,16 +84,16 @@ RPM은 빌드한 머신의 Fedora 릴리스와 아키텍처용입니다(예: `fc
 빌드해 설치합니다.
 
 ```sh
-git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
+git clone --branch vVERSION https://github.com/shandyCho/useless-init-converter.git
 sudo dnf install git rpm-build gcc make cpio
-sdcompat/dist/rpm/build-skarnet-rpms.sh            # 타르볼은 먼저 ~/skarnet-sources에 직접 받기(README.md 참고)
+useless-init-converter/dist/rpm/build-skarnet-rpms.sh            # 타르볼은 먼저 ~/skarnet-sources에 직접 받기(README.md 참고)
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 ```
 
 그다음 빈 디렉터리에서:
 
 ```sh
-gh release download vVERSION -R shandyCho/sdcompat    # 또는 브라우저로 파일을 받기
+gh release download vVERSION -R shandyCho/useless-init-converter    # 또는 브라우저로 파일을 받기
 sha256sum -c SHA256SUMS
 sudo dnf install ./*.rpm
 sdcompat init --dry-run

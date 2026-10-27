@@ -1,6 +1,9 @@
-# sdcompat
+# useless-init-converter
 
 **English** | [한국어](README.md)
+
+The commands, packages and paths are named `sdcompat` (`sdcompat init`,
+`/etc/sdcompat`, the RPM packages).
 
 A systemd compatibility layer for s6. **s6-linux-init + s6-rc** run Fedora,
 and you manage it with s6's own tools (`s6`, s6-rc's repository and sets);
@@ -256,14 +259,14 @@ release you will install (`VERSION`):
 
 ```sh
 sudo dnf install git rpm-build gcc make cpio
-git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
-cat sdcompat/dist/skarnet.versions      # NAME  VERSION  SHA-256, one package per line
+git clone --branch vVERSION https://github.com/shandyCho/useless-init-converter.git
+cat useless-init-converter/dist/skarnet.versions      # NAME  VERSION  SHA-256, one package per line
 ```
 
 This prints the file names you need, `NAME-VERSION.tar.gz`, one per package:
 
 ```sh
-grep -v '^#' sdcompat/dist/skarnet.versions | while read -r name ver _; do
+grep -v '^#' useless-init-converter/dist/skarnet.versions | while read -r name ver _; do
     [ -n "$name" ] && echo "$name-$ver.tar.gz"
 done
 ```
@@ -281,12 +284,12 @@ stops on a wrong one and lists the names of missing ones. A different
 directory: `--sources DIR`.
 
 ```sh
-sdcompat/dist/rpm/build-skarnet-rpms.sh
+useless-init-converter/dist/rpm/build-skarnet-rpms.sh
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 ```
 
 **3. Install sdcompat.** Download all the `.rpm` files and `SHA256SUMS` of
-that [GitHub release](https://github.com/shandyCho/sdcompat/releases) into an
+that [GitHub release](https://github.com/shandyCho/useless-init-converter/releases) into an
 empty directory and run:
 
 ```sh

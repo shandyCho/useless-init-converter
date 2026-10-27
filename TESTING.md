@@ -2,7 +2,7 @@
 
 [English](TESTING-us.md) | **한국어**
 
-이 안내서는 `https://github.com/shandyCho/sdcompat`을 새로 클론하는 것부터, s6를
+이 안내서는 `https://github.com/shandyCho/useless-init-converter`를 새로 클론하는 것부터, s6를
 PID 1로 두고 Fedora의 GNOME 세션을 띄우는 것까지 다룹니다. 단계는 영향이 없는 것부터
 시스템을 바꾸는 것 순서로 나뉘어 있습니다. 실패한 첫 단계에서 멈추고 알려 주세요
 ([문제 보고하기](#문제-보고하기) 참고).
@@ -37,8 +37,8 @@ PID 1로 두고 Fedora의 GNOME 세션을 띄우는 것까지 다룹니다. 단�
 
 ```sh
 sudo dnf install -y git
-git clone https://github.com/shandyCho/sdcompat.git
-cd sdcompat
+git clone https://github.com/shandyCho/useless-init-converter.git
+cd useless-init-converter
 git log -1 --oneline               # 보고할 때 쓸 커밋 해시를 적어 두세요
 ```
 
@@ -320,7 +320,7 @@ VM 스냅샷으로 되돌리면 모든 변경이 사라집니다.
 ## 새 버전으로 업데이트하기
 
 ```sh
-cd sdcompat
+cd useless-init-converter
 git pull
 packages/build-rpms.sh
 for b in standalone/*/build-rpm.sh; do "$b"; done

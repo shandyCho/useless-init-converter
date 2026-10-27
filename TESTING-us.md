@@ -3,7 +3,7 @@
 **English** | [한국어](TESTING.md)
 
 This manual takes you from a fresh clone of
-`https://github.com/shandyCho/sdcompat` to a GNOME session on Fedora running
+`https://github.com/shandyCho/useless-init-converter` to a GNOME session on Fedora running
 with s6 as PID 1. It is split into stages that go from harmless to invasive.
 Stop at the first stage that fails and report it (see
 [Reporting a problem](#reporting-a-problem)).
@@ -38,8 +38,8 @@ Stop at the first stage that fails and report it (see
 
 ```sh
 sudo dnf install -y git
-git clone https://github.com/shandyCho/sdcompat.git
-cd sdcompat
+git clone https://github.com/shandyCho/useless-init-converter.git
+cd useless-init-converter
 git log -1 --oneline               # note this commit hash for reports
 ```
 
@@ -341,7 +341,7 @@ Reverting the VM snapshot undoes everything.
 ## Updating to a newer version
 
 ```sh
-cd sdcompat
+cd useless-init-converter
 git pull
 packages/build-rpms.sh
 for b in standalone/*/build-rpm.sh; do "$b"; done

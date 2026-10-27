@@ -1,6 +1,8 @@
-# sdcompat
+# useless-init-converter
 
 [English](README-us.md) | **한국어**
+
+명령, 패키지, 경로의 이름은 `sdcompat`입니다(`sdcompat init`, `/etc/sdcompat`, RPM 패키지).
 
 s6를 위한 systemd 호환 계층입니다. Fedora는 **s6-linux-init + s6-rc**가 실행하고,
 관리는 s6 자체의 도구(`s6`, s6-rc의 저장소와 세트)로 합니다. sdcompat은 Fedora의 유닛
@@ -223,14 +225,14 @@ s6-frontend, mdevd)가 들어 있지 않습니다. skarnet.org에서 릴리스 �
 
 ```sh
 sudo dnf install git rpm-build gcc make cpio
-git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
-cat sdcompat/dist/skarnet.versions      # 한 줄에 패키지 하나: 이름  버전  SHA-256
+git clone --branch vVERSION https://github.com/shandyCho/useless-init-converter.git
+cat useless-init-converter/dist/skarnet.versions      # 한 줄에 패키지 하나: 이름  버전  SHA-256
 ```
 
 다음은 받아야 할 파일 이름(`이름-버전.tar.gz`)을 패키지마다 하나씩 출력합니다.
 
 ```sh
-grep -v '^#' sdcompat/dist/skarnet.versions | while read -r name ver _; do
+grep -v '^#' useless-init-converter/dist/skarnet.versions | while read -r name ver _; do
     [ -n "$name" ] && echo "$name-$ver.tar.gz"
 done
 ```
@@ -246,11 +248,11 @@ SHA-256 값을 공개하고, `dist/skarnet.versions`에 같은 값이 들어 있
 이름을 알려 줍니다. 다른 디렉터리는 `--sources DIR`로 지정합니다.
 
 ```sh
-sdcompat/dist/rpm/build-skarnet-rpms.sh
+useless-init-converter/dist/rpm/build-skarnet-rpms.sh
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 ```
 
-**3. sdcompat 설치.** 그 [GitHub 릴리스](https://github.com/shandyCho/sdcompat/releases)의
+**3. sdcompat 설치.** 그 [GitHub 릴리스](https://github.com/shandyCho/useless-init-converter/releases)의
 `.rpm` 파일과 `SHA256SUMS`를 모두 빈 디렉터리에 받아 다음을 실행합니다.
 
 ```sh
