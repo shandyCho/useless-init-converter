@@ -10,7 +10,7 @@ PID 1로 두고 Fedora의 GNOME 세션을 띄우는 것까지 다룹니다. 단�
 | 단계 | root 필요 | 시스템 변경 | 소요 시간 |
 |---|---|---|---|
 | 1. 코드와 도구 받기 | 예 (dnf) | 빌드 도구 설치 | 10분 |
-| 2. s6 RPM 빌드 | 예 (dnf) | 패키지 6개 설치 | 10분 |
+| 2. s6 RPM 빌드 | 예 (dnf) | 패키지 7개 설치 | 10분 |
 | 3. 샌드박스 테스트 | 아니요 | 없음 | 5분 |
 | 4. 변환 미리보기 | 예 (읽기 전용) | 없음 | 2분 |
 | 5. 설치 | 예 | sdcompat RPM 설치, 부팅 항목, `/etc/sdcompat` 추가 | 15분 |
@@ -51,7 +51,7 @@ git log -1 --oneline               # 보고할 때 쓸 커밋 해시를 적어 �
 빌드와 테스트에 필요한 것을 모두 설치합니다.
 
 ```sh
-sudo dnf install -y gcc make rpm-build cargo rust dbus-daemon python3 curl
+sudo dnf install -y gcc make rpm-build cpio cargo rust dbus-daemon python3
 ```
 
 전체 의존성 목록은 [README.md](README.md#의존성)에 있습니다. sdcompat은 libpam,

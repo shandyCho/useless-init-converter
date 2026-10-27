@@ -245,7 +245,8 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 ## Deploying on Fedora (do it in a VM first)
 
-Install the packages, then let `sdcompat init` set up the boot:
+Three steps: build the skarnet.org packages, install the sdcompat RPMs of
+a release, then let `sdcompat init` set up the boot.
 
 **1. Get the sources.** The releases don't include the skarnet.org packages
 (skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd); you
@@ -284,8 +285,8 @@ sdcompat/dist/rpm/build-skarnet-rpms.sh
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 ```
 
-**3. Install sdcompat.** Download all the `.rpm` files and `SHA256SUMS` of that
-[GitHub release](https://github.com/shandyCho/sdcompat/releases) into an
+**3. Install sdcompat.** Download all the `.rpm` files and `SHA256SUMS` of
+that [GitHub release](https://github.com/shandyCho/sdcompat/releases) into an
 empty directory and run:
 
 ```sh
@@ -295,13 +296,14 @@ sdcompat init --dry-run                   # what it would do (no root needed)
 sudo sdcompat init
 ```
 
-A release holds the five tool packages and the
-standalone tools; dnf takes the rest, such as earlyoom and rsyslog, from
-Fedora's repositories. The RPMs are for the Fedora release named in the release text.
-To update, download the next release's files and run `sudo dnf upgrade
-./*.rpm`, then `sudo sdcompat init --yes` (the skarnet packages only when
-`dist/skarnet.versions` changed). You can also build the sdcompat RPMs
-yourself (`packages/build-rpms.sh`, `standalone/*/build-rpm.sh`); see [packages/README-us.md](packages/README-us.md).
+A release holds the five tool packages and the standalone tools; dnf takes
+the rest, such as earlyoom and rsyslog, from Fedora's repositories. The
+RPMs are for the Fedora release named in the release text. To update,
+download the next release's files and run `sudo dnf upgrade ./*.rpm`, then
+`sudo sdcompat init --yes`; rebuild the skarnet packages only when the new
+release's `dist/skarnet.versions` changed. You can also build the sdcompat
+RPMs yourself (`packages/build-rpms.sh`, `standalone/*/build-rpm.sh`); see
+[packages/README-us.md](packages/README-us.md).
 
 `sdcompat init` **adds** a GRUB entry, "Fedora (s6 + sdcompat)", and keeps the
 normal systemd boot as the default unless you pass `--default-s6`. It installs

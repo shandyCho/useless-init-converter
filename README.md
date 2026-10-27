@@ -214,7 +214,8 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 ## Fedora에 배포하기 (먼저 VM에서 해 보세요)
 
-패키지를 설치한 뒤 `sdcompat init`으로 부팅을 설정합니다.
+세 단계입니다. skarnet.org 패키지를 빌드하고, 릴리스의 sdcompat RPM을 설치한 뒤,
+`sdcompat init`으로 부팅을 설정합니다.
 
 **1. 소스 받기.** 릴리스에는 skarnet.org 패키지(skalibs, execline, s6, s6-rc, s6-linux-init,
 s6-frontend, mdevd)가 들어 있지 않습니다. skarnet.org에서 릴리스 타르볼을 직접 받아 빌드합니다.
@@ -249,8 +250,8 @@ sdcompat/dist/rpm/build-skarnet-rpms.sh
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 ```
 
-**3. sdcompat 설치.** 그 [GitHub 릴리스](https://github.com/shandyCho/sdcompat/releases)의 `.rpm` 파일과
-`SHA256SUMS`를 모두 빈 디렉터리에 받아 다음을 실행합니다.
+**3. sdcompat 설치.** 그 [GitHub 릴리스](https://github.com/shandyCho/sdcompat/releases)의
+`.rpm` 파일과 `SHA256SUMS`를 모두 빈 디렉터리에 받아 다음을 실행합니다.
 
 ```sh
 sha256sum -c SHA256SUMS
@@ -259,11 +260,12 @@ sdcompat init --dry-run                   # 무엇을 할지 보기(root 불필�
 sudo sdcompat init
 ```
 
-릴리스에는 도구 패키지 다섯과 독립 도구가 들어 있고, earlyoom, rsyslog 같은
-나머지는 dnf가 Fedora 저장소에서 가져옵니다. RPM은 릴리스 본문에 적힌 Fedora 릴리스용입니다. 업데이트는 다음 릴리스의
-파일을 받아 `sudo dnf upgrade ./*.rpm`, 그다음 `sudo sdcompat init --yes`입니다(skarnet
-패키지는 `dist/skarnet.versions`가 바뀌었을 때만). sdcompat RPM을 직접 빌드할 수도
-있습니다(`packages/build-rpms.sh`, `standalone/*/build-rpm.sh`). [packages/README.md](packages/README.md)를 참고하세요.
+릴리스에는 도구 패키지 다섯과 독립 도구가 들어 있고, earlyoom, rsyslog 같은 나머지는 dnf가
+Fedora 저장소에서 가져옵니다. RPM은 릴리스 본문에 적힌 Fedora 릴리스용입니다. 업데이트는 다음
+릴리스의 파일을 받아 `sudo dnf upgrade ./*.rpm`, 그다음 `sudo sdcompat init --yes`입니다.
+skarnet 패키지는 새 릴리스의 `dist/skarnet.versions`가 바뀌었을 때만 다시 빌드합니다.
+sdcompat RPM을 직접 빌드할 수도 있습니다(`packages/build-rpms.sh`,
+`standalone/*/build-rpm.sh`). [packages/README.md](packages/README.md)를 참고하세요.
 
 `sdcompat init`은 GRUB 항목 "Fedora (s6 + sdcompat)"를 **추가**하고, `--default-s6`을 주지
 않으면 일반 systemd 부팅을 기본값으로 둡니다. 아무것도 설치하지 않습니다. 설정에 필요한 패키지가

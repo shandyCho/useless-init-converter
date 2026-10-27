@@ -11,7 +11,7 @@ Stop at the first stage that fails and report it (see
 | Stage | Needs root | Changes the system | Time |
 |---|---|---|---|
 | 1. Get the code and tools | yes (dnf) | installs build tools | 10 min |
-| 2. Build the s6 RPMs | yes (dnf) | installs 6 packages | 10 min |
+| 2. Build the s6 RPMs | yes (dnf) | installs 7 packages | 10 min |
 | 3. Sandbox tests | no | no | 5 min |
 | 4. Translation preview | yes (read-only) | no | 2 min |
 | 5. Install | yes | installs the sdcompat RPMs, adds a boot entry, `/etc/sdcompat` | 15 min |
@@ -53,7 +53,7 @@ works too.)
 Install everything needed to build and test:
 
 ```sh
-sudo dnf install -y gcc make rpm-build cargo rust dbus-daemon python3 curl
+sudo dnf install -y gcc make rpm-build cpio cargo rust dbus-daemon python3
 ```
 
 The full list of dependencies is in
