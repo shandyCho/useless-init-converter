@@ -193,6 +193,10 @@ sdcompat init --dry-run
 sudo sdcompat init
 ```
 
+미리 보기는 실행할 명령을 모두 출력하고, 끝에 `Dry run: nothing was changed. To apply this,
+run:`과 적용할 명령(`sudo sdcompat init`, 옵션을 주었다면 같은 옵션)을 보여줍니다. 바뀌는 것은
+없습니다. 빠진 패키지가 있으면 그 전에 `sudo dnf install ...`을 안내하고 끝납니다.
+
 `sdcompat init`은 계획을 보여주고, 무엇이든 바꾸기 전에 확인을 받습니다. **"Fedora (s6 + sdcompat)"**
 부팅 항목을 추가하고 일반 systemd 부팅을 기본값으로 둡니다(s6 부팅이 잘 되면 `--default-s6`으로
 기본값으로 만들 수 있습니다. 이 문서 끝을 보세요). 이 항목은 SELinux를

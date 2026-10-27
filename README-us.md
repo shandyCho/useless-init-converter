@@ -250,7 +250,7 @@ Install the packages, then let `sdcompat init` set up the boot:
 ```sh
 sudo dnf copr enable OWNER/sdcompat       # the COPR project; see packages/README-us.md
 sudo dnf install sdcompat
-sudo sdcompat init --dry-run              # what it would do (works without root too)
+sdcompat init --dry-run                   # what it would do (no root needed)
 sudo sdcompat init
 ```
 
@@ -297,7 +297,7 @@ Options:
 
 | Option | Effect |
 |---|---|
-| `--dry-run` | Print every command, change nothing (works without root) |
+| `--dry-run` | Print every command, change nothing (works without root). It ends with the command that applies it: `sudo sdcompat init` with the same options minus `--dry-run` |
 | `--yes` | Don't ask before starting |
 | `--journal=yes\|no` | `no`: no systemd-journald, rsyslog plus one s6-log directory per service (needs `rsyslog` and `sdcompat-journal-relay`) / `yes`: back to journald |
 | `--resolved=yes\|no` | `no`: no systemd-resolved on the s6 boot, NetworkManager handles DNS itself / `yes`: back to resolved |

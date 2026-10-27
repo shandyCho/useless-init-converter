@@ -206,6 +206,12 @@ sdcompat init --dry-run
 sudo sdcompat init
 ```
 
+The preview prints every command it would run and ends with `Dry run:
+nothing was changed. To apply this, run:` and the command to apply it
+(`sudo sdcompat init`, with the same options if you gave any). Nothing is
+changed. If a package is missing it stops before that with a `sudo dnf
+install ...` hint.
+
 `sdcompat init` prints a plan and asks before changing anything. It adds a boot
 entry **"Fedora (s6 + sdcompat)"** and keeps the normal systemd boot as the
 default (once the s6 boot works for you, `--default-s6` makes it the default;

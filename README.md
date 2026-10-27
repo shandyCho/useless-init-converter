@@ -219,7 +219,7 @@ tests/sandbox.sh ~/sdc-sandbox stop
 ```sh
 sudo dnf copr enable OWNER/sdcompat       # COPR 프로젝트. packages/README.md 참고
 sudo dnf install sdcompat
-sudo sdcompat init --dry-run              # 무엇을 할지 보기(root 없이도 됩니다)
+sdcompat init --dry-run                   # 무엇을 할지 보기(root 불필요)
 sudo sdcompat init
 ```
 
@@ -260,7 +260,7 @@ s6-linux-init)를 설치하고, 권장 패키지로 s6-frontend, mdevd, earlyoom
 
 | 옵션 | 효과 |
 |---|---|
-| `--dry-run` | 모든 명령을 출력만 하고 아무것도 바꾸지 않습니다(root 불필요) |
+| `--dry-run` | 모든 명령을 출력만 하고 아무것도 바꾸지 않습니다(root 불필요). 끝에 적용할 명령(같은 옵션에서 `--dry-run`만 뺀 `sudo sdcompat init ...`)을 보여줍니다 |
 | `--yes` | 시작 전에 묻지 않습니다 |
 | `--journal=yes\|no` | `no`: systemd-journald 없이 rsyslog와 서비스별 s6-log 디렉터리를 씁니다(`rsyslog`와 `sdcompat-journal-relay` 필요) / `yes`: journald로 되돌립니다 |
 | `--resolved=yes\|no` | `no`: s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / `yes`: resolved로 되돌립니다 |
