@@ -215,8 +215,43 @@ EOF
     esac
     command -v restorecon >/dev/null && restorecon -R "$nm" /run/systemd/resolve 2>/dev/null
     ;;
+zram | zram-stop)
+    # In place of zram-generator, a systemd generator (nothing runs the
+    # generators on the s6 boot): Fedora's compressed swap. The generator
+    # itself decides, as at a systemd boot, which /dev/zramN to make from
+    # zram-generator.conf (zram-generator-defaults: zram0, min(ram, 8192)),
+    # the memory and systemd.zram= on the kernel command line, loads the
+    # module and adds the devices. Its dev-zramN.swap units go where
+    # systemd puts them (/run/systemd/generator, the one place its SELinux
+    # domain may write) and are read here only; they are not in the unit
+    # path. Each device is then set up as systemd-zram-setup@zramN does and
+    # swapped on with the unit's priority and options.
+    zg=/usr/lib/systemd/system-generators/zram-generator
+    [ -x "$zg" ] || exit 0
+    out=/run/systemd/generator
+    if [ "$1" = zram ]; then
+        mkdir -p "$out" "$out.early" "$out.late"
+        command -v restorecon >/dev/null && restorecon "$out" "$out.early" "$out.late" 2>/dev/null
+        "$zg" "$out" "$out.early" "$out.late" || { warn "zram-generator exited $?"; exit 0; }
+    fi
+    for u in "$out"/dev-zram*.swap; do
+        [ -e "$u" ] || continue
+        dev=$(sed -n 's/^What=//p' "$u")
+        n=${dev##*/}
+        [ -n "$n" ] || continue
+        if [ "$1" = zram ]; then
+            prio=$(sed -n 's/^Priority=//p' "$u")
+            opts=$(sed -n 's/^Options=//p' "$u")
+            "$zg" --setup-device "$n" || { warn "zram-generator --setup-device $n exited $?"; continue; }
+            swapon ${prio:+-p "$prio"} ${opts:+-o "$opts"} "$dev" || warn "swapon $dev failed"
+        else
+            grep -q "^$dev " /proc/swaps && { swapoff "$dev" || warn "swapoff $dev failed"; }
+            "$zg" --reset-device "$n" || warn "zram-generator --reset-device $n exited $?"
+        fi
+    done
+    ;;
 *)
-    echo "usage: $0 mount-api|mount-fs|umount-fs|udev-trigger|modules-load|hostname|tmpfiles|sysusers|sysctl|vconsole|resolv" >&2
+    echo "usage: $0 mount-api|mount-fs|umount-fs|udev-trigger|modules-load|hostname|tmpfiles|sysusers|sysctl|vconsole|rfkill|rfkill-save|resolv|zram|zram-stop" >&2
     exit 2
     ;;
 esac

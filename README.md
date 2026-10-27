@@ -149,6 +149,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `uinitconverter init`이 경고합니다.
 - `Accept=yes` 소켓과 첫 시작의 요청 시(on-demand) 활성화. 서비스는 소켓과 함께 미리 시작됩니다(그 뒤의 재시작만 소켓 활동을 기다립니다).
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
+- systemd generator: s6 부팅에서는 하나도 실행되지 않습니다. `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
 - `AccuracySec=`(타이머는 묶지 않고 제시간에 실행), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. 이 타이머 키들은 받기만 하고 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.
 - 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivateUsers=`, `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=`(systemd에서는 BPF LSM 프로그램), IP 사용량 집계(`IPAccounting=`).
 - 이미 실행 중인 작업의 취소.
@@ -368,6 +369,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 | 네트워크 / DNS / 시간 | NetworkManager, systemd-resolved(`--resolved=no`: NetworkManager만), chrony |
 | OOM 처리 | systemd-oomd 대신 earlyoom |
 | 무선 상태(rfkill) | systemd-rfkill 대신 s6 oneshot에서 util-linux `rfkill` |
+| 압축 스왑(zram) | systemd generator 대신 s6 oneshot `zram`이 Fedora의 zram-generator를 실행(같은 `zram-generator.conf`, 크기, 우선순위) |
 | 장치 | 일반 서비스로 실행되는 systemd-udevd |
 | 로그인, 사용자 매니저 | 감독(supervised) 서비스로 실행되는 systemd-logind와 `systemd --user` |
 

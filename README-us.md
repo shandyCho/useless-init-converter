@@ -178,6 +178,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - Encrypted volumes in `/etc/crypttab` that the initramfs does not unlock (systemd opens them with `systemd-cryptsetup@` units). The LUKS root disk is unlocked by the initramfs and works; `uinitconverter init` warns about the others.
 - `Accept=yes` sockets, and on-demand activation at first start: services are started eagerly, with their sockets (only a later restart waits for activity).
 - autofs: `.automount` units mount eagerly.
+- systemd generators: none runs on the s6 boot. `/etc/fstab` is mounted by the `mount-fs` s6 service and the zram swap set up by the `zram` one; units that other generators would make (e.g. `systemd-gpt-auto-generator`'s, `rc-local`) don't exist there.
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. These timer keys are accepted without effect, so the report doesn't list them as ignored.
 - Watchdog, credentials (`LoadCredential=`, `ImportCredential=`), `PrivateUsers=`, `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=` (a BPF LSM program in systemd), and IP accounting (`IPAccounting=`).
 - Cancelling a job that is already running.
@@ -423,6 +424,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 | Network / DNS / time | NetworkManager, systemd-resolved (`--resolved=no`: NetworkManager alone), chrony |
 | OOM handling | earlyoom instead of systemd-oomd |
 | Radio state (rfkill) | util-linux `rfkill` from an s6 oneshot instead of systemd-rfkill |
+| Compressed swap (zram) | Fedora's zram-generator, run by the s6 oneshot `zram` instead of as a systemd generator (same `zram-generator.conf`, size and priority) |
 | Devices | systemd-udevd as a plain service |
 | Login, user manager | systemd-logind and `systemd --user`, as supervised services |
 
