@@ -6825,7 +6825,11 @@ installed now are unchanged. COPR source RPMs (all 16) in
 
 - cargo build (no warnings), cargo test (all passed; sdcompat 5 tests),
   sandbox 257/257. Both dry runs checked by hand with target/debug/sdcompat.
-- No docs quoted the old ending; none changed.
+- No docs quoted the old ending. Afterwards (dae1e9b), at the owner's
+  request: README pair (the deploy example runs the dry run without sudo; the
+  `--dry-run` row names the apply command it ends with) and TESTING pair
+  (stage 5 says what the preview ends with and that a missing package stops
+  it with a dnf hint).
 
 ### Current state
 
