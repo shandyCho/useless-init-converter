@@ -48,11 +48,19 @@ find "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm' \
     echo "sdcompat $VERSION ($COMMIT), RPMs for Fedora ${DIST#fc} $ARCH."
     echo
     echo "First build and install the skarnet.org packages (skalibs, execline, s6,"
-    echo "s6-rc, s6-linux-init, s6-frontend, mdevd), which this release does not include:"
+    echo "s6-rc, s6-linux-init, s6-frontend, mdevd), which this release does not include."
+    echo "Download these tarballs from skarnet.org into ~/skarnet-sources:"
+    echo
+    while read -r name ver _; do
+        case $name in ''|'#'*) continue ;; esac
+        echo "- https://skarnet.org/software/$name/$name-$ver.tar.gz"
+    done <"$REPO/dist/skarnet.versions"
+    echo
+    echo "then build them (the script checks the tarballs' SHA-256 sums):"
     echo
     echo '```sh'
-    echo "git clone --branch $TAG https://github.com/$GITHUB_REPO.git"
     echo "sudo dnf install git rpm-build gcc make cpio"
+    echo "git clone --branch $TAG https://github.com/$GITHUB_REPO.git"
     echo "sdcompat/dist/rpm/build-skarnet-rpms.sh"
     echo "sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm"
     echo '```'

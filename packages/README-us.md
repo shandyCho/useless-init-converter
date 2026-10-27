@@ -94,7 +94,7 @@ from the release's tag:
 ```sh
 git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
 sudo dnf install git rpm-build gcc make cpio
-sdcompat/dist/rpm/build-skarnet-rpms.sh            # downloads the skarnet.org tarballs
+sdcompat/dist/rpm/build-skarnet-rpms.sh            # tarballs downloaded into ~/skarnet-sources first (README-us.md)
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 ```
 

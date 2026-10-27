@@ -4,6 +4,12 @@
 #
 #   dist/rpm/build-skarnet-rpms.sh [OUTDIR]          # default: ~/rpmbuild-skarnet
 #   dist/rpm/build-skarnet-rpms.sh --srpm [OUTDIR]   # source RPMs only
+#   dist/rpm/build-skarnet-rpms.sh --sources DIR ... # tarballs elsewhere
+#
+# It downloads nothing: download the skarnet.org tarballs named in
+# skarnet.versions (https://skarnet.org/software/NAME/NAME-VERSION.tar.gz)
+# into ~/skarnet-sources (or DIR) first. Each is checked against the
+# SHA-256 sum in skarnet.versions; missing ones are listed with their URLs.
 #
 # With --srpm the source RPMs go to OUTDIR/srpms, each with its version and
 # release in the spec and the verified skarnet.org tarball inside; another
@@ -22,10 +28,16 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 SRPM=0
-if [ "${1:-}" = --srpm ]; then
-    SRPM=1
-    shift
-fi
+SOURCES=$HOME/skarnet-sources
+while [ $# -gt 0 ]; do
+    case $1 in
+        --srpm) SRPM=1; shift ;;
+        --sources) [ $# -ge 2 ] || { echo "error: --sources needs a directory" >&2; exit 2; }; SOURCES=$2; shift 2 ;;
+        --sources=*) SOURCES=${1#--sources=}; shift ;;
+        -*) echo "error: unknown option $1" >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
 OUT=${1:-$HOME/rpmbuild-skarnet}
 VERSIONS=$HERE/../skarnet.versions
 # Each build gets a newer Release, so dnf upgrades packages whose version did
@@ -49,12 +61,25 @@ done <"$VERSIONS"
 mkdir -p "$OUT"/{SOURCES,SPECS,SRPMS,RPMS,BUILD,rpms,srpms}
 TOP=(--define "_topdir $OUT")
 
-echo "==> Downloading and verifying sources"
+missing=()
+for name in "${ORDER[@]}"; do
+    [ -s "$SOURCES/$name-${VER[$name]}.tar.gz" ] || missing+=("$name-${VER[$name]}")
+done
+if [ ${#missing[@]} -gt 0 ]; then
+    echo "error: these tarballs are not in $SOURCES; download them first:" >&2
+    for m in "${missing[@]}"; do
+        echo "  https://skarnet.org/software/${m%-*}/$m.tar.gz" >&2
+    done
+    echo "(see the installation section of README-us.md)" >&2
+    exit 1
+fi
+
+echo "==> Verifying the sources in $SOURCES"
 for name in "${ORDER[@]}"; do
     ver=${VER[$name]}
-    tarball="$OUT/SOURCES/$name-$ver.tar.gz"
-    [ -s "$tarball" ] || curl -fsSL -o "$tarball" "https://skarnet.org/software/$name/$name-$ver.tar.gz"
-    echo "${SHA256[$name]}  $tarball" | sha256sum -c --quiet - || die "checksum mismatch for $tarball"
+    tarball="$SOURCES/$name-$ver.tar.gz"
+    echo "${SHA256[$name]}  $tarball" | sha256sum -c --quiet - || die "checksum mismatch for $tarball (not the release pinned in skarnet.versions)"
+    cp "$tarball" "$OUT/SOURCES/"
     # The spec takes its version from skarnet.versions. The sources are
     # built as released, unpatched.
     {

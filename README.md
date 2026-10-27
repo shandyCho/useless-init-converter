@@ -216,17 +216,47 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 패키지를 설치한 뒤 `sdcompat init`으로 부팅을 설정합니다.
 
-먼저 릴리스에 들어 있지 않은 skarnet.org 패키지를 빌드해 설치합니다(`VERSION`은 설치할
-릴리스).
+**1. 소스 받기.** 릴리스에는 skarnet.org 패키지(skalibs, execline, s6, s6-rc, s6-linux-init,
+s6-frontend, mdevd)가 들어 있지 않습니다. skarnet.org에서 릴리스 타르볼을 직접 받아 빌드합니다.
+쓸 버전은 설치할 sdcompat 릴리스(`VERSION`)의 `dist/skarnet.versions`에 고정되어 있습니다.
 
 ```sh
-git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
 sudo dnf install git rpm-build gcc make cpio
+git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
+cat sdcompat/dist/skarnet.versions      # 한 줄에 패키지 하나: 이름  버전  SHA-256
+```
+
+각 패키지의 타르볼은 `https://skarnet.org/software/이름/이름-버전.tar.gz`입니다(예:
+`https://skarnet.org/software/skalibs/skalibs-2.16.0.0.tar.gz`). 다음은 그 릴리스의 URL을
+출력합니다.
+
+```sh
+grep -v '^#' sdcompat/dist/skarnet.versions | while read -r name ver _; do
+    [ -n "$name" ] && echo "https://skarnet.org/software/$name/$name-$ver.tar.gz"
+done
+```
+
+하나씩 브라우저나 `curl -fLO URL`로 `~/skarnet-sources`에 받습니다.
+
+```sh
+mkdir -p ~/skarnet-sources && cd ~/skarnet-sources
+curl -fLO https://skarnet.org/software/skalibs/skalibs-2.16.0.0.tar.gz   # URL마다 하나씩
+cd -
+```
+
+skarnet.org는 타르볼마다 SHA-256 값도 공개합니다(URL 끝에 `.sha256`). `dist/skarnet.versions`에
+같은 값이 들어 있습니다.
+
+**2. 빌드와 설치.** 빌드 스크립트는 아무것도 내려받지 않습니다. `~/skarnet-sources`의
+타르볼을 모두 `dist/skarnet.versions`와 대조하고, 값이 다르면 멈추며, 없는 것은 URL을
+알려 줍니다. 다른 디렉터리는 `--sources DIR`로 지정합니다.
+
+```sh
 sdcompat/dist/rpm/build-skarnet-rpms.sh
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 ```
 
-그다음 그 [GitHub 릴리스](https://github.com/shandyCho/sdcompat/releases)의 `.rpm` 파일과
+**3. sdcompat 설치.** 그 [GitHub 릴리스](https://github.com/shandyCho/sdcompat/releases)의 `.rpm` 파일과
 `SHA256SUMS`를 모두 빈 디렉터리에 받아 다음을 실행합니다.
 
 ```sh
@@ -236,8 +266,7 @@ sdcompat init --dry-run                   # 무엇을 할지 보기(root 불필�
 sudo sdcompat init
 ```
 
-`build-skarnet-rpms.sh`는 skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd를
-빌드합니다. 릴리스에는 도구 패키지 다섯과 독립 도구가 들어 있고, earlyoom, rsyslog 같은
+릴리스에는 도구 패키지 다섯과 독립 도구가 들어 있고, earlyoom, rsyslog 같은
 나머지는 dnf가 Fedora 저장소에서 가져옵니다. RPM은 릴리스 본문에 적힌 Fedora 릴리스용입니다. 업데이트는 다음 릴리스의
 파일을 받아 `sudo dnf upgrade ./*.rpm`, 그다음 `sudo sdcompat init --yes`입니다(skarnet
 패키지는 `dist/skarnet.versions`가 바뀌었을 때만). sdcompat RPM을 직접 빌드할 수도
@@ -358,7 +387,7 @@ skarnet 버전과 타르볼의 SHA-256 값(2026-10-18 릴리스 기준)은 RPM �
 systemd로 부팅한 호스트에서도 네임스페이스 안에서 실행되므로 실제 systemd는 건드리지 않습니다.
 
 ```sh
-dist/rpm/build-skarnet-rpms.sh && sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
+dist/rpm/build-skarnet-rpms.sh && sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm   # 타르볼: 배포하기 참고
 sudo dnf install dbus-daemon python3 cargo
 cargo build && tests/sandbox.sh ~/sdc && tests/check.sh ~/sdc
 tests/systemctl.sh status notifier.service

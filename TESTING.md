@@ -65,11 +65,14 @@ rpm -q pam libselinux libseccomp policycoreutils
 ## 2. s6 패키지 빌드와 설치
 
 Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd를 패키지로 제공하지 않습니다.
-빌드 스크립트가 소스를 내려받아 고정된 SHA-256 값으로 검증하고, 의존성 순서대로
-RPM을 빌드합니다.
+먼저 `dist/skarnet.versions`에 적힌 버전의 릴리스 타르볼을 skarnet.org에서 직접
+`~/skarnet-sources`에 받습니다(URL은 `https://skarnet.org/software/이름/이름-버전.tar.gz`.
+README.md의 "Fedora에 배포하기" 참고). 빌드 스크립트는 아무것도 내려받지 않고, 타르볼을
+고정된 SHA-256 값으로 검증한 뒤 의존성 순서대로 RPM을 빌드합니다. 없는 타르볼이 있으면
+그 URL을 알려 주고 멈춥니다.
 
 ```sh
-dist/rpm/build-skarnet-rpms.sh
+dist/rpm/build-skarnet-rpms.sh            # 다른 디렉터리의 타르볼: --sources DIR
 ```
 
 - mock이 없으면 `rpmbuild`를 씁니다. 각 패키지를 `~/rpmbuild-skarnet/sysroot`에

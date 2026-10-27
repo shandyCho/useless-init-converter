@@ -247,17 +247,51 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 Install the packages, then let `sdcompat init` set up the boot:
 
-First build and install the skarnet.org packages, which the releases don't
-include (`VERSION` is the release you will install):
+**1. Get the sources.** The releases don't include the skarnet.org packages
+(skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd); you
+download their release tarballs from skarnet.org yourself and build them.
+The versions to use are pinned in `dist/skarnet.versions` of the sdcompat
+release you will install (`VERSION`):
 
 ```sh
-git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
 sudo dnf install git rpm-build gcc make cpio
+git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
+cat sdcompat/dist/skarnet.versions      # NAME  VERSION  SHA-256, one package per line
+```
+
+Each package's tarball is `https://skarnet.org/software/NAME/NAME-VERSION.tar.gz`
+(e.g. `https://skarnet.org/software/skalibs/skalibs-2.16.0.0.tar.gz`). This
+prints the URLs for that release:
+
+```sh
+grep -v '^#' sdcompat/dist/skarnet.versions | while read -r name ver _; do
+    [ -n "$name" ] && echo "https://skarnet.org/software/$name/$name-$ver.tar.gz"
+done
+```
+
+Download each of them, with a browser or `curl -fLO URL`, into
+`~/skarnet-sources`:
+
+```sh
+mkdir -p ~/skarnet-sources && cd ~/skarnet-sources
+curl -fLO https://skarnet.org/software/skalibs/skalibs-2.16.0.0.tar.gz   # and so on, one per URL
+cd -
+```
+
+skarnet.org also publishes each tarball's SHA-256 sum (the URL plus
+`.sha256`); `dist/skarnet.versions` holds the same sums.
+
+**2. Build and install them.** The build script downloads nothing: it
+checks every tarball in `~/skarnet-sources` against `dist/skarnet.versions`,
+stops on a wrong one and lists the URLs of missing ones. A different
+directory: `--sources DIR`.
+
+```sh
 sdcompat/dist/rpm/build-skarnet-rpms.sh
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 ```
 
-Then download all the `.rpm` files and `SHA256SUMS` of that
+**3. Install sdcompat.** Download all the `.rpm` files and `SHA256SUMS` of that
 [GitHub release](https://github.com/shandyCho/sdcompat/releases) into an
 empty directory and run:
 
@@ -268,8 +302,7 @@ sdcompat init --dry-run                   # what it would do (no root needed)
 sudo sdcompat init
 ```
 
-`build-skarnet-rpms.sh` builds skalibs, execline, s6, s6-rc, s6-linux-init,
-s6-frontend and mdevd. A release holds the five tool packages and the
+A release holds the five tool packages and the
 standalone tools; dnf takes the rest, such as earlyoom and rsyslog, from
 Fedora's repositories. The RPMs are for the Fedora release named in the release text.
 To update, download the next release's files and run `sudo dnf upgrade
@@ -413,7 +446,7 @@ On a host booted with systemd, they run in a namespace and never touch the real
 systemd:
 
 ```sh
-dist/rpm/build-skarnet-rpms.sh && sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
+dist/rpm/build-skarnet-rpms.sh && sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm   # tarballs: see Deploying
 sudo dnf install dbus-daemon python3 cargo
 cargo build && tests/sandbox.sh ~/sdc && tests/check.sh ~/sdc
 tests/systemctl.sh status notifier.service

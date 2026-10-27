@@ -86,7 +86,7 @@ RPM은 빌드한 머신의 Fedora 릴리스와 아키텍처용입니다(예: `fc
 ```sh
 git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
 sudo dnf install git rpm-build gcc make cpio
-sdcompat/dist/rpm/build-skarnet-rpms.sh            # skarnet.org 타르볼을 내려받습니다
+sdcompat/dist/rpm/build-skarnet-rpms.sh            # 타르볼은 먼저 ~/skarnet-sources에 직접 받기(README.md 참고)
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 ```
 

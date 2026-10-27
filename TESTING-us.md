@@ -68,11 +68,15 @@ rpm -q pam libselinux libseccomp policycoreutils
 ## 2. Build and install the s6 packages
 
 Fedora does not package skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend or mdevd. The
-build script downloads them, checks them against pinned SHA-256 sums and builds
-RPMs in dependency order:
+First download the release tarballs of the versions in
+`dist/skarnet.versions` from skarnet.org yourself, into `~/skarnet-sources`
+(the URL is `https://skarnet.org/software/NAME/NAME-VERSION.tar.gz`; see
+"Deploying on Fedora" in README-us.md). The build script downloads nothing:
+it checks the tarballs against the pinned SHA-256 sums and builds RPMs in
+dependency order. When a tarball is missing it stops and prints its URL.
 
 ```sh
-dist/rpm/build-skarnet-rpms.sh
+dist/rpm/build-skarnet-rpms.sh            # tarballs elsewhere: --sources DIR
 ```
 
 - Without mock, it uses `rpmbuild`. Each package is unpacked into
