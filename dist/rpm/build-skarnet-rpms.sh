@@ -3,13 +3,12 @@
 # (Fedora does not package them), in that order.
 #
 #   dist/rpm/build-skarnet-rpms.sh [OUTDIR]          # default: ~/rpmbuild-skarnet
-#   dist/rpm/build-skarnet-rpms.sh --srpm [OUTDIR]   # source RPMs only (for COPR)
+#   dist/rpm/build-skarnet-rpms.sh --srpm [OUTDIR]   # source RPMs only
 #
 # With --srpm the source RPMs go to OUTDIR/srpms, each with its version and
-# release in the spec and the verified skarnet.org tarball inside; a
-# builder such as COPR must build them in the order of skarnet.versions
-# (each needs the -devel packages of the ones before it; see
-# packages/copr-srpms.sh).
+# release in the spec and the verified skarnet.org tarball inside; another
+# builder must build them in the order of skarnet.versions (each needs the
+# -devel packages of the ones before it).
 #
 # With mock installed (and you in the "mock" group) everything is built in
 # clean chroots with `mock --chain`. Otherwise rpmbuild is used, and each

@@ -4,12 +4,13 @@
 # tarball with the crates vendored, so rpmbuild needs no network.
 #
 #   packages/build-rpms.sh [OUTDIR]          # default: ~/rpmbuild-sdcompat
-#   packages/build-rpms.sh --srpm [OUTDIR]   # source RPMs only (for COPR)
+#   packages/build-rpms.sh --srpm [OUTDIR]   # source RPMs only
 #
 # With --srpm the five source RPMs go to OUTDIR/srpms, each with the version
-# and release in its spec and the vendored tarball inside, so a builder
-# such as COPR builds them as they are (packages/copr-srpms.sh makes them
-# with the other packages'). Nothing is installed and no sudo is needed.
+# and release in its spec and the vendored tarball inside, so they rebuild
+# offline as they are (rpmbuild --rebuild, mock). packages/github-release.sh
+# builds the binary RPMs with the other packages' for a GitHub release.
+# Nothing is installed and no sudo is needed.
 # Afterwards:
 #   sudo dnf install OUTDIR/rpms/*.rpm       (first time)
 #   sudo dnf upgrade OUTDIR/rpms/*.rpm       (after a rebuild)

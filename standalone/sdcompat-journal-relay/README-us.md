@@ -29,7 +29,7 @@ RPM: `./build-rpm.sh [OUTDIR]` builds `sdcompat-journal-relay.spec` into
 `~/rpmbuild-sdcompat-standalone/rpms` (no sudo; each rebuild gets a newer release, so
 `sudo dnf upgrade` takes it). Install it with
 `sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-journal-relay-*.rpm`. `./build-rpm.sh --srpm` makes only
-the source RPM, for a build service such as COPR.
+the source RPM, to rebuild elsewhere (`rpmbuild --rebuild`, mock).
 
 ## Run
 

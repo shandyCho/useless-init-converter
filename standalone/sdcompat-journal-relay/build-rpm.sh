@@ -3,11 +3,11 @@
 # the crates vendored, so rpmbuild needs no network.
 #
 #   ./build-rpm.sh [OUTDIR]          # default: ~/rpmbuild-sdcompat-standalone
-#   ./build-rpm.sh --srpm [OUTDIR]   # the source RPM only (e.g. for COPR)
+#   ./build-rpm.sh --srpm [OUTDIR]   # the source RPM only
 #
 # With --srpm the source RPM goes to OUTDIR/srpms, with the release in its
-# spec and the vendored tarball inside, so a builder such as COPR builds it
-# as it is. Nothing is installed and no sudo is needed. Afterwards:
+# spec and the vendored tarball inside, so it rebuilds offline as it is
+# (rpmbuild --rebuild, mock). Nothing is installed and no sudo is needed. Afterwards:
 #   sudo dnf install OUTDIR/rpms/*.rpm       (first time)
 #   sudo dnf upgrade OUTDIR/rpms/*.rpm       (after a rebuild)
 #

@@ -164,7 +164,7 @@ sdcompat은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공�
 
 | 패키지 | 용도 |
 |---|---|
-| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, 서비스 감독, 서비스 데이터베이스. Fedora에 패키지가 없으므로 sdcompat COPR에서 받거나 `dist/rpm/build-skarnet-rpms.sh`로 빌드합니다 |
+| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, 서비스 감독, 서비스 데이터베이스. Fedora에 패키지가 없으므로 sdcompat의 GitHub 릴리스에서 받거나 `dist/rpm/build-skarnet-rpms.sh`로 빌드합니다 |
 | s6-frontend (권장) | `s6` 명령([`s6` 명령](#s6-명령-s6-frontend) 참고). 나머지와 함께 빌드됩니다 |
 | mdevd (권장) | s6 initramfs(`--boot-only-s6=yes`)에서 드라이버를 로드합니다. 나머지와 함께 빌드됩니다 |
 | systemd | 설치된 채로 둡니다: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
@@ -216,18 +216,22 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 패키지를 설치한 뒤 `sdcompat init`으로 부팅을 설정합니다.
 
+[GitHub 릴리스](https://github.com/shandyCho/sdcompat/releases)에서 한 릴리스의 `.rpm` 파일과
+`SHA256SUMS`를 모두 빈 디렉터리에 받은 뒤:
+
 ```sh
-sudo dnf copr enable OWNER/sdcompat       # COPR 프로젝트. packages/README.md 참고
-sudo dnf install sdcompat
+sha256sum -c SHA256SUMS
+sudo dnf install ./*.rpm
 sdcompat init --dry-run                   # 무엇을 할지 보기(root 불필요)
 sudo sdcompat init
 ```
 
-`dnf install sdcompat`은 도구 패키지 넷과 skarnet 패키지(skalibs, execline, s6, s6-rc,
-s6-linux-init)를 설치하고, 권장 패키지로 s6-frontend, mdevd, earlyoom, rsyslog와 독립 도구도
-설치합니다. COPR 없이 쓰려면 RPM을 직접 빌드해서(`dist/rpm/build-skarnet-rpms.sh`,
-`packages/build-rpms.sh`, `standalone/*/build-rpm.sh`) `dnf install`하세요.
-[packages/README.md](packages/README.md)를 참고하세요.
+릴리스에는 도구 패키지 다섯과 skarnet 패키지(skalibs, execline, s6, s6-rc, s6-linux-init,
+s6-frontend, mdevd), 독립 도구가 들어 있고, earlyoom, rsyslog 같은 나머지는 dnf가 Fedora
+저장소에서 가져옵니다. RPM은 릴리스 본문에 적힌 Fedora 릴리스용입니다. 업데이트는 다음 릴리스의
+파일을 받아 `sudo dnf upgrade ./*.rpm`, 그다음 `sudo sdcompat init --yes`입니다. RPM을 직접
+빌드할 수도 있습니다(`dist/rpm/build-skarnet-rpms.sh`, `packages/build-rpms.sh`,
+`standalone/*/build-rpm.sh`). [packages/README.md](packages/README.md)를 참고하세요.
 
 `sdcompat init`은 GRUB 항목 "Fedora (s6 + sdcompat)"를 **추가**하고, `--default-s6`을 주지
 않으면 일반 systemd 부팅을 기본값으로 둡니다. 아무것도 설치하지 않습니다. 설정에 필요한 패키지가
@@ -512,7 +516,7 @@ standalone/                별도 프로젝트. 각각 README와 spec이 있습�
   sdcompat-notify/         systemd-notify 대체
 dist/                      설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
                            s6-linux-init 골격, kernel-install 플러그인
-packages/                  본체 도구의 RPM spec(도구마다 하나), 빌드 스크립트, copr-srpms.sh
+packages/                  본체 도구의 RPM spec(도구마다 하나), 빌드 스크립트, github-release.sh
 dist/rpm/                  dist/skarnet.versions에 있는 skarnet 패키지의 spec과 빌드 스크립트
 tests/                     비특권 샌드박스, 시나리오 검사, systemctl 래퍼
 ```

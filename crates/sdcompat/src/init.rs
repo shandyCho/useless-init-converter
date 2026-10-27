@@ -1,7 +1,7 @@
 //! `sdcompat init`: set up an installed system to boot with s6-linux-init +
 //! s6-rc + sdcompat instead of systemd as PID 1.
 //!
-//! The packages (dnf, e.g. from COPR) bring the programs and the files in
+//! The packages (dnf, e.g. from a GitHub release) bring the programs and the files in
 //! /usr; this writes the machine's own configuration: /etc/sdcompat, the
 //! s6-linux-init tree, the s6-rc database, SELinux labels and a GRUB entry
 //! "Fedora (s6 + sdcompat)". The systemd boot entry keeps working, and is
@@ -32,13 +32,18 @@ const S6_CONF_MARK: &str = "written by sdcompat's";
 const SYSINIT_CONTENTS: &str = "/etc/sdcompat/s6/sdcompat-sysinit/contents.d";
 const BLS_DIR: &str = "/boot/loader/entries";
 const CORE_PACKAGES: &str = "sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd";
+/// Where the packages Fedora does not have come from.
+const RELEASES: &str = "https://github.com/shandyCho/sdcompat/releases";
+/// The packages init may ask for that are in a release, not in Fedora.
+const RELEASE_PACKAGES: [&str; 3] = ["s6-linux-init", "sdcompat-journal-relay", "mdevd"];
 
 const USAGE: &str = "\
 usage: sdcompat init [OPTIONS]
        sdcompat init --uninstall [--yes] [--dry-run]
 
 Set up this Fedora system to boot with s6-linux-init + s6-rc + sdcompat.
-Install the packages first (dnf install sdcompat). The systemd boot entry
+Install the packages first (the RPMs of a release from
+https://github.com/shandyCho/sdcompat/releases). The systemd boot entry
 keeps working: init adds a GRUB entry \"Fedora (s6 + sdcompat)\". It shows
 its plan and asks before changing anything.
 
@@ -391,7 +396,7 @@ fn check_system(ctx: &Ctx) {
         format!("{LIBEXEC}/sdcompat-gen"),
     ];
     if let Some(p) = packaged.iter().find(|p| !exists(p)) {
-        let msg = format!("{p} is missing: install the packages first (sudo dnf install sdcompat)");
+        let msg = format!("{p} is missing: install the packages first (sudo dnf install ./*.rpm with the RPMs from {RELEASES})");
         if ctx.dry {
             warn(&msg);
         } else {
@@ -422,7 +427,10 @@ fn check_programs(ctx: &Ctx, s: &Settings) {
     }
     let missing: Vec<&str> = need.iter().filter(|(ok, _)| !ok).map(|(_, p)| *p).collect();
     if !missing.is_empty() {
-        let msg = format!("missing packages for these settings: sudo dnf install {}", missing.join(" "));
+        let mut msg = format!("missing packages for these settings: sudo dnf install {}", missing.join(" "));
+        if missing.iter().any(|p| RELEASE_PACKAGES.contains(p)) {
+            msg += &format!(" (the s6 and sdcompat ones are RPMs in {RELEASES})");
+        }
         if ctx.dry {
             warn(&msg);
         } else {

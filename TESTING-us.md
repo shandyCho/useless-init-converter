@@ -194,8 +194,9 @@ sudo dnf install ~/rpmbuild-sdcompat/rpms/*.rpm ~/rpmbuild-sdcompat-standalone/r
 sdcompat --version                    # every core tool from the same build
 ```
 
-(With the packages from a COPR project instead, `sudo dnf copr enable
-OWNER/sdcompat && sudo dnf install sdcompat` replaces stage 2 and these
+(With the packages from a GitHub release instead, download the release's
+`.rpm` files and `SHA256SUMS` into an empty directory and run `sha256sum -c
+SHA256SUMS && sudo dnf install ./*.rpm`; that replaces stage 2 and these
 commands.)
 
 Installing the packages changes nothing about booting yet. Preview, then set
@@ -350,7 +351,7 @@ sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm ~/rpmbuild-sdcompat-standalone/r
 sudo sdcompat init --yes
 ```
 
-(From COPR: `sudo dnf upgrade 'sdcompat*'`, then `sudo sdcompat init --yes`.)
+(From a GitHub release: download the next release's files, `sudo dnf upgrade ./*.rpm`, then `sudo sdcompat init --yes`.)
 
 Running `sdcompat init` again is safe. It keeps your `/etc/sdcompat`
 configuration and the choices of the last run, regenerates the database,

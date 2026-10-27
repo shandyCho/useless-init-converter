@@ -52,7 +52,7 @@ RPM: `./build-rpm.sh [OUTDIR]` builds `sdcompat-linkwatch.spec` into
 `~/rpmbuild-sdcompat-standalone/rpms` (no sudo; each rebuild gets a newer release, so
 `sudo dnf upgrade` takes it). Install it with
 `sudo dnf install ~/rpmbuild-sdcompat-standalone/rpms/sdcompat-linkwatch-*.rpm`. `./build-rpm.sh --srpm` makes only
-the source RPM, for a build service such as COPR. sdcompat runs it as the s6 service `sdcompat-linkwatch`
+the source RPM, to rebuild elsewhere (`rpmbuild --rebuild`, mock). sdcompat runs it as the s6 service `sdcompat-linkwatch`
 (idle when the tool is not installed).
 
 ## Run

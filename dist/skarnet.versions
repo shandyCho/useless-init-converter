@@ -1,6 +1,6 @@
 # The skarnet.org packages sdcompat runs on, in build order. This is the only
 # place their versions live: dist/rpm/build-skarnet-rpms.sh (the RPM specs)
-# reads it, and packages/copr-srpms.sh orders the builds by it.
+# reads it, and builds them in this order.
 #
 # To move to new releases, change the versions and checksums here. The
 # checksum is skarnet.org's published one:

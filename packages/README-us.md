@@ -29,7 +29,7 @@ executables, so they are used only to build and are not packaged.
 ```sh
 packages/build-rpms.sh            # result: ~/rpmbuild-sdcompat/rpms
 packages/build-rpms.sh DIR        # somewhere else
-packages/build-rpms.sh --srpm     # source RPMs only: ~/rpmbuild-sdcompat/srpms (see COPR)
+packages/build-rpms.sh --srpm     # source RPMs only: ~/rpmbuild-sdcompat/srpms
 ```
 
 The script packs the workspace (`Cargo.toml`, `Cargo.lock`, `crates`, `dist`)
@@ -58,61 +58,52 @@ this script (plain `rpmbuild` fails for lack of a version).
 - To set the release yourself, e.g. for a published release:
   `SDCOMPAT_RELEASE=1 packages/build-rpms.sh`.
 
-## COPR
+## GitHub releases
 
-The packages can be built on [Fedora COPR](https://copr.fedorainfracloud.org)
-from source RPMs, so users install them with dnf:
-
-```sh
-packages/copr-srpms.sh                 # all 16 source RPMs: ~/sdcompat-srpms
-packages/copr-srpms.sh core            # only the five core ones (after a code change)
-packages/copr-srpms.sh DIR core standalone
-```
-
-It runs each build script with `--srpm` (`packages/build-rpms.sh --srpm`,
-`standalone/*/build-rpm.sh --srpm`, `dist/rpm/build-skarnet-rpms.sh --srpm`),
-which writes the version and release into the spec and puts the vendored
-crates (or the verified skarnet.org tarball) into the source RPM, so COPR
-builds them offline as they are. Results: `DIR/srpms/` and
-`DIR/BUILD-ORDER.txt`:
-
-```
-stage 1: skalibs-...src.rpm
-stage 2: execline-...src.rpm mdevd-...src.rpm
-stage 3: s6-...src.rpm
-stage 4: s6-rc-...src.rpm s6-linux-init-...src.rpm
-stage 5: s6-frontend-...src.rpm
-stage 6: sdcompat-...src.rpm sdcompatd-...src.rpm ... sdcompat-notify-...src.rpm
-```
-
-A skarnet package builds against the `-devel` packages of the ones before
-it, so start a stage once the earlier stages have succeeded in the COPR
-project (the stages come from the specs' `BuildRequires`). The Rust
-packages need only cargo and rust and can build in any order. The five core
-packages require each other's exact version-release: upload the five of one
-run together.
-
-One-time setup on copr.fedorainfracloud.org: New Project, pick the Fedora
-chroots (e.g. `fedora-45-x86_64`); no external repositories are needed.
-Then per build:
-
-- **Web:** the project's Builds > New Build > Upload, one source RPM at a
-  time, stage by stage.
-- **copr-cli** (`dnf install copr-cli`, API token in `~/.config/copr`):
-  `copr-cli build OWNER/sdcompat FILE...` per stage; it waits for the builds.
-
-The skarnet packages only need rebuilding when `dist/skarnet.versions`
-changes; after a code change upload `packages/copr-srpms.sh core` (and
-`standalone` when a standalone tool changed). Users then run:
+The packages are published as files on the project's
+[GitHub releases](https://github.com/shandyCho/sdcompat/releases):
 
 ```sh
-sudo dnf copr enable OWNER/sdcompat
-sudo dnf install sdcompat
+packages/github-release.sh             # result: ~/sdcompat-release
+packages/github-release.sh DIR         # somewhere else
+```
+
+It needs a committed tree, then runs the three build scripts
+(`dist/rpm/build-skarnet-rpms.sh`, `packages/build-rpms.sh`,
+`standalone/*/build-rpm.sh`) in a fresh `DIR/work` and collects:
+
+- `DIR/assets/`: the binary RPMs a user installs (skarnet, the five core
+  packages, the standalone tools; no `-devel` or debuginfo packages) and
+  `SHA256SUMS`.
+- `DIR/NOTES.md`: the release text, with the commit, the Fedora release and
+  architecture the RPMs are built for, the install commands and the list of
+  packages.
+
+At the end it prints the `gh release create` command (tag
+`vVERSION`, from `[workspace.package] version`) to run where the GitHub CLI
+is logged in. Without it: on GitHub, Releases > Draft a new release, the
+tag `vVERSION` on that commit, NOTES.md as the text, and every file in
+`DIR/assets` attached. A tag can only be used once, so bump the version in
+`Cargo.toml` before each release.
+
+The RPMs are built for the Fedora release and architecture of the machine
+that builds them (e.g. `fc45`, `x86_64`); build on each Fedora release you
+want to support. Users then run, in an empty directory:
+
+```sh
+gh release download vVERSION -R shandyCho/sdcompat    # or download the files in a browser
+sha256sum -c SHA256SUMS
+sudo dnf install ./*.rpm
+sdcompat init --dry-run
 sudo sdcompat init
 ```
 
-The specs still say `License: TBD`; COPR builds them, but choose a license
-before publishing.
+dnf takes rsyslog, earlyoom and the other dependencies from Fedora's
+repositories. There is no repository on GitHub, so `dnf upgrade` alone
+does not see new releases: download the next release's files and run
+`sudo dnf upgrade ./*.rpm`, then `sudo sdcompat init --yes`.
+
+The specs still say `License: TBD`; choose a license before publishing.
 
 ## Installing local builds
 

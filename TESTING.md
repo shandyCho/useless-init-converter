@@ -183,8 +183,9 @@ sudo dnf install ~/rpmbuild-sdcompat/rpms/*.rpm ~/rpmbuild-sdcompat-standalone/r
 sdcompat --version                    # 본체 도구가 모두 같은 빌드인지
 ```
 
-(COPR 프로젝트의 패키지를 쓴다면 `sudo dnf copr enable OWNER/sdcompat && sudo dnf install
-sdcompat`이 2단계와 위 명령을 대신합니다.)
+(GitHub 릴리스의 패키지를 쓴다면, 한 릴리스의 `.rpm` 파일과 `SHA256SUMS`를 빈 디렉터리에
+받아 `sha256sum -c SHA256SUMS && sudo dnf install ./*.rpm`을 실행하는 것이 2단계와 위 명령을
+대신합니다.)
 
 패키지를 설치해도 부팅은 아직 바뀌지 않습니다. 미리 본 뒤 부팅을 설정합니다.
 
@@ -330,7 +331,7 @@ sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm ~/rpmbuild-sdcompat-standalone/r
 sudo sdcompat init --yes
 ```
 
-(COPR에서는 `sudo dnf upgrade 'sdcompat*'` 다음 `sudo sdcompat init --yes`.)
+(GitHub 릴리스에서는 다음 릴리스의 파일을 받아 `sudo dnf upgrade ./*.rpm` 다음 `sudo sdcompat init --yes`.)
 
 `sdcompat init`을 다시 실행해도 안전합니다. `/etc/sdcompat` 설정과 지난 실행의 선택은
 그대로 두고, 데이터베이스, s6-linux-init 트리, 부팅 항목을 다시 만들며, 바꾸는 파일은

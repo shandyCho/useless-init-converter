@@ -28,7 +28,7 @@
 ```sh
 packages/build-rpms.sh            # 결과: ~/rpmbuild-sdcompat/rpms
 packages/build-rpms.sh DIR        # 다른 위치
-packages/build-rpms.sh --srpm     # 소스 RPM만: ~/rpmbuild-sdcompat/srpms (COPR 참고)
+packages/build-rpms.sh --srpm     # 소스 RPM만: ~/rpmbuild-sdcompat/srpms
 ```
 
 스크립트는 작업공간(`Cargo.toml`, `Cargo.lock`, `crates`, `dist`)과 `cargo vendor`로
@@ -54,57 +54,47 @@ spec에는 버전을 적지 않습니다. 스크립트가 정해서 넘겨 주�
   `0.1.0 (git c8aabf8)`처럼 커밋을 보여 줍니다.
 - 공개 릴리스처럼 릴리스 번호를 직접 정하려면 `SDCOMPAT_RELEASE=1 packages/build-rpms.sh`.
 
-## COPR
+## GitHub 릴리스
 
-패키지는 [Fedora COPR](https://copr.fedorainfracloud.org)에서 소스 RPM으로 빌드할 수
-있습니다. 그러면 사용자는 dnf로 설치합니다.
-
-```sh
-packages/copr-srpms.sh                 # 소스 RPM 16개 전부: ~/sdcompat-srpms
-packages/copr-srpms.sh core            # 본체 다섯 개만(코드를 고친 뒤)
-packages/copr-srpms.sh DIR core standalone
-```
-
-각 빌드 스크립트를 `--srpm`으로 실행합니다(`packages/build-rpms.sh --srpm`,
-`standalone/*/build-rpm.sh --srpm`, `dist/rpm/build-skarnet-rpms.sh --srpm`). 버전과
-릴리스를 spec에 적고, vendoring한 크레이트(또는 검증한 skarnet.org 타르볼)를 소스 RPM에
-넣으므로 COPR은 네트워크 없이 그대로 빌드합니다. 결과는 `DIR/srpms/`와
-`DIR/BUILD-ORDER.txt`입니다.
-
-```
-stage 1: skalibs-...src.rpm
-stage 2: execline-...src.rpm mdevd-...src.rpm
-stage 3: s6-...src.rpm
-stage 4: s6-rc-...src.rpm s6-linux-init-...src.rpm
-stage 5: s6-frontend-...src.rpm
-stage 6: sdcompat-...src.rpm sdcompatd-...src.rpm ... sdcompat-notify-...src.rpm
-```
-
-skarnet 패키지는 앞 패키지들의 `-devel` 패키지로 빌드하므로, 앞 단계가 COPR
-프로젝트에서 성공한 뒤에 다음 단계를 시작하세요(단계는 spec의 `BuildRequires`에서
-계산합니다). Rust 패키지는 cargo와 rust만 있으면 되므로 순서가 상관없습니다. 본체 다섯
-패키지는 서로의 정확한 버전-릴리스를 요구하므로, 한 번에 만든 다섯 개를 함께 올리세요.
-
-copr.fedorainfracloud.org에서 처음 한 번: New Project를 만들고 Fedora chroot(예:
-`fedora-45-x86_64`)를 고릅니다. 외부 저장소는 필요 없습니다. 그다음 빌드마다:
-
-- **웹:** 프로젝트의 Builds > New Build > Upload에서 소스 RPM을 하나씩, 단계 순서대로
-  올립니다.
-- **copr-cli** (`dnf install copr-cli`, API 토큰은 `~/.config/copr`): 단계마다
-  `copr-cli build OWNER/sdcompat FILE...`. 빌드가 끝날 때까지 기다립니다.
-
-skarnet 패키지는 `dist/skarnet.versions`가 바뀔 때만 다시 빌드하면 됩니다. 코드를 고친
-뒤에는 `packages/copr-srpms.sh core`의 결과를 올리세요(독립 도구가 바뀌었으면
-`standalone`도). 사용자는 다음을 실행합니다.
+패키지는 프로젝트의 [GitHub 릴리스](https://github.com/shandyCho/sdcompat/releases)에
+파일로 올립니다.
 
 ```sh
-sudo dnf copr enable OWNER/sdcompat
-sudo dnf install sdcompat
+packages/github-release.sh             # 결과: ~/sdcompat-release
+packages/github-release.sh DIR         # 다른 위치
+```
+
+커밋된 트리가 필요하고, 새로 만든 `DIR/work`에서 빌드 스크립트 셋
+(`dist/rpm/build-skarnet-rpms.sh`, `packages/build-rpms.sh`,
+`standalone/*/build-rpm.sh`)을 실행한 뒤 다음을 모읍니다.
+
+- `DIR/assets/`: 사용자가 설치할 바이너리 RPM(skarnet, 본체 다섯 패키지, 독립 도구.
+  `-devel`과 debuginfo 패키지는 빼고)과 `SHA256SUMS`.
+- `DIR/NOTES.md`: 릴리스 본문. 커밋, RPM을 빌드한 Fedora 릴리스와 아키텍처, 설치 명령,
+  패키지 목록이 들어 있습니다.
+
+끝에 GitHub CLI가 로그인된 곳에서 실행할 `gh release create` 명령을 출력합니다(태그는
+`[workspace.package] version`에서 만든 `vVERSION`). CLI 없이 하려면 GitHub에서
+Releases > Draft a new release를 열고, 그 커밋에 태그 `vVERSION`을 달고, NOTES.md를
+본문으로 넣고, `DIR/assets`의 파일을 모두 첨부합니다. 태그는 한 번만 쓸 수 있으므로
+릴리스마다 `Cargo.toml`의 버전을 올리세요.
+
+RPM은 빌드한 머신의 Fedora 릴리스와 아키텍처용입니다(예: `fc45`, `x86_64`). 지원할 Fedora
+릴리스마다 그 위에서 빌드하세요. 사용자는 빈 디렉터리에서 다음을 실행합니다.
+
+```sh
+gh release download vVERSION -R shandyCho/sdcompat    # 또는 브라우저로 파일을 받기
+sha256sum -c SHA256SUMS
+sudo dnf install ./*.rpm
+sdcompat init --dry-run
 sudo sdcompat init
 ```
 
-spec에는 아직 `License: TBD`라고 되어 있습니다. COPR은 그대로 빌드하지만, 공개하기 전에
-라이선스를 정하세요.
+rsyslog, earlyoom 같은 다른 의존 패키지는 dnf가 Fedora 저장소에서 가져옵니다. GitHub에는
+저장소가 없으므로 `dnf upgrade`만으로는 새 릴리스를 알 수 없습니다. 다음 릴리스의 파일을
+받아 `sudo dnf upgrade ./*.rpm`을 실행한 뒤 `sudo sdcompat init --yes`를 실행하세요.
+
+spec에는 아직 `License: TBD`라고 되어 있습니다. 공개하기 전에 라이선스를 정하세요.
 
 ## 직접 빌드한 패키지 설치
 

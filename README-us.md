@@ -195,7 +195,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 
 | Package | Used for |
 |---|---|
-| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, supervision, the service database. Fedora doesn't package them: they come from the sdcompat COPR, or build them with `dist/rpm/build-skarnet-rpms.sh` |
+| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, supervision, the service database. Fedora doesn't package them: they come from sdcompat's GitHub releases, or build them with `dist/rpm/build-skarnet-rpms.sh` |
 | s6-frontend (recommended) | The `s6` command (see [The `s6` command](#the-s6-command-s6-frontend)); built with the others |
 | mdevd (recommended) | Loads the drivers in the s6 initramfs (`--boot-only-s6=yes`); built with the others |
 | systemd | Stays installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
@@ -247,19 +247,25 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 Install the packages, then let `sdcompat init` set up the boot:
 
+Download all the `.rpm` files and `SHA256SUMS` of one of the
+[GitHub releases](https://github.com/shandyCho/sdcompat/releases) into an
+empty directory, then:
+
 ```sh
-sudo dnf copr enable OWNER/sdcompat       # the COPR project; see packages/README-us.md
-sudo dnf install sdcompat
+sha256sum -c SHA256SUMS
+sudo dnf install ./*.rpm
 sdcompat init --dry-run                   # what it would do (no root needed)
 sudo sdcompat init
 ```
 
-`dnf install sdcompat` brings the four tool packages and the skarnet
-packages (skalibs, execline, s6, s6-rc, s6-linux-init), and as recommended
-packages s6-frontend, mdevd, earlyoom, rsyslog and the standalone tools.
-Without the COPR, build the RPMs yourself (`dist/rpm/build-skarnet-rpms.sh`,
-`packages/build-rpms.sh`, `standalone/*/build-rpm.sh`) and `dnf install`
-them; see [packages/README-us.md](packages/README-us.md).
+A release holds the five tool packages, the skarnet packages (skalibs,
+execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd) and the standalone
+tools; dnf takes the rest, such as earlyoom and rsyslog, from Fedora's
+repositories. The RPMs are for the Fedora release named in the release text.
+To update, download the next release's files and run `sudo dnf upgrade
+./*.rpm`, then `sudo sdcompat init --yes`. You can also build the RPMs
+yourself (`dist/rpm/build-skarnet-rpms.sh`, `packages/build-rpms.sh`,
+`standalone/*/build-rpm.sh`); see [packages/README-us.md](packages/README-us.md).
 
 `sdcompat init` **adds** a GRUB entry, "Fedora (s6 + sdcompat)", and keeps the
 normal systemd boot as the default unless you pass `--default-s6`. It installs
@@ -579,7 +585,7 @@ standalone/                separate projects, each with its own README and spec
   sdcompat-notify/         systemd-notify replacement
 dist/                      config, D-Bus policy, s6 services, early-boot helper,
                            s6-linux-init skeleton, kernel-install plugin
-packages/                  RPM specs for the core tools (one per tool), their build script, copr-srpms.sh
+packages/                  RPM specs for the core tools (one per tool), their build script, github-release.sh
 dist/rpm/                  specs and build script for the skarnet packages in dist/skarnet.versions
 tests/                     unprivileged sandbox, scenario checks, systemctl wrapper
 ```
