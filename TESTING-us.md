@@ -36,19 +36,12 @@ Stop at the first stage that fails and report it (see
 
 ## 1. Get the code and the build tools
 
-The repository is private, so log in to GitHub first. The GitHub CLI is the
-simplest way:
-
 ```sh
-sudo dnf install -y git gh
-gh auth login                      # choose GitHub.com, HTTPS, log in with a browser
-gh repo clone shandyCho/sdcompat
+sudo dnf install -y git
+git clone https://github.com/shandyCho/sdcompat.git
 cd sdcompat
 git log -1 --oneline               # note this commit hash for reports
 ```
-
-(With SSH keys set up on GitHub, `git clone git@github.com:shandyCho/sdcompat.git`
-works too.)
 
 Install everything needed to build and test:
 

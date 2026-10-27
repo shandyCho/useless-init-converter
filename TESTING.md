@@ -35,18 +35,12 @@ PID 1로 두고 Fedora의 GNOME 세션을 띄우는 것까지 다룹니다. 단�
 
 ## 1. 코드와 빌드 도구 받기
 
-저장소가 비공개이므로 먼저 GitHub에 로그인해야 합니다. GitHub CLI가 가장 간단합니다.
-
 ```sh
-sudo dnf install -y git gh
-gh auth login                      # GitHub.com, HTTPS를 고르고 브라우저로 로그인
-gh repo clone shandyCho/sdcompat
+sudo dnf install -y git
+git clone https://github.com/shandyCho/sdcompat.git
 cd sdcompat
 git log -1 --oneline               # 보고할 때 쓸 커밋 해시를 적어 두세요
 ```
-
-(GitHub에 SSH 키를 등록해 두었다면 `git clone git@github.com:shandyCho/sdcompat.git`도
-됩니다.)
 
 빌드와 테스트에 필요한 것을 모두 설치합니다.
 
