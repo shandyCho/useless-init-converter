@@ -2,6 +2,7 @@
 //! uinitconverter.conf and the programs it names, the per-unit state files, the generated database's index,
 //! and the fd store protocol.
 
+pub mod automask;
 pub mod calendar;
 pub mod config;
 pub mod envfile;

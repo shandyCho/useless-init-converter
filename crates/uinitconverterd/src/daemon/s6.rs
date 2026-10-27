@@ -347,7 +347,8 @@ impl Daemon {
                 return s;
             }
             let Some(sv) = self.svstat_cached(id).await else { return s };
-            if dep_failed || st.has(keys::SOCKET_WAIT) {
+            // As for the database's longruns: a skipped start stays up for s6.
+            if !condition_ok || dep_failed || st.has(keys::SOCKET_WAIT) {
                 return s;
             }
             if start_failed {

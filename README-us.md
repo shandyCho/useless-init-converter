@@ -538,6 +538,20 @@ How it fits together:
   show the set: `enabled` for `always`/`active`, `disabled` for `usable`,
   `masked` for `masked` (`static`, `indirect` and `alias` stay as systemd
   has them).
+- **Automatic masking (`AUTO_MASK=yes`, the default).** A reload moves to
+  `masked` the translated services, timers and paths that are `usable`, not
+  pulled in by the boot, and that no service staying in the database
+  depends on (with their logger and `UNIT.stop`). Out of the database they
+  have no idle `s6-supervise`. When `systemctl start`, D-Bus activation, a
+  timer or udev asks for one, uinitconverterd runs it as a dynamic service,
+  like `user@UID` (supervised only while it runs); then `s6-svstat` shows it,
+  `s6-rc -a list` doesn't. `systemctl is-enabled` and `status` show them
+  `disabled`. `/var/lib/uinitconverter/auto-masked` lists them; once
+  something depends on one, the next reload puts it back to `usable`. A
+  service you move out with `s6 set enable|unmask` is recorded in
+  `auto-masked.keep` and never masked automatically again; one you
+  `s6 set mask` yourself is refused as before. With `AUTO_MASK=no` the next
+  reload puts everything it masked back to `usable`.
 - `systemctl daemon-reload` and `uinitconverter reload` (also run by dnf's file
   triggers when packages change) regenerate the store, sync the repository,
   then commit `current` and install it as the boot and live database. Before
@@ -608,6 +622,7 @@ and defaults). The most important keys:
 - `INIT`: the init system units are translated for. Only `s6` exists yet; any other value stops every tool with a configuration error.
 - `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `uinitconverter init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. The shell scripts and s6 service definitions in `dist/` still run them by name.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
+- `AUTO_MASK`: `yes` (default) masks the services the boot doesn't use in the s6 set and starts them dynamically on request (see "Automatic masking" above).
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
 - `INCLUDE`: by default lets through the systemd services that work under uinitconverter: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight (screen/keyboard brightness kept across boots) and the sleep services. The radio state (rfkill) is kept by the `rfkill` s6 oneshot instead of systemd-rfkill: util-linux `rfkill` restores each device's soft block at boot and the state is saved at shutdown, in systemd-rfkill's own files (`/var/lib/systemd/rfkill/ID_PATH:TYPE`), so the systemd boot entry shares it. Unlike systemd-rfkill it saves only at a clean shutdown, and a device that appears after the boot's udev settle keeps its state.
 

@@ -573,6 +573,10 @@ impl Daemon {
         let transient = self.transient.lock().unwrap().contains_key(&id);
         let dynamic = self.dynamic_kind(&id).is_some() || self.can_be_dynamic(&id, &unit);
         if !transient && !dynamic && self.kind_of(&id).is_none() && jtype != "stop" {
+            // Masked in the s6 set by the admin (AUTO_MASK='s are dynamic).
+            if crate::install::set_rx(&self.cfg, &id) == Some("masked") {
+                return Err(err(E_MASKED, format!("Unit {name} is masked in the s6 set ({}).", self.cfg.set_name)));
+            }
             // New unit file since the last reload: translate it now (not for
             // bus activation, which any user can trigger).
             if allow_reload && !self.cfg.is_excluded(&id) {

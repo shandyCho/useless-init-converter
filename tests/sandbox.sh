@@ -647,6 +647,11 @@ cat > "$U/beside.target" <<EOF
 [Unit]
 Wants=beside3.service
 EOF
+# The section drives s6-rc itself on these: they stay in the database, as
+# if the admin had taken them back from AUTO_MASK=.
+mkdir -p "$W/state"
+printf '%s\n' hold1.service hold2.service hold3.service hold4.service \
+    beside1.service beside2.service beside3.service >"$W/state/auto-masked.keep"
 
 # --- socket started on its own, re-activated after its service exits ---
 # Like systemd-rfkill.socket: a static socket with ListenSpecial= (here a

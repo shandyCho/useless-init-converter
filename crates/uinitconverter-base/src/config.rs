@@ -92,6 +92,9 @@ pub struct Config {
     /// (SYSLOG=, one of SYSLOGS). Read by that service's run script; here
     /// it is only checked.
     pub syslog: String,
+    /// Mask the translated services nothing boots or depends on in the s6
+    /// set and start them as dynamic instances on demand (see automask.rs).
+    pub auto_mask: bool,
     /// When false, systemd-resolved is not translated (RESOLVED=no): the
     /// s6 "resolv" oneshot makes NetworkManager handle DNS on that boot.
     pub resolved: bool,
@@ -241,6 +244,7 @@ impl Config {
             allow_uids: Vec::new(),
             journal: true,
             syslog: "rsyslog".into(),
+            auto_mask: true,
             resolved: true,
             journal_stdout: PathBuf::from("/run/systemd/journal/stdout"),
             transient_dir: PathBuf::from("/run/systemd/transient"),
@@ -310,6 +314,7 @@ impl Config {
                 "HALT_CMD" => cfg.halt_cmd = v,
                 "JOURNAL" => cfg.journal = crate::unit::parse_bool(&v).unwrap_or(true),
                 "SYSLOG" => cfg.syslog = v,
+                "AUTO_MASK" => cfg.auto_mask = crate::unit::parse_bool(&v).unwrap_or(true),
                 "RESOLVED" => cfg.resolved = crate::unit::parse_bool(&v).unwrap_or(true),
                 // The system bus: read by the dbus s6 service's run script.
                 "BUS" => {}

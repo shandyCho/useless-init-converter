@@ -928,7 +928,17 @@ rx() { s6-rc-set-status -r "$W/repo" current "$1" 2>/dev/null | cut -d/ -f2; }
 in_default() { s6-rc-db -l "$R/live" contents default 2>/dev/null | grep -qx "$1"; }
 expect_eq "enabled unit starts active in the set" "$(rx hello.service)" "active"
 printf '[Service]\nExecStart=/bin/sleep 1000\n' > "$W/units/repo-helper.service"
-call Reload && expect_eq "a new unit not enabled starts usable" "$(rx repo-helper.service)" "usable"
+# AUTO_MASK=yes: nothing boots or needs it, so it leaves the database and
+# starts as a dynamic instance.
+call Reload && expect_eq "a new unit not enabled is masked (AUTO_MASK=)" "$(rx repo-helper.service)" "masked"
+grep -qx repo-helper.service "$W/state/auto-masked" && ok "it is listed in auto-masked" || bad "repo-helper.service not in $W/state/auto-masked"
+# No [Install]: static, as on systemd; never "masked".
+expect_eq "UnitFileState of an auto-masked service" "$(prop repo-helper.service Unit UnitFileState)" "static"
+call StartUnit ss repo-helper.service replace
+expect_state repo-helper.service active/running
+[ -d "$R/run/dyn/repo-helper.service" ] && ok "it runs as a dynamic instance" || bad "repo-helper.service not in RUN_DIR/dyn"
+call StopUnit ss repo-helper.service replace
+expect_state repo-helper.service inactive/dead
 cat > "$W/units/repo-new.service" <<EOF
 [Unit]
 Requires=repo-helper.service
@@ -941,6 +951,22 @@ EOF
 "$GEN" --config "$W/uinitconverter.conf" enable repo-new.service >/dev/null
 call Reload && expect_eq "a new enabled unit starts active" "$(rx repo-new.service)" "active"
 expect_eq "what an active service needs is made active (s6-rc-set-fix -u)" "$(rx repo-helper.service)" "active"
+grep -qx repo-helper.service "$W/state/auto-masked" && bad "repo-helper.service still in auto-masked" || ok "an auto-masked service something needs is unmasked"
+printf '[Service]\nExecStart=/bin/sleep 1000\n' > "$W/units/repo-lazy.service"
+call Reload && expect_eq "another unused unit is masked" "$(rx repo-lazy.service)" "masked"
+s6-rc-set-change -r "$W/repo" -p current usable repo-lazy.service 2>/dev/null
+call Reload && expect_eq "the admin's unmask is kept" "$(rx repo-lazy.service)" "usable"
+grep -qx repo-lazy.service "$W/state/auto-masked.keep" && ok "and recorded in auto-masked.keep" || bad "repo-lazy.service not in auto-masked.keep"
+# -p: with JOURNAL=no its logger is in the same pipeline.
+s6-rc-set-change -r "$W/repo" -p current masked repo-lazy.service 2>/dev/null
+call Reload
+if call StartUnit ss repo-lazy.service replace >/dev/null 2>&1; then
+    bad "a service the admin masked was started"
+elif grep -q "masked" "$W/last-error"; then
+    ok "a service the admin masked is refused"
+else
+    bad "admin-masked start: $(cat "$W/last-error")"
+fi
 in_default repo-new.service && ok "the default bundle has it" || bad "repo-new.service not in the default bundle"
 s6-rc-set-change -r "$W/repo" current usable hello.service 2>/dev/null
 call Reload

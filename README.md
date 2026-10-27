@@ -471,6 +471,18 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
   `list-unit-files`는 세트를 보여 줍니다: `always`/`active`는 `enabled`, `usable`은
   `disabled`, `masked`는 `masked`입니다(`static`, `indirect`, `alias`는 systemd가 보는
   그대로입니다).
+- **자동 마스킹(`AUTO_MASK=yes`, 기본값).** 부팅이 끌어들이지 않고 `usable`인 변환된
+  서비스·타이머·path 중, 남아 있는 서비스가 의존하지 않는 것은 reload가 `masked`로
+  옮깁니다(로거와 `UNIT.stop`도 함께). 데이터베이스에 없으므로 할 일 없이 대기하는
+  `s6-supervise`가 생기지 않습니다. 이 서비스들은 `systemctl start`, D-Bus 활성화, 타이머,
+  udev가 요청하면 uinitconverterd가 `user@UID`처럼 동적 서비스로 띄웁니다(실행되는 동안만
+  감독). 실행 중에는 `s6-rc -a list`가 아니라 `s6-svstat`에만 보입니다. `systemctl
+  is-enabled`와 `status`는 `disabled`로 보여 줍니다. 무엇을 마스킹했는지는
+  `/var/lib/uinitconverter/auto-masked`에 있고, 무엇이 그 서비스에 의존하게 되면 다음
+  reload가 `usable`로 되돌립니다. 관리자가 `s6 set enable|unmask`로 꺼낸 서비스는
+  `auto-masked.keep`에 기록되어 다시는 자동으로 마스킹되지 않습니다. 관리자가 직접
+  `s6 set mask`한 서비스는 지금처럼 시작이 거부됩니다. `AUTO_MASK=no`이면 다음 reload가
+  자동으로 마스킹한 것을 모두 `usable`로 되돌립니다.
 - `systemctl daemon-reload`와 `uinitconverter reload`(패키지가 바뀌면 dnf의 파일 트리거도 실행)는
   스토어를 다시 만들고 저장소를 동기화한 뒤 `current`를 커밋해 부팅 및 live 데이터베이스로
   설치합니다. 커밋 전에 `s6-rc-set-fix -u`를 실행해 `active` 서비스가 의존하는 것을
@@ -533,6 +545,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `INIT`: 유닛을 변환할 대상 init 시스템. 지금은 `s6`만 있고, 다른 값이면 모든 도구가 설정 오류로 멈춥니다.
 - `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `uinitconverter init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
+- `AUTO_MASK`: `yes`(기본값)이면 부팅에 쓰이지 않는 서비스를 s6 세트에서 자동으로 `masked`로 두고 요청이 오면 동적으로 띄웁니다(위의 "자동 마스킹" 참고).
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 원하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
 - `INCLUDE`: 기본값으로 uinitconverter에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight(화면·키보드 밝기를 부팅 사이에 유지), 절전 서비스)를 통과시킵니다. 무선 상태(rfkill)는 systemd-rfkill 대신 `rfkill` s6 oneshot이 유지합니다. 부팅 때 util-linux `rfkill`로 장치마다 soft block을 되살리고, 종료할 때 상태를 systemd-rfkill 자신의 파일(`/var/lib/systemd/rfkill/ID_PATH:TYPE`)에 저장하므로 systemd 부팅 항목과 상태를 공유합니다. systemd-rfkill과 달리 정상 종료할 때만 저장하며, 부팅 중 udev settle 뒤에 나타난 장치는 상태를 그대로 둡니다.
 

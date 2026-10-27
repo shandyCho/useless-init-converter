@@ -35,7 +35,8 @@ fn write(path: PathBuf, content: &str, exec: bool) -> std::io::Result<()> {
 }
 
 impl Daemon {
-    /// Only instances of templates are created on demand; other units come
+    /// Instances of templates, transient units and the units AUTO_MASK=
+    /// left out of the database are created on demand; other units come
     /// from the compiled database.
     pub(super) fn can_be_dynamic(&self, id: &str, unit: &Unit) -> bool {
         if !unit.is_loaded() || self.kind_of(id).is_some() {
@@ -44,6 +45,12 @@ impl Daemon {
         // Transient units from systemd-run.
         if self.is_transient_file(unit) {
             return matches!(unit.utype(), "service" | "timer" | "path");
+        }
+        // Masked in the set by the generator, not by the admin.
+        if crate::install::set_rx(&self.cfg, id) == Some("masked")
+            && uinitconverter_base::automask::masked(&self.cfg).contains(id)
+        {
+            return matches!(unit.utype(), "service" | "timer" | "path") && !self.cfg.is_excluded(id);
         }
         unit.utype() == "service"
             && loader::parse_name(id).map(|n| n.instance.is_some()).unwrap_or(false)
@@ -123,9 +130,10 @@ impl Daemon {
             let ldir = dir.join("log");
             fs::create_dir_all(&ldir).map_err(e)?;
             let logdir = util::sh_quote(&log_dir.join(id).display().to_string());
+            let s6log = util::sh_quote(&tools::path("s6-log"));
             write(
                 ldir.join("run"),
-                &format!("#!/bin/sh\nmkdir -p {logdir} || exit 1\nexec s6-log n10 s1000000 T {logdir}\n"),
+                &format!("#!/bin/sh\nmkdir -p {logdir} || exit 1\nexec {s6log} n10 s1000000 T {logdir}\n"),
                 true,
             )
             .map_err(e)?;
@@ -238,6 +246,22 @@ impl Daemon {
                 .lock()
                 .unwrap()
                 .insert(id.to_string(), Dynamic { kind: Kind::Longrun, active: false });
+        }
+        if already {
+            // As do_start for the database's longruns: skipped or failed
+            // earlier but still up for s6, so restart it and the runner
+            // checks conditions and requirements again.
+            let st = crate::state::for_unit(&self.cfg.run_dir, id);
+            let parked = st.has(crate::state::keys::CONDITION_FAILED)
+                || st.has(crate::state::keys::DEPENDENCY_FAILED)
+                || st.has(crate::state::keys::START_FAILED)
+                || st.has(crate::state::keys::PARKED);
+            let sv = self.svstat(id).await.unwrap_or_default();
+            if sv.up && parked {
+                let started_at = crate::util::now_realtime_usec();
+                let r = self.restart_longrun(id, unit, sv.pid).await;
+                return self.job_outcome(id, started_at, r);
+            }
         }
         // `s6-svlink -d` also writes log/down: the s6-log of a JOURNAL=no
         // install would never run, and the service would write into a pipe

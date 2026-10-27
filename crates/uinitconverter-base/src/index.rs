@@ -86,6 +86,13 @@ impl Index {
                 _ => {}
             }
         }
+        // Masked in the s6 set (by the admin or AUTO_MASK=): not in the
+        // compiled database, whatever the generated store has.
+        if let Ok(rd) = fs::read_dir(cfg.repo_dir.join("sources").join(&cfg.set_name).join("masked")) {
+            for e in rd.flatten() {
+                idx.units.remove(e.file_name().to_string_lossy().as_ref());
+            }
+        }
         idx
     }
 
