@@ -16,8 +16,10 @@ use std::process::{exit, Command, Stdio};
 use uinitconverter_base::config::{Config, DEFAULT_LOG_DIR, SYSLOGS};
 use uinitconverter_base::tools;
 
+mod s6;
+use s6::S6LI_BASE;
+
 const TITLE: &str = "Fedora (s6 + uinitconverter)";
-const S6LI_BASE: &str = "/etc/s6-linux-init/current";
 const LIBEXEC: &str = "/usr/libexec/uinitconverter";
 const SHARE: &str = "/usr/share/uinitconverter";
 const BOOT_OPTIONS: &str = "/etc/uinitconverter/boot-options";
@@ -28,10 +30,6 @@ const KI_PLUGIN: &str = "/usr/lib/kernel/install.d/90-uinitconverter.install";
 /// The copy the old setup-fedora.sh put in /etc, which would hide the
 /// packaged one (kernel-install prefers /etc).
 const OLD_KI_PLUGIN: &str = "/etc/kernel/install.d/90-uinitconverter.install";
-const S6_CONF: &str = "/etc/s6.conf";
-/// In the s6.conf we write: one with it is ours to replace.
-const S6_CONF_MARK: &str = "written by uinitconverter's";
-const SYSINIT_CONTENTS: &str = "/etc/uinitconverter/s6/uinitconverter-sysinit/contents.d";
 const BLS_DIR: &str = "/boot/loader/entries";
 const CORE_PACKAGES: &str = "uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd";
 /// Where the packages Fedora does not have come from.
@@ -590,16 +588,6 @@ fn check_luks(ctx: &Ctx) {
 
 // ---------------------------------------------------------------- steps
 
-/// Take the s6 service NAME out of, or put it into, the uinitconverter-sysinit bundle.
-fn sysinit_member(ctx: &Ctx, name: &str, member: bool) {
-    let f = format!("{SYSINIT_CONTENTS}/{name}");
-    if !member && exists(&f) {
-        ctx.run(&["rm", "-f", &f]);
-    } else if member && !exists(&f) {
-        ctx.run(&["touch", &f]);
-    }
-}
-
 fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
     say("Configuring /etc/uinitconverter");
     let conf_path = ctx.cfg.config_path.display().to_string();
@@ -636,36 +624,7 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
         let conf = read(&format!("{SHARE}/{name}")).unwrap_or_default();
         ctx.put(&format!("/etc/uinitconverter/{name}"), &conf, 0o644);
     }
-    // The s6 command: uinitconverter's repository stores and boot database.
-    // A copy written by an earlier run is replaced; yours is kept.
-    let ours = read(&format!("{SHARE}/s6.conf")).unwrap_or_default();
-    match read(S6_CONF) {
-        Some(cur) if !cur.contains(S6_CONF_MARK) => {
-            println!("  keeping your {S6_CONF}; it needs these lines (see {SHARE}/s6.conf):");
-            for l in ours.lines().filter(|l| ["repodir ", "bootdb ", "storelist "].iter().any(|k| l.starts_with(k))) {
-                println!("    {l}");
-            }
-        }
-        Some(cur) if cur == ours => {}
-        _ => ctx.put(S6_CONF, &ours, 0o644),
-    }
-    // The admin's own s6-rc services: the last store, so they override.
-    if let Some(own) = ctx.cfg.extra_source.last() {
-        ctx.run(&["mkdir", "-p", &own.display().to_string()]);
-    }
-    // The boot bundle "default" is made by s6-rc-set-commit from the
-    // repository set; s6-rc refuses a store that defines one.
-    if exists("/etc/uinitconverter/s6/default") {
-        println!("  removing /etc/uinitconverter/s6/default (the set's commit makes it now)");
-        ctx.backup("/etc/uinitconverter/s6/default");
-        ctx.run(&["rm", "-rf", "/etc/uinitconverter/s6/default"]);
-    }
-    // With journald, it owns /dev/log; the s6-only rsyslog is not started.
-    // Without it, journal-relay serves journald's client sockets instead.
-    sysinit_member(ctx, "syslog", !s.journal);
-    sysinit_member(ctx, "journal-relay", !s.journal);
-    // Without resolved, "resolv" hands DNS to NetworkManager at boot.
-    sysinit_member(ctx, "resolv", !s.resolved);
+    s6::configure(ctx, s);
     // The syslog daemons' state (rsyslog's work directory, syslog-ng's
     // persist file and control socket), labelled for them by the policy.
     let syslog_state = if s.syslog == "syslog-ng" { "/var/lib/syslog-ng" } else { "/var/lib/rsyslog" };
@@ -714,50 +673,6 @@ fn build_database(ctx: &Ctx) {
     println!("  {n} warnings (mostly sandboxing directives that are not enforced)");
 }
 
-fn setup_s6_linux_init(ctx: &Ctx) {
-    say(&format!("Generating s6-linux-init in {S6LI_BASE}"));
-    let tmp = if ctx.dry {
-        "/tmp/uinitconverter-s6li".to_string()
-    } else {
-        output(&["mktemp", "-d"])
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| die("mktemp -d failed"))
-    };
-    let current = format!("{tmp}/current");
-    let skel = format!("{SHARE}/s6-linux-init/skel");
-    // -n: keep the initramfs's /run (remount it) as systemd does. Without
-    // it s6-linux-init's umount fails (credential mounts under it) and a
-    // second tmpfs hides the udev database, /run/log/journal, utab, utmp.
-    #[rustfmt::skip]
-    ctx.run(&[
-        "s6-linux-init-maker", "-n", "-c", S6LI_BASE, "-f", &skel,
-        "-p", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
-        "-1", "-t", "2", "-D", "default", "-G", "/usr/sbin/agetty tty9 linux", &current,
-    ]);
-    if exists(S6LI_BASE) {
-        let dest = format!("{}{S6LI_BASE}", ctx.backup);
-        ctx.run(&["mkdir", "-p", &format!("{}/etc/s6-linux-init", ctx.backup)]);
-        ctx.run(&["mv", S6LI_BASE, &dest]);
-    }
-    ctx.run(&["mkdir", "-p", "/etc/s6-linux-init"]);
-    ctx.run(&["cp", "-a", &current, S6LI_BASE]);
-    if !ctx.dry {
-        let _ = fs::remove_dir_all(&tmp);
-    }
-    println!("  rescue: an early getty runs on tty9 (Ctrl+Alt+F9) even if stage 2 fails");
-}
-
-/// The installed programs that dist/selinux/uinitconverter.cil labels init_exec_t.
-fn skarnet_files() -> Vec<String> {
-    let mut v = list_dir("/usr/bin", |n| n.starts_with("s6-") || n == "ucspilogd" || n == "execline");
-    for d in ["/usr/libexec/execline", "/usr/libexec/s6", "/usr/libexec/s6-rc"] {
-        if Path::new(d).is_dir() {
-            v.push(d.to_string());
-        }
-    }
-    v
-}
-
 fn setup_selinux(ctx: &Ctx) {
     say("SELinux labels");
     // s6-linux-init's stage 1 must run as init_t, like systemd.
@@ -783,77 +698,11 @@ fn setup_selinux(ctx: &Ctx) {
     .map(|s| s.to_string())
     .chain([ctx.cfg.state_dir.display().to_string(), log_dir(&ctx.cfg)])
     .collect();
-    paths.extend(skarnet_files());
+    paths.extend(s6::skarnet_files());
     let mut argv = vec!["restorecon", "-R"];
     argv.extend(paths.iter().map(String::as_str));
     ctx.run(&argv);
-    // The s6-rc repository, which uinitconverterd (init_t) syncs and commits; on a
-    // running s6 boot the runtime state too.
-    let repo_parent = ctx.cfg.repo_dir.parent().unwrap_or(&ctx.cfg.repo_dir).display().to_string();
-    for d in [ctx.cfg.run_dir.display().to_string(), repo_parent, "/run/uncaught-logs".into()] {
-        if Path::new(&d).is_dir() {
-            ctx.run(&["restorecon", "-R", &d]);
-        }
-    }
-    // ... lets the services write their stderr to the catch-all logger's fifo.
-    let fifo = "/run/service/s6-svscan-log/fifo";
-    if exists(fifo) {
-        ctx.run(&["restorecon", fifo]);
-    }
-    // ... lets s6-supervise notify waiters started from a shell (s6-svc -w).
-    // (The s6-rc services' are in the live directory, relabelled below.)
-    let events: Vec<String> = list_dir("/run/service", |_| true)
-        .into_iter()
-        .filter(|d| !Path::new(d).is_symlink())
-        .map(|d| format!("{d}/event"))
-        .filter(|e| Path::new(e).is_dir())
-        .collect();
-    if !events.is_empty() {
-        let mut argv = vec!["restorecon"];
-        argv.extend(events.iter().map(String::as_str));
-        ctx.run(&argv);
-    }
-    // ... and lets s6-rc-update (daemon-reload) rename in the live directory.
-    // LIVE_DIR is a symlink s6-rc-update points at LIVE_DIR:XXXX.
-    let live_dir = &ctx.cfg.live_dir;
-    let live_name = live_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let live_parent = live_dir.parent().map(|p| p.display().to_string()).unwrap_or_else(|| "/".into());
-    let mut live = list_dir(&live_parent, |n| n.starts_with(&format!("{live_name}:")));
-    if live_dir.is_symlink() {
-        live.push(live_dir.display().to_string());
-    }
-    if !live.is_empty() {
-        let mut argv = vec!["restorecon", "-R"];
-        argv.extend(live.iter().map(String::as_str));
-        ctx.run(&argv);
-    }
-}
-
-fn svok(ctx: &Ctx, dir: &str) -> bool {
-    Path::new(dir).is_dir() && (ctx.dry || succeeds(&["s6-svok", dir]))
-}
-
-/// On the s6 boot, restart uinitconverterd so the installed build takes over
-/// without a reboot. The daemon keeps dynamic units, the fd store and device
-/// state across a restart. uinitconverter-fdstore and journal-relay are left alone:
-/// restarting them would drop held fds and log sockets. uinitconverter-linkwatch
-/// keeps no state: it is restarted too.
-fn restart_daemon(ctx: &Ctx) {
-    let servicedir = |name: &str| ctx.cfg.live_dir.join("servicedirs").join(name).display().to_string();
-    let lw = servicedir("uinitconverter-linkwatch");
-    let lw = lw.as_str();
-    if svok(ctx, lw) {
-        ctx.run(&["s6-svc", "-r", lw]);
-    }
-    let svc = servicedir(&ctx.cfg.daemon_service);
-    let svc = svc.as_str();
-    if !svok(ctx, svc) {
-        return;
-    }
-    say("Restarting uinitconverterd (running on the s6 boot)");
-    if !ctx.try_run(&["s6-svc", "-wR", "-T", "30000", "-r", svc]) {
-        warn(&format!("uinitconverterd was not ready within 30 s; check s6-svstat {svc}"));
-    }
+    s6::relabel_runtime(ctx);
 }
 
 /// The BLS entries init added (title "Fedora (s6 + uinitconverter)...").
@@ -1121,12 +970,7 @@ fn uninstall(ctx: &Ctx, args: &[String]) -> ! {
     for img in list_dir("/boot", |n| n.starts_with("initramfs-") && n.ends_with("-s6.img")) {
         ctx.run(&["rm", "-f", &img]);
     }
-    if read(S6_CONF).is_some_and(|t| t.contains(S6_CONF_MARK)) {
-        ctx.run(&["rm", "-f", S6_CONF]);
-    }
-    if exists(S6LI_BASE) {
-        ctx.run(&["rm", "-rf", S6LI_BASE]);
-    }
+    s6::uninstall(ctx);
     if ctx.dry {
         print!("{}", dry_run_end(args));
         exit(0);
@@ -1185,11 +1029,11 @@ pub fn main(args: &[String]) -> ! {
     configure_uinitconverter(&ctx, &s);
     enable_units(&ctx);
     build_database(&ctx);
-    setup_s6_linux_init(&ctx);
+    s6::setup_s6_linux_init(&ctx);
     // After the labels: the new daemon starts under the new policy, and
     // s6-svc -wR needs the event directories relabelled.
     setup_selinux(&ctx);
-    restart_daemon(&ctx);
+    s6::restart_daemon(&ctx);
     add_grub_entry(&ctx, &s);
     if ctx.dry {
         print!("{}", dry_run_end(args));
