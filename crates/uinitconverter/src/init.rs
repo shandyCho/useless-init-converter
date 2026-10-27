@@ -13,14 +13,13 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::{exit, Command, Stdio};
 
-use uinitconverter_base::config::{Config, SYSLOGS};
+use uinitconverter_base::config::{Config, DEFAULT_LOG_DIR, SYSLOGS};
 use uinitconverter_base::tools;
 
 const TITLE: &str = "Fedora (s6 + uinitconverter)";
 const S6LI_BASE: &str = "/etc/s6-linux-init/current";
 const LIBEXEC: &str = "/usr/libexec/uinitconverter";
 const SHARE: &str = "/usr/share/uinitconverter";
-const SDC_CONF: &str = "/etc/uinitconverter/uinitconverter.conf";
 const BOOT_OPTIONS: &str = "/etc/uinitconverter/boot-options";
 const BOOT_DEFAULT_FILE: &str = "/etc/uinitconverter/boot-default";
 const BOOT_ONLY_S6_FILE: &str = "/etc/uinitconverter/boot-only-s6";
@@ -277,8 +276,8 @@ fn exists(path: &str) -> bool {
     Path::new(path).exists()
 }
 
-fn resolve(o: &Opts) -> Settings {
-    let conf = read(SDC_CONF).unwrap_or_default();
+fn resolve(o: &Opts, cfg: &Config) -> Settings {
+    let conf = fs::read_to_string(&cfg.config_path).unwrap_or_default();
     Settings {
         journal: o.journal.unwrap_or_else(|| conf_bool(&conf, "JOURNAL")),
         resolved: o.resolved.unwrap_or_else(|| conf_bool(&conf, "RESOLVED")),
@@ -356,6 +355,8 @@ fn list_dir(dir: &str, keep: impl Fn(&str) -> bool) -> Vec<String> {
 }
 
 struct Ctx {
+    /// uinitconverter.conf as it was before this run: its directories.
+    cfg: Config,
     dry: bool,
     yes: bool,
     /// Where overwritten files go.
@@ -601,32 +602,34 @@ fn sysinit_member(ctx: &Ctx, name: &str, member: bool) {
 
 fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
     say("Configuring /etc/uinitconverter");
-    match read(SDC_CONF) {
+    let conf_path = ctx.cfg.config_path.display().to_string();
+    let conf_path = conf_path.as_str();
+    match read(conf_path) {
         Some(mut text) => {
             let mut changed = false;
             for (key, val) in [("JOURNAL", s.journal), ("RESOLVED", s.resolved)] {
                 if let Some(t) = set_conf_key(&text, key, val) {
-                    println!("  {key}={} in {SDC_CONF}", if val { "yes" } else { "no" });
+                    println!("  {key}={} in {conf_path}", if val { "yes" } else { "no" });
                     text = t;
                     changed = true;
                 }
             }
             if let Some(t) = set_conf_bus(&text, s.broker) {
-                println!("  BUS={} in {SDC_CONF}", if s.broker { "broker" } else { "daemon" });
+                println!("  BUS={} in {conf_path}", if s.broker { "broker" } else { "daemon" });
                 text = t;
                 changed = true;
             }
             if let Some(t) = set_conf_choice(&text, "SYSLOG", "syslog", &s.syslog, SYSLOGS[0]) {
-                println!("  SYSLOG={} in {SDC_CONF}", s.syslog);
+                println!("  SYSLOG={} in {conf_path}", s.syslog);
                 text = t;
                 changed = true;
             }
             if changed {
-                ctx.put(SDC_CONF, &text, 0o644);
+                ctx.put(conf_path, &text, 0o644);
             }
         }
-        None if ctx.dry => warn(&format!("{SDC_CONF} is missing")),
-        None => die(&format!("{SDC_CONF} is missing: sudo dnf reinstall uinitconverter")),
+        None if ctx.dry => warn(&format!("{conf_path} is missing")),
+        None => die(&format!("{conf_path} is missing: sudo dnf reinstall uinitconverter")),
     }
     if !s.journal {
         let name = if s.syslog == "syslog-ng" { "syslog-ng.conf" } else { "rsyslog.conf" };
@@ -647,7 +650,9 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
         _ => ctx.put(S6_CONF, &ours, 0o644),
     }
     // The admin's own s6-rc services: the last store, so they override.
-    ctx.run(&["mkdir", "-p", "/etc/s6/sources"]);
+    if let Some(own) = ctx.cfg.extra_source.last() {
+        ctx.run(&["mkdir", "-p", &own.display().to_string()]);
+    }
     // The boot bundle "default" is made by s6-rc-set-commit from the
     // repository set; s6-rc refuses a store that defines one.
     if exists("/etc/uinitconverter/s6/default") {
@@ -664,17 +669,23 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
     // The syslog daemons' state (rsyslog's work directory, syslog-ng's
     // persist file and control socket), labelled for them by the policy.
     let syslog_state = if s.syslog == "syslog-ng" { "/var/lib/syslog-ng" } else { "/var/lib/rsyslog" };
-    ctx.run(&["mkdir", "-p", "/var/lib/uinitconverter", "/var/log/uinitconverter", syslog_state]);
+    let (state, logs) = (ctx.cfg.state_dir.display().to_string(), log_dir(&ctx.cfg));
+    ctx.run(&["mkdir", "-p", &state, &logs, syslog_state]);
 }
 
-fn unit_installed(unit: &str) -> bool {
-    ["/etc/systemd/system", "/usr/lib/systemd/system"].iter().any(|d| Path::new(d).join(unit).exists())
+/// LOG_DIR, also when JOURNAL=yes leaves it unset (a later --journal=no needs it).
+fn log_dir(cfg: &Config) -> String {
+    cfg.log_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_else(|| DEFAULT_LOG_DIR.into())
+}
+
+fn unit_installed(cfg: &Config, unit: &str) -> bool {
+    cfg.unit_path.iter().any(|d| d.join(unit).exists())
 }
 
 fn enable_units(ctx: &Ctx) {
     say("Enabling units (these are also normal on the systemd boot)");
     for u in ["chronyd.service", "NetworkManager.service"] {
-        if unit_installed(u) {
+        if unit_installed(&ctx.cfg, u) {
             ctx.run(&["systemctl", "--no-reload", "enable", u]);
         } else {
             warn(&format!("{u} is not installed; the s6 boot runs without it"));
@@ -693,9 +704,9 @@ fn build_database(ctx: &Ctx) {
     if ctx.dry {
         return;
     }
-    let report = "/var/lib/uinitconverter/current/report.txt";
+    let report = ctx.cfg.state_dir.join("current/report.txt").display().to_string();
     println!("  report: {report}");
-    let text = read(report).unwrap_or_default();
+    let text = read(&report).unwrap_or_default();
     for l in text.lines().filter(|l| ["translated:", "skipped:", "cycles broken:"].iter().any(|k| l.starts_with(k))) {
         println!("  {l}");
     }
@@ -766,12 +777,11 @@ fn setup_selinux(ctx: &Ctx) {
         "/usr/sbin/init-selinux",
         "/etc/uinitconverter",
         SHARE,
-        "/var/lib/uinitconverter",
-        "/var/log/uinitconverter",
         "/usr/share/dbus-1/system.d/uinitconverter.conf",
     ]
     .iter()
     .map(|s| s.to_string())
+    .chain([ctx.cfg.state_dir.display().to_string(), log_dir(&ctx.cfg)])
     .collect();
     paths.extend(skarnet_files());
     let mut argv = vec!["restorecon", "-R"];
@@ -779,9 +789,10 @@ fn setup_selinux(ctx: &Ctx) {
     ctx.run(&argv);
     // The s6-rc repository, which uinitconverterd (init_t) syncs and commits; on a
     // running s6 boot the runtime state too.
-    for d in ["/run/uinitconverter", "/var/lib/s6-rc", "/run/uncaught-logs"] {
-        if Path::new(d).is_dir() {
-            ctx.run(&["restorecon", "-R", d]);
+    let repo_parent = ctx.cfg.repo_dir.parent().unwrap_or(&ctx.cfg.repo_dir).display().to_string();
+    for d in [ctx.cfg.run_dir.display().to_string(), repo_parent, "/run/uncaught-logs".into()] {
+        if Path::new(&d).is_dir() {
+            ctx.run(&["restorecon", "-R", &d]);
         }
     }
     // ... lets the services write their stderr to the catch-all logger's fifo.
@@ -803,9 +814,13 @@ fn setup_selinux(ctx: &Ctx) {
         ctx.run(&argv);
     }
     // ... and lets s6-rc-update (daemon-reload) rename in the live directory.
-    let mut live = list_dir("/run", |n| n.starts_with("s6-rc:"));
-    if Path::new("/run/s6-rc").is_symlink() {
-        live.push("/run/s6-rc".into());
+    // LIVE_DIR is a symlink s6-rc-update points at LIVE_DIR:XXXX.
+    let live_dir = &ctx.cfg.live_dir;
+    let live_name = live_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let live_parent = live_dir.parent().map(|p| p.display().to_string()).unwrap_or_else(|| "/".into());
+    let mut live = list_dir(&live_parent, |n| n.starts_with(&format!("{live_name}:")));
+    if live_dir.is_symlink() {
+        live.push(live_dir.display().to_string());
     }
     if !live.is_empty() {
         let mut argv = vec!["restorecon", "-R"];
@@ -824,11 +839,14 @@ fn svok(ctx: &Ctx, dir: &str) -> bool {
 /// restarting them would drop held fds and log sockets. uinitconverter-linkwatch
 /// keeps no state: it is restarted too.
 fn restart_daemon(ctx: &Ctx) {
-    let lw = "/run/s6-rc/servicedirs/uinitconverter-linkwatch";
+    let servicedir = |name: &str| ctx.cfg.live_dir.join("servicedirs").join(name).display().to_string();
+    let lw = servicedir("uinitconverter-linkwatch");
+    let lw = lw.as_str();
     if svok(ctx, lw) {
         ctx.run(&["s6-svc", "-r", lw]);
     }
-    let svc = "/run/s6-rc/servicedirs/uinitconverterd";
+    let svc = servicedir(&ctx.cfg.daemon_service);
+    let svc = svc.as_str();
     if !svok(ctx, svc) {
         return;
     }
@@ -1130,10 +1148,11 @@ fn dry_run_end(args: &[String]) -> String {
 // ---------------------------------------------------------------- main
 
 pub fn main(args: &[String]) -> ! {
-    // Only for TOOLS=: an install that has no config yet runs the programs by name.
-    if let Err(e) = Config::load(None) {
+    // Its directories and TOOLS=; the defaults when there is no config yet.
+    let cfg = Config::load(None).unwrap_or_else(|e| {
         warn(&e);
-    }
+        Config::defaults()
+    });
     let opts = match parse_args(args) {
         Ok(Some(o)) => o,
         Ok(None) => {
@@ -1149,13 +1168,14 @@ pub fn main(args: &[String]) -> ! {
     let ctx = Ctx {
         dry: opts.dry,
         yes: opts.yes,
-        backup: format!("/var/lib/uinitconverter/setup-backup/{stamp}"),
+        backup: cfg.state_dir.join("setup-backup").join(&stamp).display().to_string(),
+        cfg,
     };
     check_system(&ctx);
     if opts.uninstall {
         uninstall(&ctx, args);
     }
-    let s = resolve(&opts);
+    let s = resolve(&opts, &ctx.cfg);
     print!("{}", plan(&s, &ctx.backup));
     println!();
     check_programs(&ctx, &s);

@@ -9,6 +9,10 @@ use crate::envfile;
 
 pub const DEFAULT_CONFIG: &str = "/etc/uinitconverter/uinitconverter.conf";
 
+/// LOG_DIR's default. JOURNAL=yes clears Config::log_dir, so a tool that
+/// prepares the directory for a later JOURNAL=no falls back to this.
+pub const DEFAULT_LOG_DIR: &str = "/var/log/uinitconverter";
+
 /// Where an uinitconverter tool is: next to the running program when it is there
 /// (a build tree, or /usr/libexec/uinitconverter itself), else /usr/libexec/uinitconverter.
 pub fn tool_path(name: &str) -> PathBuf {
@@ -161,7 +165,7 @@ impl Config {
             set_name: "current".into(),
             live_dir: PathBuf::from("/run/s6-rc"),
             run_dir: PathBuf::from("/run/uinitconverter"),
-            log_dir: Some(PathBuf::from("/var/log/uinitconverter")),
+            log_dir: Some(PathBuf::from(DEFAULT_LOG_DIR)),
             exclude: [
                 "systemd-*",
                 "initrd-*",
