@@ -981,7 +981,7 @@ fn next_steps(s: &Settings) -> String {
 
 // ---------------------------------------------------------------- uninstall
 
-fn uninstall(ctx: &Ctx) -> ! {
+fn uninstall(ctx: &Ctx, args: &[String]) -> ! {
     say("Removing the s6 boot entry and what sdcompat init wrote");
     ctx.confirm(&format!("Remove the '{TITLE}' boot entry, {S6LI_BASE} and the boot settings?"));
     systemd_default(ctx);
@@ -1000,11 +1000,22 @@ fn uninstall(ctx: &Ctx) -> ! {
     if exists(S6LI_BASE) {
         ctx.run(&["rm", "-rf", S6LI_BASE]);
     }
+    if ctx.dry {
+        print!("{}", dry_run_end(args));
+        exit(0);
+    }
     println!("  Kept: /etc/sdcompat (your configuration), /var/lib/sdcompat, /var/log/sdcompat,");
     println!("  and enabled units (all harmless for the systemd boot).");
     println!("  To remove the packages too: sudo dnf remove {CORE_PACKAGES}");
     println!("  (and the skarnet and standalone packages, if nothing else needs them).");
     exit(0);
+}
+
+/// The end of a --dry-run: the command that would apply what was shown.
+fn dry_run_end(args: &[String]) -> String {
+    let rest: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--dry-run").collect();
+    let cmd = if rest.is_empty() { "sudo sdcompat init".to_string() } else { format!("sudo sdcompat init {}", rest.join(" ")) };
+    format!("\nDry run: nothing was changed. To apply this, run:\n  {cmd}\n")
 }
 
 // ---------------------------------------------------------------- main
@@ -1029,7 +1040,7 @@ pub fn main(args: &[String]) -> ! {
     };
     check_system(&ctx);
     if opts.uninstall {
-        uninstall(&ctx);
+        uninstall(&ctx, args);
     }
     let s = resolve(&opts);
     print!("{}", plan(&s, &ctx.backup));
@@ -1047,7 +1058,11 @@ pub fn main(args: &[String]) -> ! {
     setup_selinux(&ctx);
     restart_daemon(&ctx);
     add_grub_entry(&ctx, &s);
-    print!("{}", next_steps(&s));
+    if ctx.dry {
+        print!("{}", dry_run_end(args));
+    } else {
+        print!("{}", next_steps(&s));
+    }
     exit(0);
 }
 
@@ -1057,6 +1072,13 @@ mod tests {
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn dry_run_end_drops_the_flag() {
+        assert!(dry_run_end(&args(&["--dry-run"])).contains("  sudo sdcompat init\n"));
+        assert!(dry_run_end(&args(&["--journal=no", "--dry-run", "--uninstall"]))
+            .contains("  sudo sdcompat init --journal=no --uninstall\n"));
     }
 
     #[test]
