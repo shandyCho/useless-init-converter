@@ -111,7 +111,7 @@ impl Daemon {
         let e = |e: std::io::Error| e.to_string();
         // The same scripts and timings as the database's longruns (gen);
         // `down`: s6-svlink -d links it down, dyn_start brings it up.
-        for (name, text, exec) in crate::gen::longrun_files(&self.cfg, id, &crate::gen::Timings::of(unit)) {
+        for (name, text, exec) in crate::gen::longrun_files(&self.cfg, id, &crate::gen::Timings::of(unit), false) {
             write(dir.join(name), &text, exec).map_err(e)?;
         }
         write(dir.join("down"), "", false).map_err(e)?;

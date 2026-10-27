@@ -100,6 +100,14 @@ pub mod keys {
     /// The service exited and its runner waits for activity on its sockets
     /// before starting it again (systemd's socket activation, Accept=no).
     pub const SOCKET_WAIT: &str = "socket-wait";
+    /// The run script started the service since it was last stopped: an
+    /// on-demand service restarted by s6 (Restart=, daemon-reload) starts
+    /// at once instead of waiting for its sockets again.
+    pub const ACTIVATED: &str = "activated";
+    /// Set by the daemon before it starts a longrun: an on-demand service
+    /// started by a job (systemctl start, a dependency, D-Bus activation)
+    /// does not wait for socket activity first. The runner takes it.
+    pub const START_REQUESTED: &str = "start-requested";
 }
 
 pub fn for_unit(run_dir: &Path, unit: &str) -> UnitState {

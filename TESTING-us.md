@@ -255,6 +255,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | fwupd | `fwupdmgr get-devices` | a device list (fwupd starts with its syscall filter) |
 | No busy runner | `top -b -n1 -o %CPU \| head -15` | no `uinitconverter` process near 100 % CPU |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (twice, a few seconds apart) | `up (pid …) N seconds`, with N growing (not restarting) |
+| On-demand services | `systemctl status virtlogd.service iscsid.service` and `ls -l /run/libvirt/virtlogd-sock`; then `sudo python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect("/run/libvirt/virtlogd-sock")'` and the status again | `inactive (dead)` with the socket file there; after the connection, `virtlogd` is `active (running)` |
 | Swap (zram) | `swapon --show` and `s6-rc -a list \| grep -x zram` | `/dev/zram0` with priority `100` and the same size as on the systemd boot (`min(ram, 8 GiB)` by default); `zram` is listed |
 | Radio state (rfkill) | Turn Bluetooth off in GNOME Settings, reboot into the s6 entry, then `rfkill` and `s6-rc -a list \| grep -x rfkill` | Bluetooth still `blocked` after the reboot; `rfkill` is listed (the oneshot, not systemd-rfkill) |
 | Reload watchdog | `sudo s6-svstat /run/service/uinitconverter-linkwatch` and `sudo grep -h uinitconverter-linkwatch /run/uncaught-logs/current` | `up (pid …)`; a log line only if a reload was stuck (`… sent its start event`) |

@@ -127,6 +127,17 @@ expect_eq "alias resolves" "$(upath hello-alias.service)" "/org/freedesktop/syst
 expect_eq "UnitFileState enabled" "$(prop hello.service Unit UnitFileState)" "enabled"
 expect_eq "preset disabled" "$(prop failing.service Unit UnitFilePreset)" "disabled"
 
+# sock.socket is enabled, sock.service is not: listening, not started.
+# Without uinitconverter-fdstore nothing holds the sockets before the
+# daemon is up, so the runner starts it at once.
+if [ -e "$W/fdstore.log" ]; then
+    expect_state sock.service inactive/dead
+    [ -S "$R/test.sock" ] && ok "sock.socket listens at boot" || bad "no $R/test.sock at boot"
+    [ ! -e "$R/sock.out" ] && ok "sock.service not started at boot (on demand)" || bad "sock.service ran at boot"
+else
+    expect_state sock.service active/running
+fi
+
 section "start jobs (in parallel)"
 for u in dep.service failing.service flappy.service cond.service sock.service forking.service reloadable.service; do
     call StartUnit ss "$u" replace &
@@ -536,6 +547,10 @@ n=$(lines "$R/fdkeep.out")
 call RestartUnit ss fdkeep.service replace
 sleep 1
 expect_eq "FDSTORE=1 fd handed back after restart" "$(last_new "$R/fdkeep.out" "$n")" "start names=kept"
+# Once first: started at boot before the daemon served the store
+# (SANDBOX_FDSTORE=no), its socket was not held yet.
+call RestartUnit ss sock.service replace
+sleep 1
 i1=$(stat -c %i "$R/test.sock")
 call RestartUnit ss sock.service replace
 sleep 1
@@ -659,6 +674,34 @@ call StopUnit ss react2.service replace
 expect_state react2.service inactive/dead
 in_s6rc react2.service && bad "react2 still up in s6-rc after stop" || ok "react2 down in s6-rc after stop"
 $L -b -d change hold4.service
+
+section "on-demand services"
+if [ -e "$W/fdstore.log" ]; then
+    expect_state lazy.service inactive/dead
+    expect_state lazydep.service inactive/dead
+    [ ! -e "$R/lazy.out" ] && [ ! -e "$R/lazydep.out" ] && ok "lazy and lazydep not started at boot" || bad "on-demand services ran at boot"
+    python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])' "$R/lazy.sock"
+    expect_state lazy.service active/running
+    expect_eq "first connection started lazy.service with its socket" "$(cat "$R/lazy.out" 2>/dev/null)" "fds=1"
+    expect_state lazydep.service active/running
+    expect_eq "and the on-demand service it requires" "$(cat "$R/lazydep.out" 2>/dev/null)" "started"
+    # Restarted by a job, not stopped: starts again without activity.
+    call RestartUnit ss lazy.service replace
+    expect_state lazy.service active/running
+    expect_eq "restart runs it at once" "$(lines "$R/lazy.out")" "2"
+    call StopUnit ss lazy.service replace
+    expect_state lazy.service inactive/dead
+    # Stopped, a start by a job does not wait for a connection.
+    call StartUnit ss lazy.service replace
+    expect_state lazy.service active/running
+    expect_eq "StartUnit after stop runs it at once" "$(lines "$R/lazy.out")" "3"
+else
+    # No store before the daemon: started at boot instead.
+    expect_state lazy.service active/running
+    expect_state lazydep.service active/running
+fi
+call StopUnit ss lazy.service replace
+call StopUnit ss lazydep.service replace
 
 section "transient scope"
 sleep 1000 &

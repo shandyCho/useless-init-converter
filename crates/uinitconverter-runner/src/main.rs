@@ -17,7 +17,9 @@ const USAGE: &str = "\
 usage: uinitconverter-runner [--config PATH] COMMAND [--config PATH] [--mainpid N] (-- UNIT | --unit-hex HEX) [ARGS]
        uinitconverter-runner --version
 
-  run          longrun `run` script; ends by exec()ing the main process
+  run [--on-demand]
+               longrun `run` script; ends by exec()ing the main process
+               (--on-demand: first wait for activity on the unit's sockets)
   finish CODE SIG
                longrun `finish` script; cleanup and Restart= policy
   up | down    oneshot scripts (also mount and swap units)
@@ -34,12 +36,14 @@ fn die(msg: &str) -> ! {
 struct Internal {
     unit: String,
     main_pid: Option<u32>,
+    on_demand: bool,
     rest: Vec<String>,
 }
 
 fn parse_internal(args: &[String]) -> Internal {
     let mut unit = None;
     let mut main_pid = None;
+    let mut on_demand = false;
     let mut rest = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -48,6 +52,7 @@ fn parse_internal(args: &[String]) -> Internal {
                 i += 1;
                 main_pid = args.get(i).and_then(|p| p.parse().ok());
             }
+            "--on-demand" => on_demand = true,
             "--unit-hex" => {
                 i += 1;
                 let hex = args.get(i).cloned().unwrap_or_default();
@@ -73,6 +78,7 @@ fn parse_internal(args: &[String]) -> Internal {
     Internal {
         unit: unit.unwrap_or_else(|| die("missing unit name")),
         main_pid,
+        on_demand,
         rest,
     }
 }
@@ -144,10 +150,11 @@ fn main() {
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
     let a = parse_internal(&args[1..]);
-    let r = match runner::Runner::new(cfg.clone(), &a.unit, matches!(cmd.as_str(), "run" | "up")) {
+    let mut r = match runner::Runner::new(cfg.clone(), &a.unit, matches!(cmd.as_str(), "run" | "up")) {
         Ok(r) => r,
         Err(e) => exit(setup_failed(&cfg, &cmd, &a.unit, &e)),
     };
+    r.on_demand = a.on_demand;
     let code = match cmd.as_str() {
         "run" => r.cmd_run(),
         "finish" => {

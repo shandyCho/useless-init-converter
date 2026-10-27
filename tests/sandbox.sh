@@ -86,9 +86,15 @@ EOF
 cat > "$U/multi-user.target" <<EOF
 [Unit]
 Description=Multi-User System
+Wants=sockets.target
 AllowIsolate=yes
 EOF
 ln -s multi-user.target "$U/default.target"
+# Enabled sockets join the boot through it (their services are on demand).
+cat > "$U/sockets.target" <<EOF
+[Unit]
+Description=Sockets
+EOF
 
 cat > "$U/hello.service" <<EOF
 [Unit]
@@ -639,6 +645,32 @@ cat > "$U/react2.service" <<EOF
 ExecStart=/usr/bin/python3 $W/react.py $R/react2.out
 EOF
 
+# --- on-demand: enabled sockets whose services nothing else wants ---
+# Like virtlogd.socket: the service starts on the first connection, and
+# then starts the on-demand service it requires (iscsiuio -> iscsid).
+cat > "$U/lazy.socket" <<EOF
+[Socket]
+ListenStream=$R/lazy.sock
+[Install]
+WantedBy=sockets.target
+EOF
+cat > "$U/lazy.service" <<EOF
+[Unit]
+Requires=lazydep.service
+[Service]
+ExecStart=/bin/sh -c 'echo "fds=\$LISTEN_FDS" >> $R/lazy.out; exec sleep 1000'
+EOF
+cat > "$U/lazydep.socket" <<EOF
+[Socket]
+ListenStream=$R/lazydep.sock
+[Install]
+WantedBy=sockets.target
+EOF
+cat > "$U/lazydep.service" <<EOF
+[Service]
+ExecStart=/bin/sh -c 'echo started >> $R/lazydep.out; exec sleep 1000'
+EOF
+
 # --- path units ---
 cat > "$U/watch.service" <<EOF
 [Service]
@@ -677,7 +709,7 @@ disable *
 EOF
 
 C="--config $W/uinitconverter.conf"
-"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket watch.path chg.path bad.service after-bad.service stopper.service stopcond.service >/dev/null
+"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket lazy.socket lazydep.socket watch.path chg.path bad.service after-bad.service stopper.service stopcond.service >/dev/null
 
 # Stand-in for journald's stdout stream socket: records each connection.
 mkdir -p "$R/journal"

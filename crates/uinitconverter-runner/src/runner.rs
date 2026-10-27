@@ -65,6 +65,9 @@ pub struct Runner {
     /// What `deadline` limits, for the log: "start", or "stop" for ExecStop=.
     deadline_what: std::cell::Cell<&'static str>,
     timed_out: std::cell::Cell<bool>,
+    /// `run --on-demand` (uinitconverter-gen): bind the sockets and wait for
+    /// activity before the first start, as systemd's socket activation.
+    pub on_demand: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -127,6 +130,7 @@ impl Runner {
         };
 
         let mut r = Runner {
+            on_demand: false,
             sandbox: Sandbox::from_unit(&unit, &st.dir, Vec::new()),
             cfg,
             unit,
@@ -999,34 +1003,64 @@ impl Runner {
             .collect()
     }
 
+    /// Bind the socket units' sockets and leave them with the fd store.
+    fn bind_sockets(&self, socks: &[Unit]) -> Result<Vec<(String, std::os::fd::OwnedFd)>, String> {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        let store = self.cfg.run_dir.join("fdstore");
+        let key = format!("{}#sockets", self.unit.id);
+        // As systemd: the sockets carry the label of the service's domain.
+        let label = self
+            .main_command()
+            .ok()
+            .and_then(|m| crate::selinux::exec_label(&execcmd::resolve_path(&m.path)));
+        crate::selinux::set_socket_label(label.as_deref());
+        let bound: Result<Vec<_>, String> = socks.iter().map(socket::bind_all).collect();
+        crate::selinux::set_socket_label(None);
+        let mut fds = Vec::new();
+        for b in bound?.into_iter().flatten() {
+            let owned = unsafe { OwnedFd::from_raw_fd(b.fd) };
+            // Best effort: without the daemon we just rebind next time.
+            let _ = crate::fdstore::put(&store, &key, &b.name, owned.as_raw_fd(), crate::fdstore::SOCKETS_MAX);
+            fds.push((b.name, owned));
+        }
+        Ok(fds)
+    }
+
+    /// The first start of an on-demand service: listen on its sockets
+    /// (held by the fd store) and wait for activity, like systemd's socket
+    /// unit in front of an inactive service. Not when s6 restarts one that
+    /// ran (Restart=, s6-rc-update) or a job asked for the start; and
+    /// without the fd store it just starts.
+    fn should_wait_on_demand(&self) -> bool {
+        if !self.on_demand || self.st.has(keys::ACTIVATED) || self.st.take(keys::START_REQUESTED) {
+            return false;
+        }
+        let socks = self.socket_units();
+        if socks.is_empty() {
+            return false;
+        }
+        let store = self.cfg.run_dir.join("fdstore");
+        let key = format!("{}#sockets", self.unit.id);
+        if crate::fdstore::get(&store, &key).is_empty() {
+            // Dropped here; the store keeps its own copies.
+            if let Err(e) = self.bind_sockets(&socks) {
+                log(self.id(), &format!("on demand: {e}; starting it now"));
+                return false;
+            }
+        }
+        !crate::fdstore::get(&store, &key).is_empty()
+    }
+
     /// Sockets (kept open by the daemon across restarts) and FDSTORE=
     /// descriptors, arranged on fds 3.. for the final exec.
     fn setup_listen_fds(&mut self) -> Result<(), String> {
-        use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+        use std::os::fd::{IntoRawFd, OwnedFd};
         let store = self.cfg.run_dir.join("fdstore");
         let mut fds: Vec<(String, OwnedFd)> = Vec::new();
         let socks = self.socket_units();
         if !socks.is_empty() {
-            let key = format!("{}#sockets", self.unit.id);
-            let held = crate::fdstore::get(&store, &key);
-            if !held.is_empty() {
-                fds = held;
-            } else {
-                // As systemd: the sockets carry the label of the service's domain.
-                let label = self
-                    .main_command()
-                    .ok()
-                    .and_then(|m| crate::selinux::exec_label(&execcmd::resolve_path(&m.path)));
-                crate::selinux::set_socket_label(label.as_deref());
-                let bound: Result<Vec<_>, String> = socks.iter().map(socket::bind_all).collect();
-                crate::selinux::set_socket_label(None);
-                for b in bound?.into_iter().flatten() {
-                    let owned = unsafe { OwnedFd::from_raw_fd(b.fd) };
-                    // Best effort: without the daemon we just rebind next time.
-                    let _ = crate::fdstore::put(&store, &key, &b.name, owned.as_raw_fd(), crate::fdstore::SOCKETS_MAX);
-                    fds.push((b.name, owned));
-                }
-            }
+            let held = crate::fdstore::get(&store, &format!("{}#sockets", self.unit.id));
+            fds = if held.is_empty() { self.bind_sockets(&socks)? } else { held };
         }
         let max: usize = self
             .unit
@@ -1109,6 +1143,9 @@ impl Runner {
     /// longrun `run` script.
     pub fn cmd_run(mut self) -> i32 {
         self.take_notify_fd();
+        if self.should_wait_on_demand() {
+            self.st.set(keys::SOCKET_WAIT, "1");
+        }
         if self.st.has(keys::SOCKET_WAIT) {
             // Ready for s6 while waiting, like a listening socket unit: an
             // `s6-rc -u change` recording a unit started beside the boot's
@@ -1116,7 +1153,10 @@ impl Runner {
             // then bring it down. The daemon's start waits on the unit state.
             self.signal_ready();
             self.wait_for_sockets();
+            self.start_waiting_requirements();
         }
+        self.st.set(keys::ACTIVATED, "1");
+        self.st.clear(keys::START_REQUESTED);
         self.enter_cgroup();
         if let Err(e) = self.prepare_start() {
             self.soft_fail(&e);
@@ -1285,32 +1325,67 @@ impl Runner {
     }
 
     /// OnSuccess=/OnFailure= and SuccessAction=/FailureAction= after the unit finished.
+    /// StartUnit for each of `units` through the daemon, detached: the
+    /// daemon may be busy with the very job that ran us.
+    fn start_units_detached(&self, why: &str, units: Vec<String>) {
+        if units.is_empty() {
+            return;
+        }
+        let cfg = self.cfg.clone();
+        let id = self.unit.id.clone();
+        let run = || -> Result<(), String> {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+            rt.block_on(async {
+                let conn = crate::client::connect(&cfg).await?;
+                for u in &units {
+                    if let Err(e) = crate::client::manager_call(&conn, "StartUnit", &(u.as_str(), "replace")).await {
+                        eprintln!("uinitconverter[{id}]: {why}={u}: {e}");
+                    }
+                }
+                Ok(())
+            })
+        };
+        let _ = double_fork(|| {
+            if let Err(e) = run() {
+                log(self.id(), &format!("{why}: {e}"));
+            }
+        });
+    }
+
+    /// Leaving the socket wait: requirements that are on demand too and
+    /// still wait for their sockets start with this one, as systemd starts
+    /// them (iscsiuio Requires=iscsid). Their sockets already listen, so
+    /// this one need not wait for them.
+    fn start_waiting_requirements(&self) {
+        let ld = Loader::new(&self.cfg);
+        let mut names = Vec::new();
+        for key in ["Requires", "BindsTo", "Wants"] {
+            names.extend(self.unit.get_words("Unit", key));
+        }
+        names.extend(ld.dir_deps(&self.unit, "requires"));
+        names.extend(ld.dir_deps(&self.unit, "wants"));
+        let mut ids: Vec<String> = Vec::new();
+        for n in names {
+            let id = ld.load(&n).id;
+            if id != self.unit.id
+                && !ids.contains(&id)
+                && crate::state::for_unit(&self.cfg.run_dir, &id).has(keys::SOCKET_WAIT)
+            {
+                ids.push(id);
+            }
+        }
+        self.start_units_detached("on demand", ids);
+    }
+
     fn on_result(&self, success: bool) {
         let (units_key, action_key) = if success { ("OnSuccess", "SuccessAction") } else { ("OnFailure", "FailureAction") };
-        let units = self.unit.get_words("Unit", units_key);
-        if !units.is_empty() {
-            let cfg = self.cfg.clone();
-            let id = self.unit.id.clone();
-            let run = || -> Result<(), String> {
-                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-                rt.block_on(async {
-                    let conn = crate::client::connect(&cfg).await?;
-                    for u in &units {
-                        let u = u.replace("%n", &id);
-                        if let Err(e) = crate::client::manager_call(&conn, "StartUnit", &(u.as_str(), "replace")).await {
-                            eprintln!("uinitconverter[{id}]: {units_key}={u}: {e}");
-                        }
-                    }
-                    Ok(())
-                })
-            };
-            // Detached: the daemon may be busy with the very job that ran us.
-            let _ = double_fork(|| {
-                if let Err(e) = run() {
-                    log(self.id(), &format!("{units_key}: {e}"));
-                }
-            });
-        }
+        let units: Vec<String> = self
+            .unit
+            .get_words("Unit", units_key)
+            .into_iter()
+            .map(|u| u.replace("%n", &self.unit.id))
+            .collect();
+        self.start_units_detached(units_key, units);
         if let Some(action) = self.unit.get("Unit", action_key) {
             let cmd = match action.as_str() {
                 "none" => None,
@@ -1728,11 +1803,15 @@ impl Runner {
 
     /// longrun `finish` script: cleanup and Restart= policy.
     pub fn cmd_finish(self, exit_code: i32, signum: i32) -> i32 {
+        let stopped = !wanted_up();
+        // Stopped: an on-demand service waits for activity again next time.
+        if stopped {
+            self.st.clear(keys::ACTIVATED);
+        }
         if self.st.has(keys::SOCKET_WAIT) {
             // Ended while waiting for its sockets: the service wasn't running.
             let requested_restart = self.st.has(keys::RESTART_REQUESTED);
             self.st.clear(keys::RESTART_REQUESTED);
-            let stopped = !wanted_up();
             if stopped || requested_restart {
                 self.st.clear(keys::SOCKET_WAIT);
             }
@@ -1759,7 +1838,7 @@ impl Runner {
 
         let requested_restart = self.st.has(keys::RESTART_REQUESTED);
         self.st.clear(keys::RESTART_REQUESTED);
-        let stopping = !wanted_up() || requested_restart;
+        let stopping = stopped || requested_restart;
         let kill_signal = self
             .unit
             .get("Service", "KillSignal")

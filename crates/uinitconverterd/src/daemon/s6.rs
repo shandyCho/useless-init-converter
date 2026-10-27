@@ -893,6 +893,9 @@ impl Daemon {
                     self.wake_socket_wait(id).await;
                     return self.wait_woken(id, unit, started_at).await;
                 }
+                // A job's start: an on-demand runner starts the service now
+                // instead of waiting for socket activity.
+                state::for_unit(&self.cfg.run_dir, id).set(keys::START_REQUESTED, "1");
                 if active.contains(id) {
                     let sv = self.svstat(id).await.unwrap_or_default();
                     let st = state::for_unit(&self.cfg.run_dir, id);

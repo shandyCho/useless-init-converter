@@ -77,7 +77,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 암묵적 의존성: `DefaultDependencies=` → `sysinit.target`, `Type=dbus` → `dbus.socket`. `BusName=`이 있는(다른 `Type=`의) 서비스도 `dbus.socket` 다음에 시작합니다. systemd는 이런 서비스를 버스 활성화로 시작하지만, 여기서는 소켓 유닛이 부팅 때 시작할 수 있기 때문입니다.
 - 의존성 순환은 컴파일을 실패시키는 대신 끊고 보고합니다.
 - `DEP_MAP`은 systemd 유닛을 직접 작성한 s6 서비스에 대응시킵니다. 예: `dbus.service` → `dbus`.
-- 활성화된 `.socket`은 자신의 서비스를 끌어옵니다. 소켓은 러너가 바인드하며, 이름 또는 `Service=`로 짝을 찾습니다.
+- 활성화된 `.socket`은 자신의 서비스를 끌어옵니다. 소켓은 러너가 바인드하며, 이름 또는 `Service=`로 짝을 찾습니다. 부팅이 소켓을 통해서만 끌어오는 서비스(sockets.target이 `virtlogd.socket`을 원하고 `virtlogd.service`는 아무도 원하지 않음)는 요청 시(on-demand) 서비스입니다. 러너는 소켓만 바인드하고 기다립니다(`run --on-demand`, `uinitconverter plan`의 "on demand").
 - `Conflicts=`: 두 유닛이 모두 부팅 시 시작될 경우, 충돌 대상은 타깃에서 빠집니다(예: `getty@tty1.service`보다 `gdm.service`). 실행 중에는 유닛을 시작하거나 재시작할 때 충돌하는 유닛을 멈춥니다.
 
 **마운트, 스왑, path 유닛**
@@ -111,6 +111,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - `Runtime/State/Cache/Logs/ConfigurationDirectory=`.
 - `StandardInput/Output/Error=`(null, tty, file:, append:, truncate:), `TTYPath=`, `TTYVHangup=`. `getty@.service`에 필요한 만큼 지원합니다.
 - `Accept=no` 소켓 활성화: `ListenStream/Datagram/SequentialPacket/FIFO/Special`와 `LISTEN_FDS`, `LISTEN_PID`, `LISTEN_FDNAMES`. 소켓이 있는 서비스가 정상 종료하면 systemd처럼 소켓에 다음 활동이 있을 때 다시 시작됩니다(systemd-rfkill은 할 일이 없으면 종료합니다). `.socket`을 시작하면(`systemctl start`, udev의 `SYSTEMD_WANTS`) 그 서비스가 소켓과 함께 시작됩니다.
+- 부팅 때의 요청 시 활성화: 요청 시 서비스는 systemd에서처럼 소켓에 첫 활동이 있을 때까지 `inactive`입니다(iscsid, libvirt 데몬들, cupsd, dmeventd, hostnamed). 그때 자신이 요구하는(`Requires=`/`BindsTo=`/`Wants=`) 요청 시 서비스 중 아직 기다리는 것도 시작합니다. 작업으로 시작하면(`systemctl start`, 의존성, D-Bus 활성화, `.path` 유닛) 바로 실행되고, 한 번 실행된 서비스를 s6가 다시 시작할 때(`Restart=`, `systemctl restart`)도 기다리지 않습니다. `systemctl stop` 뒤에는 이전처럼 소켓이 닫힙니다. 소켓은 `uinitconverter-fdstore`가 들고 있습니다. 이것이 없으면 uinitconverterd가 뜨기 전에는 소켓을 들고 있을 곳이 없으므로 서비스가 바로 시작됩니다.
 - `Restart=`(모든 모드), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=`(reboot/poweroff/halt).
 - `FDSTORE=1` / `FileDescriptorStoreMax=`: 저장된 fd를 보관했다가 재시작 후 돌려줍니다(journald와 logind가 사용). 리스닝 소켓도 같은 방식으로 보관하므로 서비스를 재시작해도 열린 채로 유지됩니다. 저장소는 독립 도구 `uinitconverter-fdstore`를 실행하는 별도의 s6 서비스이므로 uinitconverterd를 다시 시작해도 fd가 남습니다. 이 도구를 설치하지 않았으면 데몬이 직접 보관합니다. `FileDescriptorStoreMax=`가 있는 서비스는 이 서비스 다음에 시작됩니다.
@@ -147,7 +148,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 ## 아직 구현되지 않은 것
 
 - initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `uinitconverter init`이 경고합니다.
-- `Accept=yes` 소켓과 첫 시작의 요청 시(on-demand) 활성화. 서비스는 소켓과 함께 미리 시작됩니다(그 뒤의 재시작만 소켓 활동을 기다립니다).
+- `Accept=yes` 소켓. 실행 중에 `.socket`을 시작하면 여전히 그 서비스가 바로 시작되고, 요청 시 서비스가 요구하는 유닛 중 요청 시 서비스가 아닌 것은 부팅 때 시작됩니다(s6-rc 의존성).
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
 - systemd generator: s6 부팅에서는 하나도 실행되지 않습니다. `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
 - `AccuracySec=`(타이머는 묶지 않고 제시간에 실행), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. 이 타이머 키들은 받기만 하고 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.

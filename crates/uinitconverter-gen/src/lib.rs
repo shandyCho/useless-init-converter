@@ -5,7 +5,8 @@
 //!   .service (long-running)  -> longrun  (run/finish call `uinitconverter-runner run|finish`)
 //!   .service Type=oneshot    -> oneshot  (up/down call `uinitconverter-runner up|down`)
 //!   .target                  -> bundle   (contents = Wants/Requires + .wants/.requires dirs)
-//!   enabled .socket          -> its service is pulled in instead (sockets are bound by the runner)
+//!   enabled .socket          -> its service is pulled in instead (sockets are bound by the runner);
+//!                               pulled in only that way, it starts on the first activity (on-demand)
 //!   dependencies             -> Requires/Requisite/BindsTo, plus Wants that are also ordered After
 //!   long-running ExecStop=   -> also a oneshot UNIT.stop that depends on it; its `down` runs ExecStop=
 
@@ -34,6 +35,13 @@ pub struct Planned {
     /// The oneshot that runs a longrun's ExecStop= when s6-rc stops it
     /// (see index::stop_atom).
     pub stop_atom: Option<String>,
+    /// Dependencies reached only through a .socket name (Requires=X.socket,
+    /// sockets.target's wants): systemd starts the socket, not the service.
+    pub socket_deps: BTreeSet<String>,
+    /// A service with sockets that the boot pulls in only through them: as
+    /// under systemd it is started on the first activity, so its runner
+    /// binds the sockets and waits (`run --on-demand`).
+    pub on_demand: bool,
     pub warnings: Vec<String>,
     pub timings: Timings,
 }
@@ -83,7 +91,9 @@ impl Timings {
 
 /// The files of a longrun's directory that s6-rc's source format and a
 /// plain s6 service directory share: (name, contents, executable).
-pub fn longrun_files(cfg: &Config, id: &str, t: &Timings) -> Vec<(&'static str, String, bool)> {
+/// `on_demand`: the runner binds the sockets and waits for activity before
+/// the first start (see Planned::on_demand).
+pub fn longrun_files(cfg: &Config, id: &str, t: &Timings, on_demand: bool) -> Vec<(&'static str, String, bool)> {
     let args = cfg.runner_args();
     let arg = unit_arg(id);
     if id.ends_with(".timer") || id.ends_with(".path") {
@@ -95,8 +105,9 @@ pub fn longrun_files(cfg: &Config, id: &str, t: &Timings) -> Vec<(&'static str, 
         ];
     }
     let runner = cfg.runner.display();
+    let lazy = if on_demand { " --on-demand" } else { "" };
     let mut out = vec![
-        ("run", format!("#!/bin/sh\nexec {runner} run{args} {arg}\n"), true),
+        ("run", format!("#!/bin/sh\nexec {runner} run{args}{lazy} {arg}\n"), true),
         ("finish", format!("#!/bin/sh\nexec {runner} finish{args} {arg} \"$@\"\n"), true),
         ("notification-fd", "3\n".into(), false),
         ("timeout-up", format!("{}\n", t.up_ms), false),
@@ -384,6 +395,13 @@ pub fn plan(cfg: &Config) -> Plan {
         let n = plan.aliases.get(n).map(String::as_str).unwrap_or(n);
         (loaded.contains_key(n) || plan.extra_names.contains(n)).then(|| n.to_string())
     };
+    // A dependency on a socket, which resolve() turns into its service.
+    let via_socket = |n: &str, plan: &Plan| -> bool {
+        let n = plan.aliases.get(n).map(String::as_str).unwrap_or(n);
+        n.ends_with(".socket") && socket_service.contains_key(n)
+    };
+    // Services whose runner can hold sockets: on_demand candidates.
+    let mut socket_activated: BTreeSet<String> = BTreeSet::new();
 
     // Ordering: After= plus reversed Before= of other units.
     let mut after_sets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -410,23 +428,27 @@ pub fn plan(cfg: &Config) -> Plan {
         let (requires, wants, _, _) = &raw[id];
         let after = after_sets.get(id).cloned().unwrap_or_default();
         let mut deps = BTreeSet::new();
+        let (mut by_socket, mut by_name) = (BTreeSet::new(), BTreeSet::new());
         let mut warnings = Vec::new();
         let is_target = unit.utype() == "target";
 
         for r in requires {
-            if let Some(r) = resolve(r, &plan) {
-                deps.insert(r);
+            if let Some(d) = resolve(r, &plan) {
+                if via_socket(r, &plan) { &mut by_socket } else { &mut by_name }.insert(d.clone());
+                deps.insert(d);
             }
         }
         for w in wants {
-            if let Some(w) = resolve(w, &plan) {
+            if let Some(d) = resolve(w, &plan) {
                 // Targets pull in everything they want; services only wait for
                 // wanted units they are also ordered after.
-                if is_target || after.contains(&w) {
-                    deps.insert(w);
+                if is_target || after.contains(&d) {
+                    if via_socket(w, &plan) { &mut by_socket } else { &mut by_name }.insert(d.clone());
+                    deps.insert(d);
                 }
             }
         }
+        let socket_deps: BTreeSet<String> = by_socket.difference(&by_name).cloned().collect();
         // RequiresMountsFor=: depend on the mount units covering those paths.
         for path in unit.get_words("Unit", "RequiresMountsFor") {
             for (m, w) in &mount_points {
@@ -530,6 +552,10 @@ pub fn plan(cfg: &Config) -> Plan {
             && !unit.get_all("Service", "ExecStop").is_empty())
         .then(|| stop_atom(id))
         .filter(|n| !plan.extra_names.contains(n));
+        // Without an fd store to hold the sockets, the runner just starts it.
+        if kind == Kind::Longrun && unit.utype() == "service" && has_sockets {
+            socket_activated.insert(id.clone());
+        }
 
         plan.units.insert(
             id.clone(),
@@ -539,6 +565,8 @@ pub fn plan(cfg: &Config) -> Plan {
                 deps,
                 log_atom,
                 stop_atom,
+                socket_deps,
+                on_demand: false,
                 warnings,
                 timings: Timings::of(unit),
             },
@@ -549,7 +577,37 @@ pub fn plan(cfg: &Config) -> Plan {
     let aliases = plan.aliases.clone();
     resolve_conflicts(&mut plan, &loaded, &aliases);
     plan.boot = boot_closure(&plan);
+    mark_on_demand(&mut plan, &socket_activated);
     plan
+}
+
+/// Planned::on_demand: of the services that hold sockets, those the boot
+/// reaches only through socket dependencies (sockets.target wants
+/// virtlogd.socket; nothing wants virtlogd.service itself). What such a
+/// service requires does not count, as systemd does not start it at boot
+/// either (iscsiuio Requires=iscsid); the runner starts it on activation.
+fn mark_on_demand(plan: &mut Plan, socket_activated: &BTreeSet<String>) {
+    let mut started = BTreeSet::new();
+    let mut listening = BTreeSet::new();
+    let mut stack: Vec<String> = plan.default_target.iter().cloned().collect();
+    while let Some(n) = stack.pop() {
+        let Some(p) = plan.units.get(&n) else { continue };
+        if !started.insert(n) {
+            continue;
+        }
+        for d in &p.deps {
+            if p.socket_deps.contains(d) && socket_activated.contains(d) {
+                listening.insert(d.clone());
+            } else {
+                stack.push(d.clone());
+            }
+        }
+    }
+    for id in listening.difference(&started) {
+        if let Some(p) = plan.units.get_mut(id) {
+            p.on_demand = true;
+        }
+    }
 }
 
 /// default.target and everything it reaches through bundle contents and
@@ -723,7 +781,7 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
                 write_file(&sdir.join("timeout-down"), &format!("{}\n", p.timings.down_ms), false)?;
             }
             Kind::Longrun => {
-                for (name, text, exec) in longrun_files(cfg, &p.id, &p.timings) {
+                for (name, text, exec) in longrun_files(cfg, &p.id, &p.timings, p.on_demand) {
                     write_file(&sdir.join(name), &text, exec)?;
                 }
                 if let Some(stop) = &p.stop_atom {
@@ -839,6 +897,9 @@ pub fn report(plan: &Plan) -> String {
     let _ = writeln!(s);
     for p in plan.units.values() {
         let _ = writeln!(s, "{} [{}]", p.id, p.kind.as_str());
+        if p.on_demand {
+            let _ = writeln!(s, "    on demand: started on the first activity on its sockets");
+        }
         if !p.deps.is_empty() {
             let label = if p.kind == Kind::Bundle { "contents" } else { "depends" };
             let deps: Vec<&str> = p.deps.iter().map(String::as_str).collect();
@@ -1393,6 +1454,60 @@ mod tests {
         assert!(plan.units["ev.service"].deps.contains(FDSTORE_SERVICE));
         assert!(plan.units["al.service"].deps.contains(FDSTORE_SERVICE));
         assert!(!plan.units["plain.service"].deps.contains(FDSTORE_SERVICE));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A service the boot reaches only through its enabled socket waits
+    /// for activity; one also wanted by name starts at boot. What an
+    /// on-demand service requires does not count.
+    #[test]
+    fn socket_only_services_are_on_demand() {
+        let tmp = std::env::temp_dir().join(format!("uinitconverter-gen-ondemand-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let (units, extra) = (tmp.join("units"), tmp.join("extra"));
+        fs::create_dir_all(units.join("sockets.target.wants")).unwrap();
+        fs::create_dir_all(units.join("multi-user.target.wants")).unwrap();
+        fs::create_dir_all(extra.join(FDSTORE_SERVICE)).unwrap();
+        fs::write(extra.join(FDSTORE_SERVICE).join("type"), "longrun\n").unwrap();
+        let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
+        let enable = |t: &str, n: &str| {
+            std::os::unix::fs::symlink(format!("../{n}"), units.join(format!("{t}.wants/{n}"))).unwrap()
+        };
+        write("multi-user.target", "[Unit]\nWants=sockets.target\n");
+        write("sockets.target", "[Unit]\nDescription=s\n");
+        std::os::unix::fs::symlink("multi-user.target", units.join("default.target")).unwrap();
+        for n in ["lazy", "named", "req", "user"] {
+            write(&format!("{n}.socket"), &format!("[Unit]\nDefaultDependencies=no\n[Socket]\nListenFIFO=/run/{n}\n"));
+            enable("sockets.target", &format!("{n}.socket"));
+        }
+        let svc = "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n";
+        write("lazy.service", svc);
+        write("named.service", svc);
+        enable("multi-user.target", "named.service");
+        // Started by name (enabled), requires lazy.socket only: lazy stays on demand.
+        write("starter.service", "[Unit]\nDefaultDependencies=no\nRequires=lazy.socket\n[Service]\nExecStart=/bin/true\n");
+        enable("multi-user.target", "starter.service");
+        // user is on demand and requires req.service by name: req stays on demand.
+        write("user.service", "[Unit]\nDefaultDependencies=no\nRequires=req.service\n[Service]\nExecStart=/bin/true\n");
+        write("req.service", svc);
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![units];
+        cfg.extra_source = vec![extra];
+
+        let p = plan(&cfg);
+        for u in ["lazy.service", "user.service", "req.service"] {
+            assert!(p.units[u].on_demand, "{u} should be on demand");
+        }
+        for u in ["named.service", "starter.service"] {
+            assert!(!p.units[u].on_demand, "{u} should start at boot");
+        }
+        assert!(p.boot.contains("lazy.service"));
+        let run = |id: &str| {
+            let u = &p.units[id];
+            longrun_files(&cfg, id, &u.timings, u.on_demand)[0].1.clone()
+        };
+        assert!(run("lazy.service").contains(" run --on-demand "), "{}", run("lazy.service"));
+        assert!(!run("named.service").contains("--on-demand"));
         let _ = fs::remove_dir_all(&tmp);
     }
 
