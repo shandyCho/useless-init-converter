@@ -20,6 +20,7 @@ use crate::install;
 use crate::loader::{LoadState, Loader, Unit};
 use crate::sandbox::{self, Sandbox};
 use crate::socket;
+use crate::supervisor;
 use crate::tools;
 use crate::state::{keys, UnitState};
 use crate::util::{self, UserInfo};
@@ -1697,7 +1698,7 @@ impl Runner {
 
     /// longrun `finish` script: cleanup and Restart= policy.
     pub fn cmd_finish(self, exit_code: i32, signum: i32) -> i32 {
-        let stopped = !wanted_up();
+        let stopped = !supervisor::wanted_up();
         // Stopped: an on-demand service waits for activity again next time.
         if stopped {
             self.st.clear(keys::ACTIVATED);
@@ -2073,15 +2074,7 @@ impl Runner {
         if skipped {
             return 0;
         }
-        let out = std::process::Command::new(tools::path("s6-svstat"))
-            .args(["-o", "up,pid"])
-            .arg(self.cfg.live_dir.join("scandir").join(self.id()))
-            .output();
-        let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-        let sv_pid = match text.split_whitespace().collect::<Vec<_>>().as_slice() {
-            ["true", pid] => pid.parse::<u32>().ok().filter(|&p| p > 0),
-            _ => return 0,
-        };
+        let Some(sv_pid) = supervisor::up_pid(&self.cfg, self.id()) else { return 0 };
         // The service's own PID: under PAMName= or Type=forking the
         // supervised process is the runner around it.
         let main_pid = self
@@ -2528,7 +2521,6 @@ fn double_fork<F: FnOnce()>(f: F) -> Result<(), String> {
     Ok(())
 }
 
-/// s6-svstat on the current directory (finish runs in the service dir).
 /// May this sender talk to a unit's notify socket? Root, the unit's User=,
 /// the main process, or any process in the main process's cgroup (systemd's
 /// NotifyAccess=all; children may notify via systemd-notify).
@@ -2588,14 +2580,6 @@ fn main_pid_ok(pid: u32, sender_uid: u32, main_pid: u32, cgroup: Option<&str>) -
         }),
         None => matches!((cg(pid), cg(main_pid)), (Some(a), Some(b)) if a == b),
     }
-}
-
-fn wanted_up() -> bool {
-    std::process::Command::new(tools::path("s6-svstat"))
-        .args(["-o", "wantedup", "."])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() != "false")
-        .unwrap_or(true)
 }
 
 fn env_set(env: &mut Vec<(String, String)>, k: &str, v: &str) {

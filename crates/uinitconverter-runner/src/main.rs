@@ -10,6 +10,7 @@ pub(crate) use uinitconverter_exec::{bpf, cgroup, conditions, execcmd, pam, sand
 pub(crate) use uinitconverter_install as install;
 
 mod runner;
+mod supervisor;
 
 use config::Config;
 
