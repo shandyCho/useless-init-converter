@@ -7582,3 +7582,65 @@ PAM, seccomp, BPF are already dlopen()ed at run time.
    boot, then `tests/hardencompare.sh report`.
 2. Owner decides the order of item 3A and the init-backend/config work
    (see the plan in this session's answer).
+
+## 2026-10-28, part 45: INIT= and TOOLS= (2cb6541), plan for other inits
+
+Owner chose (나): first make hardcoded parts configurable and gather the s6
+code behind one module, then implement item 3A (auto-mask + dynamic start)
+inside that s6 backend. "Libraries" means **packages** (what dnf
+installs), not Rust crates.
+
+Survey of what the code runs from other packages (Command::new and
+init.rs ctx.run): s6-svc 12, s6-svstat 4, s6-rc-db 3, s6-rc 3,
+s6-rc-set-change 3, s6-rc-repo-init 2, s6-svscanctl 2, s6-svlink,
+s6-svunlink, s6-rc-update, s6-rc-set-{new,fix,commit,install},
+s6-rc-repo-sync, s6-log (generated loggers); mount/umount/swapon/swapoff;
+useradd; journalctl; init.rs: systemctl, restorecon, semanage, semodule,
+grub2-editenv, grubby (via kernel-install plugin), coreutils. Spec
+Requires: s6, s6-rc, s6-linux-init, execline, dbus-daemon, util-linux,
+shadow-utils, policycoreutils(-python-utils), grubby; Recommends
+s6-frontend, rsyslog, mdevd, earlyoom. Generated run scripts use only
+/bin/sh and the runner.
+
+2cb6541:
+- uinitconverter_base::tools: a process-wide NAME -> PROGRAM table,
+  set from TOOLS= by Config::load (blank-separated NAME=PROGRAM; a bad
+  pair is a config error); tools::path(name) falls back to the name (PATH).
+  Global rather than a Config field because mountunit.rs and init.rs have
+  no Config at hand.
+- Routed through it: all s6 tools in daemon/s6.rs, dynamic.rs, gen,
+  runner (s6-svstat, useradd), mountunit.rs, journalctl in uinitconverterd
+  log, s6-log in generated logger scripts (quoted), and every program
+  `uinitconverter init` runs (try_run/output/succeeds). The installer
+  crate now depends on uinitconverter-base and loads the config (warning
+  on errors). Not routed: coreutils, /bin/sh, the shell scripts and s6
+  sources in dist/ (they belong to the s6 backend, step 2).
+- INIT= (Config.init, INITS = ["s6"]): any other value fails Config::load.
+- Tests: cargo test 78 pass (tools: configure_and_lookup; config:
+  init_and_tools_keys, both under tools::TEST_LOCK since the table is
+  global); standalone 3/3/3/2; sandbox 279/279 (new: the sandbox's
+  TOOLS= routes s6-svc through a logging wrapper, check.sh checks it ran;
+  45 calls), SANDBOX_JOURNAL=no 286/286; shellcheck/bash -n pass.
+- Mistake during the session: a bash heredoc holding a Python script that
+  itself contained `EOF` ended early and ran a few lines as shell (a
+  chmod and a write to /uinitconverter.conf, both failed; nothing was
+  created). Edits to scripts with heredocs are now made with the Edit tool.
+
+### Plan (remaining)
+
+1. Rest of step 1:
+   a. Package roles whose replacement changes the command line, not only
+      the path, get a provider key like BUS= (exists: daemon|broker):
+      syslog (rsyslog is hardcoded in the s6 "syslog" service and
+      SYSLOG_UNITS), boot loader (grub2-editenv/grubby/kernel-install in
+      init.rs). Specs: express alternatives with rich dependencies.
+   b. The ~180 absolute path literals: kernel/OS paths stay; the
+      installer's own (S6LI_BASE, S6_CONF, SHARE, KI_PLUGIN, ...) move to
+      the s6 backend in step 2 or to Config.
+2. s6 backend module: daemon/s6.rs + dynamic.rs (start/stop/status,
+   scandir, s6-rc-db queries), gen's repo/set/commit/install, init.rs's
+   s6-linux-init setup, the runner's s6-svstat/readiness, dist/s6*. The
+   daemon and gen call it through one interface; the trait is fixed only
+   when a second backend (dinit first: dependencies and readiness like
+   s6-rc; runit has no dependency manager) is written.
+3. Item 3A inside the s6 backend (design in part 44).
