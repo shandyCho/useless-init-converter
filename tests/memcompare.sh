@@ -25,8 +25,9 @@ kb() { # first number of "  1234 kB"
 # Which group a process belongs to, for the summary.
 group_of() { # group_of PID COMM
     case $2 in
-        s6-log|systemd-journal|rsyslogd|uinitconverter-journa*) echo logging ;;
-        s6-*|uinitconverter*) echo init ;;
+        # sdcompat*: installs from before the rename to uinitconverter.
+        s6-log|systemd-journal|rsyslogd|uinitconverter-journa*|sdcompat-journal*) echo logging ;;
+        s6-*|uinitconverter*|sdcompat*) echo init ;;
         systemd|'(sd-pam)')
             if [ "$1" = 1 ]; then echo init; else echo user-manager; fi ;;
         *) [ "$1" = 1 ] && echo init || echo other ;;
