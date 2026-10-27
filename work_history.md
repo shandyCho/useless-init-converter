@@ -6908,3 +6908,16 @@ RPMs are still ga365750. ~/sdcompat-srpms (COPR, part 26) is obsolete.
 2. Owner: on this machine `sudo dnf upgrade` to a new build and run
    `sudo sdcompat init` (part 26's checks).
 3. Try the README's install steps on a fresh Fedora VM from the release.
+
+## 2026-10-27, part 29: docs review; the repository goes public (fd25395, and the next commit)
+
+- Review of the README and TESTING pairs after part 28 (fd25395): the deploy
+  section names its three steps; the update note says when to rebuild the
+  skarnet packages; TESTING's stage table said 6 s6 packages (7 since
+  mdevd); stage 1 installs cpio (build-skarnet-rpms.sh needs it) instead of
+  curl.
+- Owner decision: the repository will be made public (GitHub releases of a
+  private repository are only downloadable with access). TESTING stage 1
+  now clones with plain `git clone https://...` (no `gh auth login`).
+- Next steps: as in part 28; make the repository public before
+  `gh release create`.
