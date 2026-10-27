@@ -7036,3 +7036,42 @@ without a "setup script"; SELinux permissive only on the first run; GNOME
 status limited to what is recorded (GDM login, GNOME session, power off from
 the GNOME menu on one Fedora 45 machine, enforcing); source layout entries.
 Everything else matched the code.
+
+## 2026-10-27, part 34: zram swap on the s6 boot (6d331a2); memcompare (abf10e8)
+
+- abf10e8: tests/memcompare.sh groups sdcompat* processes too, so this
+  machine (still the old sdcompat RPMs, core 4db6aef) can be measured.
+- The owner wants to redo the memory comparison (part of 2026-10-21: s6
+  used ~211 MiB more; the s6 boot had no swap). First: swap on s6.
+- Cause: the s6 boot runs no systemd generators; Fedora's zram swap comes
+  from zram-generator (zram-generator-defaults: [zram0] zram-size =
+  min(ram, 8192)). It writes dev-zram0.swap (What=/dev/zram0,
+  Priority=100, Options=discard) and systemd-zram-setup@zram0.service
+  runs `zram-generator --setup-device zram0`.
+- 6d331a2: s6 oneshot `zram` (dist/s6/zram: flag-essential, after
+  mount-api, member of uinitconverter-sysinit, so generated services that
+  follow sysinit.target stop before it) runs `early zram` / `early
+  zram-stop`. It runs the generator itself into /run/systemd/generator
+  (+ .early/.late), restorecon'd: policy lets systemd_zram_generator_t
+  (entered from init_t, as under systemd) write only
+  systemd_generator_unit_file_t dirs; not tmpfs_t files, not var_run_t.
+  The generator dirs are not in UNIT_PATH. Then per dev-zramN.swap:
+  --setup-device, `swapon -p PRIO -o OPTS`; stop: swapoff if in
+  /proc/swaps, --reset-device. Missing generator: nothing (exit 0); every
+  failure only warns, as the other early steps.
+- Tested: bash -n, shellcheck; the logic with a fake generator and fake
+  swapon/swapoff/restorecon (up: generator, setup, `swapon -p 100 -o
+  discard /dev/zram0`; down: swapoff, reset). The sandbox doesn't use
+  dist/s6. Not tested: a real s6 boot (SELinux enforcing included).
+- Docs: replaced-components table (zram row), "Not implemented": systemd
+  generators (fstab and zram covered), TESTING row "Swap (zram)".
+
+### Next steps
+
+1. Owner: switch this machine to uinitconverter ("Moving from sdcompat"),
+   installing ~/rpmbuild-uinitconverter/rpms (core with zram) and the
+   standalone RPMs from ~/uinitconverter-release/assets; `sudo
+   uinitconverter init --journal=no --resolved=no --boot-only-s6=yes
+   --selinux=enforcing`; boot s6; TESTING "Swap (zram)" row; `sudo
+   ausearch -m AVC -ts boot | grep zram`.
+2. Then the memory comparison (tests/memcompare.sh snap on both boots).
