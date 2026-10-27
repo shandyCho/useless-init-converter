@@ -45,6 +45,10 @@ find "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm' \
 (cd "$OUT/assets" && sha256sum -- *.rpm >SHA256SUMS)
 
 {
+    echo "> **This software is AI slop: you install and run it at your own risk.**"
+    echo ">"
+    echo "> **이 소프트웨어는 AI 슬롭으로 설치와 실행에 대한 책임은 사용자에게 있습니다.**"
+    echo
     echo "uinitconverter $VERSION ($COMMIT), RPMs for Fedora ${DIST#fc} $ARCH."
     echo
     echo "First build and install the skarnet.org packages (skalibs, execline, s6,"
