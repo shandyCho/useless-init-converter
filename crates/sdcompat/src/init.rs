@@ -48,8 +48,8 @@ Install the packages first: the skarnet ones built with
 dist/rpm/build-skarnet-rpms.sh, then the RPMs of a release from
 https://github.com/shandyCho/useless-init-converter/releases.
 The systemd boot entry keeps working: init adds a GRUB entry
-\"Fedora (s6 + sdcompat)\". It shows
-its plan and asks before changing anything.
+\"Fedora (s6 + sdcompat)\". It shows its plan and asks before changing
+anything.
 
   --dry-run             print every command, change nothing (no root needed)
   -y, --yes             do not ask

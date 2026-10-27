@@ -6921,3 +6921,21 @@ RPMs are still ga365750. ~/sdcompat-srpms (COPR, part 26) is obsolete.
   now clones with plain `git clone https://...` (no `gh auth login`).
 - Next steps: as in part 28; make the repository public before
   `gh release create`.
+
+## 2026-10-27, part 30: repository renamed to useless-init-converter (165c64d)
+
+- Owner renamed the GitHub repository to shandyCho/useless-init-converter.
+  Decision (asked): rename the repository name and URLs only; the commands,
+  crates, RPM packages, paths (/etc/sdcompat, ...), SELinux module, GRUB
+  title and kernel options keep the name sdcompat.
+- Changed: every GitHub URL, the clone commands (`cd
+  useless-init-converter`, `useless-init-converter/dist/...`), the release
+  script's GITHUB_REPO, init's releases link and --help text; the README
+  pair's title is useless-init-converter with a line saying the commands,
+  packages and paths are named sdcompat. The local `git remote` origin was
+  updated. The local checkout directory stays ~/sdcompat.
+- cargo build/test passed; shellcheck on github-release.sh.
+- ~/sdcompat-release (built from 0def011) still has the old URLs in
+  NOTES.md and the old repository in its gh command: rerun
+  packages/github-release.sh after pushing before publishing.
+
