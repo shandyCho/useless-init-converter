@@ -1,5 +1,5 @@
 #!/bin/sh
 # rsyslog stands in for journald under s6. It uses its own configuration
-# (/etc/sdcompat/rsyslog.conf, written by the setup script) so that the
+# (/etc/uinitconverter/rsyslog.conf, written by the setup script) so that the
 # systemd boot, where journald owns /dev/log, is unaffected.
-exec rsyslogd -n -iNONE -f /etc/sdcompat/rsyslog.conf
+exec rsyslogd -n -iNONE -f /etc/uinitconverter/rsyslog.conf

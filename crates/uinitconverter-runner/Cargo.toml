@@ -1,0 +1,15 @@
+[package]
+name = "uinitconverter-runner"
+version.workspace = true
+edition.workspace = true
+description = "Run one systemd service under s6 with systemd's execution semantics (uinitconverter-runner)"
+
+[dependencies]
+uinitconverter-version.workspace = true
+uinitconverter-base.workspace = true
+uinitconverter-install.workspace = true
+uinitconverter-exec.workspace = true
+uinitconverter-client.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+libc.workspace = true

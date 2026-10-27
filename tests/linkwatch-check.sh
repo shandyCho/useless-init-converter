@@ -1,15 +1,15 @@
 #!/bin/bash
-# Check the running sdcompat-linkwatch on the s6 boot (TESTING, "Reload
+# Check the running uinitconverter-linkwatch on the s6 boot (TESTING, "Reload
 # watchdog").
 #
 #   sudo tests/linkwatch-check.sh
 #
-# Starts a throwaway s6-supervise in /run/sdcompat/lwtest, so its start event
+# Starts a throwaway s6-supervise in /run/uinitconverter/lwtest, so its start event
 # has already been sent, then waits for that event under the name
 # s6-rc-update: the wait a daemon-reload hangs on when a supervisor started
 # before s6-rc-update listened. The system's linkwatch must send the event
 # after its --after (default 10 s). A plain s6-ftrig-wait on the same
-# directory must be left alone and time out. /run/sdcompat is init_var_run_t,
+# directory must be left alone and time out. /run/uinitconverter is init_var_run_t,
 # which linkwatch (init_t) may write; in /tmp the fifos would be user_tmp_t
 # and the check would fail on SELinux instead. Everything it creates is
 # removed at the end; no real service is touched.
@@ -26,7 +26,7 @@ if [ "$(id -u)" != 0 ]; then
     exit 2
 fi
 
-T=/run/sdcompat/lwtest
+T=/run/uinitconverter/lwtest
 B=$(mktemp -d)
 fail=0
 ok() { echo "ok:   $1"; }
@@ -38,10 +38,10 @@ cleanup() {
     rm -rf "$T" "$B"
 }
 
-if s6-svstat /run/service/sdcompat-linkwatch 2>/dev/null | grep -q '^up '; then
-    ok "sdcompat-linkwatch is up"
+if s6-svstat /run/service/uinitconverter-linkwatch 2>/dev/null | grep -q '^up '; then
+    ok "uinitconverter-linkwatch is up"
 else
-    bad "sdcompat-linkwatch is not up: $(s6-svstat /run/service/sdcompat-linkwatch 2>&1)"
+    bad "uinitconverter-linkwatch is not up: $(s6-svstat /run/service/uinitconverter-linkwatch 2>&1)"
     exit 1
 fi
 
@@ -75,8 +75,8 @@ else
     bad "linkwatch sent an event to a waiter that is not s6-rc-update or s6-svlink"
 fi
 
-if grep -q "sdcompat-linkwatch: .*$T/svc" /run/uncaught-logs/current; then
-    ok "linkwatch logged it: $(grep -h "sdcompat-linkwatch: .*$T/svc" /run/uncaught-logs/current | tail -1)"
+if grep -q "uinitconverter-linkwatch: .*$T/svc" /run/uncaught-logs/current; then
+    ok "linkwatch logged it: $(grep -h "uinitconverter-linkwatch: .*$T/svc" /run/uncaught-logs/current | tail -1)"
 else
     bad "no linkwatch line for $T/svc in /run/uncaught-logs/current"
 fi

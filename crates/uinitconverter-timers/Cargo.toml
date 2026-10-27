@@ -1,0 +1,13 @@
+[package]
+name = "uinitconverter-timers"
+version.workspace = true
+edition.workspace = true
+description = "Run .timer and .path units under s6 (uinitconverter-timers)"
+
+[dependencies]
+uinitconverter-version.workspace = true
+uinitconverter-base.workspace = true
+uinitconverter-client.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+libc.workspace = true

@@ -1,4 +1,4 @@
-# Testing sdcompat on Fedora
+# Testing uinitconverter on Fedora
 
 **English** | [한국어](TESTING.md)
 
@@ -14,7 +14,7 @@ Stop at the first stage that fails and report it (see
 | 2. Build the s6 RPMs | yes (dnf) | installs 7 packages | 10 min |
 | 3. Sandbox tests | no | no | 5 min |
 | 4. Translation preview | yes (read-only) | no | 2 min |
-| 5. Install | yes | installs the sdcompat RPMs, adds a boot entry, `/etc/sdcompat` | 15 min |
+| 5. Install | yes | installs the uinitconverter RPMs, adds a boot entry, `/etc/uinitconverter` | 15 min |
 | 6. Boot with s6 | yes | boots the new entry | 15 min |
 
 ## 0. Before you start
@@ -50,7 +50,7 @@ sudo dnf install -y gcc make rpm-build cpio cargo rust dbus-daemon python3
 ```
 
 The full list of dependencies is in
-[README-us.md](README-us.md#dependencies). sdcompat loads libpam, libselinux
+[README-us.md](README-us.md#dependencies). uinitconverter loads libpam, libselinux
 and libseccomp at run time instead of linking them. Fedora Workstation already
 has them, but check that all four are installed:
 
@@ -103,13 +103,13 @@ tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 lines are normal and not failures:
 - `SKIP transient scope (needs a writable cgroup …)`. Creating cgroups needs root.
 - `Call failed: Job type reload is not applicable …`. That one is a check that an error is returned.
-- `sdcompat[bad.service]: ExecStart=/bin/sh failed: exit status 1`, printed by `tests/sandbox.sh`.
+- `uinitconverter[bad.service]: ExecStart=/bin/sh failed: exit status 1`, printed by `tests/sandbox.sh`.
   `bad.service` fails on purpose, to test how its dependents are handled.
 
 **`Broken pipe` on a database reload:** on a loaded machine `daemon.log` may show
 `s6-rc-update: fatal: unable to manage new service directories in …: Broken pipe`
-followed by `sdcompat: relinked …` lines. It is an s6-ftrigrd bug in s6 2.15.1.1;
-sdcompat repairs what it leaves and retries, so the checks should still pass. If a
+followed by `uinitconverter: relinked …` lines. It is an s6-ftrigrd bug in s6 2.15.1.1;
+uinitconverter repairs what it leaves and retries, so the checks should still pass. If a
 run of failures like `hello.service: expected active/running, got inactive/dead`
 follows anyway, report it with `daemon.log`.
 
@@ -120,16 +120,16 @@ sandbox. To run it again, recreate the sandbox:
 To test a `JOURNAL=no` install (per-service s6-log instead of journald), set up
 the sandbox with `SANDBOX_JOURNAL=no tests/sandbox.sh ~/sdc`. `check.sh` then
 looks for service output under `~/sdc/logs/` instead of the journal stream, and
-sends native and stream messages through `sdcompat-journal-relay` (sockets in
+sends native and stream messages through `uinitconverter-journal-relay` (sockets in
 `$XDG_RUNTIME_DIR/sdc-test/jrelay`, forwarded to a stand-in `/dev/log` that
 writes `devlog.out` next to them).
 
-To check that the core works without the standalone `sdcompat-fdstore`, run
+To check that the core works without the standalone `uinitconverter-fdstore`, run
 `sandbox.sh` and `check.sh` with `SANDBOX_FDSTORE=no` in front. The daemon then
 holds the fds itself, so `check.sh` checks that they are gone after the daemon
 restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
-On a machine with sdcompat's SELinux module installed, `/usr/bin/s6-rc-update`
+On a machine with uinitconverter's SELinux module installed, `/usr/bin/s6-rc-update`
 runs as `init_t` when you start it (that is what lets `sudo s6 live install`
 work), and `init_t` can't open the sandbox's files. So `sandbox.sh` copies
 `s6-rc-update` and `s6-rc-format-upgrade` into `WORKDIR/bin`, where they keep
@@ -152,7 +152,7 @@ tests/collect-diagnostics.sh ~/sdc
 
 The cgroup BPF programs (`DevicePolicy=`, `IPAddressDeny=`) can only be checked
 in the kernel as root. This one test asks for your sudo password, uses a
-scratch cgroup `/sys/fs/cgroup/sdcompat-bpf-test-PID` that it removes again,
+scratch cgroup `/sys/fs/cgroup/uinitconverter-bpf-test-PID` that it removes again,
 and touches no unit:
 
 ```sh
@@ -163,14 +163,14 @@ tests/bpf-root.sh
 
 ## 4. Translation preview (read-only)
 
-This shows how sdcompat would translate this machine's own units, without
+This shows how uinitconverter would translate this machine's own units, without
 starting or writing anything:
 
 ```sh
 cargo build --release
-sudo ./target/release/sdcompat plan > ~/sdcompat-plan.txt
-head -3 ~/sdcompat-plan.txt
-grep -A3 -E '^(gdm|NetworkManager|systemd-logind|chronyd|accounts-daemon)\.service ' ~/sdcompat-plan.txt
+sudo ./target/release/uinitconverter plan > ~/uinitconverter-plan.txt
+head -3 ~/uinitconverter-plan.txt
+grep -A3 -E '^(gdm|NetworkManager|systemd-logind|chronyd|accounts-daemon)\.service ' ~/uinitconverter-plan.txt
 ```
 
 Look for:
@@ -181,14 +181,14 @@ Look for:
 
 ## 5. Install (take the VM snapshot first)
 
-Build the sdcompat RPMs from this checkout and install them (no root is
+Build the uinitconverter RPMs from this checkout and install them (no root is
 needed to build):
 
 ```sh
 packages/build-rpms.sh
 for b in standalone/*/build-rpm.sh; do "$b"; done
-sudo dnf install ~/rpmbuild-sdcompat/rpms/*.rpm ~/rpmbuild-sdcompat-standalone/rpms/*.rpm
-sdcompat --version                    # every core tool from the same build
+sudo dnf install ~/rpmbuild-uinitconverter/rpms/*.rpm ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm
+uinitconverter --version                    # every core tool from the same build
 ```
 
 (With the packages from a GitHub release instead, download the release's
@@ -201,26 +201,26 @@ Installing the packages changes nothing about booting yet. Preview, then set
 up the boot:
 
 ```sh
-sdcompat init --dry-run
-sudo sdcompat init
+uinitconverter init --dry-run
+sudo uinitconverter init
 ```
 
 The preview prints every command it would run and ends with `Dry run:
 nothing was changed. To apply this, run:` and the command to apply it
-(`sudo sdcompat init`, with the same options if you gave any). Nothing is
+(`sudo uinitconverter init`, with the same options if you gave any). Nothing is
 changed. If a package is missing it stops before that with a `sudo dnf
 install ...` hint.
 
-`sdcompat init` prints a plan and asks before changing anything. It adds a boot
-entry **"Fedora (s6 + sdcompat)"** and keeps the normal systemd boot as the
+`uinitconverter init` prints a plan and asks before changing anything. It adds a boot
+entry **"Fedora (s6 + uinitconverter)"** and keeps the normal systemd boot as the
 default (once the s6 boot works for you, `--default-s6` makes it the default;
 see the end of this file). That entry boots with SELinux in permissive mode.
 
 Check the result:
 
 ```sh
-sudo ls /boot/loader/entries/ | grep sdcompat         # the new boot entry
-head -3 /var/lib/sdcompat/current/report.txt       # translation summary
+sudo ls /boot/loader/entries/ | grep uinitconverter         # the new boot entry
+head -3 /var/lib/uinitconverter/current/report.txt       # translation summary
 ```
 
 ## 6. Boot with s6
@@ -229,7 +229,7 @@ head -3 /var/lib/sdcompat/current/report.txt       # translation summary
 sudo reboot
 ```
 
-In the GRUB menu choose **Fedora (s6 + sdcompat) …**. You will see text
+In the GRUB menu choose **Fedora (s6 + uinitconverter) …**. You will see text
 boot messages instead of the splash screen, then the GDM login screen.
 
 **With LUKS encryption**, the passphrase prompt is plain text
@@ -248,14 +248,14 @@ After logging in to GNOME, open a terminal and go through this list:
 | s6 is PID 1 | `cat /proc/1/comm` | `s6-svscan` |
 | SELinux domains | `ps -eZ \| grep -E ' (s6-svscan\|chronyd\|gdm\|systemd-logind)$'` | `init_t`, `chronyd_t`, `xdm_t`, `systemd_logind_t` (not `unconfined_service_t`) |
 | SELinux denials | `sudo ausearch -m AVC -ts boot \| audit2allow` | ideally nothing; send the output otherwise |
-| SELinux checks on D-Bus callers | `sudo runcon -r system_r -t insights_core_t -- env systemctl show -p Version`, then `sudo runcon -r system_r -t insights_core_t -- env systemctl daemon-reload`, then `sudo grep -E 'SELinux access check\|avc: +denied' /run/uncaught-logs/current` | neither prints anything: insights_core_t may not write to the terminal (no rule on `user_devpts_t`), so the grep is the result. It shows the AVC's `avc:  denied  { reload } … tclass=system permissive=0` and, on its own line, `sdcompatd: SELinux access check … perm=reload state=enforcing function=Reload` (the second is refused although run as root, as under systemd); nothing for the first (`status` is granted to that domain) and, from normal use, nothing else (send any other line) |
+| SELinux checks on D-Bus callers | `sudo runcon -r system_r -t insights_core_t -- env systemctl show -p Version`, then `sudo runcon -r system_r -t insights_core_t -- env systemctl daemon-reload`, then `sudo grep -E 'SELinux access check\|avc: +denied' /run/uncaught-logs/current` | neither prints anything: insights_core_t may not write to the terminal (no rule on `user_devpts_t`), so the grep is the result. It shows the AVC's `avc:  denied  { reload } … tclass=system permissive=0` and, on its own line, `uinitconverterd: SELinux access check … perm=reload state=enforcing function=Reload` (the second is refused although run as root, as under systemd); nothing for the first (`status` is granted to that domain) and, from normal use, nothing else (send any other line) |
 | Dispatcher scripts' output (only with `--journal=no`) | after a reboot, `sudo ausearch -m AVC -ts boot \| grep NetworkManager_dispatcher` | nothing (their writes to the s6-log pipe were denied before) |
 | fwupd | `fwupdmgr get-devices` | a device list (fwupd starts with its syscall filter) |
-| No busy runner | `top -b -n1 -o %CPU \| head -15` | no `sdcompat` process near 100 % CPU |
+| No busy runner | `top -b -n1 -o %CPU \| head -15` | no `uinitconverter` process near 100 % CPU |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (twice, a few seconds apart) | `up (pid …) N seconds`, with N growing (not restarting) |
 | Radio state (rfkill) | Turn Bluetooth off in GNOME Settings, reboot into the s6 entry, then `rfkill` and `s6-rc -a list \| grep -x rfkill` | Bluetooth still `blocked` after the reboot; `rfkill` is listed (the oneshot, not systemd-rfkill) |
-| Reload watchdog | `sudo s6-svstat /run/service/sdcompat-linkwatch` and `sudo grep -h sdcompat-linkwatch /run/uncaught-logs/current` | `up (pid …)`; a log line only if a reload was stuck (`… sent its start event`) |
-| Reload watchdog unblocks a wait | `sudo tests/linkwatch-check.sh` (about 30 s; a throwaway supervisor in /run/sdcompat/lwtest, removed afterwards) | five `ok:` lines and exit 0: a waiter named s6-rc-update gets the missed start event after about 10 s, a plain s6-ftrig-wait times out, linkwatch logs the send, no denials |
+| Reload watchdog | `sudo s6-svstat /run/service/uinitconverter-linkwatch` and `sudo grep -h uinitconverter-linkwatch /run/uncaught-logs/current` | `up (pid …)`; a log line only if a reload was stuck (`… sent its start event`) |
+| Reload watchdog unblocks a wait | `sudo tests/linkwatch-check.sh` (about 30 s; a throwaway supervisor in /run/uinitconverter/lwtest, removed afterwards) | five `ok:` lines and exit 0: a waiter named s6-rc-update gets the missed start event after about 10 s, a plain s6-ftrig-wait times out, linkwatch logs the send, no denials |
 | Restart on package update | `systemctl show -p MainPID chronyd`, then `sudo dnf reinstall -y chrony`, then the first command again | a different MainPID (the update marked chronyd needs-restart and `systemctl enqueue-marked` restarted it) |
 | User managers on package update | `sudo systemctl --user -M $USER@ is-system-running`, then `sudo /usr/lib/systemd/systemd-update-helper user-reload-restart; echo $?` | `running` or `degraded` (reached through `systemd-run --pipe`), then `0` |
 | Shared mount propagation | `findmnt -no PROPAGATION /` | `shared` (as systemd sets it; `private` means mounts made later, e.g. a USB stick, don't reach units, flatpak apps or containers) |
@@ -269,11 +269,11 @@ After logging in to GNOME, open a terminal and go through this list:
 | s6 set | `s6 set status gdm.service sshd.service dbus` | `gdm.service/active`, `sshd.service/usable` (unless you enabled sshd), `dbus/always` |
 | s6 set decides what boots | `sudo s6 set disable -p chronyd.service`, `sudo systemctl daemon-reload`, `s6 set status chronyd.service`, reboot into s6, `systemctl is-active chronyd.service`; then `sudo s6 set enable chronyd.service` and `sudo systemctl daemon-reload` | `chronyd.service/usable` and `chronyd.service.log/usable` after the reload (`s6 set status chronyd.service chronyd.service.log`), `systemctl is-enabled chronyd.service` says `disabled`; `inactive` after the reboot; after the enable and reload both `active` and `enabled` |
 | `s6 live install` from a shell | `sudo s6 set commit --no-snapshot && sudo s6 live install --no-snapshot`, then `ls -Z /run/service \| awk '{print $1}' \| sort \| uniq -c` and `sudo ausearch -m AVC -ts recent` | it returns; the links are `tmpfs_t` or `init_var_run_t`, no `user_tmp_t`; no denials |
-| Previous shutdown | after an s6 power-off and the next s6 boot: `sudo ls -l /var/log/sdcompat/last-shutdown-*.log; sudo grep -ci denied /var/log/sdcompat/last-shutdown-*.log` | both files from the power-off time, and `0` denials (send the files otherwise); the power-off took a few seconds, not 25 s or more; the console log is not empty and has no `unable to rename`, no `Failed to activate service ... timed out` and no `sdcompatd: stopping ... took`; the kernel log has no `services still not down after 180 s` |
+| Previous shutdown | after an s6 power-off and the next s6 boot: `sudo ls -l /var/log/uinitconverter/last-shutdown-*.log; sudo grep -ci denied /var/log/uinitconverter/last-shutdown-*.log` | both files from the power-off time, and `0` denials (send the files otherwise); the power-off took a few seconds, not 25 s or more; the console log is not empty and has no `unable to rename`, no `Failed to activate service ... timed out` and no `uinitconverterd: stopping ... took`; the kernel log has no `services still not down after 180 s` |
 | ExecStop= of longruns | `printf '[Service]\nExecStart=/bin/sleep infinity\nExecStop=/bin/sh -c "echo stop $$MAINPID >> /var/tmp/sdc-stop.log"\n' \| sudo tee /etc/systemd/system/sdc-stoptest.service; sudo systemctl daemon-reload; sudo systemctl start sdc-stoptest; sleep 2; s6 live status sdc-stoptest.service.stop; sudo s6 live stop sdc-stoptest.service; cat /var/tmp/sdc-stop.log`; then `sudo systemctl start sdc-stoptest`, power off, boot s6 again, `cat /var/tmp/sdc-stop.log`; afterwards `sudo rm /etc/systemd/system/sdc-stoptest.service /var/tmp/sdc-stop.log; sudo systemctl daemon-reload` | `sdc-stoptest.service.stop` is up; one `stop PID` line after `s6 live stop` and a second one from the power-off; the Previous shutdown row still holds |
 | Bus and userdb labels | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t` and `systemd_userdbd_runtime_t` |
-| Catch-all fifo label | `ls -Z /run/service/s6-svscan-log/fifo` and `sudo ausearch -m AVC -ts boot \| grep s6-svscan-log/fifo` | `sdcompat_log_fifo_t`, no denials on that fifo (as `initctl_t` the services' stderr became /dev/null) |
-| Waiting from a shell | after a reboot, `ls -dZ /run/service/s6-svscan-log/event /run/service/sdcompatd/event`; `sudo s6-svc -wR -T 30000 -r /run/service/sdcompatd`; `sudo ausearch -m AVC -ts recent \| grep ftrig` | both `init_var_run_t`; s6-svc returns at once with 0; no denials (as `tmpfs_t` the waiter's fifo was `user_tmp_t`, s6-supervise could not write it, and the wait timed out) |
+| Catch-all fifo label | `ls -Z /run/service/s6-svscan-log/fifo` and `sudo ausearch -m AVC -ts boot \| grep s6-svscan-log/fifo` | `uinitconverter_log_fifo_t`, no denials on that fifo (as `initctl_t` the services' stderr became /dev/null) |
+| Waiting from a shell | after a reboot, `ls -dZ /run/service/s6-svscan-log/event /run/service/uinitconverterd/event`; `sudo s6-svc -wR -T 30000 -r /run/service/uinitconverterd`; `sudo ausearch -m AVC -ts recent \| grep ftrig` | both `init_var_run_t`; s6-svc returns at once with 0; no denials (as `tmpfs_t` the waiter's fifo was `user_tmp_t`, s6-supervise could not write it, and the wait timed out) |
 | Overall state | `systemctl is-system-running` | `running` (`degraded` is OK; see next line) |
 | Failed units | `systemctl --failed` | ideally none; note any that are listed |
 | Journal | `journalctl -b \| head` | log lines from this boot |
@@ -303,11 +303,11 @@ apps open each time:
 sudo tests/memcompare.sh snap        # waits until 5 minutes after boot
 ```
 
-Each run writes `~/sdcompat-mem/mem-<s6|systemd>-<date>.tsv`. Then, on either
+Each run writes `~/uinitconverter-mem/mem-<s6|systemd>-<date>.tsv`. Then, on either
 boot:
 
 ```sh
-tests/memcompare.sh compare ~/sdcompat-mem/mem-systemd-*.tsv ~/sdcompat-mem/mem-s6-*.tsv
+tests/memcompare.sh compare ~/uinitconverter-mem/mem-systemd-*.tsv ~/uinitconverter-mem/mem-s6-*.tsv
 ```
 
 It prints the system totals (as `free`), memory per group (init and
@@ -326,12 +326,12 @@ anonymous memory.
    ```
 2. If the newest s6 database is the problem, reboot, press **e** on the s6
    entry in GRUB and add one of these to the `linux` line:
-   - `sdcompat.db=previous` boots the database installed before the last one.
+   - `uinitconverter.db=previous` boots the database installed before the last one.
 3. To get out, reboot and choose the normal Fedora entry. Logs from the failed
    s6 boot are then visible with `journalctl -b -1`, if journald was running.
-   sdcompat's own messages (the daemon, and the runner's errors such as a
+   uinitconverter's own messages (the daemon, and the runner's errors such as a
    failed PAM session or exec) are there too:
-   `journalctl -b -1 -t sdcompatd -t sdcompat`.
+   `journalctl -b -1 -t uinitconverterd -t uinitconverter`.
 4. Run `sudo tests/collect-diagnostics.sh` from whichever boot you can reach
    and send the archive. If you can only use the rescue console, send
    `/run/uncaught-logs/current`.
@@ -345,24 +345,24 @@ cd useless-init-converter
 git pull
 packages/build-rpms.sh
 for b in standalone/*/build-rpm.sh; do "$b"; done
-sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm ~/rpmbuild-sdcompat-standalone/rpms/*.rpm
-sudo sdcompat init --yes
+sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm
+sudo uinitconverter init --yes
 ```
 
-(From a GitHub release: download the next release's files, `sudo dnf upgrade ./*.rpm`, then `sudo sdcompat init --yes`.)
+(From a GitHub release: download the next release's files, `sudo dnf upgrade ./*.rpm`, then `sudo uinitconverter init --yes`.)
 
-Running `sdcompat init` again is safe. It keeps your `/etc/sdcompat`
+Running `uinitconverter init` again is safe. It keeps your `/etc/uinitconverter`
 configuration and the choices of the last run, regenerates the database,
 the s6-linux-init tree and the boot entry, and backs up what it replaces.
-The s6 services in `/etc/sdcompat/s6` belong to the package: dnf updates
+The s6 services in `/etc/uinitconverter/s6` belong to the package: dnf updates
 the ones you did not edit and leaves an edited file alone, with the new
 version beside it as `FILE.rpmnew` to merge yourself. Run on the s6 boot,
-init restarts sdcompatd so the new binary takes over without a reboot
-(sdcompat-fdstore and journal-relay keep the old one until the next boot).
+init restarts uinitconverterd so the new binary takes over without a reboot
+(uinitconverter-fdstore and journal-relay keep the old one until the next boot).
 It also reloads the SELinux policy module; check that it is loaded:
 
 ```sh
-sudo semodule -l | grep -x sdcompat
+sudo semodule -l | grep -x uinitconverter
 ```
 
 If `dist/skarnet.versions` or `dist/rpm/` changed in the update, rebuild and
@@ -377,25 +377,25 @@ Once the s6 boot works for you (the checks above pass, ideally enforcing),
 make its entry the default (init keeps your other choices):
 
 ```sh
-sudo sdcompat init --selinux=enforcing --default-s6
+sudo uinitconverter init --selinux=enforcing --default-s6
 ```
 
 Check:
 
 | What | Command | Expected |
 |---|---|---|
-| The default | `sudo grubby --info=DEFAULT \| grep title` | `title="Fedora (s6 + sdcompat) <kernel>"` |
-| The choice is kept | `cat /etc/sdcompat/boot-default` | `s6` |
+| The default | `sudo grubby --info=DEFAULT \| grep title` | `title="Fedora (s6 + uinitconverter) <kernel>"` |
+| The choice is kept | `cat /etc/uinitconverter/boot-default` | `s6` |
 | It boots | reboot without touching the menu; `cat /proc/1/comm` | `s6-svscan` |
 | After a kernel update | `sudo dnf upgrade kernel*`, then the first row again | the s6 entry of the new kernel |
 
 To reach the systemd entry once, hold Shift or press Esc while GRUB starts
 and pick it. To make systemd the default again:
-`sudo sdcompat init --default-systemd`.
+`sudo uinitconverter init --default-systemd`.
 
 ## Booting with no systemd at all
 
-`--boot-only-s6=yes` gives the s6 entry sdcompat's own initramfs: s6-svscan is
+`--boot-only-s6=yes` gives the s6 entry uinitconverter's own initramfs: s6-svscan is
 its PID 1 and mdevd loads the drivers, so systemd never runs, not even in
 the initramfs. The LUKS root must be unlocked by typing the passphrase.
 
@@ -415,13 +415,13 @@ must load, three wrong passphrases then the rescue shell and a retry,
 Then on the machine:
 
 ```sh
-sudo sdcompat init --boot-only-s6=yes
+sudo uinitconverter init --boot-only-s6=yes
 ```
 
 | What | Command | Expected |
 |---|---|---|
 | The image | `ls -l /boot/initramfs-*-s6.img` | one per installed kernel, built just now |
-| The entry uses it | `sudo sh -c 'grep ^initrd /boot/loader/entries/*~sdcompat.conf'` | `initramfs-<kernel>-s6.img`; the systemd entries keep `initramfs-<kernel>.img` |
+| The entry uses it | `sudo sh -c 'grep ^initrd /boot/loader/entries/*~uinitconverter.conf'` | `initramfs-<kernel>-s6.img`; the systemd entries keep `initramfs-<kernel>.img` |
 | The prompt | boot the s6 entry | a plain `Enter passphrase for /dev/nvme…:` prompt; the boot goes on after it |
 | No systemd ran | `sudo dmesg \| grep -E 'Run /init\|systemd\[1\]\|running in initrd'` | only `Run /init as init process` |
 | PID 1 | `cat /proc/1/comm` | `s6-svscan` |
@@ -434,21 +434,21 @@ If the prompt never comes or the disk is not found, the rescue shell is on
 the console: `dmesg`, `ls /dev`, `cat /proc/cmdline` show what is missing
 (send them). To boot once with Fedora's initramfs, press `e` on the s6 entry
 and change `initramfs-<kernel>-s6.img` to `initramfs-<kernel>.img`. To go
-back for good: `sudo sdcompat init --boot-only-s6=no`.
+back for good: `sudo uinitconverter init --boot-only-s6=no`.
 
 ## Removing it
 
 Boot the normal Fedora entry, then:
 
 ```sh
-sudo sdcompat init --uninstall
-sudo dnf remove sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd \
-    sdcompat-fdstore sdcompat-notify sdcompat-journal-relay sdcompat-linkwatch
+sudo uinitconverter init --uninstall
+sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd \
+    uinitconverter-fdstore uinitconverter-notify uinitconverter-journal-relay uinitconverter-linkwatch
 sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd \
     skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel
 ```
 
-`/etc/sdcompat`, `/var/lib/sdcompat` and the enabled units stay. They do
+`/etc/uinitconverter`, `/var/lib/uinitconverter` and the enabled units stay. They do
 nothing on a systemd boot.
 
 ## Reporting a problem

@@ -1,0 +1,11 @@
+[package]
+name = "uinitconverter-client"
+version.workspace = true
+edition.workspace = true
+description = "Minimal D-Bus client for the uinitconverter daemon"
+
+[dependencies]
+uinitconverter-base.workspace = true
+serde.workspace = true
+zbus.workspace = true
+tokio.workspace = true

@@ -6,7 +6,7 @@
 #
 # snap waits until the system has been up SECS seconds (default 300) so both
 # boots are measured after the same settling time, then writes
-# DIR/mem-<init>-<date>.tsv (DIR defaults to ~/sdcompat-mem of the user who
+# DIR/mem-<init>-<date>.tsv (DIR defaults to ~/uinitconverter-mem of the user who
 # ran sudo). Without root it still works, but other users' processes have no
 # PSS and the comparison falls back to private anonymous memory (RssAnon).
 # It only reads; nothing is changed.
@@ -25,8 +25,8 @@ kb() { # first number of "  1234 kB"
 # Which group a process belongs to, for the summary.
 group_of() { # group_of PID COMM
     case $2 in
-        s6-log|systemd-journal|rsyslogd|sdcompat-journa*) echo logging ;;
-        s6-*|sdcompat*) echo init ;;
+        s6-log|systemd-journal|rsyslogd|uinitconverter-journa*) echo logging ;;
+        s6-*|uinitconverter*) echo init ;;
         systemd|'(sd-pam)')
             if [ "$1" = 1 ]; then echo init; else echo user-manager; fi ;;
         *) [ "$1" = 1 ] && echo init || echo other ;;
@@ -48,7 +48,7 @@ snap() {
     if [ -z "$dir" ]; then
         local home=$HOME
         [ -n "$owner" ] && home=$(getent passwd "$owner" | cut -d: -f6)
-        dir=$home/sdcompat-mem
+        dir=$home/uinitconverter-mem
     fi
 
     local up

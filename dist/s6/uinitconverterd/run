@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/libexec/uinitconverter/uinitconverterd daemon --ready-fd 3

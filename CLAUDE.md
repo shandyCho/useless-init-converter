@@ -24,7 +24,7 @@ if they turned out to be wrong.
 - Packaging: each core executable is its own RPM (`packages/NAME.spec`, all
   built from one workspace tarball by `packages/build-rpms.sh`), and they
   depend on each other with `Requires`; the library crates are not packaged.
-  The `sdcompat` package holds the boot setup (`dist/`) and requires the tools.
+  The `uinitconverter` package holds the boot setup (`dist/`) and requires the tools.
   The version is `[workspace.package] version` in Cargo.toml and the release
   is generated per build; the specs carry neither, so build them only with
   that script.
@@ -37,7 +37,7 @@ if they turned out to be wrong.
 - Never modify skarnet's sources (skalibs, execline, s6, s6-rc,
   s6-linux-init, s6-frontend), and don't add patches for them in
   `dist/rpm/`. Reading the tarballs to understand their behaviour is fine.
-  Fix things on sdcompat's side (SELinux module, skel scripts, setup,
+  Fix things on uinitconverter's side (SELinux module, skel scripts, setup,
   crates); if that isn't possible, describe the upstream behaviour and
   leave the decision to the owner.
 - Shell scripts must pass `bash -n` and `shellcheck -S warning`.

@@ -1,4 +1,4 @@
-# sdcompat: the systemd compatibility layer, split into crates by role.
+# uinitconverter: the systemd compatibility layer, split into crates by role.
 # The standalone tools in standalone/ are separate projects, not members.
 [workspace]
 resolver = "2"
@@ -9,12 +9,12 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
-sdcompat-base = { path = "crates/sdcompat-base" }
-sdcompat-version = { path = "crates/sdcompat-version" }
-sdcompat-install = { path = "crates/sdcompat-install" }
-sdcompat-exec = { path = "crates/sdcompat-exec" }
-sdcompat-client = { path = "crates/sdcompat-client" }
-sdcompat-gen = { path = "crates/sdcompat-gen" }
+uinitconverter-base = { path = "crates/uinitconverter-base" }
+uinitconverter-version = { path = "crates/uinitconverter-version" }
+uinitconverter-install = { path = "crates/uinitconverter-install" }
+uinitconverter-exec = { path = "crates/uinitconverter-exec" }
+uinitconverter-client = { path = "crates/uinitconverter-client" }
+uinitconverter-gen = { path = "crates/uinitconverter-gen" }
 zbus = { version = "5.19", default-features = false, features = ["tokio", "p2p"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "time", "sync", "fs", "io-util", "signal"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

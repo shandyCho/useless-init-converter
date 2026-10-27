@@ -55,5 +55,5 @@ rm -rf %{buildroot}%{_includedir} %{buildroot}%{_libdir}/*.a
 %{_libexecdir}/%{name}/
 
 %changelog
-* Tue Oct 20 2026 sdcompat - 0.1.0.0-1
+* Tue Oct 20 2026 uinitconverter - 0.1.0.0-1
 - Initial package

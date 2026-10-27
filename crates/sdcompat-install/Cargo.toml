@@ -1,9 +1,0 @@
-[package]
-name = "sdcompat-install"
-version.workspace = true
-edition.workspace = true
-description = "enable/disable/mask/preset: unit file installation state, as systemctl does it"
-
-[dependencies]
-sdcompat-base.workspace = true
-libc.workspace = true

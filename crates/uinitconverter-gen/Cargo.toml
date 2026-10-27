@@ -1,0 +1,14 @@
+[package]
+name = "uinitconverter-gen"
+version.workspace = true
+edition.workspace = true
+description = "Translate systemd units into an s6-rc database (uinitconverter-gen)"
+
+[dependencies]
+uinitconverter-version.workspace = true
+uinitconverter-base.workspace = true
+uinitconverter-install.workspace = true
+libc.workspace = true
+uinitconverter-client.workspace = true
+zbus.workspace = true
+tokio.workspace = true

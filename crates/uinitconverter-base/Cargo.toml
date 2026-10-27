@@ -1,0 +1,8 @@
+[package]
+name = "uinitconverter-base"
+version.workspace = true
+edition.workspace = true
+description = "Unit files, uinitconverter.conf, state files and the database index: what every uinitconverter crate shares"
+
+[dependencies]
+libc.workspace = true

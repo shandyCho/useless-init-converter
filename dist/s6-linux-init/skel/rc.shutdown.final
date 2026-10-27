@@ -7,7 +7,7 @@
 # All archives, not only the newest: the kill also hits the catch-all
 # s6-log, and the restarted one archives the interrupted "current" as @*.u
 # and starts an empty one. The archives sort by time (TAI64N names).
-d=/var/log/sdcompat
+d=/var/log/uinitconverter
 umask 077
 # s6-linux-init-umountall ran just before. A separate /var (or /var/log)
 # is unmounted by now: mount it again from fstab for the two files.
@@ -34,13 +34,13 @@ fi
 if [ ! -d "$d" ]; then
     :
 elif [ ! -w "$d" ]; then
-    echo "sdcompat: $d is read-only, the shutdown logs are not kept" > /dev/console 2>/dev/null
+    echo "uinitconverter: $d is read-only, the shutdown logs are not kept" > /dev/console 2>/dev/null
 else
     cat /run/uncaught-logs/@* /run/uncaught-logs/current > "$d/last-shutdown-console.log" 2>/dev/null
     # From rc.shutdown's marker on; the whole log if it is missing.
     dmesg > "$d/last-shutdown-kernel.log" 2>/dev/null
-    if grep -q 'sdcompat: shutdown starts' "$d/last-shutdown-kernel.log"; then
-        dmesg | sed -n '/sdcompat: shutdown starts/,$p' > "$d/last-shutdown-kernel.log" 2>/dev/null
+    if grep -q 'uinitconverter: shutdown starts' "$d/last-shutdown-kernel.log"; then
+        dmesg | sed -n '/uinitconverter: shutdown starts/,$p' > "$d/last-shutdown-kernel.log" 2>/dev/null
     fi
     sync
 fi
@@ -49,7 +49,7 @@ fi
 if [ -n "$umountall_failed" ]; then
     # What s6-linux-init-umountall does: unmount everything, the busy ones
     # (the root) read-only. umount -a leaves proc, sysfs and devpts alone.
-    echo "sdcompat: filesystems still mounted read-write, unmounting them" > /dev/console 2>/dev/null
+    echo "uinitconverter: filesystems still mounted read-write, unmounting them" > /dev/console 2>/dev/null
     sync
     umount -a -r 2>/dev/null
     mount -o remount,ro / 2>/dev/null

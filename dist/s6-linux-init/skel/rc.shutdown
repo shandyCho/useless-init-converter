@@ -1,6 +1,6 @@
 #!/bin/sh
 # Shutdown: bring every s6-rc service down (dependencies respected).
-# The marker stops sdcompatd from starting units beside this change
+# The marker stops uinitconverterd from starting units beside this change
 # (D-Bus activations during shutdown). The kernel log line marks where this
 # shutdown starts for rc.shutdown.final.
 # s6-linux-init-shutdownd waits for this script without a time limit, so a
@@ -8,26 +8,26 @@
 # minutes s6-rc gives up (exit 2) and shutdownd kills what is left, as
 # systemd ends a shutdown its unit stop timeouts couldn't. s6-rc starts its
 # -t clock only once it has the lock, and -b waits for the lock with no
-# limit: a change that never ends (the boot's, or a start sdcompatd began
+# limit: a change that never ends (the boot's, or a start uinitconverterd began
 # before the marker, of a unit with TimeoutStartSec=infinity) would hold
 # it for good. So timeout(1) bounds the whole call (137: killed).
-# First sdcompatd stops the on-demand instances (user@UID, ...), which
+# First uinitconverterd stops the on-demand instances (user@UID, ...), which
 # s6-rc doesn't know: they are ordered after s6-rc services such as logind
 # (stopped after it, each user@'s PAM close waited 45 s). Bounded too; what
-# it leaves, sdcompatd stops again when s6-rc takes it down.
-mkdir -p /run/sdcompat && : > /run/sdcompat/shutting-down
-echo "sdcompat: shutdown starts" > /dev/kmsg 2>/dev/null
-timeout -s KILL 120 /usr/libexec/sdcompat/sdcompatd stop-instances
+# it leaves, uinitconverterd stops again when s6-rc takes it down.
+mkdir -p /run/uinitconverter && : > /run/uinitconverter/shutting-down
+echo "uinitconverter: shutdown starts" > /dev/kmsg 2>/dev/null
+timeout -s KILL 120 /usr/libexec/uinitconverter/uinitconverterd stop-instances
 case $? in
 0) ;;
-137) echo "sdcompat: on-demand instances still not down after 120 s" > /dev/kmsg 2>/dev/null ;;
-*) echo "sdcompat: sdcompatd stop-instances failed" > /dev/kmsg 2>/dev/null ;;
+137) echo "uinitconverter: on-demand instances still not down after 120 s" > /dev/kmsg 2>/dev/null ;;
+*) echo "uinitconverter: uinitconverterd stop-instances failed" > /dev/kmsg 2>/dev/null ;;
 esac
 timeout -s KILL 180 s6-rc -v2 -t 180000 -bDa change
 rc=$?
 case $rc in
 0) ;;
-2|137) echo "sdcompat: services still not down after 180 s, killing the rest" > /dev/kmsg 2>/dev/null ;;
-*) echo "sdcompat: s6-rc change exited $rc" > /dev/kmsg 2>/dev/null ;;
+2|137) echo "uinitconverter: services still not down after 180 s, killing the rest" > /dev/kmsg 2>/dev/null ;;
+*) echo "uinitconverter: s6-rc change exited $rc" > /dev/kmsg 2>/dev/null ;;
 esac
 exit "$rc"

@@ -1,7 +1,7 @@
 #!/bin/bash
-# Build the s6 initramfs (sdcompat init --boot-only-s6=yes): s6-svscan is its
+# Build the s6 initramfs (uinitconverter init --boot-only-s6=yes): s6-svscan is its
 # PID 1, mdevd loads the drivers, and a bash script opens LUKS and mounts the
-# root (see root/ beside this script, installed as /usr/share/sdcompat/initramfs).
+# root (see root/ beside this script, installed as /usr/share/uinitconverter/initramfs).
 # No systemd and no dracut run at boot; dracut-install only copies binaries
 # with their libraries and kernel modules with their dependencies here.
 #
@@ -9,26 +9,26 @@
 #     -k KVER           kernel version (default: uname -r)
 #     -o FILE           output (default: /boot/initramfs-KVER-s6.img)
 #     --source DIR      the initramfs tree (default: root/ beside this script,
-#                       else /usr/share/sdcompat/initramfs)
+#                       else /usr/share/uinitconverter/initramfs)
 #     --add-module M    another kernel module (or =DIR of them); repeatable
 #     --add FILE        another file or program (with its libraries); repeatable
 #     --no-microcode    no early CPU microcode
 #
-# Extra modules are also read from /etc/sdcompat/initramfs-modules (one name
+# Extra modules are also read from /etc/uinitconverter/initramfs-modules (one name
 # or =DIR per line). Runs unprivileged when the output is writable.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 # Programs come from the system, not from the caller's PATH (tests set
-# SDCOMPAT_INITRAMFS_PATH to use tools that are not installed).
-PATH=${SDCOMPAT_INITRAMFS_PATH:-/usr/bin:/usr/sbin}
+# UINITCONVERTER_INITRAMFS_PATH to use tools that are not installed).
+PATH=${UINITCONVERTER_INITRAMFS_PATH:-/usr/bin:/usr/sbin}
 KVER=$(uname -r)
 OUT=""
 SRC=""
 MICROCODE=1
 EXTRA_MODULES=()
 EXTRA_FILES=()
-MODULES_FILE=${SDCOMPAT_INITRAMFS_MODULES:-/etc/sdcompat/initramfs-modules}
+MODULES_FILE=${UINITCONVERTER_INITRAMFS_MODULES:-/etc/uinitconverter/initramfs-modules}
 DI=/usr/lib/dracut/dracut-install
 
 die() { echo "mkinitramfs: $*" >&2; exit 1; }
@@ -49,7 +49,7 @@ done
 OUT=${OUT:-/boot/initramfs-$KVER-s6.img}
 if [ -z "$SRC" ]; then
     SRC=$HERE/root
-    [ -d "$SRC" ] || SRC=/usr/share/sdcompat/initramfs
+    [ -d "$SRC" ] || SRC=/usr/share/uinitconverter/initramfs
 fi
 KDIR=/lib/modules/$KVER
 [ -d "$SRC" ] || die "$SRC: no initramfs tree"
@@ -59,7 +59,7 @@ for p in cpio zstd depmod mdevd s6-svscan execlineb cryptsetup; do
     command -v "$p" >/dev/null || die "$p not found"
 done
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/sdcompat-initramfs.XXXXXX")
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/uinitconverter-initramfs.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 R=$WORK/root
 

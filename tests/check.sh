@@ -55,7 +55,7 @@ last_new() {
 }
 
 # SANDBOX_JOURNAL=no: output goes to per-service s6-log directories.
-grep -qx 'JOURNAL=no' "$W/sdcompat.conf" && journal=no || journal=yes
+grep -qx 'JOURNAL=no' "$W/uinitconverter.conf" && journal=no || journal=yes
 expect_log() {
     unit=$1 text=$2 tries=25
     while [ $tries -gt 0 ] && ! grep -q "$text" "$W/logs/$unit/current" 2>/dev/null; do
@@ -114,7 +114,7 @@ expect_eq "notify STATUS= relayed" "$(prop notifier.service Service StatusText)"
 # The notify helper must block in poll() after READY=1, not spin.
 ticks() {
     t=0
-    for p in $(pgrep -u "$(id -u)" -f 'sdcompat-runner run .*-- notifier\.service$'); do
+    for p in $(pgrep -u "$(id -u)" -f 'uinitconverter-runner run .*-- notifier\.service$'); do
         t=$((t + $(awk '{print $14 + $15}' "/proc/$p/stat" 2>/dev/null || echo 0)))
     done
     echo "$t"
@@ -300,10 +300,10 @@ out=$($B call $MGR EnableUnitFiles asbb 1 hello.service false false)
 case "$out" in *symlink*) ok "enable created links" ;; *) bad "enable: $out" ;; esac
 call Reload && ok "daemon-reload"
 expect_state hello.service active/running
-# With a live state, `sdcompat-gen reload` goes through sdcompatd (from a
+# With a live state, `uinitconverter-gen reload` goes through uinitconverterd (from a
 # login shell s6-rc-update would label the scan directory for that shell).
-out=$("$(dirname "$0")/../target/debug/sdcompat-gen" --config "$W/sdcompat.conf" reload 2>&1)
-case "$out" in "reloaded by sdcompatd"*) ok "sdcompat-gen reload through sdcompatd" ;; *) bad "sdcompat-gen reload: $out" ;; esac
+out=$("$(dirname "$0")/../target/debug/uinitconverter-gen" --config "$W/uinitconverter.conf" reload 2>&1)
+case "$out" in "reloaded by uinitconverterd"*) ok "uinitconverter-gen reload through uinitconverterd" ;; *) bad "uinitconverter-gen reload: $out" ;; esac
 expect_state hello.service active/running
 
 section "timers"
@@ -691,8 +691,8 @@ restart_daemon() {
     echo $! > "$W/daemon.pid"
     sleep 1
 }
-grep -v '^ALLOW_UIDS=' "$W/sdcompat.conf" > "$W/unpriv.conf"
-DAEMON=$(dirname "$(sed -n 's/^RUNNER=//p' "$W/sdcompat.conf")")/sdcompatd
+grep -v '^ALLOW_UIDS=' "$W/uinitconverter.conf" > "$W/unpriv.conf"
+DAEMON=$(dirname "$(sed -n 's/^RUNNER=//p' "$W/uinitconverter.conf")")/uinitconverterd
 # On-demand instances outlive the daemon: a longrun (like user@UID) with the
 # oneshot it is bound to, and a oneshot alone (like systemd-backlight@).
 call StartUnit ss inst@b.service replace
@@ -747,11 +747,11 @@ if [ -n "$SR" ] && [ $unpriv = yes ]; then
         && bad "private socket accepted an unprivileged peer" || ok "private socket refuses an unprivileged peer"
 fi
 # Back to the normal daemon, so the sandbox stays usable.
-restart_daemon "$W/sdcompat.conf"
+restart_daemon "$W/uinitconverter.conf"
 # Stopping the oneshot stops the longrun bound to it: the daemon knows both.
 call StopUnit ss prep@b.service replace
 expect_state inst@b.service inactive/dead
-# With sdcompat-fdstore the store is its own process: what units stored
+# With uinitconverter-fdstore the store is its own process: what units stored
 # survived both daemon swaps. Without it (SANDBOX_FDSTORE=no) the daemon
 # held them, so they went with it and the socket was bound anew.
 n=$(lines "$R/fdkeep.out")
@@ -763,9 +763,9 @@ if [ -e "$W/fdstore.log" ]; then
     expect_eq "FDSTORE=1 fd kept across daemon restarts" "$(last_new "$R/fdkeep.out" "$n")" "start names=kept"
     expect_eq "listening socket kept across daemon restarts" "$(stat -c %i "$R/test.sock")" "$i1"
 else
-    expect_eq "FDSTORE=1 fd gone with the daemon (no sdcompat-fdstore)" "$(last_new "$R/fdkeep.out" "$n")" "start names="
-    [ "$(stat -c %i "$R/test.sock")" != "$i1" ] && ok "listening socket bound anew (no sdcompat-fdstore)" \
-        || bad "listening socket kept without sdcompat-fdstore"
+    expect_eq "FDSTORE=1 fd gone with the daemon (no uinitconverter-fdstore)" "$(last_new "$R/fdkeep.out" "$n")" "start names="
+    [ "$(stat -c %i "$R/test.sock")" != "$i1" ] && ok "listening socket bound anew (no uinitconverter-fdstore)" \
+        || bad "listening socket kept without uinitconverter-fdstore"
 fi
 expect_state prep@b.service inactive/dead
 [ ! -e "$R/run/dyn/inst@b.service" ] && ok "inst@b's service directory removed" || bad "inst@b's service directory left"
@@ -799,7 +799,7 @@ time.sleep(0.3)
 fi
 
 section "shutdown stops on-demand oneshots"
-# As rc.shutdown: the marker, then s6-rc takes sdcompatd down (SIGTERM).
+# As rc.shutdown: the marker, then s6-rc takes uinitconverterd down (SIGTERM).
 : > "$R/run/shutting-down"
 # Starts are refused at once: rc.shutdown holds the s6-rc lock, and a D-Bus
 # caller would otherwise wait for the bus's activation timeout.
@@ -817,7 +817,7 @@ sleep 0.5
 t0=$(date +%s)
 # As rc.shutdown: first stop-instances, while the daemon (and, on a real
 # system, logind) still runs.
-"$DAEMON" --config "$W/sdcompat.conf" stop-instances > "$W/stop-instances.out" 2>&1 &
+"$DAEMON" --config "$W/uinitconverter.conf" stop-instances > "$W/stop-instances.out" 2>&1 &
 sipid=$!
 # A StopUnit for the same unit while the daemon stops it (the bus is still
 # served then) waits for that stop instead of running ExecStop= again.
@@ -834,7 +834,7 @@ grep -qx "down c" "$R/prep.out" && ok "prep@c's ExecStop= ran, started by an ear
 [ ! -e "$R/run/dyn-oneshot/prep@c.service" ] && ok "its marker is gone" || bad "prep@c marker left"
 expect_eq "on-demand longrun's ExecStop= ran at shutdown" "$(cat "$R/prepl.out" 2>/dev/null)" "down d"
 rm -f "$R/run/shutting-down"
-if "$DAEMON" --config "$W/sdcompat.conf" stop-instances 2>/dev/null; then
+if "$DAEMON" --config "$W/uinitconverter.conf" stop-instances 2>/dev/null; then
     bad "stop-instances accepted outside a shutdown"
 else
     ok "stop-instances refused outside a shutdown"
@@ -850,14 +850,14 @@ while [ $tries -gt 0 ] && ! grep -qx "down e" "$R/prep.out"; do tries=$((tries -
 grep -qx "down e" "$R/prep.out" && ok "the daemon's SIGTERM stops what is left" || bad "prep@e not stopped at the daemon's SIGTERM"
 expect_eq "prep@c's ExecStop= not run again" "$(grep -cx "down c" "$R/prep.out")" "1"
 rm -f "$R/run/shutting-down"
-restart_daemon "$W/sdcompat.conf"
+restart_daemon "$W/uinitconverter.conf"
 expect_state prep@c.service inactive/dead
 
 section "s6-rc repository"
 # The translated units are a store in an s6-rc repository; the set
 # "current" decides what boots. systemd's enable state only gives a new
 # service its first prescription; after that the set decides.
-GEN="$(dirname "$0")/../target/debug/sdcompat-gen"
+GEN="$(dirname "$0")/../target/debug/uinitconverter-gen"
 rx() { s6-rc-set-status -r "$W/repo" current "$1" 2>/dev/null | cut -d/ -f2; }
 in_default() { s6-rc-db -l "$R/live" contents default 2>/dev/null | grep -qx "$1"; }
 expect_eq "enabled unit starts active in the set" "$(rx hello.service)" "active"
@@ -872,7 +872,7 @@ ExecStart=/bin/sleep 1000
 [Install]
 WantedBy=multi-user.target
 EOF
-"$GEN" --config "$W/sdcompat.conf" enable repo-new.service >/dev/null
+"$GEN" --config "$W/uinitconverter.conf" enable repo-new.service >/dev/null
 call Reload && expect_eq "a new enabled unit starts active" "$(rx repo-new.service)" "active"
 expect_eq "what an active service needs is made active (s6-rc-set-fix -u)" "$(rx repo-helper.service)" "active"
 in_default repo-new.service && ok "the default bundle has it" || bad "repo-new.service not in the default bundle"
@@ -883,7 +883,7 @@ in_default hello.service && bad "a usable service is still in the default bundle
 expect_eq "UnitFileState of a usable service" "$(prop hello.service Unit UnitFileState)" "disabled"
 # JOURNAL=no: the service's logger follows it out of the boot.
 [ -n "$(rx hello.service.log)" ] && expect_eq "the logger of a usable service is usable" "$(rx hello.service.log)" "usable"
-"$GEN" --config "$W/sdcompat.conf" disable repo-new.service >/dev/null
+"$GEN" --config "$W/uinitconverter.conf" disable repo-new.service >/dev/null
 call Reload && expect_eq "systemctl disable leaves the set alone" "$(rx repo-new.service)" "active"
 prev=$(readlink -f "$W/state/compiled.previous")
 [ -d "$prev" ] && [ "$prev" != "$(readlink -f "$W/state/compiled")" ] && ok "the replaced database is kept as compiled.previous" || bad "compiled.previous: '$prev'"
@@ -908,7 +908,7 @@ in_default stopper.service.stop && ok "and in the default bundle" || bad "stoppe
 section "linkwatch"
 # A supervisor that started before anyone listened: its "s" went to nobody.
 # A waiter named s6-rc-update (s6-ftrig-wait under that name) waits on it as
-# s6_supervise_link_names() would; the sandbox's sdcompat-linkwatch
+# s6_supervise_link_names() would; the sandbox's uinitconverter-linkwatch
 # (--after 3) sends the missed event. Under its own name it is left alone.
 mkdir -p "$R/lw/svc" "$W/lw-bin"
 printf '#!/bin/sh\nexec sleep 1000\n' > "$R/lw/svc/run"

@@ -1,9 +1,0 @@
-[package]
-name = "sdcompat-exec"
-version.workspace = true
-edition.workspace = true
-description = "How a service process is set up: sandboxing, seccomp, BPF, cgroups, SELinux, PAM, sockets, conditions"
-
-[dependencies]
-sdcompat-base.workspace = true
-libc.workspace = true

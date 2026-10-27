@@ -5,26 +5,26 @@
 #   tests/sandbox.sh [WORKDIR]      set up and start everything
 #   tests/sandbox.sh WORKDIR stop   tear it down
 # SANDBOX_JOURNAL=no sets it up as a JOURNAL=no install (per-service s6-log).
-# SANDBOX_FDSTORE=no runs it without the standalone sdcompat-fdstore (the
+# SANDBOX_FDSTORE=no runs it without the standalone uinitconverter-fdstore (the
 # daemon then holds the fds itself).
 #
 # Needs `cargo build` in this workspace; the standalone tools it uses
-# (sdcompat-notify, sdcompat-fdstore, sdcompat-journal-relay,
-# sdcompat-linkwatch) are built here.
+# (uinitconverter-notify, uinitconverter-fdstore, uinitconverter-journal-relay,
+# uinitconverter-linkwatch) are built here.
 set -eu
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 BIN=$TOP/target/debug
-GEN=$BIN/sdcompat-gen
-DAEMON=$BIN/sdcompatd
-for p in sdcompat-notify sdcompat-fdstore sdcompat-journal-relay sdcompat-linkwatch; do
+GEN=$BIN/uinitconverter-gen
+DAEMON=$BIN/uinitconverterd
+for p in uinitconverter-notify uinitconverter-fdstore uinitconverter-journal-relay uinitconverter-linkwatch; do
     cargo build --quiet --manifest-path "$TOP/standalone/$p/Cargo.toml"
 done
-NOTIFY=$TOP/standalone/sdcompat-notify/target/debug/sdcompat-notify
-FDSTORE=$TOP/standalone/sdcompat-fdstore/target/debug/sdcompat-fdstore
-RELAY=$TOP/standalone/sdcompat-journal-relay/target/debug/sdcompat-journal-relay
-LINKWATCH=$TOP/standalone/sdcompat-linkwatch/target/debug/sdcompat-linkwatch
-W=${1:-${TMPDIR:-/tmp}/sdcompat-sandbox}
+NOTIFY=$TOP/standalone/uinitconverter-notify/target/debug/uinitconverter-notify
+FDSTORE=$TOP/standalone/uinitconverter-fdstore/target/debug/uinitconverter-fdstore
+RELAY=$TOP/standalone/uinitconverter-journal-relay/target/debug/uinitconverter-journal-relay
+LINKWATCH=$TOP/standalone/uinitconverter-linkwatch/target/debug/uinitconverter-linkwatch
+W=${1:-${TMPDIR:-/tmp}/uinitconverter-sandbox}
 # Sockets need short paths (sun_path is 108 bytes).
 R=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sdc-test
 
@@ -47,18 +47,18 @@ fi
 rm -rf "$W" "$R"
 mkdir -p "$W/units" "$W/presets" "$W/scan" "$W/bin" "$R"
 U=$W/units
-# With sdcompat's SELinux module installed, /usr/bin/s6-rc-update (and
+# With uinitconverter's SELinux module installed, /usr/bin/s6-rc-update (and
 # s6-rc-format-upgrade) run as init_t when started from unconfined_t, and
 # init_t can't open the sandbox's user_tmp_t files ("unable to take lock
 # ... Permission denied"). Copies here have this directory's label and no
-# transition; s6-rc-set-install and sdcompat find s6-rc-update by PATH.
+# transition; s6-rc-set-install and uinitconverter find s6-rc-update by PATH.
 for p in s6-rc-update s6-rc-format-upgrade; do
     cp "$(command -v "$p")" "$W/bin/"
 done
 PATH=$W/bin:$PATH
 export PATH
 
-cat > "$W/sdcompat.conf" <<EOF
+cat > "$W/uinitconverter.conf" <<EOF
 UNIT_PATH=$U
 RUNTIME_UNIT_DIR=$R/units
 PRESET_PATH=$W/presets
@@ -72,8 +72,8 @@ BOOTED_FLAG=
 PRIVATE_SOCKET=$R/private
 BUS_ADDRESS=unix:path=$R/bus
 ALLOW_UIDS=$(id -u)
-RUNNER=$BIN/sdcompat-runner
-TIMER_RUNNER=$BIN/sdcompat-timers
+RUNNER=$BIN/uinitconverter-runner
+TIMER_RUNNER=$BIN/uinitconverter-timers
 POWEROFF_CMD=touch $R/poweroff-requested
 REBOOT_CMD=touch $R/reboot-requested
 JOURNAL=${SANDBOX_JOURNAL:-yes}
@@ -288,7 +288,7 @@ EOF
 cat > "$U/cond.service" <<EOF
 [Unit]
 Description=Condition fails
-ConditionPathExists=/nonexistent/sdcompat
+ConditionPathExists=/nonexistent/uinitconverter
 [Service]
 ExecStart=/bin/sleep 1000
 EOF
@@ -446,7 +446,7 @@ Type=oneshot
 ExecStart=/bin/sh -c 'echo cleaned > $R/cleanup.out'
 EOF
 
-# --- failure propagation (s6-rc only orders; sdcompat enforces Requires=) ---
+# --- failure propagation (s6-rc only orders; uinitconverter enforces Requires=) ---
 cat > "$U/bad.service" <<EOF
 [Unit]
 Description=Fails unless \$R/bad-ok exists
@@ -676,7 +676,7 @@ enable notifier.service
 disable *
 EOF
 
-C="--config $W/sdcompat.conf"
+C="--config $W/uinitconverter.conf"
 "$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket watch.path chg.path bad.service after-bad.service stopper.service stopcond.service >/dev/null
 
 # Stand-in for journald's stdout stream socket: records each connection.
@@ -703,7 +703,7 @@ sleep 0.3
 "$GEN" $C preset notifier.service >/dev/null
 "$GEN" $C reload --no-update
 
-# The fd store runs apart from the daemon, like the sdcompat-fdstore service.
+# The fd store runs apart from the daemon, like the uinitconverter-fdstore service.
 if [ "${SANDBOX_FDSTORE:-yes}" = yes ]; then
     "$FDSTORE" --socket "$R/run/fdstore" >"$W/fdstore.log" 2>&1 &
     echo $! >> "$W/pids"
@@ -729,7 +729,7 @@ fi
 
 s6-svscan "$W/scan" >"$W/svscan.log" 2>&1 &
 echo $! >> "$W/pids"
-# As the sdcompat-linkwatch service, quicker, and only for this sandbox's
+# As the uinitconverter-linkwatch service, quicker, and only for this sandbox's
 # service directories.
 "$LINKWATCH" --after 3 --interval 1 --under "$R" >"$W/linkwatch.log" 2>&1 &
 echo $! >> "$W/pids"
@@ -760,5 +760,5 @@ sleep 0.5
 
 echo "sandbox ready"
 echo "  bus:     unix:path=$R/bus"
-echo "  config:  $W/sdcompat.conf"
+echo "  config:  $W/uinitconverter.conf"
 echo "  live:    $R/live"

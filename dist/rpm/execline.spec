@@ -54,12 +54,12 @@ Headers, shared library links and pkg-config files for execline.
 # (symlink) option of the bundled tools/install.sh.
 %{__make} install DESTDIR=%{buildroot}
 # One multicall binary, /usr/bin/execline, and a symlink per command: the
-# SELinux module (dist/selinux/sdcompat.cil) labels that one file, whatever
+# SELinux module (dist/selinux/uinitconverter.cil) labels that one file, whatever
 # commands a release has.
 #
 # bash owns /usr/bin/cd, umask and wait (POSIX wrappers around its builtins),
 # so execline's go to %{_libexecdir}/%{name}, out of PATH. Only s6-linux-init's
-# container mode (-C, not used by sdcompat) calls wait.
+# container mode (-C, not used by uinitconverter) calls wait.
 mkdir -p %{buildroot}%{_libexecdir}/%{name}
 for c in cd umask wait; do
     rm %{buildroot}%{_bindir}/$c
@@ -80,9 +80,9 @@ done
 %{_libdir}/pkgconfig/*.pc
 
 %changelog
-* Mon Oct 19 2026 sdcompat - 2.9.9.2-2
+* Mon Oct 19 2026 uinitconverter - 2.9.9.2-2
 - Do not ship /usr/bin/cd, umask, wait (owned by bash); wait moves to
   /usr/libexec/execline
 
-* Sun Oct 18 2026 sdcompat - 2.9.9.2-1
+* Sun Oct 18 2026 uinitconverter - 2.9.9.2-1
 - Initial package

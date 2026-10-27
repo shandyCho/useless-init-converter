@@ -1,0 +1,18 @@
+[package]
+name = "uinitconverterd"
+version.workspace = true
+edition.workspace = true
+description = "The org.freedesktop.systemd1 D-Bus API on top of s6-rc (uinitconverterd)"
+
+[dependencies]
+uinitconverter-version.workspace = true
+uinitconverter-base.workspace = true
+uinitconverter-install.workspace = true
+uinitconverter-exec.workspace = true
+uinitconverter-gen.workspace = true
+uinitconverter-client.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+libc.workspace = true
+serde.workspace = true

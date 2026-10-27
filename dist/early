@@ -1,5 +1,5 @@
 #!/bin/sh
-# Early-boot helpers for the example s6 services in /etc/sdcompat/s6.
+# Early-boot helpers for the example s6 services in /etc/uinitconverter/s6.
 # They replace the systemd units that only make sense with systemd as PID 1
 # (systemd-remount-fs, systemd-modules-load, the API filesystem mounts, ...).
 # Review them for your machine before booting with them.
@@ -9,7 +9,7 @@
 # fail (a sysctl key, one tmpfiles line). Failures are logged instead.
 set -u
 
-warn() { echo "sdcompat early: $*" >&2; }
+warn() { echo "uinitconverter early: $*" >&2; }
 
 mnt() { # mnt FSTYPE TARGET OPTIONS
     mountpoint -q "$2" && return 0
@@ -153,8 +153,8 @@ sysctl)
 vconsole)
     # Keymap and font from /etc/vconsole.conf. udev's 90-vconsole.rules asks
     # for systemd-vconsole-setup.service for each console during the
-    # trigger, before sdcompatd is up to start it, so run it here once
-    # udev has settled. Later consoles go through sdcompatd.
+    # trigger, before uinitconverterd is up to start it, so run it here once
+    # udev has settled. Later consoles go through uinitconverterd.
     [ -e /dev/tty0 ] || exit 0
     v=/usr/lib/systemd/systemd-vconsole-setup
     [ -x "$v" ] || exit 0
@@ -193,14 +193,14 @@ rfkill | rfkill-save)
     done
     ;;
 resolv)
-    # RESOLVED=no (sdcompat init --resolved=no): systemd-resolved does not
+    # RESOLVED=no (uinitconverter init --resolved=no): systemd-resolved does not
     # run on this boot. NetworkManager handles DNS itself, and the stub file
     # /etc/resolv.conf links to points at NetworkManager's copy. All of it
     # is in /run, so the systemd boot keeps using resolved.
     nm=/run/NetworkManager
     mkdir -p "$nm/conf.d"
-    cat >"$nm/conf.d/99-sdcompat-no-resolved.conf" <<'EOF'
-# Written at boot by sdcompat's "resolv" s6 service (RESOLVED=no).
+    cat >"$nm/conf.d/99-uinitconverter-no-resolved.conf" <<'EOF'
+# Written at boot by uinitconverter's "resolv" s6 service (RESOLVED=no).
 # rc-manager=symlink: Fedora's resolvconf is resolvectl, i.e. resolved.
 [main]
 dns=default

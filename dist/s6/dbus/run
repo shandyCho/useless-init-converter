@@ -1,6 +1,6 @@
 #!/bin/sh
 # The reference dbus-daemon (dnf install dbus-daemon); --systemd-activation
-# makes it ask sdcompat to start services with SystemdService=.
+# makes it ask uinitconverter to start services with SystemdService=.
 mkdir -p /run/dbus
 # systemd creates it for dbus.socket with its file_contexts label
 # (system_dbusd_var_run_t); the socket inherits it, and confined services

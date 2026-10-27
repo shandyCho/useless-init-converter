@@ -2,12 +2,12 @@
 # Without journald (JOURNAL=no): listen on journald's client sockets in
 # /run/systemd/journal and forward to rsyslog. dbus-broker-launch, the
 # session bus of systemd --user, refuses to start without them.
-# sdcompat-journal-relay is a separate project; sdcompat init --journal=no
+# uinitconverter-journal-relay is a separate project; uinitconverter init --journal=no
 # requires it. If it is missing anyway, report ready and idle so the boot
 # goes on.
-bin=/usr/libexec/sdcompat/sdcompat-journal-relay
+bin=/usr/libexec/uinitconverter/uinitconverter-journal-relay
 if [ ! -x "$bin" ]; then
-    echo "sdcompat-journal-relay is not installed: no journald sockets" >&2
+    echo "uinitconverter-journal-relay is not installed: no journald sockets" >&2
     echo >&3
     exec sleep infinity
 fi

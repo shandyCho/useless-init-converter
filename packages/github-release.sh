@@ -1,9 +1,9 @@
 #!/bin/bash
-# Build the sdcompat RPMs (the five core packages and the standalone tools)
+# Build the uinitconverter RPMs (the five core packages and the standalone tools)
 # and collect them for a GitHub release. The skarnet.org packages are not
 # in it: users build them with dist/rpm/build-skarnet-rpms.sh.
 #
-#   packages/github-release.sh [OUTDIR]      # default: ~/sdcompat-release
+#   packages/github-release.sh [OUTDIR]      # default: ~/uinitconverter-release
 #
 # OUTDIR/assets gets the binary RPMs (no -devel or debuginfo packages) and
 # SHA256SUMS; OUTDIR/NOTES.md is the release text with the install commands.
@@ -15,7 +15,7 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-OUT=${1:-$HOME/sdcompat-release}
+OUT=${1:-$HOME/uinitconverter-release}
 GITHUB_REPO=shandyCho/useless-init-converter
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -45,7 +45,7 @@ find "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm' \
 (cd "$OUT/assets" && sha256sum -- *.rpm >SHA256SUMS)
 
 {
-    echo "sdcompat $VERSION ($COMMIT), RPMs for Fedora ${DIST#fc} $ARCH."
+    echo "uinitconverter $VERSION ($COMMIT), RPMs for Fedora ${DIST#fc} $ARCH."
     echo
     echo "First build and install the skarnet.org packages (skalibs, execline, s6,"
     echo "s6-rc, s6-linux-init, s6-frontend, mdevd), which this release does not include."
@@ -72,8 +72,8 @@ find "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm' \
     echo '```sh'
     echo "sha256sum -c SHA256SUMS"
     echo "sudo dnf install ./*.rpm        # an update: sudo dnf upgrade ./*.rpm"
-    echo "sdcompat init --dry-run"
-    echo "sudo sdcompat init"
+    echo "uinitconverter init --dry-run"
+    echo "sudo uinitconverter init"
     echo '```'
     echo
     echo "With the GitHub CLI: gh release download $TAG -R $GITHUB_REPO"
@@ -88,4 +88,4 @@ echo "==> $(find "$OUT/assets" -name '*.rpm' | wc -l) RPMs in $OUT/assets, notes
 echo "Publish (where gh is logged in; or on GitHub: Releases > Draft a new release,"
 echo "tag $TAG on $COMMIT, paste NOTES.md, attach every file in $OUT/assets):"
 echo "  gh release create $TAG -R $GITHUB_REPO --target $(git -C "$REPO" rev-parse HEAD) \\"
-echo "      --title \"sdcompat $VERSION\" --notes-file $OUT/NOTES.md $OUT/assets/*"
+echo "      --title \"uinitconverter $VERSION\" --notes-file $OUT/NOTES.md $OUT/assets/*"

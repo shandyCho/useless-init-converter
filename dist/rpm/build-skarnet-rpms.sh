@@ -141,4 +141,4 @@ echo
 echo "RPMs in $OUT/rpms:"
 ls -1 "$OUT/rpms"
 echo
-echo "Next: sudo dnf install $OUT/rpms/*.rpm  (then the sdcompat RPMs, then sudo sdcompat init)"
+echo "Next: sudo dnf install $OUT/rpms/*.rpm  (then the uinitconverter RPMs, then sudo uinitconverter init)"

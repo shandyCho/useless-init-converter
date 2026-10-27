@@ -1,0 +1,8 @@
+[package]
+name = "uinitconverter-version"
+version.workspace = true
+edition.workspace = true
+description = "The build's version for the uinitconverter tools' --version"
+build = "build.rs"
+
+[dependencies]

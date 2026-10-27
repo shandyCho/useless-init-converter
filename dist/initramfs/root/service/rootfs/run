@@ -7,7 +7,7 @@
 # Kernel options read: root= (UUID=, LABEL=, PARTUUID=, PARTLABEL=, /dev/...),
 # rootfstype=, rootflags=, ro/rw, init=, rd.luks.uuid= (luks-UUID or UUID),
 # rd.luks.name=UUID=NAME, rd.luks=0, rd.break (shell before switching),
-# sdcompat.initrd.timeout=SECONDS (wait for disks, default 30).
+# uinitconverter.initrd.timeout=SECONDS (wait for disks, default 30).
 exec 2>&1
 export DM_DISABLE_UDEV=1
 SYSROOT=/sysroot
@@ -42,7 +42,7 @@ for a in "${args[@]}"; do
         luks_name[${u%%=*}]=${u#*=}
         ;;
     rd.break) brk=1 ;;
-    sdcompat.initrd.timeout=*) timeout=${a#sdcompat.initrd.timeout=} ;;
+    uinitconverter.initrd.timeout=*) timeout=${a#uinitconverter.initrd.timeout=} ;;
     esac
 done
 [ -n "$root" ] || rescue "no root= on the kernel command line"

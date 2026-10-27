@@ -1,5 +1,5 @@
 #!/bin/bash
-# Boot the s6 initramfs (dist/initramfs, sdcompat init --boot-only-s6=yes) in
+# Boot the s6 initramfs (dist/initramfs, uinitconverter init --boot-only-s6=yes) in
 # QEMU, unprivileged: a LUKS2 disk with a btrfs root in subvol=root, opened
 # with a passphrase typed on the serial console.
 #
@@ -14,12 +14,12 @@ TOP=$(cd "$(dirname "$0")/.." && pwd)
 W=${1:?usage: tests/initramfs.sh WORKDIR [KVER]}
 KVER=${2:-$(uname -r)}
 KERNEL=/boot/vmlinuz-$KVER
-PASS=sdcompat-test
+PASS=uinitconverter-test
 MK=$TOP/dist/initramfs/mkinitramfs
 CONSOLE=$TOP/tests/qemu-console.py
-export SDCOMPAT_INITRAMFS_PATH=${MDEVD_BIN:+$MDEVD_BIN:}/usr/bin:/usr/sbin
-# The test's own module list, not this host's /etc/sdcompat one.
-export SDCOMPAT_INITRAMFS_MODULES=/dev/null
+export UINITCONVERTER_INITRAMFS_PATH=${MDEVD_BIN:+$MDEVD_BIN:}/usr/bin:/usr/sbin
+# The test's own module list, not this host's /etc/uinitconverter one.
+export UINITCONVERTER_INITRAMFS_MODULES=/dev/null
 
 [ -r "$KERNEL" ] || { echo "$KERNEL not readable" >&2; exit 1; }
 rm -rf "$W"
@@ -144,7 +144,7 @@ boot "rd.break: shell before switching, then boots" \
     "$cmdline testarg rd.break" "${disk[@]}" -- \
     "wait:Enter passphrase" "sleep:1" "send:$PASS" "wait:rd.break: shell" "send:exit" "wait:$result"
 boot "no disk: times out into the rescue shell" \
-    "$cmdline sdcompat.initrd.timeout=2" -- \
+    "$cmdline uinitconverter.initrd.timeout=2" -- \
     "wait:LUKS device UUID=$luks not found" "wait:rescue shell" "send:echo o >/proc/sysrq-trigger"
 
 echo

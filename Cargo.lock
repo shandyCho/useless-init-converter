@@ -341,107 +341,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
-name = "sdcompat"
-version = "0.1.0"
-dependencies = [
- "libc",
- "sdcompat-version",
-]
-
-[[package]]
-name = "sdcompat-base"
-version = "0.1.0"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "sdcompat-client"
-version = "0.1.0"
-dependencies = [
- "sdcompat-base",
- "serde",
- "tokio",
- "zbus",
-]
-
-[[package]]
-name = "sdcompat-exec"
-version = "0.1.0"
-dependencies = [
- "libc",
- "sdcompat-base",
-]
-
-[[package]]
-name = "sdcompat-gen"
-version = "0.1.0"
-dependencies = [
- "libc",
- "sdcompat-base",
- "sdcompat-client",
- "sdcompat-install",
- "sdcompat-version",
- "tokio",
- "zbus",
-]
-
-[[package]]
-name = "sdcompat-install"
-version = "0.1.0"
-dependencies = [
- "libc",
- "sdcompat-base",
-]
-
-[[package]]
-name = "sdcompat-runner"
-version = "0.1.0"
-dependencies = [
- "libc",
- "sdcompat-base",
- "sdcompat-client",
- "sdcompat-exec",
- "sdcompat-install",
- "sdcompat-version",
- "tokio",
- "zbus",
-]
-
-[[package]]
-name = "sdcompat-timers"
-version = "0.1.0"
-dependencies = [
- "libc",
- "sdcompat-base",
- "sdcompat-client",
- "sdcompat-version",
- "tokio",
- "zbus",
-]
-
-[[package]]
-name = "sdcompat-version"
-version = "0.1.0"
-
-[[package]]
-name = "sdcompatd"
-version = "0.1.0"
-dependencies = [
- "futures-util",
- "libc",
- "sdcompat-base",
- "sdcompat-client",
- "sdcompat-exec",
- "sdcompat-gen",
- "sdcompat-install",
- "sdcompat-version",
- "serde",
- "tokio",
- "zbus",
-]
-
-[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -641,6 +540,107 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys",
+]
+
+[[package]]
+name = "uinitconverter"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "uinitconverter-version",
+]
+
+[[package]]
+name = "uinitconverter-base"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "uinitconverter-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tokio",
+ "uinitconverter-base",
+ "zbus",
+]
+
+[[package]]
+name = "uinitconverter-exec"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "uinitconverter-base",
+]
+
+[[package]]
+name = "uinitconverter-gen"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tokio",
+ "uinitconverter-base",
+ "uinitconverter-client",
+ "uinitconverter-install",
+ "uinitconverter-version",
+ "zbus",
+]
+
+[[package]]
+name = "uinitconverter-install"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "uinitconverter-base",
+]
+
+[[package]]
+name = "uinitconverter-runner"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tokio",
+ "uinitconverter-base",
+ "uinitconverter-client",
+ "uinitconverter-exec",
+ "uinitconverter-install",
+ "uinitconverter-version",
+ "zbus",
+]
+
+[[package]]
+name = "uinitconverter-timers"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tokio",
+ "uinitconverter-base",
+ "uinitconverter-client",
+ "uinitconverter-version",
+ "zbus",
+]
+
+[[package]]
+name = "uinitconverter-version"
+version = "0.1.0"
+
+[[package]]
+name = "uinitconverterd"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "libc",
+ "serde",
+ "tokio",
+ "uinitconverter-base",
+ "uinitconverter-client",
+ "uinitconverter-exec",
+ "uinitconverter-gen",
+ "uinitconverter-install",
+ "uinitconverter-version",
+ "zbus",
 ]
 
 [[package]]

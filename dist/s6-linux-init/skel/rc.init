@@ -1,25 +1,25 @@
 #!/bin/sh -e
-# s6-linux-init stage 2 for sdcompat (install into your s6-linux-init skel
+# s6-linux-init stage 2 for uinitconverter (install into your s6-linux-init skel
 # directory, then run s6-linux-init-maker).
 rl="$1"
 shift
 
-# The initramfs mounts / read-only; the database lives in /var/lib/sdcompat.
+# The initramfs mounts / read-only; the database lives in /var/lib/uinitconverter.
 mount -o remount,rw / || true
 
-# The boot database is the set sdcompat (or `s6 live install`) installed
+# The boot database is the set uinitconverter (or `s6 live install`) installed
 # last; nothing is regenerated here. Unit files changed while the system
 # was down (e.g. from a systemd boot) are picked up by the next
-# `systemctl daemon-reload` or `sdcompat reload`.
+# `systemctl daemon-reload` or `uinitconverter reload`.
 # Kernel command line option:
-#   sdcompat.db=previous   boot the database installed before the last one
-db=/var/lib/sdcompat/compiled
+#   uinitconverter.db=previous   boot the database installed before the last one
+db=/var/lib/uinitconverter/compiled
 for opt in $(cat /proc/cmdline); do
     case $opt in
-        sdcompat.db=previous) db=/var/lib/sdcompat/compiled.previous ;;
+        uinitconverter.db=previous) db=/var/lib/uinitconverter/compiled.previous ;;
     esac
 done
-[ -e "$db" ] || db=/var/lib/sdcompat/compiled
+[ -e "$db" ] || db=/var/lib/uinitconverter/compiled
 
 s6-rc-init -c "$db" -l /run/s6-rc /run/service
 

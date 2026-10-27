@@ -66,5 +66,5 @@ Headers, shared library links and pkg-config files for s6-rc.
 %{_libdir}/pkgconfig/*.pc
 
 %changelog
-* Sun Oct 18 2026 sdcompat - 0.7.0.0-1
+* Sun Oct 18 2026 uinitconverter - 0.7.0.0-1
 - Initial package

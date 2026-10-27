@@ -58,5 +58,5 @@ directory needed to build skarnet.org software.
 %{_libdir}/skalibs/
 
 %changelog
-* Sun Oct 18 2026 sdcompat - 2.15.1.0-1
+* Sun Oct 18 2026 uinitconverter - 2.15.1.0-1
 - Initial package

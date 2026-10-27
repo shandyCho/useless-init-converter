@@ -1,0 +1,9 @@
+[package]
+name = "uinitconverter-install"
+version.workspace = true
+edition.workspace = true
+description = "enable/disable/mask/preset: unit file installation state, as systemctl does it"
+
+[dependencies]
+uinitconverter-base.workspace = true
+libc.workspace = true

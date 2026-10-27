@@ -22,7 +22,7 @@ else
 fi
 [ -S "$SB/private" ] || { echo "sandbox not running (tests/sandbox.sh)" >&2; exit 1; }
 
-BIND=${TMPDIR:-/tmp}/sdcompat-ns-$(id -u)
+BIND=${TMPDIR:-/tmp}/uinitconverter-ns-$(id -u)
 mkdir -p "$BIND"
 
 exec unshare -rm --propagation private sh -c '

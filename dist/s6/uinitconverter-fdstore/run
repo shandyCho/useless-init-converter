@@ -1,0 +1,17 @@
+#!/bin/sh
+# Holds FDSTORE= fds and listening sockets apart from uinitconverterd, so they
+# survive its restarts. uinitconverter-fdstore is a separate, optional project:
+# without it, report ready and idle; uinitconverterd then holds the fds itself.
+bin=/usr/libexec/uinitconverter/uinitconverter-fdstore
+if [ ! -x "$bin" ]; then
+    echo "uinitconverter-fdstore is not installed; uinitconverterd holds the fds" >&2
+    echo >&3
+    exec sleep infinity
+fi
+# Where uinitconverterd and the runner look for it: RUN_DIR/fdstore.
+run_dir=$(
+    # shellcheck disable=SC1091
+    . /etc/uinitconverter/uinitconverter.conf 2>/dev/null
+    echo "${RUN_DIR:-/run/uinitconverter}"
+)
+exec "$bin" --socket "${run_dir:-/run/uinitconverter}/fdstore" --ready-fd 3

@@ -1,4 +1,4 @@
-# Fedora에서 sdcompat 시험하기
+# Fedora에서 uinitconverter 시험하기
 
 [English](TESTING-us.md) | **한국어**
 
@@ -13,7 +13,7 @@ PID 1로 두고 Fedora의 GNOME 세션을 띄우는 것까지 다룹니다. 단�
 | 2. s6 RPM 빌드 | 예 (dnf) | 패키지 7개 설치 | 10분 |
 | 3. 샌드박스 테스트 | 아니요 | 없음 | 5분 |
 | 4. 변환 미리보기 | 예 (읽기 전용) | 없음 | 2분 |
-| 5. 설치 | 예 | sdcompat RPM 설치, 부팅 항목, `/etc/sdcompat` 추가 | 15분 |
+| 5. 설치 | 예 | uinitconverter RPM 설치, 부팅 항목, `/etc/uinitconverter` 추가 | 15분 |
 | 6. s6로 부팅 | 예 | 새 항목으로 부팅 | 15분 |
 
 ## 0. 시작하기 전에
@@ -48,7 +48,7 @@ git log -1 --oneline               # 보고할 때 쓸 커밋 해시를 적어 �
 sudo dnf install -y gcc make rpm-build cpio cargo rust dbus-daemon python3
 ```
 
-전체 의존성 목록은 [README.md](README.md#의존성)에 있습니다. sdcompat은 libpam,
+전체 의존성 목록은 [README.md](README.md#의존성)에 있습니다. uinitconverter은 libpam,
 libselinux, libseccomp를 링크하지 않고 실행 중에 불러옵니다. Fedora Workstation에는
 이미 있지만, 네 개가 모두 설치되어 있는지 확인하세요.
 
@@ -100,13 +100,13 @@ tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 정상이며 실패가 아닙니다.
 - `SKIP transient scope (needs a writable cgroup …)`. cgroup을 만들려면 root가 필요합니다.
 - `Call failed: Job type reload is not applicable …`. 오류가 제대로 반환되는지 확인하는 검사입니다.
-- `tests/sandbox.sh`가 출력하는 `sdcompat[bad.service]: ExecStart=/bin/sh failed: exit status 1`.
+- `tests/sandbox.sh`가 출력하는 `uinitconverter[bad.service]: ExecStart=/bin/sh failed: exit status 1`.
   `bad.service`는 의존성 처리를 검사하려고 일부러 실패하게 만든 유닛입니다.
 
 **데이터베이스를 다시 불러올 때의 `Broken pipe`:** 부하가 걸린 기계에서는
 `daemon.log`에 `s6-rc-update: fatal: unable to manage new service directories in …:
-Broken pipe`와 그 뒤에 `sdcompat: relinked …` 줄이 보일 수 있습니다. s6 2.15.1.1의
-s6-ftrigrd 버그이고, sdcompat이 고친 뒤 다시 시도하므로 검사는 통과해야 합니다. 그런데도
+Broken pipe`와 그 뒤에 `uinitconverter: relinked …` 줄이 보일 수 있습니다. s6 2.15.1.1의
+s6-ftrigrd 버그이고, uinitconverter이 고친 뒤 다시 시도하므로 검사는 통과해야 합니다. 그런데도
 `hello.service: expected active/running, got inactive/dead` 같은 실패가 줄지어 나오면
 `daemon.log`와 함께 알려 주세요.
 
@@ -115,16 +115,16 @@ s6-ftrigrd 버그이고, sdcompat이 고친 뒤 다시 시도하므로 검사는
 
 `JOURNAL=no` 설치(journald 대신 서비스별 s6-log)를 시험하려면 샌드박스를
 `SANDBOX_JOURNAL=no tests/sandbox.sh ~/sdc`로 띄우세요. 그러면 `check.sh`는 서비스 출력을
-journal 스트림 대신 `~/sdc/logs/` 아래에서 확인하고, `sdcompat-journal-relay`로 native 메시지와
+journal 스트림 대신 `~/sdc/logs/` 아래에서 확인하고, `uinitconverter-journal-relay`로 native 메시지와
 스트림 메시지를 보내 봅니다(소켓은 `$XDG_RUNTIME_DIR/sdc-test/jrelay`, 받은 내용은 대역 `/dev/log`가
 같은 곳의 `devlog.out`에 씁니다).
 
-sdcompat의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-update`를 직접 실행해도
+uinitconverter의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-update`를 직접 실행해도
 `init_t`로 돕니다(`sudo s6 live install`이 동작하는 이유입니다). `init_t`는 샌드박스의 파일을 열
 수 없으므로, `sandbox.sh`는 `s6-rc-update`와 `s6-rc-format-upgrade`를 `WORKDIR/bin`에 복사하고
 (복사본은 그 디렉터리의 레이블을 가집니다), 두 스크립트 모두 그 디렉터리를 `PATH` 맨 앞에 둡니다.
 
-본체가 독립 도구 `sdcompat-fdstore` 없이 동작하는지 보려면 `SANDBOX_FDSTORE=no`를 앞에 붙여
+본체가 독립 도구 `uinitconverter-fdstore` 없이 동작하는지 보려면 `SANDBOX_FDSTORE=no`를 앞에 붙여
 `sandbox.sh`와 `check.sh`를 실행하세요. 그러면 데몬이 fd를 직접 보관하므로, 데몬을 다시 시작한
 뒤 fd가 사라졌는지를 확인합니다. 독립 도구는 `tests/sandbox.sh`가 `standalone/`에서 빌드합니다.
 
@@ -145,7 +145,7 @@ tests/collect-diagnostics.sh ~/sdc
 
 cgroup BPF 프로그램(`DevicePolicy=`, `IPAddressDeny=`)은 root 권한으로만 커널에서
 확인할 수 있습니다. 이 테스트 하나는 sudo 암호를 묻고, 임시 cgroup
-`/sys/fs/cgroup/sdcompat-bpf-test-PID`를 쓴 뒤 지우며, 어떤 유닛도 건드리지 않습니다:
+`/sys/fs/cgroup/uinitconverter-bpf-test-PID`를 쓴 뒤 지우며, 어떤 유닛도 건드리지 않습니다:
 
 ```sh
 tests/bpf-root.sh
@@ -155,13 +155,13 @@ tests/bpf-root.sh
 
 ## 4. 변환 미리보기 (읽기 전용)
 
-아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 sdcompat이 어떻게 변환할지 보여줍니다.
+아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 uinitconverter이 어떻게 변환할지 보여줍니다.
 
 ```sh
 cargo build --release
-sudo ./target/release/sdcompat plan > ~/sdcompat-plan.txt
-head -3 ~/sdcompat-plan.txt
-grep -A3 -E '^(gdm|NetworkManager|systemd-logind|chronyd|accounts-daemon)\.service ' ~/sdcompat-plan.txt
+sudo ./target/release/uinitconverter plan > ~/uinitconverter-plan.txt
+head -3 ~/uinitconverter-plan.txt
+grep -A3 -E '^(gdm|NetworkManager|systemd-logind|chronyd|accounts-daemon)\.service ' ~/uinitconverter-plan.txt
 ```
 
 확인할 것:
@@ -171,13 +171,13 @@ grep -A3 -E '^(gdm|NetworkManager|systemd-logind|chronyd|accounts-daemon)\.servi
 
 ## 5. 설치 (먼저 VM 스냅샷을 찍으세요)
 
-이 체크아웃으로 sdcompat RPM을 빌드해 설치합니다(빌드에는 root가 필요 없습니다).
+이 체크아웃으로 uinitconverter RPM을 빌드해 설치합니다(빌드에는 root가 필요 없습니다).
 
 ```sh
 packages/build-rpms.sh
 for b in standalone/*/build-rpm.sh; do "$b"; done
-sudo dnf install ~/rpmbuild-sdcompat/rpms/*.rpm ~/rpmbuild-sdcompat-standalone/rpms/*.rpm
-sdcompat --version                    # 본체 도구가 모두 같은 빌드인지
+sudo dnf install ~/rpmbuild-uinitconverter/rpms/*.rpm ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm
+uinitconverter --version                    # 본체 도구가 모두 같은 빌드인지
 ```
 
 (GitHub 릴리스의 패키지를 쓴다면, 한 릴리스의 `.rpm` 파일과 `SHA256SUMS`를 빈 디렉터리에
@@ -187,15 +187,15 @@ sdcompat --version                    # 본체 도구가 모두 같은 빌드인
 패키지를 설치해도 부팅은 아직 바뀌지 않습니다. 미리 본 뒤 부팅을 설정합니다.
 
 ```sh
-sdcompat init --dry-run
-sudo sdcompat init
+uinitconverter init --dry-run
+sudo uinitconverter init
 ```
 
 미리 보기는 실행할 명령을 모두 출력하고, 끝에 `Dry run: nothing was changed. To apply this,
-run:`과 적용할 명령(`sudo sdcompat init`, 옵션을 주었다면 같은 옵션)을 보여줍니다. 바뀌는 것은
+run:`과 적용할 명령(`sudo uinitconverter init`, 옵션을 주었다면 같은 옵션)을 보여줍니다. 바뀌는 것은
 없습니다. 빠진 패키지가 있으면 그 전에 `sudo dnf install ...`을 안내하고 끝납니다.
 
-`sdcompat init`은 계획을 보여주고, 무엇이든 바꾸기 전에 확인을 받습니다. **"Fedora (s6 + sdcompat)"**
+`uinitconverter init`은 계획을 보여주고, 무엇이든 바꾸기 전에 확인을 받습니다. **"Fedora (s6 + uinitconverter)"**
 부팅 항목을 추가하고 일반 systemd 부팅을 기본값으로 둡니다(s6 부팅이 잘 되면 `--default-s6`으로
 기본값으로 만들 수 있습니다. 이 문서 끝을 보세요). 이 항목은 SELinux를
 permissive 모드로 부팅합니다.
@@ -203,8 +203,8 @@ permissive 모드로 부팅합니다.
 결과 확인:
 
 ```sh
-sudo ls /boot/loader/entries/ | grep sdcompat         # 새 부팅 항목
-head -3 /var/lib/sdcompat/current/report.txt       # 변환 요약
+sudo ls /boot/loader/entries/ | grep uinitconverter         # 새 부팅 항목
+head -3 /var/lib/uinitconverter/current/report.txt       # 변환 요약
 ```
 
 ## 6. s6로 부팅하기
@@ -213,7 +213,7 @@ head -3 /var/lib/sdcompat/current/report.txt       # 변환 요약
 sudo reboot
 ```
 
-GRUB 메뉴에서 **Fedora (s6 + sdcompat) …**를 고르세요. 스플래시 화면 대신 텍스트 부팅
+GRUB 메뉴에서 **Fedora (s6 + uinitconverter) …**를 고르세요. 스플래시 화면 대신 텍스트 부팅
 메시지가 보이고, 이어서 GDM 로그인 화면이 나옵니다.
 
 **LUKS로 암호화했다면** s6 항목은 plymouth를 끄기 때문에, 비밀번호 입력란이 부팅 메시지
@@ -230,14 +230,14 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | s6가 PID 1 | `cat /proc/1/comm` | `s6-svscan` |
 | SELinux 도메인 | `ps -eZ \| grep -E ' (s6-svscan\|chronyd\|gdm\|systemd-logind)$'` | `init_t`, `chronyd_t`, `xdm_t`, `systemd_logind_t` (`unconfined_service_t`가 아님) |
 | SELinux 거부 | `sudo ausearch -m AVC -ts boot \| audit2allow` | 없는 것이 좋습니다. 있으면 출력을 보내 주세요 |
-| D-Bus 호출자의 SELinux 검사 | `sudo runcon -r system_r -t insights_core_t -- env systemctl show -p Version`, 그다음 `sudo runcon -r system_r -t insights_core_t -- env systemctl daemon-reload`, 그다음 `sudo grep -E 'SELinux access check\|avc: +denied' /run/uncaught-logs/current` | 두 명령 모두 아무것도 출력하지 않습니다. insights_core_t는 터미널에 쓸 수 없으므로(`user_devpts_t`에 대한 규칙 없음) 결과는 grep으로 봅니다. AVC의 `avc:  denied  { reload } … tclass=system permissive=0`과, 그다음 별도 줄에 `sdcompatd: SELinux access check … perm=reload state=enforcing function=Reload`가 나옵니다(두 번째 명령은 root로 실행해도 systemd에서처럼 거부됨). 첫 명령에 대한 줄은 없고(그 도메인에는 `status`가 허용됨), 평소 사용에서 생긴 다른 줄도 없습니다(있으면 보내 주세요) |
+| D-Bus 호출자의 SELinux 검사 | `sudo runcon -r system_r -t insights_core_t -- env systemctl show -p Version`, 그다음 `sudo runcon -r system_r -t insights_core_t -- env systemctl daemon-reload`, 그다음 `sudo grep -E 'SELinux access check\|avc: +denied' /run/uncaught-logs/current` | 두 명령 모두 아무것도 출력하지 않습니다. insights_core_t는 터미널에 쓸 수 없으므로(`user_devpts_t`에 대한 규칙 없음) 결과는 grep으로 봅니다. AVC의 `avc:  denied  { reload } … tclass=system permissive=0`과, 그다음 별도 줄에 `uinitconverterd: SELinux access check … perm=reload state=enforcing function=Reload`가 나옵니다(두 번째 명령은 root로 실행해도 systemd에서처럼 거부됨). 첫 명령에 대한 줄은 없고(그 도메인에는 `status`가 허용됨), 평소 사용에서 생긴 다른 줄도 없습니다(있으면 보내 주세요) |
 | 디스패처 스크립트의 출력(`--journal=no`일 때만) | 재부팅 후 `sudo ausearch -m AVC -ts boot \| grep NetworkManager_dispatcher` | 아무것도 없음(전에는 s6-log 파이프에 쓰기가 거부됨) |
 | fwupd | `fwupdmgr get-devices` | 장치 목록(fwupd가 시스템 콜 필터를 켠 채 시작됩니다) |
-| 바쁜 러너 없음 | `top -b -n1 -o %CPU \| head -15` | CPU를 100 % 가까이 쓰는 `sdcompat` 프로세스가 없습니다 |
+| 바쁜 러너 없음 | `top -b -n1 -o %CPU \| head -15` | CPU를 100 % 가까이 쓰는 `uinitconverter` 프로세스가 없습니다 |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (몇 초 간격으로 두 번) | `up (pid …) N seconds`, N이 늘어납니다(재시작하지 않음) |
 | 무선 상태(rfkill) | GNOME 설정에서 블루투스를 끄고 s6 항목으로 재부팅한 뒤 `rfkill`과 `s6-rc -a list \| grep -x rfkill` | 재부팅 뒤에도 블루투스가 `blocked`. `rfkill`이 나옵니다(systemd-rfkill이 아니라 oneshot) |
-| reload 감시 | `sudo s6-svstat /run/service/sdcompat-linkwatch`와 `sudo grep -h sdcompat-linkwatch /run/uncaught-logs/current` | `up (pid …)`. 로그 줄은 reload가 멈췄을 때만 나옵니다(`… sent its start event`) |
-| reload 감시가 기다림을 풀어 줌 | `sudo tests/linkwatch-check.sh` (30초쯤 걸립니다. /run/sdcompat/lwtest에 임시 supervisor를 만들고 끝나면 지웁니다) | `ok:` 다섯 줄과 종료 코드 0: s6-rc-update라는 이름으로 기다리는 쪽이 10초쯤 뒤 놓친 시작 이벤트를 받고, 일반 s6-ftrig-wait는 시간 초과되며, linkwatch가 보낸 것을 로그에 남기고, 거부가 없습니다 |
+| reload 감시 | `sudo s6-svstat /run/service/uinitconverter-linkwatch`와 `sudo grep -h uinitconverter-linkwatch /run/uncaught-logs/current` | `up (pid …)`. 로그 줄은 reload가 멈췄을 때만 나옵니다(`… sent its start event`) |
+| reload 감시가 기다림을 풀어 줌 | `sudo tests/linkwatch-check.sh` (30초쯤 걸립니다. /run/uinitconverter/lwtest에 임시 supervisor를 만들고 끝나면 지웁니다) | `ok:` 다섯 줄과 종료 코드 0: s6-rc-update라는 이름으로 기다리는 쪽이 10초쯤 뒤 놓친 시작 이벤트를 받고, 일반 s6-ftrig-wait는 시간 초과되며, linkwatch가 보낸 것을 로그에 남기고, 거부가 없습니다 |
 | 패키지 업데이트 시 재시작 | `systemctl show -p MainPID chronyd`, 이어서 `sudo dnf reinstall -y chrony`, 그다음 첫 명령을 다시 | MainPID가 바뀝니다(업데이트가 chronyd에 needs-restart를 표시하고 `systemctl enqueue-marked`가 재시작합니다) |
 | 패키지 업데이트 시 사용자 매니저 | `sudo systemctl --user -M $USER@ is-system-running`, 이어서 `sudo /usr/lib/systemd/systemd-update-helper user-reload-restart; echo $?` | `running` 또는 `degraded`(`systemd-run --pipe`를 거쳐 도달), 그다음 `0` |
 | 공유 마운트 전파 | `findmnt -no PROPAGATION /` | `shared`(systemd와 같습니다. `private`이면 나중에 한 마운트, 예를 들어 USB 메모리가 유닛·flatpak 앱·컨테이너에 보이지 않습니다) |
@@ -251,11 +251,11 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | s6 세트 | `s6 set status gdm.service sshd.service dbus` | `gdm.service/active`, `sshd.service/usable`(sshd를 활성화하지 않았다면), `dbus/always` |
 | 부팅할 것은 s6 세트가 정함 | `sudo s6 set disable -p chronyd.service`, `sudo systemctl daemon-reload`, `s6 set status chronyd.service`, s6로 재부팅, `systemctl is-active chronyd.service`. 그다음 `sudo s6 set enable chronyd.service`, `sudo systemctl daemon-reload` | reload 후 `chronyd.service/usable`과 `chronyd.service.log/usable`(`s6 set status chronyd.service chronyd.service.log`), `systemctl is-enabled chronyd.service`는 `disabled`. 재부팅 후 `inactive`. enable과 reload 후에는 둘 다 `active`, `enabled` |
 | 셸에서 `s6 live install` | `sudo s6 set commit --no-snapshot && sudo s6 live install --no-snapshot`, 그다음 `ls -Z /run/service \| awk '{print $1}' \| sort \| uniq -c`와 `sudo ausearch -m AVC -ts recent` | 명령이 끝나고, 링크는 `tmpfs_t` 또는 `init_var_run_t`이며 `user_tmp_t`는 없고, 거부(denial)도 없음 |
-| 이전 종료 | s6에서 전원을 끄고 다시 s6로 부팅한 뒤 `sudo ls -l /var/log/sdcompat/last-shutdown-*.log; sudo grep -ci denied /var/log/sdcompat/last-shutdown-*.log` | 두 파일 모두 전원을 끈 시각의 것이고 거부(denied)는 `0`입니다(아니면 파일을 보내 주세요). 전원 끄기가 25초 이상이 아니라 몇 초 걸렸고, 콘솔 로그가 비어 있지 않으며 `unable to rename`, `Failed to activate service ... timed out`, `sdcompatd: stopping ... took`이 없고, 커널 로그에 `services still not down after 180 s`가 없습니다 |
+| 이전 종료 | s6에서 전원을 끄고 다시 s6로 부팅한 뒤 `sudo ls -l /var/log/uinitconverter/last-shutdown-*.log; sudo grep -ci denied /var/log/uinitconverter/last-shutdown-*.log` | 두 파일 모두 전원을 끈 시각의 것이고 거부(denied)는 `0`입니다(아니면 파일을 보내 주세요). 전원 끄기가 25초 이상이 아니라 몇 초 걸렸고, 콘솔 로그가 비어 있지 않으며 `unable to rename`, `Failed to activate service ... timed out`, `uinitconverterd: stopping ... took`이 없고, 커널 로그에 `services still not down after 180 s`가 없습니다 |
 | longrun의 ExecStop= | `printf '[Service]\nExecStart=/bin/sleep infinity\nExecStop=/bin/sh -c "echo stop $$MAINPID >> /var/tmp/sdc-stop.log"\n' \| sudo tee /etc/systemd/system/sdc-stoptest.service; sudo systemctl daemon-reload; sudo systemctl start sdc-stoptest; sleep 2; s6 live status sdc-stoptest.service.stop; sudo s6 live stop sdc-stoptest.service; cat /var/tmp/sdc-stop.log`. 그다음 `sudo systemctl start sdc-stoptest`, 전원을 끄고 다시 s6로 부팅해 `cat /var/tmp/sdc-stop.log`. 끝나면 `sudo rm /etc/systemd/system/sdc-stoptest.service /var/tmp/sdc-stop.log; sudo systemctl daemon-reload` | `sdc-stoptest.service.stop`이 올라와 있습니다. `s6 live stop` 뒤에 `stop PID` 줄이 하나, 전원을 끈 뒤 하나가 더 있습니다. 이전 종료 항목도 그대로 맞습니다 |
 | 버스와 userdb 레이블 | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t`와 `systemd_userdbd_runtime_t` |
-| catch-all fifo 레이블 | `ls -Z /run/service/s6-svscan-log/fifo`와 `sudo ausearch -m AVC -ts boot \| grep s6-svscan-log/fifo` | `sdcompat_log_fifo_t`이고, 이 fifo에 대한 거부가 없음 (`initctl_t`이면 서비스의 stderr가 /dev/null로 바뀜) |
-| 셸에서 기다리기 | 재부팅 후 `ls -dZ /run/service/s6-svscan-log/event /run/service/sdcompatd/event`; `sudo s6-svc -wR -T 30000 -r /run/service/sdcompatd`; `sudo ausearch -m AVC -ts recent \| grep ftrig` | 둘 다 `init_var_run_t`; s6-svc가 바로 0으로 끝남; 거부 없음 (`tmpfs_t`이면 기다리는 쪽의 fifo가 `user_tmp_t`가 되어 s6-supervise가 쓰지 못하고 기다림이 시간 초과됨) |
+| catch-all fifo 레이블 | `ls -Z /run/service/s6-svscan-log/fifo`와 `sudo ausearch -m AVC -ts boot \| grep s6-svscan-log/fifo` | `uinitconverter_log_fifo_t`이고, 이 fifo에 대한 거부가 없음 (`initctl_t`이면 서비스의 stderr가 /dev/null로 바뀜) |
+| 셸에서 기다리기 | 재부팅 후 `ls -dZ /run/service/s6-svscan-log/event /run/service/uinitconverterd/event`; `sudo s6-svc -wR -T 30000 -r /run/service/uinitconverterd`; `sudo ausearch -m AVC -ts recent \| grep ftrig` | 둘 다 `init_var_run_t`; s6-svc가 바로 0으로 끝남; 거부 없음 (`tmpfs_t`이면 기다리는 쪽의 fifo가 `user_tmp_t`가 되어 s6-supervise가 쓰지 못하고 기다림이 시간 초과됨) |
 | 전체 상태 | `systemctl is-system-running` | `running` (`degraded`도 괜찮습니다. 다음 줄 참고) |
 | 실패한 유닛 | `systemctl --failed` | 없는 것이 좋습니다. 있으면 적어 두세요 |
 | 저널 | `journalctl -b \| head` | 이번 부팅의 로그 |
@@ -285,11 +285,11 @@ sudo tests/collect-diagnostics.sh
 sudo tests/memcompare.sh snap        # 부팅 후 5분이 될 때까지 기다립니다
 ```
 
-실행할 때마다 `~/sdcompat-mem/mem-<s6|systemd>-<날짜>.tsv`가 생깁니다. 그다음
+실행할 때마다 `~/uinitconverter-mem/mem-<s6|systemd>-<날짜>.tsv`가 생깁니다. 그다음
 어느 부팅에서든:
 
 ```sh
-tests/memcompare.sh compare ~/sdcompat-mem/mem-systemd-*.tsv ~/sdcompat-mem/mem-s6-*.tsv
+tests/memcompare.sh compare ~/uinitconverter-mem/mem-systemd-*.tsv ~/uinitconverter-mem/mem-s6-*.tsv
 ```
 
 시스템 전체 수치(`free`와 같은 방식), 그룹별 메모리(init과 감독, 로그, 사용자
@@ -307,11 +307,11 @@ PSS(공유 페이지를 쓰는 프로세스들에 나눠 계산한 값)를 비�
    ```
 2. 최신 s6 데이터베이스가 문제라면, 재부팅해서 GRUB의 s6 항목에서 **e**를 누르고
    `linux` 줄에 다음 중 하나를 추가하세요.
-   - `sdcompat.db=previous`는 마지막 것 이전에 설치된 데이터베이스로 부팅합니다.
+   - `uinitconverter.db=previous`는 마지막 것 이전에 설치된 데이터베이스로 부팅합니다.
 3. 빠져나오려면 재부팅해서 일반 Fedora 항목을 고르세요. journald가 실행됐었다면 실패한
-   s6 부팅의 로그를 `journalctl -b -1`로 볼 수 있습니다. sdcompat 자신의 메시지(데몬,
+   s6 부팅의 로그를 `journalctl -b -1`로 볼 수 있습니다. uinitconverter 자신의 메시지(데몬,
    그리고 PAM 세션이나 exec 실패 같은 러너의 오류)도 그곳에 남습니다:
-   `journalctl -b -1 -t sdcompatd -t sdcompat`.
+   `journalctl -b -1 -t uinitconverterd -t uinitconverter`.
 4. 들어갈 수 있는 부팅에서 `sudo tests/collect-diagnostics.sh`를 실행하고 압축 파일을
    보내 주세요. 복구 콘솔만 쓸 수 있다면 `/run/uncaught-logs/current`를 보내 주세요.
 
@@ -324,22 +324,22 @@ cd useless-init-converter
 git pull
 packages/build-rpms.sh
 for b in standalone/*/build-rpm.sh; do "$b"; done
-sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm ~/rpmbuild-sdcompat-standalone/rpms/*.rpm
-sudo sdcompat init --yes
+sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm
+sudo uinitconverter init --yes
 ```
 
-(GitHub 릴리스에서는 다음 릴리스의 파일을 받아 `sudo dnf upgrade ./*.rpm` 다음 `sudo sdcompat init --yes`.)
+(GitHub 릴리스에서는 다음 릴리스의 파일을 받아 `sudo dnf upgrade ./*.rpm` 다음 `sudo uinitconverter init --yes`.)
 
-`sdcompat init`을 다시 실행해도 안전합니다. `/etc/sdcompat` 설정과 지난 실행의 선택은
+`uinitconverter init`을 다시 실행해도 안전합니다. `/etc/uinitconverter` 설정과 지난 실행의 선택은
 그대로 두고, 데이터베이스, s6-linux-init 트리, 부팅 항목을 다시 만들며, 바꾸는 파일은
-백업합니다. `/etc/sdcompat/s6`의 s6 서비스는 패키지 소유입니다. dnf가 고치지 않은 것은
+백업합니다. `/etc/uinitconverter/s6`의 s6 서비스는 패키지 소유입니다. dnf가 고치지 않은 것은
 새 버전으로 바꾸고, 고친 파일은 그대로 두며 새 버전을 옆에 `파일.rpmnew`로 남기니 직접
-합치세요. s6로 부팅한 상태에서 실행하면 init이 sdcompatd를 재시작해서 재부팅 없이 새
-바이너리가 동작합니다(sdcompat-fdstore와 journal-relay는 다음 부팅까지 이전 바이너리를
+합치세요. s6로 부팅한 상태에서 실행하면 init이 uinitconverterd를 재시작해서 재부팅 없이 새
+바이너리가 동작합니다(uinitconverter-fdstore와 journal-relay는 다음 부팅까지 이전 바이너리를
 씁니다). SELinux 정책 모듈도 다시 불러옵니다. 불러와졌는지 확인하세요.
 
 ```sh
-sudo semodule -l | grep -x sdcompat
+sudo semodule -l | grep -x uinitconverter
 ```
 
 업데이트에서 `dist/skarnet.versions`나 `dist/rpm/`이 바뀌었다면 먼저 s6 패키지를 다시 빌드해
@@ -353,24 +353,24 @@ s6 부팅이 잘 되면(위의 확인 항목을 통과하고, 가능하면 enfor
 만드세요(init은 다른 선택을 유지합니다).
 
 ```sh
-sudo sdcompat init --selinux=enforcing --default-s6
+sudo uinitconverter init --selinux=enforcing --default-s6
 ```
 
 확인:
 
 | 항목 | 명령 | 기대 결과 |
 |---|---|---|
-| 기본값 | `sudo grubby --info=DEFAULT \| grep title` | `title="Fedora (s6 + sdcompat) <커널>"` |
-| 선택이 유지됨 | `cat /etc/sdcompat/boot-default` | `s6` |
+| 기본값 | `sudo grubby --info=DEFAULT \| grep title` | `title="Fedora (s6 + uinitconverter) <커널>"` |
+| 선택이 유지됨 | `cat /etc/uinitconverter/boot-default` | `s6` |
 | 부팅됨 | 메뉴를 건드리지 않고 재부팅, `cat /proc/1/comm` | `s6-svscan` |
 | 커널 업데이트 후 | `sudo dnf upgrade kernel*`, 그다음 첫 줄을 다시 | 새 커널의 s6 항목 |
 
 systemd 항목으로 한 번만 부팅하려면 GRUB이 시작할 때 Shift를 누르고 있거나 Esc를 눌러 고르세요.
-systemd를 다시 기본값으로 하려면 `sudo sdcompat init --default-systemd`를 실행하세요.
+systemd를 다시 기본값으로 하려면 `sudo uinitconverter init --default-systemd`를 실행하세요.
 
 ## systemd 없이 부팅하기
 
-`--boot-only-s6=yes`는 s6 항목에 sdcompat의 initramfs를 줍니다. s6-svscan이 그 PID 1이고 mdevd가
+`--boot-only-s6=yes`는 s6 항목에 uinitconverter의 initramfs를 줍니다. s6-svscan이 그 PID 1이고 mdevd가
 드라이버를 로드하므로, initramfs에서도 systemd가 실행되지 않습니다. LUKS 루트는 암호를 입력해
 열어야 합니다.
 
@@ -389,13 +389,13 @@ btrfs 루트를 `subvol=root`에 둔 LUKS2 디스크를 만들고, 실행 중인
 그다음 머신에서:
 
 ```sh
-sudo sdcompat init --boot-only-s6=yes
+sudo uinitconverter init --boot-only-s6=yes
 ```
 
 | 항목 | 명령 | 기대 결과 |
 |---|---|---|
 | 이미지 | `ls -l /boot/initramfs-*-s6.img` | 설치된 커널마다 하나, 방금 만들어짐 |
-| 항목이 그것을 씀 | `sudo sh -c 'grep ^initrd /boot/loader/entries/*~sdcompat.conf'` | `initramfs-<커널>-s6.img`. systemd 항목은 `initramfs-<커널>.img` 그대로 |
+| 항목이 그것을 씀 | `sudo sh -c 'grep ^initrd /boot/loader/entries/*~uinitconverter.conf'` | `initramfs-<커널>-s6.img`. systemd 항목은 `initramfs-<커널>.img` 그대로 |
 | 암호 입력 | s6 항목으로 부팅 | 평범한 `Enter passphrase for /dev/nvme…:` 프롬프트, 입력 뒤 부팅이 계속됨 |
 | systemd가 실행되지 않음 | `sudo dmesg \| grep -E 'Run /init\|systemd\[1\]\|running in initrd'` | `Run /init as init process`만 나옴 |
 | PID 1 | `cat /proc/1/comm` | `s6-svscan` |
@@ -407,21 +407,21 @@ sudo sdcompat init --boot-only-s6=yes
 암호 프롬프트가 나오지 않거나 디스크를 찾지 못하면 콘솔에 복구 셸이 열립니다. `dmesg`, `ls /dev`,
 `cat /proc/cmdline`으로 무엇이 없는지 보세요(결과를 보내 주세요). Fedora의 initramfs로 한 번만
 부팅하려면 s6 항목에서 `e`를 눌러 `initramfs-<커널>-s6.img`를 `initramfs-<커널>.img`로 바꾸세요.
-완전히 되돌리려면 `sudo sdcompat init --boot-only-s6=no`를 실행하세요.
+완전히 되돌리려면 `sudo uinitconverter init --boot-only-s6=no`를 실행하세요.
 
 ## 제거하기
 
 일반 Fedora 항목으로 부팅한 뒤:
 
 ```sh
-sudo sdcompat init --uninstall
-sudo dnf remove sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd \
-    sdcompat-fdstore sdcompat-notify sdcompat-journal-relay sdcompat-linkwatch
+sudo uinitconverter init --uninstall
+sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd \
+    uinitconverter-fdstore uinitconverter-notify uinitconverter-journal-relay uinitconverter-linkwatch
 sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd \
     skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel
 ```
 
-`/etc/sdcompat`, `/var/lib/sdcompat`, 활성화한 유닛은 남습니다. systemd 부팅에서는 아무
+`/etc/uinitconverter`, `/var/lib/uinitconverter`, 활성화한 유닛은 남습니다. systemd 부팅에서는 아무
 영향이 없습니다.
 
 ## 문제 보고하기

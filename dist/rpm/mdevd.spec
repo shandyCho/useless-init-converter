@@ -14,8 +14,8 @@ BuildRequires:  skalibs-devel
 
 %description
 mdevd is a small daemon managing kernel hotplug events, similarly to udevd,
-with the configuration file format of busybox's mdev. sdcompat's s6
-initramfs (sdcompat init --boot-only-s6=yes) uses it to load drivers.
+with the configuration file format of busybox's mdev. uinitconverter's s6
+initramfs (uinitconverter init --boot-only-s6=yes) uses it to load drivers.
 
 %prep
 %autosetup
@@ -53,5 +53,5 @@ rm -rf %{buildroot}%{_includedir}/mdevd
 %{_bindir}/mdevd-coldplug
 
 %changelog
-* Sun Oct 25 2026 sdcompat - 0.1.8.2-1
+* Sun Oct 25 2026 uinitconverter - 0.1.8.2-1
 - Initial package
