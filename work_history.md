@@ -7217,3 +7217,130 @@ became a snapshot service.
    `tail /var/lib/uinitconverter-memtest/log`, `sudo ausearch -m AVC -ts
    boot | grep memtest`.
 2. Earlier next steps from part 36 (on-demand services on a real boot).
+
+## 2026-10-27, part 38: dbus-broker as the s6 system bus — study and sandbox mode (e3c8c9c)
+
+The owner asked about replacing dbus-daemon on the s6 boot, suggesting a
+"standalone dbus-broker". Findings (from dbus-broker v37's source and the
+binaries):
+
+- `dbus-broker` (the broker) doesn't link libsystemd; activation goes to
+  its controller over a private fd (`org.bus1.DBus.Controller`).
+  `dbus-broker-launch` links libsystemd and needs a systemd *API*, not
+  systemd: `Subscribe`, `LoadUnit` (then `PropertiesChanged` on the unit
+  for `ActiveState=failed`/`ConditionResult=false`), `StartUnit` or
+  `StartTransientUnit("dbus-:1.N-NAME@K.service", ExecStart a(sasb),
+  KillMode=process, CollectMode, User=)`, `JobRemoved` (done/skipped =
+  ok), `SetEnvironment`. Also a listening socket via LISTEN_FDS and
+  /run/systemd/journal/socket (fatal if missing).
+- Options considered: keep dbus-daemon; dbus-broker + stock launcher on
+  uinitconverterd's systemd1 emulation (chosen to try: Fedora's default
+  bus, fits decision 1); own controller for the bare broker (fallback:
+  must translate the dbus-1 XML policy); busd (alpha, no activation:
+  rejected).
+- Checked on our side: LoadUnit returns a path for a not-yet-existing
+  unit (needed, or every transient activation fails); StartUnit replies
+  before JobRemoved with the same job path. The launcher connects to the
+  bus before dropping to `dbus`, so the bus reports uid 0 and no polkit
+  query happens (would deadlock: polkit is bus-activated). It ignores
+  activation of org.freedesktop.systemd1, so calls made before
+  uinitconverterd joins wait in the broker (sd-bus 25 s timeout).
+- Known gap (same with dbus-daemon today): a generated s6-rc unit that
+  fails after its job finished emits no PropertiesChanged, so callers
+  wait for their own timeout.
+
+Change (e3c8c9c): `SANDBOX_BUS=broker` in tests/sandbox.sh runs
+`dbus-broker-launch --scope system` in `unshare -U --map-current-user -m
+--keep-caps` (same uid, so peer credentials stay real) with a tmpfs /run,
+/run/user bound back, and a stand-in journal bound at
+/run/systemd/journal (journal-relay's dir with SANDBOX_JOURNAL=no, else a
+sink writing broker-journal.log); a python binder passes the socket as fd
+3 (needs set_inheritable: the socket often already is fd 3). Setup exits
+with the launcher's log if it dies. New activation services in both
+modes: org.example.Trans (no SystemdService=; broker mode also checks a
+running dbus-*-org.example.Trans@N.service via ListUnits) and
+org.example.Fail (failact.service fails; the caller must get an error in
+under 10 s). TESTING/TESTING-us document SANDBOX_BUS.
+
+Tests: shellcheck/bash -n; default 274/274, SANDBOX_BUS=broker 275/275,
+SANDBOX_BUS=broker SANDBOX_JOURNAL=no 282/282 (launcher's "Ready" reached
+the stand-in /dev/log through the relay). Not run: cargo test (no Rust
+change). Not tested: a real s6 boot with dbus-broker, SELinux enforcing.
+
+### Next steps (dbus-broker)
+
+1. Owner: decide whether to make the s6 system bus selectable.
+2. If yes: dist/s6/dbus run script choosing broker/daemon by a setting
+   (keep dbus-daemon installed as the fallback; rollback without editing
+   files, e.g. a kernel command-line flag); depend on journald or
+   journal-relay; socket binding + LISTEN_FDS/LISTEN_PID + restorecon;
+   readiness via sd_notify; `dbus` reload as a ReloadConfig call.
+3. Then a real s6 boot in enforcing mode (`ausearch -m AVC -ts boot`).
+
+## 2026-10-27, part 39: selectable system bus on the s6 boot (ff59ab0)
+
+The owner decided: make the s6 system bus selectable (part 38, step 1).
+
+- `BUS=daemon|broker` in uinitconverter.conf (default daemon, so existing
+  installs don't change), set by `uinitconverter init --bus=` (marker "#
+  set by uinitconverter init --bus=broker"; daemon removes the line);
+  `uinitconverter.bus=daemon|broker` on the kernel command line wins for
+  one boot. config.rs accepts the key (the run script reads it). init's
+  plan shows a D-Bus line; next steps list the kernel flag; --bus=broker
+  requires dbus-broker-launch.
+- dist/s6/dbus/run, broker: `s6-softlimit -o 16384
+  s6-ipcserver-socketbinder -a 0666 /run/dbus/system_bus_socket sh -c
+  'echo >&3; export LISTEN_FDS=1 LISTEN_PID=$$; exec dbus-broker-launch
+  --scope system --audit 3<&0 </dev/null'`, oom_score_adj -900 (as
+  dbus-broker.service). Ready once the socket is bound: clients wait in
+  its backlog, as with dbus.socket. The supervised PID is the launcher, so
+  `s6-svc -h` reloads it (it also watches its config dirs itself, so no
+  reload work was needed: risk 3 of part 38 is void).
+- Fallbacks to dbus-daemon (risk 5, no boot without a bus): dbus-broker
+  not installed; /run/systemd/journal/socket missing after 10 s (journald
+  with JOURNAL=yes is a generated service started beside dbus, so no
+  static dependency is possible; journal-relay is in sysinit with
+  JOURNAL=no); a 4th start in this boot (/run/uinitconverter/dbus-broker-tries,
+  so three launcher exits). The reason goes to the catch-all log ("dbus:
+  dbus-daemon instead of dbus-broker: ..."). dbus-daemon stays a Requires.
+- SELinux: s6-ipcserver-socketbinder (s6 2.15) creates PATH.lock while
+  binding (not passed on to the program). Fedora's policy lets init_t
+  create the socket in system_dbusd_var_run_t but no file there (sesearch:
+  pidfile:file has no create/write), so enforcing would deny it and the
+  broker would never start. cil: named typetransition for
+  "system_bus_socket.lock" to init_var_run_t. Not compiled here (no root
+  to read the policy store); same form as the existing "event" rule.
+- Tested: the broker branch of a path-substituted copy under a real
+  s6-supervise in the sandbox namespace with the real launcher (own config
+  instead of --audit and the system config's <user>dbus</user>): s6-svwait
+  -U ready, socket 0666, bus answers, supervised PID = launcher with
+  LISTEN_FDS=1 and its own LISTEN_PID, launcher log on the journal socket.
+  With a fake dbus-daemon: kernel flag daemon over BUS=broker, the 4th try,
+  dbus-broker missing, and (by accident, in the first attempt) the missing
+  journal socket all fall back with their message. cargo test (75 + 2
+  ignored), standalone tests, shellcheck/bash -n, sandbox daemon 274/274,
+  broker 275/275, broker + SANDBOX_JOURNAL=no 282/282.
+- Test mistake, no harm: one fallback case run outside the namespace found
+  the host's journal socket and started a real launcher on the test
+  config; stopped by its command line (the host's buses untouched). Note:
+  `pgrep -x dbus-broker-launch` never matches (name over 15 characters).
+- Docs: README/README-us (--bus row, BUS key, kernel flag, activation
+  through the broker, replaced-components rows), TESTING/TESTING-us boot
+  check row "System bus (only with --bus=broker)", uinitconverter.conf.
+
+### Current state
+
+The s6 boot runs dbus-daemon unless BUS=broker. Not tested: a real s6
+boot with BUS=broker, permissive or enforcing; loading the new cil rule.
+
+### Next steps
+
+1. Owner: build the RPMs, install, `sudo uinitconverter init --bus=broker`
+   (semodule -i loads the new rule), boot s6 permissive; TESTING row
+   "System bus"; `sudo ausearch -m AVC -ts boot | grep -E 'dbus|socketbinder'`;
+   GNOME login, `busctl --system list`, a bus-activated service (e.g.
+   `busctl --system introspect org.freedesktop.hostname1 /org/freedesktop/hostname1`).
+2. Then enforcing. If the bus fails, boot with `uinitconverter.bus=daemon`.
+3. Known gap (both buses): a generated unit that fails after its start job
+   sends no PropertiesChanged, so activation callers wait for their own
+   timeout.
