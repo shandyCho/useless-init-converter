@@ -6829,10 +6829,14 @@ installed now are unchanged. COPR source RPMs (all 16) in
 
 ### Current state
 
-Committed. The installed RPMs (ga365750) still have the old message; the
-RPMs in ~/rpmbuild-sdcompat/rpms and ~/sdcompat-srpms were not rebuilt.
+Committed. The 5 core RPMs were rebuilt from 4db6aef (clean, release
+1.20261027091952.g4db6aef) in ~/rpmbuild-sdcompat/rpms (build-rpms.sh exit
+0, with the spec's %check; the new /usr/bin/sdcompat has the dry-run
+message). The installed ones are still ga365750. The standalone and skarnet
+RPMs are unchanged. ~/sdcompat-srpms was not rebuilt (still a365750).
 
 ### Next steps
 
-As in part 26 (rebuild the RPMs/SRPMs first if this fix should be in them),
-then `sudo sdcompat init` on this machine.
+1. Owner: `sudo dnf upgrade ~/rpmbuild-sdcompat/rpms/*.rpm`, then
+   `sdcompat init --dry-run` and `sudo sdcompat init`, and part 26's checks.
+2. Rerun `packages/copr-srpms.sh` before uploading to COPR.
