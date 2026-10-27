@@ -7075,3 +7075,93 @@ Everything else matched the code.
    --selinux=enforcing`; boot s6; TESTING "Swap (zram)" row; `sudo
    ausearch -m AVC -ts boot | grep zram`.
 2. Then the memory comparison (tests/memcompare.sh snap on both boots).
+
+## 2026-10-27, part 35: memory comparison redone (no code change)
+
+Snapshots: ~/uinitconverter-mem/mem-systemd-20261027-173018.tsv (up 580 s)
+and mem-s6-20261027-173624.tsv (up 338 s; zram0 8G prio 100 active, so
+6d331a2 works on a real s6 boot). The uptimes differ by 4 min, so Cached
+is not comparable.
+
+- "used" gap +210.8 → +78.6 MiB; total − available now −17.4 MiB (s6
+  slightly better). Most of the 2026-10-21 gap was packagekitd (100 MiB,
+  transient) and no swap, not the init.
+- init group +65.7 MiB PSS: 256 s6-supervise (32.3), 37 uinitconverter-*
+  helpers (35.1: 23 runners, 9 timers, linkwatch, journal-relay, fdstore),
+  uinitconverterd 7.6. Logging −36.5 (no journald).
+- Services running on s6 that are idle/socket-activated on systemd:
+  iscsid+iscsiuio 14.2, virtnetworkd/virtlogd/virtlockd 13.4 (and other
+  virt*d under 0.5 each), dmeventd 2.4, dnsmasq 1.0 — about 31 MiB.
+  dbus-daemon (6.1) is the s6 system bus instead of dbus-broker (−5.1).
+- Kernel side from 458 vs 114 user processes: PageTables +17.8,
+  SUnreclaim +20.0, KernelStack +6.6.
+
+### Next steps
+
+Unchanged from part 34, except the memory comparison is done; owner to
+decide whether the eagerly started socket-activated services matter.
+
+## 2026-10-27, part 36: on-demand socket activation at boot (f930166)
+
+Owner asked for socket activation after part 35 (~31 MiB of
+socket-activated daemons ran on the s6 boot only).
+
+- Rule (gen, `mark_on_demand`): a longrun service with sockets is on
+  demand when the boot reaches it only through .socket dependencies
+  (`Planned::socket_deps`: deps resolved from a .socket name and not also
+  by name). Walk from default.target following only units that really
+  start: what an on-demand service requires doesn't count (iscsiuio
+  Requires=iscsid; systemd starts neither at boot). Its run script gets
+  `--on-demand`; `plan` prints "on demand". Dynamic instances: never.
+- Runner: `run --on-demand` without ACTIVATED and without
+  START_REQUESTED binds the sockets (`bind_sockets`, split out of
+  setup_listen_fds), and if the fd store holds them sets SOCKET_WAIT and
+  takes the existing wait path (ready for s6, unit inactive). Store
+  unreachable or bind error: starts at once. Leaving the wait also starts
+  (detached StartUnit, `start_units_detached`, shared with OnFailure=) the
+  Requires/BindsTo/Wants that are themselves in SOCKET_WAIT.
+- Keys: ACTIVATED (set when the run proceeds to start, cleared by finish
+  when wanted down) so Restart=/`systemctl restart`/s6-rc-update don't
+  wait again; START_REQUESTED (daemon, do_start for a longrun, before
+  s6-rc/s6-svc), so a job's start runs at once without the 1 s
+  wake_socket_wait delay. A leftover START_REQUESTED (job that didn't run
+  it) only makes a later run start at once.
+- First version gated candidates on uinitconverter-fdstore being an
+  extra s6-rc source; the sandbox runs the store outside s6-rc, so nothing
+  was marked. Dropped: the runner's fallback covers a missing store.
+- On this machine's units (current config, `uinitconverter-gen plan`): 16
+  on demand: cups, dm-event, iscsid, iscsiuio, lvm2-lvmpolld, sssd-kcm,
+  systemd-hostnamed, virtinterfaced, virtlockd, virtlogd, virtnetworkd,
+  virtnodedevd, virtnwfilterd, virtproxyd, virtsecretd, virtstoraged.
+  cups still runs once cups.path sees its file (path-run starts it, as
+  systemd). Each waiting service keeps its runner process (0.2-2 MiB PSS
+  seen in part 35), so the saving is less than the daemons' 31 MiB.
+- Not changed (README "Not implemented"): starting a .socket at run time
+  still starts its service at once; requirements of an on-demand service
+  that are not on demand still start at boot (s6-rc deps); `systemctl
+  stop` still closes the sockets.
+- Sandbox: it had no sockets.target, so enabled sockets never booted;
+  added (multi-user Wants=). sock.service is now on demand at boot (checks
+  in "boot state"); new lazy.socket/lazy.service (Requires=lazydep) and
+  lazydep.socket/.service: not run at boot, a connect starts both, restart
+  and start-after-stop run at once. The fd store inode check restarts
+  sock.service once first (SANDBOX_FDSTORE=no: bound at boot before the
+  daemon served the store). FDSTORE=no expects the fallback.
+- Mistake: a heredoc around Python code containing `EOF` lines ended
+  early and ran the rest as shell; only failing writes to / and unknown
+  functions, nothing changed (git status checked).
+- Tests: `cargo test` all pass (gen 6, new
+  socket_only_services_are_on_demand); standalone 3/3/3/2; sandbox
+  272/272, SANDBOX_FDSTORE=no 260/260, SANDBOX_JOURNAL=no 279/279;
+  bash -n and shellcheck -S warning pass. Not tested: a real s6 boot.
+- Docs: README pair (enabled .socket, on-demand activation, not
+  implemented), TESTING pair row "On-demand services".
+
+### Next steps
+
+1. Owner: rebuild and install the RPMs, `sudo uinitconverter reload`,
+   reboot into s6; TESTING row "On-demand services"; `uinitconverter plan
+   | grep -B1 'on demand'`; check printing (cups), hostnamectl, virt-manager
+   or `virsh` with a VM, LVM (`lvs`, dmeventd monitoring).
+2. Then `sudo tests/memcompare.sh snap` again on s6 (same uptime as the
+   systemd snapshot, ~580 s: `--wait 580`) and compare.
