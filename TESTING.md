@@ -48,7 +48,7 @@ git log -1 --oneline               # 보고할 때 쓸 커밋 해시를 적어 �
 sudo dnf install -y gcc make rpm-build cpio cargo rust dbus-daemon python3
 ```
 
-전체 의존성 목록은 [README.md](README.md#의존성)에 있습니다. uinitconverter은 libpam,
+전체 의존성 목록은 [README.md](README.md#의존성)에 있습니다. uinitconverter는 libpam,
 libselinux, libseccomp를 링크하지 않고 실행 중에 불러옵니다. Fedora Workstation에는
 이미 있지만, 네 개가 모두 설치되어 있는지 확인하세요.
 
@@ -106,7 +106,7 @@ tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 **데이터베이스를 다시 불러올 때의 `Broken pipe`:** 부하가 걸린 기계에서는
 `daemon.log`에 `s6-rc-update: fatal: unable to manage new service directories in …:
 Broken pipe`와 그 뒤에 `uinitconverter: relinked …` 줄이 보일 수 있습니다. s6 2.15.1.1의
-s6-ftrigrd 버그이고, uinitconverter이 고친 뒤 다시 시도하므로 검사는 통과해야 합니다. 그런데도
+s6-ftrigrd 버그이고, uinitconverter가 고친 뒤 다시 시도하므로 검사는 통과해야 합니다. 그런데도
 `hello.service: expected active/running, got inactive/dead` 같은 실패가 줄지어 나오면
 `daemon.log`와 함께 알려 주세요.
 
@@ -155,7 +155,7 @@ tests/bpf-root.sh
 
 ## 4. 변환 미리보기 (읽기 전용)
 
-아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 uinitconverter이 어떻게 변환할지 보여줍니다.
+아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 uinitconverter가 어떻게 변환할지 보여줍니다.
 
 ```sh
 cargo build --release
@@ -329,6 +329,11 @@ sudo uinitconverter init --yes
 ```
 
 (GitHub 릴리스에서는 다음 릴리스의 파일을 받아 `sudo dnf upgrade ./*.rpm` 다음 `sudo uinitconverter init --yes`.)
+
+프로젝트 이름이 바뀌기 전의 설치(sdcompat 패키지, `/etc/sdcompat`)는 이렇게 업데이트할 수
+없습니다. [packages/README.md](packages/README.md#sdcompat에서-옮겨-오기)의 "sdcompat에서
+옮겨 오기"대로 지운 뒤 uinitconverter를 새로 설치하세요. 예전 클론은 `git pull`로 계속 쓸 수
+있고(GitHub이 예전 저장소 이름을 새 이름으로 넘겨 줍니다), 디렉터리 이름만 예전 그대로입니다.
 
 `uinitconverter init`을 다시 실행해도 안전합니다. `/etc/uinitconverter` 설정과 지난 실행의 선택은
 그대로 두고, 데이터베이스, s6-linux-init 트리, 부팅 항목을 다시 만들며, 바꾸는 파일은

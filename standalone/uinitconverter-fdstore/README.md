@@ -40,7 +40,7 @@ uinitconverter-fdstore [--socket PATH] [--ready-fd N]
 root와, 서버를 실행한 사용자만 쓸 수 있고, SELinux에서는 서버와 같은 도메인의
 상대만 쓸 수 있습니다(uinitconverter에서는 유일한 클라이언트인 uinitconverterd와 러너의 도메인
 `init_t`. 제한된 root 데몬 상당수가 `init_t`의 소켓에 연결할 수 있기 때문입니다).
-uinitconverter과 함께 쓸 때는
+uinitconverter와 함께 쓸 때는
 `/etc/uinitconverter/s6/uinitconverter-fdstore` s6 서비스가 이것을 실행합니다. 이 도구가
 없으면 그 서비스는 아무것도 하지 않고, uinitconverterd가 fd를 직접 보관합니다.
 

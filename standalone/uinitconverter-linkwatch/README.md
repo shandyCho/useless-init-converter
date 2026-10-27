@@ -49,7 +49,7 @@ RPM: `./build-rpm.sh [OUTDIR]`가 `uinitconverter-linkwatch.spec`을 `~/rpmbuild
 빌드합니다(sudo 불필요. 빌드할 때마다 릴리스가 새로워져 `sudo dnf upgrade`로
 올릴 수 있습니다). 설치는 `sudo dnf install ~/rpmbuild-uinitconverter-standalone/rpms/uinitconverter-linkwatch-*.rpm`입니다. `./build-rpm.sh --srpm`은
 다른 곳에서 다시 빌드할(`rpmbuild --rebuild`, mock) 소스 RPM만 만듭니다.
-uinitconverter은 이것을 s6 서비스 `uinitconverter-linkwatch`로 실행합니다(도구가 설치되지
+uinitconverter는 이것을 s6 서비스 `uinitconverter-linkwatch`로 실행합니다(도구가 설치되지
 않았으면 아무 일도 하지 않습니다).
 
 ## 실행

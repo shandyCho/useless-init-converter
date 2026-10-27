@@ -39,7 +39,7 @@ uinitconverter-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
 - `--syslog PATH`: 넘길 syslog 소켓(기본값 `/dev/log`).
 - `--ready-fd N`: 소켓을 연 뒤 fd N에 줄바꿈을 씁니다(s6의 준비 완료 알림).
 
-journald가 도는 시스템에서는 실행하지 마세요(같은 소켓을 씁니다). uinitconverter을
+journald가 도는 시스템에서는 실행하지 마세요(같은 소켓을 씁니다). uinitconverter를
 `JOURNAL=no`로 설치하면 `journal-relay` s6 서비스가 이것을 실행하며, 이때는 꼭
 설치되어 있어야 합니다(`uinitconverter init --journal=no`가 확인합니다).
 

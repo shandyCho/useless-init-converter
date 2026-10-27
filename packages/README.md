@@ -15,13 +15,13 @@
 | `uinitconverter-gen` | `uinitconverter-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (생성된 서비스가 실행) |
 | `uinitconverter` | `uinitconverter` 명령(부팅 설정 `uinitconverter init` 포함), `early`, 설정, s6 서비스, s6-linux-init 골격, SELinux 모듈, kernel-install 플러그인, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, 그리고 위의 네 패키지 |
 
-- `dnf install uinitconverter`이면 전부 설치됩니다. 부팅에 필요한 설정과 SELinux 모듈은
+- `dnf install uinitconverter`로 전부 설치됩니다. 부팅에 필요한 설정과 SELinux 모듈은
   `uinitconverter` 패키지에 있으므로, s6로 부팅하려면 이 패키지가 있어야 합니다.
 - 도구 패키지는 따로 업데이트할 수 있습니다. 같은 버전끼리만 맞도록
   (`= 버전-릴리스`) 묶여 있습니다.
 - 독립 도구(`standalone/`)는 여기에 없습니다. 각 디렉터리에 자기 spec과
   `build-rpm.sh`(결과: `~/rpmbuild-uinitconverter-standalone/rpms`)가 있고,
-  `uinitconverter`은 이들을 `Recommends`/`Suggests`로만 가리킵니다.
+  `uinitconverter`는 이들을 `Recommends`/`Suggests`로만 가리킵니다.
 
 ## 빌드
 

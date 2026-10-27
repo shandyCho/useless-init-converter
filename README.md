@@ -5,7 +5,7 @@
 명령, 패키지, 경로의 이름은 `uinitconverter`입니다(`uinitconverter init`, `/etc/uinitconverter`, RPM 패키지).
 
 s6를 위한 systemd 호환 계층입니다. Fedora는 **s6-linux-init + s6-rc**가 실행하고,
-관리는 s6 자체의 도구(`s6`, s6-rc의 저장소와 세트)로 합니다. uinitconverter은 Fedora의 유닛
+관리는 s6 자체의 도구(`s6`, s6-rc의 저장소와 세트)로 합니다. uinitconverter는 Fedora의 유닛
 파일을 s6-rc 서비스로 변환하고, 그것이 필요한 프로그램을 위해 `systemctl`, libsystemd,
 D-Bus 클라이언트가 계속 동작하게 합니다.
 
@@ -25,11 +25,11 @@ D-Bus 클라이언트가 계속 동작하게 합니다.
 ```
 
 라이브러리를 바꿔치기하는 방식이 아니라 프로토콜 수준에서 동작합니다. 진짜
-`systemctl`과 `libsystemd`가 systemd와 대화하듯 그대로 uinitconverter과 대화합니다.
+`systemctl`과 `libsystemd`가 systemd와 대화하듯 그대로 uinitconverter와 대화합니다.
 
 ## 구성 요소
 
-uinitconverter은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공간 하나(`crates/`)로,
+uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공간 하나(`crates/`)로,
 서로 함께 동작하며 서로에게 의존할 수 있습니다. **독립 도구**(`standalone/`)는
 각각 별도의 프로젝트로, 혼자 빌드·설치·실행되고, 본체는 이것들 없이도 동작합니다.
 
@@ -90,7 +90,7 @@ uinitconverter은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 
 **실패 처리 방식.** s6-rc에는 약한(soft) 의존성이 없습니다. 번들에 의존한다는 것은
 그 안의 모든 서비스에 의존한다는 뜻이므로, 원하기만 한(wanted) 유닛 하나가 실패해도
-그 뒤에 오는 모든 것이 멈춥니다. 그래서 uinitconverter은 s6-rc를 순서 결정에만 씁니다.
+그 뒤에 오는 모든 것이 멈춥니다. 그래서 uinitconverter는 s6-rc를 순서 결정에만 씁니다.
 - 모든 시작은 s6-rc에 성공으로 보고하고, 실제 결과(`failed`, `timeout` 등)는 따로 기록합니다.
 - `Requires=`, `BindsTo=`, `Requisite=` 대상이 실패한 유닛은 시작하지 않으며, systemd처럼 작업 결과는 `dependency`가 됩니다.
 - 유닛을 시작하면 실패했던 필수 유닛을 다시 시도하고, 이전에 조건 때문에 건너뛴 유닛은 조건을 다시 확인합니다.
@@ -175,7 +175,7 @@ uinitconverter은 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | policycoreutils, policycoreutils-python-utils | SELinux 모듈용 `restorecon`, `semodule`. `uinitconverter init`용 `semanage` |
 | grubby | 부팅 항목(`uinitconverter init`) |
 
-**실행 중에 불러오는 라이브러리 (권장).** uinitconverter이 `dlopen()`으로 불러오므로
+**실행 중에 불러오는 라이브러리 (권장).** uinitconverter가 `dlopen()`으로 불러오므로
 빌드에는 필요 없습니다. 없으면 해당 기능만 빠집니다:
 
 | 라이브러리 (Fedora 패키지) | 없을 때 |
@@ -312,7 +312,7 @@ uinitconverter RPM을 직접 빌드할 수도 있습니다(`packages/build-rpms.
 | `--boot-only-s6=yes\|no` | `yes`: s6 항목을 Fedora의 initramfs 대신 uinitconverter의 initramfs로 부팅해 systemd가 전혀 실행되지 않게 합니다(아래 참고, `mdevd` 필요) / `no`: Fedora의 것으로 되돌립니다 |
 | `--default-s6` / `--default-systemd` | s6 항목을 기본 부팅 항목으로 합니다(나중에 설치되는 커널에도) / systemd 항목을 다시 기본값으로 합니다. 어느 쪽이든 systemd 항목은 메뉴에 남습니다 |
 | `--grub=no` | 부팅 항목을 추가하거나 고치지 않습니다 |
-| `--uninstall` | 부팅 항목, s6 initramfs 이미지, `/etc/s6-linux-init/current`, (init이 썼다면) `/etc/s6.conf`, 부팅 설정을 지웁니다. `/etc/uinitconverter`은 남깁니다. 그다음 패키지를 `dnf remove`하세요 |
+| `--uninstall` | 부팅 항목, s6 initramfs 이미지, `/etc/s6-linux-init/current`, (init이 썼다면) `/etc/s6.conf`, 부팅 설정을 지웁니다. `/etc/uinitconverter`는 남깁니다. 그다음 패키지를 `dnf remove`하세요 |
 
 빠진 옵션은 지난 실행의 선택을 유지합니다. `/etc/uinitconverter/uinitconverter.conf`의
 `JOURNAL=`/`RESOLVED=`, `/etc/uinitconverter/boot-options`의 SELinux 모드,
@@ -405,16 +405,16 @@ sudo uinitconverter --config /etc/uinitconverter/uinitconverter.conf plan | less
 ## GNOME과 사용자 매니저
 
 GNOME 49는 세션 전체를 사용자 서비스 매니저를 통해 시작하고, gnome-shell은 그 안의
-임시 scope에 애플리케이션을 배치합니다. 그래서 uinitconverter은 `systemd --user`를 다시
+임시 scope에 애플리케이션을 배치합니다. 그래서 uinitconverter는 `systemd --user`를 다시
 구현하지 않습니다. **진짜 사용자 매니저를 일반 감독 서비스로 실행**하고, logind와
 사용자 매니저가 쓰는 PID 1 API를 제공합니다. systemd는 여전히 PID 1이 아닙니다.
 로그인할 때 일어나는 일:
 
 1. GDM(또는 `login`)이 PAM 스택을 실행합니다. `pam_systemd`가 **systemd-logind**(Fedora 유닛에서 생성)에게 세션 생성을 요청합니다.
 2. logind가 PID 1, 즉 uinitconverter에게 `user-1000.slice`와 `session-N.scope` 생성(`PIDFDs`를 쓰는 `StartTransientUnit`)을 요청한 뒤, `user@1000.service` 시작을 요청합니다.
-3. uinitconverter이 `user@1000.service`를 그때 만듭니다. `BindsTo=user-runtime-dir@1000.service` 의존성이 먼저 실행됩니다. 러너가 `systemd-user` PAM 세션을 열고(`PAMName=`), `user.slice/user-1000.slice/user@1000.service`를 UID 1000에게 위임한 상태로 프로세스를 `init.scope`에 두며(`Delegate=`, `DelegateSubgroup=`), `/usr/lib/systemd/systemd --user`를 실행합니다. 준비 완료 신호는 `Type=notify-reload`로 받습니다.
+3. uinitconverter가 `user@1000.service`를 그때 만듭니다. `BindsTo=user-runtime-dir@1000.service` 의존성이 먼저 실행됩니다. 러너가 `systemd-user` PAM 세션을 열고(`PAMName=`), `user.slice/user-1000.slice/user@1000.service`를 UID 1000에게 위임한 상태로 프로세스를 `init.scope`에 두며(`Delegate=`, `DelegateSubgroup=`), `/usr/lib/systemd/systemd --user`를 실행합니다. 준비 완료 신호는 `Type=notify-reload`로 받습니다.
 4. 사용자 매니저가 세션 버스(dbus-broker 사용자 유닛)와 GNOME의 사용자 타깃을 시작합니다. 이 부분은 진짜 systemd이므로 세션 안에서 `systemctl --user`, `systemd-run --user`, 앱 scope가 모두 동작합니다.
-5. 로그아웃하면 logind가 scope를, 이어서 `user@1000.service`를 멈춥니다. GNOME 메뉴의 전원 끄기와 재시작은 logind를 거쳐 `poweroff.target` 또는 `reboot.target`을 시작하며, uinitconverter이 이에 맞는 종료 명령을 실행합니다.
+5. 로그아웃하면 logind가 scope를, 이어서 `user@1000.service`를 멈춥니다. GNOME 메뉴의 전원 끄기와 재시작은 logind를 거쳐 `poweroff.target` 또는 `reboot.target`을 시작하며, uinitconverter가 이에 맞는 종료 명령을 실행합니다.
 
 위 단계에 더해 할 설정:
 
@@ -485,8 +485,8 @@ cgroup을 만드는 `StartTransientUnit`, 진짜 logind와 `systemd --user`)은 
 - **`--no-snapshot`**: s6-rc 0.8.0.2의 `s6-rc-set-install`은 세트의 스냅샷을 끝에
   초기화되지 않은 바이트가 하나 남은 경로로 확인합니다(`s6rc_repo_setuptodate()`가 경로를
   한 바이트 늦게 끝냅니다). 그래서 이 옵션이 없으면 방금 커밋한 세트를 무작위로
-  "not up-to-date"라며 거부합니다. uinitconverter은 항상 이 옵션을 넘깁니다. 업스트림 버그이며,
-  uinitconverter은 skarnet의 소스를 패치하지 않습니다.
+  "not up-to-date"라며 거부합니다. uinitconverter는 항상 이 옵션을 넘깁니다. 업스트림 버그이며,
+  uinitconverter는 skarnet의 소스를 패치하지 않습니다.
 - **초기 부팅 서비스**는 스토어가 그렇다고 할 때(`flag-essential`, 또는 `uinitconverter init`이
   syslog, journal-relay, resolv에 대해 바꾸는 `uinitconverter-sysinit` 소속) 정확히 `always`입니다.
   세트가 옮기면 reload가 되돌립니다.

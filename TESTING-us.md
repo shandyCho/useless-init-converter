@@ -351,6 +351,13 @@ sudo uinitconverter init --yes
 
 (From a GitHub release: download the next release's files, `sudo dnf upgrade ./*.rpm`, then `sudo uinitconverter init --yes`.)
 
+An install from before the project was renamed (sdcompat packages,
+`/etc/sdcompat`) can't be upgraded this way: remove it and install
+uinitconverter as new, as described in "Moving from sdcompat" in
+[packages/README-us.md](packages/README-us.md#moving-from-sdcompat). An old
+clone still works after `git pull` (GitHub redirects the old repository
+name); its directory keeps the old name.
+
 Running `uinitconverter init` again is safe. It keeps your `/etc/uinitconverter`
 configuration and the choices of the last run, regenerates the database,
 the s6-linux-init tree and the boot entry, and backs up what it replaces.
