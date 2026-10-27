@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::loader::Unit;
+use crate::tools;
 use crate::util;
 
 /// Mount point of a .mount unit: Where=, or derived from the unit name.
@@ -93,7 +94,7 @@ pub fn mount_up(unit: &Unit) -> i32 {
             }
         }
     }
-    let mut cmd = Command::new("mount");
+    let mut cmd = Command::new(tools::path("mount"));
     if let Some(t) = unit.get("Mount", "Type") {
         cmd.arg("-t").arg(t);
     }
@@ -120,7 +121,7 @@ pub fn mount_down(unit: &Unit) -> i32 {
     if !is_mounted(&where_) {
         return 0;
     }
-    let mut cmd = Command::new("umount");
+    let mut cmd = Command::new(tools::path("umount"));
     if unit.get_bool("Mount", "LazyUnmount", false) {
         cmd.arg("-l");
     }
@@ -136,7 +137,7 @@ pub fn swap_up(unit: &Unit) -> i32 {
     if swap_active(&what) {
         return 0;
     }
-    let mut cmd = Command::new("swapon");
+    let mut cmd = Command::new(tools::path("swapon"));
     if let Some(p) = unit.get("Swap", "Priority") {
         cmd.arg("-p").arg(p);
     }
@@ -152,7 +153,7 @@ pub fn swap_down(unit: &Unit) -> i32 {
     if !swap_active(&what) {
         return 0;
     }
-    run(Command::new("swapoff").arg(&what))
+    run(Command::new(tools::path("swapoff")).arg(&what))
 }
 
 #[cfg(test)]

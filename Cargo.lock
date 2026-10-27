@@ -547,6 +547,7 @@ name = "uinitconverter"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "uinitconverter-base",
  "uinitconverter-version",
 ]
 

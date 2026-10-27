@@ -6,7 +6,7 @@ use std::process::exit;
 
 pub(crate) use uinitconverter_base::pathspec as pathunit;
 pub(crate) use uinitconverter_base::timerspec as timer;
-pub(crate) use uinitconverter_base::{config, envfile, fdstore, loader, mountunit, state, unit, util};
+pub(crate) use uinitconverter_base::{config, envfile, fdstore, loader, mountunit, state, tools, unit, util};
 pub(crate) use uinitconverter_exec::{cgroup, conditions, execcmd, socket};
 pub(crate) use uinitconverter_gen as gen;
 pub(crate) use uinitconverter_install as install;
@@ -113,7 +113,7 @@ fn log(cfg: &Config, rest: &[String]) -> ! {
     let follow = rest.iter().any(|a| a == "-f" || a == "--follow");
     let Some(unit) = rest.iter().find(|a| !a.starts_with('-')) else { die("usage: uinitconverterd log UNIT [-f]") };
     if cfg.journal {
-        let mut j = std::process::Command::new("journalctl");
+        let mut j = std::process::Command::new(tools::path("journalctl"));
         j.args(["-u", unit, "--no-pager"]);
         j.arg(if follow { "-f" } else { "-n200" });
         let err = std::os::unix::process::CommandExt::exec(&mut j);

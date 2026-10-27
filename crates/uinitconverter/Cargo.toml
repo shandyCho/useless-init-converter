@@ -5,5 +5,6 @@ edition.workspace = true
 description = "The uinitconverter command: runs the uinitconverter tool that handles a subcommand"
 
 [dependencies]
+uinitconverter-base.workspace = true
 uinitconverter-version.workspace = true
 libc.workspace = true

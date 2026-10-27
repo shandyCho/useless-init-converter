@@ -1002,6 +1002,9 @@ while [ $tries -gt 0 ] && ! $B call $MGR ListJobs | grep -qx 'a(usssoo) 0'; do t
 jobs=$($B call $MGR ListJobs)
 [ "$jobs" = "a(usssoo) 0" ] && ok "no job left" || bad "jobs left at the end: $jobs"
 report_damage "the end"
+# TOOLS= in the sandbox's config: the daemon's and runners' s6-svc calls
+# (restarts, stops above) ran the logging wrapper.
+[ -s "$W/tools-s6-svc.log" ] && ok "TOOLS= wrapper used for s6-svc" || bad "TOOLS=: s6-svc wrapper never ran"
 [ -s "$W/damage.seen" ] && bad "damage seen: $(tr '\n' ';' < "$W/damage.seen")" || ok "no damage at any section boundary"
 
 echo

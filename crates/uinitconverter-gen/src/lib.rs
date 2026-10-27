@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use uinitconverter_base::config::Config;
+use uinitconverter_base::tools;
 pub use uinitconverter_base::index::{stop_atom, unit_arg, Index, Kind};
 use uinitconverter_base::loader::{self, LoadState, Loader, Unit};
 use uinitconverter_base::util;
@@ -798,10 +799,11 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
                         fs::write(ldir.join("flag-recommended"), "")?;
                     }
                     let logdir = util::sh_quote(&log_dir.join(&p.id).display().to_string());
+                    let s6log = util::sh_quote(&tools::path("s6-log"));
                     write_file(
                         &ldir.join("run"),
                         &format!(
-                            "#!/bin/sh\nmkdir -p {logdir} || exit 1\nexec s6-log -d3 n10 s1000000 T {logdir}\n"
+                            "#!/bin/sh\nmkdir -p {logdir} || exit 1\nexec {s6log} -d3 n10 s1000000 T {logdir}\n"
                         ),
                         true,
                     )?;
@@ -984,17 +986,17 @@ fn repo_sync(cfg: &Config) -> Result<(), String> {
             if let Some(parent) = cfg.repo_dir.parent() {
                 fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
             }
-            run(Command::new("s6-rc-repo-init").arg("-r").arg(repo).args(&want))?;
+            run(Command::new(tools::path("s6-rc-repo-init")).arg("-r").arg(repo).args(&want))?;
         }
         Some(have) if have != want => {
-            run(Command::new("s6-rc-repo-init").arg("-r").arg(repo).arg("-U").args(&want))?;
+            run(Command::new(tools::path("s6-rc-repo-init")).arg("-r").arg(repo).arg("-U").args(&want))?;
         }
         Some(_) => {
-            run(Command::new("s6-rc-repo-sync").arg("-r").arg(repo))?;
+            run(Command::new(tools::path("s6-rc-repo-sync")).arg("-r").arg(repo))?;
         }
     }
     if !cfg.repo_dir.join("sources").join(&cfg.set_name).is_dir() {
-        run(Command::new("s6-rc-set-new").arg("-r").arg(repo).arg(&cfg.set_name))?;
+        run(Command::new(tools::path("s6-rc-set-new")).arg("-r").arg(repo).arg(&cfg.set_name))?;
     }
     Ok(())
 }
@@ -1031,7 +1033,7 @@ fn sync_essentials(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String
         if names.is_empty() {
             continue;
         }
-        run(Command::new("s6-rc-set-change")
+        run(Command::new(tools::path("s6-rc-set-change"))
             .arg("-r")
             .arg(&cfg.repo_dir)
             .arg("-e")
@@ -1073,7 +1075,7 @@ fn sync_loggers(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
         return Ok(());
     }
     idle.sort();
-    run(Command::new("s6-rc-set-change")
+    run(Command::new(tools::path("s6-rc-set-change"))
         .arg("-r")
         .arg(&cfg.repo_dir)
         .arg(&cfg.set_name)
@@ -1110,7 +1112,7 @@ fn sync_stop_atoms(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String
     }
     for (rx, mut names) in moves {
         names.sort();
-        run(Command::new("s6-rc-set-change")
+        run(Command::new(tools::path("s6-rc-set-change"))
             .arg("-r")
             .arg(&cfg.repo_dir)
             .arg(&cfg.set_name)
@@ -1127,7 +1129,7 @@ fn sync_stop_atoms(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String
 /// as usable, and the commit refuses an inconsistent set.
 fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>) -> Result<bool, String> {
     let repo = cfg.repo_dir.as_os_str();
-    let out = run(Command::new("s6-rc-set-fix").arg("-r").arg(repo).arg("-v2").arg("-u").arg(&cfg.set_name))?;
+    let out = run(Command::new(tools::path("s6-rc-set-fix")).arg("-r").arg(repo).arg("-v2").arg("-u").arg(&cfg.set_name))?;
     changes.extend(
         out.lines()
             .filter_map(|l| l.split_once("moving service ").map(|(_, r)| r.to_string())),
@@ -1138,7 +1140,7 @@ fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>
     // terminates the snapshot's path one byte too late (an uninitialized
     // byte is left in it), so with snapshots set-install randomly finds a
     // just-committed set "not up-to-date".
-    run(Command::new("s6-rc-set-commit")
+    run(Command::new(tools::path("s6-rc-set-commit"))
         .arg("-r")
         .arg(repo)
         .arg("--no-snapshot")
@@ -1149,7 +1151,7 @@ fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>
 
     let live = update_live && fs::symlink_metadata(cfg.live_dir.join("compiled")).is_ok();
     let install = |extra: &[&str]| -> Result<String, String> {
-        run(Command::new("s6-rc-set-install")
+        run(Command::new(tools::path("s6-rc-set-install"))
             .arg("-r")
             .arg(repo)
             .arg("-c")
@@ -1207,13 +1209,13 @@ fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>
             // failed update removed (see relink_supervised).
             relink_supervised(&cfg.live_dir);
         } else if let Ok(scan) = fs::canonicalize(cfg.live_dir.join("scandir")) {
-            let _ = Command::new("s6-svscanctl").arg("-an").arg(scan).status();
+            let _ = Command::new(tools::path("s6-svscanctl")).arg("-an").arg(scan).status();
         }
         std::thread::sleep(std::time::Duration::from_millis(500 * attempt));
         let live_db = fs::canonicalize(cfg.live_dir.join("compiled")).ok();
         res = match &copy {
             Some((name, path)) if live_db.is_some() && live_db == fs::canonicalize(path).ok() => {
-                run(Command::new("s6-rc-update").arg("-e").arg("-l").arg(&cfg.live_dir).arg(path))
+                run(Command::new(tools::path("s6-rc-update")).arg("-e").arg("-l").arg(&cfg.live_dir).arg(path))
                     .and_then(|_| swap_symlink(name, &cfg.boot_db()))
             }
             Some((_, path)) => {

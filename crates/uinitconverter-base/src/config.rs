@@ -24,6 +24,9 @@ pub fn tool_path(name: &str) -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub config_path: PathBuf,
+    /// The init system the units are translated for. Only "s6" exists yet;
+    /// the key is there so a configuration names its backend.
+    pub init: String,
     /// Unit search path, highest priority first. The first entry is where
     /// enable/disable/mask write their symlinks.
     pub unit_path: Vec<PathBuf>,
@@ -95,6 +98,9 @@ pub struct Config {
     pub udev_monitor: bool,
 }
 
+/// The values INIT= accepts.
+pub const INITS: &[&str] = &["s6"];
+
 /// Units taken out of INCLUDE when RESOLVED=no.
 const RESOLVED_UNITS: &[&str] = &[
     "systemd-resolved.service",
@@ -119,6 +125,7 @@ impl Config {
         let timer_runner = tool_path("uinitconverter-timers");
         Config {
             config_path: PathBuf::from(DEFAULT_CONFIG),
+            init: "s6".into(),
             unit_path: [
                 "/etc/systemd/system",
                 "/run/systemd/transient",
@@ -250,6 +257,8 @@ impl Config {
             };
             let opt = |v: &str| (!v.is_empty()).then(|| PathBuf::from(v));
             match k.as_str() {
+                "INIT" => cfg.init = v,
+                "TOOLS" => crate::tools::configure(&v).map_err(|e| format!("{}: {e}", path.display()))?,
                 "UNIT_PATH" => cfg.unit_path = paths(&v),
                 "RUNTIME_UNIT_DIR" => cfg.runtime_unit_dir = PathBuf::from(&v),
                 "PRESET_PATH" => cfg.preset_path = paths(&v),
@@ -299,6 +308,9 @@ impl Config {
                 }
                 other => eprintln!("uinitconverter: {}: unknown key {other}", path.display()),
             }
+        }
+        if !INITS.contains(&cfg.init.as_str()) {
+            return Err(format!("{}: INIT={}: supported: {}", path.display(), cfg.init, INITS.join(" ")));
         }
         Ok(cfg.finish())
     }
@@ -386,6 +398,24 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn init_and_tools_keys() {
+        let _l = crate::tools::TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("uinitconverter-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("c.conf");
+        std::fs::write(&f, "INIT=s6\nTOOLS=\"s6-svc=/x/s6-svc swapon=/y/swapon\"\n").unwrap();
+        let cfg = Config::load(Some(&f)).unwrap();
+        assert_eq!(cfg.init, "s6");
+        assert_eq!(crate::tools::path("swapon"), "/y/swapon");
+        crate::tools::configure("").unwrap();
+        std::fs::write(&f, "INIT=dinit\n").unwrap();
+        assert!(Config::load(Some(&f)).unwrap_err().contains("INIT=dinit"));
+        std::fs::write(&f, "TOOLS=s6-svc\n").unwrap();
+        assert!(Config::load(Some(&f)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn journal_drops_syslog_map() {

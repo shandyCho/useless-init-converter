@@ -17,6 +17,7 @@ use tokio::process::Command;
 use super::Daemon;
 use crate::gen::Kind;
 use crate::loader::{self, Unit};
+use crate::tools;
 use crate::util;
 
 pub struct Dynamic {
@@ -222,7 +223,7 @@ impl Daemon {
                 eprintln!("uinitconverterd: {id}: no s6 scan directory");
                 return "failed";
             };
-            let st = Command::new("s6-svlink")
+            let st = Command::new(tools::path("s6-svlink"))
                 .args(["-d", "-t", "5000"])
                 .arg(&scan)
                 .arg(&dir)
@@ -243,10 +244,10 @@ impl Daemon {
         // nobody reads.
         let log = self.scandir(id).join("log");
         if log.is_dir() {
-            let _ = Command::new("s6-svc").arg("-u").arg(&log).status().await;
+            let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(&log).status().await;
         }
         let started_at = crate::util::now_realtime_usec();
-        let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(id)).status().await;
+        let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(self.scandir(id)).status().await;
         let r = self.wait_ready(id, unit, None).await;
         self.job_outcome(id, started_at, r)
     }
@@ -285,14 +286,14 @@ impl Daemon {
         if sv.up && !unit.get_all("Service", "ExecStop").is_empty() {
             self.run_runner("stop-exec", id, Some(sv.pid)).await;
         }
-        let _ = Command::new("s6-svc").args(["-wD", "-d", "-T", "120000"]).arg(self.scandir(id)).status().await;
+        let _ = Command::new(tools::path("s6-svc")).args(["-wD", "-d", "-T", "120000"]).arg(self.scandir(id)).status().await;
         if let Ok(scan) = fs::canonicalize(self.cfg.live_dir.join("scandir")) {
             // s6-svunlink waits for s6-svscan to end the supervisors, which
             // it doesn't while any entry in the scan directory can't be
             // stat'ed (it aborts the scan). Without a limit this stop, and
             // every job behind it, hung: logind's user@0 stop, then sudo.
             // It exits 0 when the limit passes, too.
-            let st = Command::new("s6-svunlink").args(["-t", "5000"]).arg(&scan).arg(id).status().await;
+            let st = Command::new(tools::path("s6-svunlink")).args(["-t", "5000"]).arg(&scan).arg(id).status().await;
             let link = scan.join(id);
             if !st.map(|s| s.success()).unwrap_or(false) && fs::symlink_metadata(&link).is_ok() {
                 // It failed before removing the link (it couldn't check the
@@ -304,7 +305,7 @@ impl Daemon {
                     self.drop_stored_fds(id);
                     return "done";
                 }
-                let _ = Command::new("s6-svscanctl").arg("-an").arg(&scan).status().await;
+                let _ = Command::new(tools::path("s6-svscanctl")).arg("-an").arg(&scan).status().await;
             }
         }
         self.drop_stored_fds(id);

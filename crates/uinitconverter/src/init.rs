@@ -13,6 +13,8 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::{exit, Command, Stdio};
 
+use uinitconverter_base::{config::Config, tools};
+
 const TITLE: &str = "Fedora (s6 + uinitconverter)";
 const S6LI_BASE: &str = "/etc/s6-linux-init/current";
 const LIBEXEC: &str = "/usr/libexec/uinitconverter";
@@ -291,13 +293,13 @@ fn die(msg: &str) -> ! {
 
 /// A program's stdout, or None if it can't run or fails.
 fn output(argv: &[&str]) -> Option<String> {
-    let out = Command::new(argv[0]).args(&argv[1..]).stderr(Stdio::null()).output().ok()?;
+    let out = Command::new(tools::path(argv[0])).args(&argv[1..]).stderr(Stdio::null()).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// Whether a program exits 0 (output discarded).
 fn succeeds(argv: &[&str]) -> bool {
-    Command::new(argv[0])
+    Command::new(tools::path(argv[0]))
         .args(&argv[1..])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -352,7 +354,7 @@ impl Ctx {
             println!("  + {}", argv.join(" "));
             return true;
         }
-        match Command::new(argv[0]).args(&argv[1..]).status() {
+        match Command::new(tools::path(argv[0])).args(&argv[1..]).status() {
             Ok(s) => s.success(),
             Err(e) => {
                 warn(&format!("{}: {e}", argv[0]));
@@ -1092,6 +1094,10 @@ fn dry_run_end(args: &[String]) -> String {
 // ---------------------------------------------------------------- main
 
 pub fn main(args: &[String]) -> ! {
+    // Only for TOOLS=: an install that has no config yet runs the programs by name.
+    if let Err(e) = Config::load(None) {
+        warn(&e);
+    }
     let opts = match parse_args(args) {
         Ok(Some(o)) => o,
         Ok(None) => {

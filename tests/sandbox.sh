@@ -59,8 +59,17 @@ for p in s6-rc-update s6-rc-format-upgrade; do
 done
 PATH=$W/bin:$PATH
 export PATH
+# TOOLS=: the daemon's and runners' s6-svc goes through this wrapper, which
+# records the call (check.sh looks for it).
+cat > "$W/bin/s6-svc-logged" <<EOF
+#!/bin/sh
+echo "\$*" >> "$W/tools-s6-svc.log"
+exec s6-svc "\$@"
+EOF
+chmod +x "$W/bin/s6-svc-logged"
 
 cat > "$W/uinitconverter.conf" <<EOF
+TOOLS="s6-svc=$W/bin/s6-svc-logged"
 UNIT_PATH=$U
 RUNTIME_UNIT_DIR=$R/units
 PRESET_PATH=$W/presets

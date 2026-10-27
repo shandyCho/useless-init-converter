@@ -20,6 +20,7 @@ use crate::install;
 use crate::loader::{LoadState, Loader, Unit};
 use crate::sandbox::{self, Sandbox};
 use crate::socket;
+use crate::tools;
 use crate::state::{keys, UnitState};
 use crate::util::{self, UserInfo};
 
@@ -2072,7 +2073,7 @@ impl Runner {
         if skipped {
             return 0;
         }
-        let out = std::process::Command::new("s6-svstat")
+        let out = std::process::Command::new(tools::path("s6-svstat"))
             .args(["-o", "up,pid"])
             .arg(self.cfg.live_dir.join("scandir").join(self.id()))
             .output();
@@ -2590,7 +2591,7 @@ fn main_pid_ok(pid: u32, sender_uid: u32, main_pid: u32, cgroup: Option<&str>) -
 }
 
 fn wanted_up() -> bool {
-    std::process::Command::new("s6-svstat")
+    std::process::Command::new(tools::path("s6-svstat"))
         .args(["-o", "wantedup", "."])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() != "false")
@@ -2709,7 +2710,7 @@ fn ensure_system_user(name: &str) -> Result<UserInfo, String> {
     if let Some(u) = util::lookup_user(name) {
         return Ok(u);
     }
-    let status = std::process::Command::new("useradd")
+    let status = std::process::Command::new(tools::path("useradd"))
         .args(["--system", "--no-create-home", "--home-dir", "/", "--shell", "/usr/sbin/nologin", name])
         .status()
         .map_err(|e| format!("useradd: {e}"))?;

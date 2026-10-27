@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::process::exit;
 
-pub(crate) use uinitconverter_base::{config, envfile, fdstore, index, loader, mountunit, state, unit, util};
+pub(crate) use uinitconverter_base::{config, envfile, fdstore, index, loader, mountunit, state, tools, unit, util};
 pub(crate) use uinitconverter_client as client;
 pub(crate) use uinitconverter_exec::{bpf, cgroup, conditions, execcmd, pam, sandbox, seccomp, selinux, socket};
 pub(crate) use uinitconverter_install as install;

@@ -10,6 +10,7 @@ use super::Daemon;
 use crate::gen::{self, Kind};
 use crate::loader::Unit;
 use crate::state::{self, keys};
+use crate::tools;
 use crate::util;
 
 #[derive(Debug, Clone, Default)]
@@ -46,7 +47,7 @@ impl Daemon {
     }
 
     async fn s6rc_db_list(&self, what: &str) -> Vec<String> {
-        let out = Command::new("s6-rc-db")
+        let out = Command::new(tools::path("s6-rc-db"))
             .arg("-l")
             .arg(&self.cfg.live_dir)
             .args(["list", what])
@@ -156,7 +157,7 @@ impl Daemon {
     }
 
     pub(super) async fn active_atoms_s6rc(&self) -> Option<BTreeSet<String>> {
-        let out = Command::new("s6-rc")
+        let out = Command::new(tools::path("s6-rc"))
             .arg("-l")
             .arg(&self.cfg.live_dir)
             .args(["-a", "list"])
@@ -188,7 +189,7 @@ impl Daemon {
     }
 
     async fn bundle_atoms_uncached(&self, bundle: &str) -> Vec<String> {
-        let out = Command::new("s6-rc-db")
+        let out = Command::new(tools::path("s6-rc-db"))
             .arg("-l")
             .arg(&self.cfg.live_dir)
             .args(["contents", bundle])
@@ -241,7 +242,7 @@ impl Daemon {
     }
 
     pub(super) async fn svstat(&self, atom: &str) -> Option<SvStat> {
-        let out = Command::new("s6-svstat")
+        let out = Command::new(tools::path("s6-svstat"))
             .args(["-o", "up,wantedup,ready,pid"])
             .arg(self.scandir(atom))
             .output()
@@ -436,7 +437,7 @@ impl Daemon {
     }
 
     async fn s6rc_locked(&self, args: &[&str], names: &[String]) -> Result<(), String> {
-        let out = Command::new("s6-rc")
+        let out = Command::new(tools::path("s6-rc"))
             .arg("-l")
             .arg(&self.cfg.live_dir)
             .arg("-b")
@@ -459,7 +460,7 @@ impl Daemon {
     }
 
     async fn all_dependencies(&self, id: &str) -> Option<Vec<String>> {
-        let out = Command::new("s6-rc-db")
+        let out = Command::new(tools::path("s6-rc-db"))
             .arg("-l")
             .arg(&self.cfg.live_dir)
             .args(["all-dependencies", id])
@@ -512,14 +513,14 @@ impl Daemon {
         eprintln!("uinitconverterd: start {id}: s6-rc is busy with another change, starting it beside");
         if start_logger {
             self.beside.lock().unwrap().insert(logger.clone());
-            let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(&logger)).status().await;
+            let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(self.scandir(&logger)).status().await;
             if !self.wait_up(&logger, Duration::from_secs(10)).await {
                 eprintln!("uinitconverterd: start {id}: logger {logger} did not come up");
                 return Some("failed");
             }
         }
         self.beside.lock().unwrap().insert(id.to_string());
-        let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(id)).status().await;
+        let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(self.scandir(id)).status().await;
         Some(self.wait_ready(id, unit, None).await)
     }
 
@@ -631,7 +632,7 @@ impl Daemon {
         }
         // Without -b: if a change took the lock since, fail and retry later
         // with the state it leaves.
-        let out = Command::new("s6-rc")
+        let out = Command::new(tools::path("s6-rc"))
             .arg("-l")
             .arg(&self.cfg.live_dir)
             .args(["-u", "change"])
@@ -658,7 +659,7 @@ impl Daemon {
         }
         let usec = unit.stop_timeout_usec();
         let ms = (usec / 1000).saturating_add(5000).min(u32::MAX as u64);
-        let _ = Command::new("s6-svc")
+        let _ = Command::new(tools::path("s6-svc"))
             .args(["-wD", "-T", &ms.to_string(), "-d"])
             .arg(self.scandir(id))
             .status()
@@ -674,7 +675,7 @@ impl Daemon {
     pub(super) async fn restart_longrun(&self, id: &str, unit: &Unit, old_pid: u32) -> &'static str {
         let st = state::for_unit(&self.cfg.run_dir, id);
         st.set(keys::RESTART_REQUESTED, "1");
-        let _ = Command::new("s6-svc").arg("-r").arg(self.scandir(id)).status().await;
+        let _ = Command::new(tools::path("s6-svc")).arg("-r").arg(self.scandir(id)).status().await;
         let usec = unit.stop_timeout_usec();
         let mut deadline = (usec != u64::MAX).then(|| Instant::now() + Duration::from_micros(usec));
         let mut killed = false;
@@ -690,7 +691,7 @@ impl Daemon {
                     return "timeout";
                 }
                 eprintln!("uinitconverterd: restart {id}: stop timed out, killing");
-                let _ = Command::new("s6-svc").arg("-k").arg(self.scandir(id)).status().await;
+                let _ = Command::new(tools::path("s6-svc")).arg("-k").arg(self.scandir(id)).status().await;
                 killed = true;
                 deadline = Some(Instant::now() + Duration::from_secs(5));
             }
@@ -736,13 +737,13 @@ impl Daemon {
     /// sees no SOCKET_WAIT and starts the service.
     async fn wake_socket_wait(&self, id: &str) {
         for _ in 0..20 {
-            let out = Command::new("s6-svstat").args(["-o", "up,updownfor"]).arg(self.scandir(id)).output().await;
+            let out = Command::new(tools::path("s6-svstat")).args(["-o", "up,updownfor"]).arg(self.scandir(id)).output().await;
             let Ok(out) = out else { return };
             let text = String::from_utf8_lossy(&out.stdout).into_owned();
             let f: Vec<&str> = text.split_whitespace().collect();
             match f.as_slice() {
                 ["true", secs] if secs.parse::<u64>().unwrap_or(0) >= 1 => {
-                    let _ = Command::new("s6-svc").arg("-1").arg(self.scandir(id)).status().await;
+                    let _ = Command::new(tools::path("s6-svc")).arg("-1").arg(self.scandir(id)).status().await;
                     return;
                 }
                 ["true", _] => tokio::time::sleep(Duration::from_millis(200)).await,
@@ -911,7 +912,7 @@ impl Daemon {
                     if sv.up {
                         return self.wait_ready(id, unit, None).await;
                     }
-                    let _ = Command::new("s6-svc").arg("-u").arg(self.scandir(id)).status().await;
+                    let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(self.scandir(id)).status().await;
                     return self.wait_ready(id, unit, None).await;
                 }
                 if let Some(r) = self.start_beside(id, unit).await {
