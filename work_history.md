@@ -7004,3 +7004,14 @@ This machine still runs the old sdcompat RPMs (ga365750) on its s6 boot.
    `gh release create` (rerun packages/github-release.sh first if new
    commits should be in the tag).
 
+
+## 2026-10-27, part 32: docs review after the rename (4fde5ce)
+
+- Korean particles: sdcompat ended in a consonant, uinitconverter (…컨버터)
+  ends in a vowel, so 은/이/을/과 after it became 는/가/를/와 (17 places:
+  README, TESTING, packages/README, three standalone READMEs). Check this
+  again whenever a name before a particle changes.
+- TESTING pair, update section: an sdcompat install can't be upgraded;
+  link to "Moving from sdcompat".
+- No other sentence was made wrong by the rename; English has no "an
+  uinitconverter".
