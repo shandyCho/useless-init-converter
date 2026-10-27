@@ -359,6 +359,30 @@ snapshot by hand; `sudo tests/memtest.sh uninstall` removes the service
 snapshots; its log is `/var/lib/uinitconverter-memtest/log`.
 `tests/memtest-check.sh` checks the script itself, unprivileged.
 
+**Optional: compare service hardening.** Whether the sandboxing of the
+systemd units (`NoNewPrivileges=`, `ProtectSystem=`,
+`CapabilityBoundingSet=`, `SystemCallFilter=` and so on) applies the same
+way on the s6 boot, read from `/proc` for the main process of every running
+service. Run it once per boot, after the services are up.
+
+```sh
+sudo tests/hardencompare.sh snap     # ~/uinitconverter-mem/harden/harden-<init>-<date>.tsv
+tests/hardencompare.sh report        # the latest snapshot of each init
+```
+
+For each service running on both boots it lists the settings that differ.
+`WEAKER` means the s6 boot confines it less (no_new_privs off, less
+seccomp, added capabilities, a host namespace instead of a private one, a
+read-only mount now read-write, root instead of a user, an unconfined
+SELinux domain, no cgroup BPF programs); anything else is `DIFF`. Exit 1
+when anything is weaker, 0 when nothing is, 2 when one init has no
+snapshot. `tests/hardencompare.sh compare SYSTEMD.tsv S6.tsv` compares two
+files of your choice. `/proc` doesn't show which syscalls a seccomp filter
+allows, so `SystemCallFilter=`, `RestrictAddressFamilies=`,
+`MemoryDenyWriteExecute=` and the like are compared only by the number of
+filters. `tests/hardencompare-check.sh` checks the script itself,
+unprivileged.
+
 ## If the s6 boot fails
 
 1. Press **Ctrl+Alt+F9**. A rescue login prompt runs there even when the rest

@@ -336,6 +336,28 @@ uninstall`은 서비스를 제거합니다(스냅샷은 남습니다). 서비스
 스냅샷에서 빠지며, 로그는 `/var/lib/uinitconverter-memtest/log`입니다.
 `tests/memtest-check.sh`는 스크립트 자체를 root 없이 검사합니다.
 
+**선택: 서비스 격리(하드닝) 비교.** systemd 유닛의 샌드박스 설정
+(`NoNewPrivileges=`, `ProtectSystem=`, `CapabilityBoundingSet=`,
+`SystemCallFilter=` 등)이 s6 부팅에서도 똑같이 적용되는지, 실행 중인 각
+서비스의 주 프로세스를 `/proc`에서 읽어 비교합니다. 부팅마다 한 번, 서비스들이
+올라온 뒤에 실행하세요.
+
+```sh
+sudo tests/hardencompare.sh snap     # ~/uinitconverter-mem/harden/harden-<init>-<날짜>.tsv
+tests/hardencompare.sh report        # 각 init의 최신 스냅샷끼리 비교
+```
+
+두 부팅 모두에서 실행 중인 서비스마다 다른 설정을 한 줄씩 보여 줍니다.
+`WEAKER`는 s6 쪽이 덜 막혀 있다는 뜻입니다(no_new_privs 꺼짐, seccomp 약해짐,
+capability 추가, 사설 대신 호스트 네임스페이스, 읽기 전용이던 마운트가 읽기-쓰기,
+사용자 대신 root, unconfined SELinux 도메인, cgroup BPF 프로그램 없음). 그 밖의
+차이는 `DIFF`입니다. 하나라도 `WEAKER`면 종료 코드 1, 없으면 0, 한쪽 스냅샷이
+없으면 2입니다. 두 파일을 직접 고르려면 `tests/hardencompare.sh compare
+SYSTEMD.tsv S6.tsv`를 쓰세요. seccomp 필터가 허용하는 시스템 호출은 `/proc`에
+나오지 않아서 `SystemCallFilter=`, `RestrictAddressFamilies=`,
+`MemoryDenyWriteExecute=` 같은 설정은 필터 개수로만 비교됩니다.
+`tests/hardencompare-check.sh`는 스크립트 자체를 root 없이 검사합니다.
+
 ## s6 부팅이 실패할 때
 
 1. **Ctrl+Alt+F9**를 누르세요. 나머지 부팅이 실패해도 그곳에서는 복구용 로그인
