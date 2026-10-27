@@ -7344,3 +7344,63 @@ boot with BUS=broker, permissive or enforcing; loading the new cil rule.
 3. Known gap (both buses): a generated unit that fails after its start job
    sends no PropertiesChanged, so activation callers wait for their own
    timeout.
+
+## 2026-10-27, part 40: s6 boot memory, notify helper re-executes (720c44c)
+
+Owner asked how to cut the s6 boot's memory. Measured on the live s6 boot
+(old RPMs) and the part-35 snapshot:
+
+- 254 s6-supervise, 118 with a child; 136 idle (80 down services, 56 down
+  loggers). s6-rc-init (s6-rc 0.8.0.2 doc) links every longrun of the
+  database into the scandir with ./down, so each gets a supervisor.
+- Lingering uinitconverter-runner processes by kind (PSS): Type=notify and
+  notify-reload helpers ~1.7 MiB each (11: chronyd, polkit, logind, cups,
+  iscsid, iscsiuio, virtlogd, virtlockd, virtnetworkd, user@1000 x2);
+  socket-wait runners ~280 KiB (the on-demand ones stay cheap); forking
+  supervisors ~0.4 MiB; timer/path-run ~0.45 MiB each (9).
+- Kernel cost per process ~130 KiB (part 35: +44 MiB for +344 processes).
+
+Options given (owner's choice): 2a notify helper re-exec (done here), 2b
+notify sockets in the daemon, 3 fewer supervisors (A: unreached units
+`masked` in the s6 set, the s6-native way per repodefs.html; B: left out
+of the database, run as dynamic instances), 4 one timers process, 5 shared
+logging under JOURNAL=no. **Owner: item 3 stays as it is for now** (hard
+to judge yet); s6 distros (Artix/Obarun) avoid it by shipping s6 service
+packages only for what is installed.
+
+720c44c:
+- The notify helper (double fork after setup_listen_fds) now exec()s the
+  runner as `notify-helper` (internal subcommand, handled in main before
+  any config/unit load) with NotifyHelper's fields as options (`--unit`
+  last for pgrep). It clears FD_CLOEXEC on its socket and the readiness
+  pipe, and in the new image closes every other fd > 2: the forked helper
+  used to keep the service's LISTEN_FDS open too. Path: current_exe()
+  (so ps shows uinitconverter-runner), /proc/self/exe if the binary was
+  replaced. exec failure: the old in-fork loop runs.
+- ExecStartPost=: the helper forks a child that does Config::load +
+  Runner::new + after_ready (MAINPID, kill on failure as before) and waits
+  for it; without ExecStartPost= it only stamps ACTIVE_ENTER.
+- Sandbox, debug build: helper RssAnon 384 kB (installed release helpers
+  on this boot: 1.6-2.7 MB). Expected saving ~15-17 MiB plus nothing else
+  changes in behaviour. sssd's helper was already ~300 kB.
+- The sandbox's "notify helper idle" check matched the old command line;
+  with the new one it would have passed by finding nothing, so it now
+  uses the notify-helper pattern, and new checks: helper re-executed,
+  RssAnon < 1 MiB, at most 5 fds (stdio, socket, pidfd), ExecStartPost=
+  with $MAINPID (notifier.service gained one).
+- Tests: `cargo test` all pass (runner: notify_helper_args_round_trip);
+  sandbox 278/278, SANDBOX_FDSTORE=no 266/266, SANDBOX_JOURNAL=no 285/285
+  (run with parts 38-39 in the tree); shellcheck/bash -n pass.
+- Another session committed parts 38-39 (e3c8c9c, ff59ab0, 84e723b) while
+  this ran; my check.sh/sandbox.sh hunks were staged alone with git apply
+  --cached and sit on top of them.
+- Not done: the PAM parent of user@ (~3 MiB, keeps the PAM handle) and
+  the forking supervisor stay as they are; Type=dbus and Type=simple
+  helpers end at readiness, so they were left alone.
+
+### Next steps
+
+1. Owner: rebuild/install the RPMs (on-demand + this), reboot s6, let
+   tests/memtest.sh collect snapshots on both boots; `ps -o rss,args -C
+   uinitconverter-runner` should show `notify-helper ... --unit X` lines.
+2. Item 3 (supervisors) and 4/5 when the owner decides.
