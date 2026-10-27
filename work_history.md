@@ -7526,3 +7526,59 @@ is committed, not built into RPMs or booted yet.
    virt*_var_run_t / lvm_var_run_t as on systemd) with no new AVCs.
 2. Optional: memcompare snap could record args for the init group.
 3. Items 3-5 of part 40 when the owner decides.
+
+## 2026-10-28, part 44: hardening comparison script, item 3 design (5080477)
+
+Owner asked whether the s6 boot gets s6's security advantage. Answer given:
+PID 1 is small (s6-svscan) and there is no journald, but uinitconverterd
+offers the systemd1 API as root on the system bus, 37 uinitconverter
+processes run as root, and logind/hostnamed/polkit/dbus-broker remain, so
+the whole attack surface is not smaller. The open question was whether
+the units' hardening applies the same way on s6.
+
+5080477: tests/hardencompare.sh (snap/compare/report) and
+tests/hardencompare-check.sh (29/29), documented in TESTING.md/-us.md.
+- snap reads each running service's main process (oldest process in
+  /sys/fs/cgroup/system.slice/**/X.service that isn't uinitconverter* or
+  s6-*; same cgroup layout on both inits): uid/gid/groups, umask,
+  NoNewPrivs, Seccomp + filter count, the 5 capability sets by name, the
+  SELinux context, 7 namespaces (host/private against PID 1), the mount
+  under 19 system paths (mount point, type, ro/rw, bind), 4 rlimits,
+  oom_score_adj, cgroup BPF program count (bpftool, if installed).
+- compare marks WEAKER: nnp 1->0, seccomp mode lower, capabilities added,
+  private ns -> host, ro -> rw, a systemd mount on the path missing, bind
+  lost, non-root -> root, unconfined SELinux type, BPF progs -> 0;
+  everything else DIFF. DynamicUser ids (61184-65519) count as equal.
+  Limit: the syscalls a seccomp filter allows aren't in /proc.
+- Unprivileged run on this s6 boot: 25 services, readable apart from
+  ns/exe. Not yet run as root on either boot.
+
+Item 3 (part 40): first presented as reducing root processes; corrected:
+the 136 idle supervisors (58 loggers) run nothing, so masking saves
+memory (~20-30 MiB), not attack surface. Owner chose **A (unreached units
+masked in the s6 set)** and, for starting them, **dynamic start**: units
+uinitconverter masked itself stay masked in the set and the daemon runs
+them on request like user@UID (dynamic.rs: svc dir under RUN_DIR/dyn,
+s6-svlink); units the admin masked are still refused. Facts found for the
+design: the daemon refuses set-masked units today (check_job ->
+can_be_dynamic allows only template instances and transient units);
+set_file_state maps rx masked to "masked", which must not happen for
+auto-masked units (systemctl is-enabled); s6-rc-set-change -p pulls in
+dependents and pipelines (a logger with its service). Not implemented.
+
+Owner then asked to make hardcoded parts configurable, to support other
+inits (dinit, runit) later, and to make libraries easy to replace.
+Survey (for the plan given to the owner): s6 references by crate:
+uinitconverterd 105, gen 54, uinitconverter 34, base 21, runner 16; exec,
+timers, install, client none. Absolute path literals: exec 62,
+uinitconverter 44, base 43, runner 20, daemon 11 (most are kernel/OS
+paths). Config has 33 keys. External crates: libc, zbus, tokio,
+futures-util, serde only; zbus/tokio used in ~10 files each; libselinux,
+PAM, seccomp, BPF are already dlopen()ed at run time.
+
+### Next steps
+
+1. Owner: `sudo tests/hardencompare.sh snap` on a systemd and an s6
+   boot, then `tests/hardencompare.sh report`.
+2. Owner decides the order of item 3A and the init-backend/config work
+   (see the plan in this session's answer).
