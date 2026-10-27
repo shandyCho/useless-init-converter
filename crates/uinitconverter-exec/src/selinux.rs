@@ -9,7 +9,6 @@ use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::sync::{Mutex, OnceLock};
 
 struct Lib {
-    restorecon: unsafe extern "C" fn(*const c_char, c_uint) -> c_int,
     getcon: unsafe extern "C" fn(*mut *mut c_char) -> c_int,
     getfilecon: unsafe extern "C" fn(*const c_char, *mut *mut c_char) -> c_int,
     string_to_security_class: unsafe extern "C" fn(*const c_char) -> u16,
@@ -62,7 +61,6 @@ fn open() -> Option<Lib> {
     // SAFETY: the signatures match libselinux's <selinux/selinux.h>.
     unsafe {
         Some(Lib {
-            restorecon: std::mem::transmute::<*mut c_void, _>(sym(c"selinux_restorecon")?),
             getcon: std::mem::transmute::<*mut c_void, _>(sym(c"getcon")?),
             getfilecon: std::mem::transmute::<*mut c_void, _>(sym(c"getfilecon")?),
             string_to_security_class: std::mem::transmute::<*mut c_void, _>(sym(c"string_to_security_class")?),
@@ -92,10 +90,10 @@ fn take(lib: &Lib, p: *mut c_char) -> String {
 /// Give PATH its label from file_contexts (systemd's mkdir_label and
 /// mac_selinux_create_file_prepare). Errors are ignored, as a wrong label
 /// is only a problem under enforcing and then shows up as a denial.
+/// Not selinux_restorecon(): it keeps file_contexts loaded (~1.3 MB) for
+/// the life of the process, and an on-demand runner waits for weeks.
 pub fn restorecon(path: &str) {
-    let Some(lib) = lib() else { return };
-    let Ok(c) = CString::new(path) else { return };
-    unsafe { (lib.restorecon)(c.as_ptr(), 0) };
+    label_as(&[(path.to_string(), path.to_string())]);
 }
 
 /// Give each PATH the file_contexts label of AS, the path it will appear at
@@ -129,7 +127,11 @@ fn label_as_with(lib: &Lib, pairs: &[(String, String)]) {
             (lib.freecon)(con);
         }
     }
-    unsafe { (lib.selabel_close)(h) };
+    unsafe {
+        (lib.selabel_close)(h);
+        // Hand the freed regex tables back instead of keeping them in the heap.
+        libc::malloc_trim(0);
+    }
 }
 
 /// The domain a process of ours would enter by executing EXE
