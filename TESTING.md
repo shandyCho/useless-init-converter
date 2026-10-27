@@ -184,8 +184,8 @@ sdcompat --version                    # 본체 도구가 모두 같은 빌드인
 ```
 
 (GitHub 릴리스의 패키지를 쓴다면, 한 릴리스의 `.rpm` 파일과 `SHA256SUMS`를 빈 디렉터리에
-받아 `sha256sum -c SHA256SUMS && sudo dnf install ./*.rpm`을 실행하는 것이 2단계와 위 명령을
-대신합니다.)
+받아 `sha256sum -c SHA256SUMS && sudo dnf install ./*.rpm`을 실행하는 것이 위의 본체와 독립
+도구 빌드를 대신합니다. skarnet 패키지는 릴리스에 없으므로 2단계는 그대로 합니다.)
 
 패키지를 설치해도 부팅은 아직 바뀌지 않습니다. 미리 본 뒤 부팅을 설정합니다.
 

@@ -1,6 +1,7 @@
 #!/bin/bash
-# Build every RPM a user needs (the skarnet.org packages, the five core
-# packages and the standalone tools) and collect them for a GitHub release.
+# Build the sdcompat RPMs (the five core packages and the standalone tools)
+# and collect them for a GitHub release. The skarnet.org packages are not
+# in it: users build them with dist/rpm/build-skarnet-rpms.sh.
 #
 #   packages/github-release.sh [OUTDIR]      # default: ~/sdcompat-release
 #
@@ -32,14 +33,13 @@ WORK=$OUT/work
 rm -rf "$WORK" "$OUT/assets"
 mkdir -p "$WORK" "$OUT/assets"
 
-"$REPO/dist/rpm/build-skarnet-rpms.sh" "$WORK/skarnet"
 "$HERE/build-rpms.sh" "$WORK/core"
 for b in "$REPO"/standalone/*/build-rpm.sh; do
     [ -x "$b" ] || continue
     "$b" "$WORK/standalone"
 done
 
-find "$WORK"/skarnet/rpms "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm' \
+find "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm' \
     ! -name '*.src.rpm' ! -name '*-devel-*' ! -name '*-debuginfo-*' ! -name '*-debugsource-*' \
     -exec cp {} "$OUT/assets/" \;
 (cd "$OUT/assets" && sha256sum -- *.rpm >SHA256SUMS)
@@ -47,7 +47,18 @@ find "$WORK"/skarnet/rpms "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm
 {
     echo "sdcompat $VERSION ($COMMIT), RPMs for Fedora ${DIST#fc} $ARCH."
     echo
-    echo "Download every .rpm file and SHA256SUMS into an empty directory, then:"
+    echo "First build and install the skarnet.org packages (skalibs, execline, s6,"
+    echo "s6-rc, s6-linux-init, s6-frontend, mdevd), which this release does not include:"
+    echo
+    echo '```sh'
+    echo "git clone --branch $TAG https://github.com/$GITHUB_REPO.git"
+    echo "sudo dnf install git rpm-build gcc make cpio"
+    echo "sdcompat/dist/rpm/build-skarnet-rpms.sh"
+    echo "sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm"
+    echo '```'
+    echo
+    echo "Then download every .rpm file and SHA256SUMS of this release into an empty"
+    echo "directory and run:"
     echo
     echo '```sh'
     echo "sha256sum -c SHA256SUMS"

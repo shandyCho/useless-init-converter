@@ -196,8 +196,9 @@ sdcompat --version                    # every core tool from the same build
 
 (With the packages from a GitHub release instead, download the release's
 `.rpm` files and `SHA256SUMS` into an empty directory and run `sha256sum -c
-SHA256SUMS && sudo dnf install ./*.rpm`; that replaces stage 2 and these
-commands.)
+SHA256SUMS && sudo dnf install ./*.rpm`; that replaces building the core
+and standalone RPMs above. The releases don't include the skarnet packages,
+so stage 2 stays.)
 
 Installing the packages changes nothing about booting yet. Preview, then set
 up the boot:

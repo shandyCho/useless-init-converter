@@ -195,7 +195,7 @@ everything ordered after it. sdcompat therefore uses s6-rc only for ordering:
 
 | Package | Used for |
 |---|---|
-| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, supervision, the service database. Fedora doesn't package them: they come from sdcompat's GitHub releases, or build them with `dist/rpm/build-skarnet-rpms.sh` |
+| skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, supervision, the service database. Fedora doesn't package them, and sdcompat's releases don't include them: build them with `dist/rpm/build-skarnet-rpms.sh` |
 | s6-frontend (recommended) | The `s6` command (see [The `s6` command](#the-s6-command-s6-frontend)); built with the others |
 | mdevd (recommended) | Loads the drivers in the s6 initramfs (`--boot-only-s6=yes`); built with the others |
 | systemd | Stays installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
@@ -247,9 +247,19 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 Install the packages, then let `sdcompat init` set up the boot:
 
-Download all the `.rpm` files and `SHA256SUMS` of one of the
-[GitHub releases](https://github.com/shandyCho/sdcompat/releases) into an
-empty directory, then:
+First build and install the skarnet.org packages, which the releases don't
+include (`VERSION` is the release you will install):
+
+```sh
+git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
+sudo dnf install git rpm-build gcc make cpio
+sdcompat/dist/rpm/build-skarnet-rpms.sh
+sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
+```
+
+Then download all the `.rpm` files and `SHA256SUMS` of that
+[GitHub release](https://github.com/shandyCho/sdcompat/releases) into an
+empty directory and run:
 
 ```sh
 sha256sum -c SHA256SUMS
@@ -258,14 +268,14 @@ sdcompat init --dry-run                   # what it would do (no root needed)
 sudo sdcompat init
 ```
 
-A release holds the five tool packages, the skarnet packages (skalibs,
-execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd) and the standalone
-tools; dnf takes the rest, such as earlyoom and rsyslog, from Fedora's
-repositories. The RPMs are for the Fedora release named in the release text.
+`build-skarnet-rpms.sh` builds skalibs, execline, s6, s6-rc, s6-linux-init,
+s6-frontend and mdevd. A release holds the five tool packages and the
+standalone tools; dnf takes the rest, such as earlyoom and rsyslog, from
+Fedora's repositories. The RPMs are for the Fedora release named in the release text.
 To update, download the next release's files and run `sudo dnf upgrade
-./*.rpm`, then `sudo sdcompat init --yes`. You can also build the RPMs
-yourself (`dist/rpm/build-skarnet-rpms.sh`, `packages/build-rpms.sh`,
-`standalone/*/build-rpm.sh`); see [packages/README-us.md](packages/README-us.md).
+./*.rpm`, then `sudo sdcompat init --yes` (the skarnet packages only when
+`dist/skarnet.versions` changed). You can also build the sdcompat RPMs
+yourself (`packages/build-rpms.sh`, `standalone/*/build-rpm.sh`); see [packages/README-us.md](packages/README-us.md).
 
 `sdcompat init` **adds** a GRUB entry, "Fedora (s6 + sdcompat)", and keeps the
 normal systemd boot as the default unless you pass `--default-s6`. It installs

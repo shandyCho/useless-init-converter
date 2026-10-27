@@ -68,13 +68,13 @@ packages/github-release.sh             # result: ~/sdcompat-release
 packages/github-release.sh DIR         # somewhere else
 ```
 
-It needs a committed tree, then runs the three build scripts
-(`dist/rpm/build-skarnet-rpms.sh`, `packages/build-rpms.sh`,
-`standalone/*/build-rpm.sh`) in a fresh `DIR/work` and collects:
+It needs a committed tree, then runs `packages/build-rpms.sh` and
+`standalone/*/build-rpm.sh` in a fresh `DIR/work` and collects:
 
-- `DIR/assets/`: the binary RPMs a user installs (skarnet, the five core
-  packages, the standalone tools; no `-devel` or debuginfo packages) and
-  `SHA256SUMS`.
+- `DIR/assets/`: the binary RPMs (the five core packages and the standalone
+  tools; no debuginfo packages) and `SHA256SUMS`. The skarnet.org packages
+  are not in a release: each user builds them with
+  `dist/rpm/build-skarnet-rpms.sh`.
 - `DIR/NOTES.md`: the release text, with the commit, the Fedora release and
   architecture the RPMs are built for, the install commands and the list of
   packages.
@@ -88,7 +88,17 @@ tag `vVERSION` on that commit, NOTES.md as the text, and every file in
 
 The RPMs are built for the Fedora release and architecture of the machine
 that builds them (e.g. `fc45`, `x86_64`); build on each Fedora release you
-want to support. Users then run, in an empty directory:
+want to support. Users first build and install the skarnet.org packages
+from the release's tag:
+
+```sh
+git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
+sudo dnf install git rpm-build gcc make cpio
+sdcompat/dist/rpm/build-skarnet-rpms.sh            # downloads the skarnet.org tarballs
+sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
+```
+
+then, in an empty directory:
 
 ```sh
 gh release download vVERSION -R shandyCho/sdcompat    # or download the files in a browser
@@ -101,7 +111,8 @@ sudo sdcompat init
 dnf takes rsyslog, earlyoom and the other dependencies from Fedora's
 repositories. There is no repository on GitHub, so `dnf upgrade` alone
 does not see new releases: download the next release's files and run
-`sudo dnf upgrade ./*.rpm`, then `sudo sdcompat init --yes`.
+`sudo dnf upgrade ./*.rpm`, then `sudo sdcompat init --yes`. The skarnet
+packages need rebuilding only when `dist/skarnet.versions` changes.
 
 The specs still say `License: TBD`; choose a license before publishing.
 

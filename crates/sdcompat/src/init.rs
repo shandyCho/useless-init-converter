@@ -34,16 +34,19 @@ const BLS_DIR: &str = "/boot/loader/entries";
 const CORE_PACKAGES: &str = "sdcompat sdcompat-gen sdcompat-runner sdcompat-timers sdcompatd";
 /// Where the packages Fedora does not have come from.
 const RELEASES: &str = "https://github.com/shandyCho/sdcompat/releases";
-/// The packages init may ask for that are in a release, not in Fedora.
-const RELEASE_PACKAGES: [&str; 3] = ["s6-linux-init", "sdcompat-journal-relay", "mdevd"];
+/// The packages init may ask for that Fedora does not have: built with
+/// dist/rpm/build-skarnet-rpms.sh, or in a release.
+const SKARNET_PACKAGES: [&str; 2] = ["s6-linux-init", "mdevd"];
+const RELEASE_PACKAGES: [&str; 1] = ["sdcompat-journal-relay"];
 
 const USAGE: &str = "\
 usage: sdcompat init [OPTIONS]
        sdcompat init --uninstall [--yes] [--dry-run]
 
 Set up this Fedora system to boot with s6-linux-init + s6-rc + sdcompat.
-Install the packages first (the RPMs of a release from
-https://github.com/shandyCho/sdcompat/releases). The systemd boot entry
+Install the packages first: the skarnet ones built with
+dist/rpm/build-skarnet-rpms.sh, then the RPMs of a release from
+https://github.com/shandyCho/sdcompat/releases. The systemd boot entry
 keeps working: init adds a GRUB entry \"Fedora (s6 + sdcompat)\". It shows
 its plan and asks before changing anything.
 
@@ -428,8 +431,11 @@ fn check_programs(ctx: &Ctx, s: &Settings) {
     let missing: Vec<&str> = need.iter().filter(|(ok, _)| !ok).map(|(_, p)| *p).collect();
     if !missing.is_empty() {
         let mut msg = format!("missing packages for these settings: sudo dnf install {}", missing.join(" "));
+        if missing.iter().any(|p| SKARNET_PACKAGES.contains(p)) {
+            msg += "; build s6-linux-init and mdevd with dist/rpm/build-skarnet-rpms.sh";
+        }
         if missing.iter().any(|p| RELEASE_PACKAGES.contains(p)) {
-            msg += &format!(" (the s6 and sdcompat ones are RPMs in {RELEASES})");
+            msg += &format!("; sdcompat-journal-relay is an RPM in {RELEASES}");
         }
         if ctx.dry {
             warn(&msg);

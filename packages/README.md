@@ -64,12 +64,12 @@ packages/github-release.sh             # 결과: ~/sdcompat-release
 packages/github-release.sh DIR         # 다른 위치
 ```
 
-커밋된 트리가 필요하고, 새로 만든 `DIR/work`에서 빌드 스크립트 셋
-(`dist/rpm/build-skarnet-rpms.sh`, `packages/build-rpms.sh`,
-`standalone/*/build-rpm.sh`)을 실행한 뒤 다음을 모읍니다.
+커밋된 트리가 필요하고, 새로 만든 `DIR/work`에서 `packages/build-rpms.sh`와
+`standalone/*/build-rpm.sh`를 실행한 뒤 다음을 모읍니다.
 
-- `DIR/assets/`: 사용자가 설치할 바이너리 RPM(skarnet, 본체 다섯 패키지, 독립 도구.
-  `-devel`과 debuginfo 패키지는 빼고)과 `SHA256SUMS`.
+- `DIR/assets/`: 바이너리 RPM(본체 다섯 패키지와 독립 도구. debuginfo 패키지는 빼고)과
+  `SHA256SUMS`. skarnet.org 패키지는 릴리스에 넣지 않습니다. 사용자가 각자
+  `dist/rpm/build-skarnet-rpms.sh`로 빌드합니다.
 - `DIR/NOTES.md`: 릴리스 본문. 커밋, RPM을 빌드한 Fedora 릴리스와 아키텍처, 설치 명령,
   패키지 목록이 들어 있습니다.
 
@@ -80,7 +80,17 @@ Releases > Draft a new release를 열고, 그 커밋에 태그 `vVERSION`을 달
 릴리스마다 `Cargo.toml`의 버전을 올리세요.
 
 RPM은 빌드한 머신의 Fedora 릴리스와 아키텍처용입니다(예: `fc45`, `x86_64`). 지원할 Fedora
-릴리스마다 그 위에서 빌드하세요. 사용자는 빈 디렉터리에서 다음을 실행합니다.
+릴리스마다 그 위에서 빌드하세요. 사용자는 먼저 릴리스의 태그에서 skarnet.org 패키지를
+빌드해 설치합니다.
+
+```sh
+git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
+sudo dnf install git rpm-build gcc make cpio
+sdcompat/dist/rpm/build-skarnet-rpms.sh            # skarnet.org 타르볼을 내려받습니다
+sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
+```
+
+그다음 빈 디렉터리에서:
 
 ```sh
 gh release download vVERSION -R shandyCho/sdcompat    # 또는 브라우저로 파일을 받기
@@ -92,7 +102,8 @@ sudo sdcompat init
 
 rsyslog, earlyoom 같은 다른 의존 패키지는 dnf가 Fedora 저장소에서 가져옵니다. GitHub에는
 저장소가 없으므로 `dnf upgrade`만으로는 새 릴리스를 알 수 없습니다. 다음 릴리스의 파일을
-받아 `sudo dnf upgrade ./*.rpm`을 실행한 뒤 `sudo sdcompat init --yes`를 실행하세요.
+받아 `sudo dnf upgrade ./*.rpm`을 실행한 뒤 `sudo sdcompat init --yes`를 실행하세요. skarnet
+패키지는 `dist/skarnet.versions`가 바뀔 때만 다시 빌드하면 됩니다.
 
 spec에는 아직 `License: TBD`라고 되어 있습니다. 공개하기 전에 라이선스를 정하세요.
 
