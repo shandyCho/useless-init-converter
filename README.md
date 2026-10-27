@@ -226,30 +226,23 @@ git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
 cat sdcompat/dist/skarnet.versions      # 한 줄에 패키지 하나: 이름  버전  SHA-256
 ```
 
-각 패키지의 타르볼은 `https://skarnet.org/software/이름/이름-버전.tar.gz`입니다(예:
-`https://skarnet.org/software/skalibs/skalibs-2.16.0.0.tar.gz`). 다음은 그 릴리스의 URL을
-출력합니다.
+다음은 받아야 할 파일 이름(`이름-버전.tar.gz`)을 패키지마다 하나씩 출력합니다.
 
 ```sh
 grep -v '^#' sdcompat/dist/skarnet.versions | while read -r name ver _; do
-    [ -n "$name" ] && echo "https://skarnet.org/software/$name/$name-$ver.tar.gz"
+    [ -n "$name" ] && echo "$name-$ver.tar.gz"
 done
 ```
 
-하나씩 브라우저나 `curl -fLO URL`로 `~/skarnet-sources`에 받습니다.
-
-```sh
-mkdir -p ~/skarnet-sources && cd ~/skarnet-sources
-curl -fLO https://skarnet.org/software/skalibs/skalibs-2.16.0.0.tar.gz   # URL마다 하나씩
-cd -
-```
-
-skarnet.org는 타르볼마다 SHA-256 값도 공개합니다(URL 끝에 `.sha256`). `dist/skarnet.versions`에
-같은 값이 들어 있습니다.
+[skarnet.org의 소프트웨어 페이지](https://skarnet.org/software/)에서 패키지마다 페이지를
+열고, 정확히 그 버전의 타르볼을 받으세요. 일곱 개를 모두 원래 이름 그대로
+`~/skarnet-sources`에 저장합니다(`mkdir -p ~/skarnet-sources`). skarnet.org는 릴리스마다
+SHA-256 값을 공개하고, `dist/skarnet.versions`에 같은 값이 들어 있습니다. 빌드 스크립트가
+이를 검사하므로 버전이 다르거나 내려받기가 손상되면 빌드가 멈춥니다.
 
 **2. 빌드와 설치.** 빌드 스크립트는 아무것도 내려받지 않습니다. `~/skarnet-sources`의
-타르볼을 모두 `dist/skarnet.versions`와 대조하고, 값이 다르면 멈추며, 없는 것은 URL을
-알려 줍니다. 다른 디렉터리는 `--sources DIR`로 지정합니다.
+타르볼을 모두 `dist/skarnet.versions`와 대조하고, 값이 다르면 멈추며, 없는 것은 파일
+이름을 알려 줍니다. 다른 디렉터리는 `--sources DIR`로 지정합니다.
 
 ```sh
 sdcompat/dist/rpm/build-skarnet-rpms.sh

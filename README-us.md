@@ -259,31 +259,24 @@ git clone --branch vVERSION https://github.com/shandyCho/sdcompat.git
 cat sdcompat/dist/skarnet.versions      # NAME  VERSION  SHA-256, one package per line
 ```
 
-Each package's tarball is `https://skarnet.org/software/NAME/NAME-VERSION.tar.gz`
-(e.g. `https://skarnet.org/software/skalibs/skalibs-2.16.0.0.tar.gz`). This
-prints the URLs for that release:
+This prints the file names you need, `NAME-VERSION.tar.gz`, one per package:
 
 ```sh
 grep -v '^#' sdcompat/dist/skarnet.versions | while read -r name ver _; do
-    [ -n "$name" ] && echo "https://skarnet.org/software/$name/$name-$ver.tar.gz"
+    [ -n "$name" ] && echo "$name-$ver.tar.gz"
 done
 ```
 
-Download each of them, with a browser or `curl -fLO URL`, into
-`~/skarnet-sources`:
-
-```sh
-mkdir -p ~/skarnet-sources && cd ~/skarnet-sources
-curl -fLO https://skarnet.org/software/skalibs/skalibs-2.16.0.0.tar.gz   # and so on, one per URL
-cd -
-```
-
-skarnet.org also publishes each tarball's SHA-256 sum (the URL plus
-`.sha256`); `dist/skarnet.versions` holds the same sums.
+Go to [skarnet.org's software page](https://skarnet.org/software/), open
+each package's page, and download the tarball of exactly that version. Save
+all seven in `~/skarnet-sources` (`mkdir -p ~/skarnet-sources`), under their
+original names. skarnet.org publishes each release's SHA-256 sum;
+`dist/skarnet.versions` holds the same sums, and the build script checks
+them, so a wrong version or a damaged download stops the build.
 
 **2. Build and install them.** The build script downloads nothing: it
 checks every tarball in `~/skarnet-sources` against `dist/skarnet.versions`,
-stops on a wrong one and lists the URLs of missing ones. A different
+stops on a wrong one and lists the names of missing ones. A different
 directory: `--sources DIR`.
 
 ```sh

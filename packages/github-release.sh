@@ -49,11 +49,12 @@ find "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm' \
     echo
     echo "First build and install the skarnet.org packages (skalibs, execline, s6,"
     echo "s6-rc, s6-linux-init, s6-frontend, mdevd), which this release does not include."
-    echo "Download these tarballs from skarnet.org into ~/skarnet-sources:"
+    echo "Download these tarballs from their pages on https://skarnet.org/software/"
+    echo "into ~/skarnet-sources (see the README's installation section):"
     echo
     while read -r name ver _; do
         case $name in ''|'#'*) continue ;; esac
-        echo "- https://skarnet.org/software/$name/$name-$ver.tar.gz"
+        echo "- $name-$ver.tar.gz"
     done <"$REPO/dist/skarnet.versions"
     echo
     echo "then build them (the script checks the tarballs' SHA-256 sums):"

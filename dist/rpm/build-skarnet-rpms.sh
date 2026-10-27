@@ -7,9 +7,9 @@
 #   dist/rpm/build-skarnet-rpms.sh --sources DIR ... # tarballs elsewhere
 #
 # It downloads nothing: download the skarnet.org tarballs named in
-# skarnet.versions (https://skarnet.org/software/NAME/NAME-VERSION.tar.gz)
-# into ~/skarnet-sources (or DIR) first. Each is checked against the
-# SHA-256 sum in skarnet.versions; missing ones are listed with their URLs.
+# skarnet.versions (NAME-VERSION.tar.gz, from the packages' pages on
+# skarnet.org) into ~/skarnet-sources (or DIR) first. Each is checked
+# against the SHA-256 sum in skarnet.versions; missing ones are listed.
 #
 # With --srpm the source RPMs go to OUTDIR/srpms, each with its version and
 # release in the spec and the verified skarnet.org tarball inside; another
@@ -66,9 +66,10 @@ for name in "${ORDER[@]}"; do
     [ -s "$SOURCES/$name-${VER[$name]}.tar.gz" ] || missing+=("$name-${VER[$name]}")
 done
 if [ ${#missing[@]} -gt 0 ]; then
-    echo "error: these tarballs are not in $SOURCES; download them first:" >&2
+    echo "error: these tarballs are not in $SOURCES; download them from" >&2
+    echo "their pages on https://skarnet.org/software/ first:" >&2
     for m in "${missing[@]}"; do
-        echo "  https://skarnet.org/software/${m%-*}/$m.tar.gz" >&2
+        echo "  $m.tar.gz" >&2
     done
     echo "(see the installation section of README-us.md)" >&2
     exit 1
