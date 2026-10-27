@@ -7644,3 +7644,122 @@ s6-frontend, rsyslog, mdevd, earlyoom. Generated run scripts use only
    when a second backend (dinit first: dependencies and readiness like
    s6-rc; runit has no dependency manager) is written.
 3. Item 3A inside the s6 backend (design in part 44).
+
+## 2026-10-28, part 46: providers, s6 backend modules, AUTO_MASK (1c9c567..ae863cd)
+
+Owner: "continue the remaining steps" (part 45's plan: 1a/1b, 2, 3A).
+
+1c9c567 SYSLOG=rsyslog|syslog-ng (step 1a)
+- dist/s6/syslog/run picks the daemon; dist/syslog-ng.conf writes the
+  files of dist/rsyslog.conf. syslog-ng refuses a plain /dev/log when
+  /run/systemd/system exists (our sd_booted flag) and rewrites it to a
+  socket-activated source, so the run script binds /dev/log with
+  s6-ipcserver-socketbinder -m -b0 and passes it in LISTEN_FDS to
+  systemd-syslog(); without the flag (BOOTED_FLAG= empty) systemd-syslog()
+  fails ("systemd_status='not-running'"), so it uses unix-dgram. The
+  config takes the source from `UINITCONVERTER_DEVLOG`.
+- Verified with syslog-ng 4.12 + ivykis + libnet downloaded with
+  `dnf download` and unpacked in the scratchpad (not installed): syntax
+  both ways, routing of user/authpriv/cron/mail to messages/secure/
+  cron/maillog, both source variants (the second in an unshare'd mount
+  namespace with /run/systemd hidden). /proc/kmsg and SELinux on the real
+  boot not tested.
+- Config: SYSLOG= checked (SYSLOGS), syslog-ng.service excluded with
+  rsyslog.service under JOURNAL=no. init: --syslog=, generic
+  conf_choice/set_conf_choice (BUS= uses it), writes the chosen conf,
+  mkdir /var/lib/syslog-ng or /var/lib/rsyslog. Spec: ships
+  syslog-ng.conf, Recommends (rsyslog or syslog-ng).
+- Boot loader provider: **not done**. Entries are BLS (any BLS loader);
+  only the default entry (grub2-editenv saved_entry/tmp_saved_entry) is
+  GRUB's. systemd-boot (bootctl) can't be tested here and a mistake
+  could leave the machine unbootable.
+
+3f5bed4 init: directories from the config (step 1b)
+- Ctx holds the loaded Config: CONFIG_PATH, STATE_DIR, LOG_DIR
+  (config::DEFAULT_LOG_DIR when JOURNAL=yes cleared it), RUN_DIR,
+  REPO_DIR's parent, LIVE_DIR(:*), DAEMON_SERVICE, UNIT_PATH, last
+  EXTRA_SOURCE. Package layout and s6-linux-init paths stay constants;
+  the remaining literals elsewhere are kernel/systemd-semantic paths.
+  Dry run unchanged except the order of two restorecon arguments.
+
+Step 2, s6 code behind modules (no behaviour change):
+- 3936b5b gen: lib.rs keeps plan()/report()/types; s6.rs has
+  longrun_files, write_source, stop atoms, repo/set/commit/install,
+  relink, and regenerate's install half (takes the plan). Check: reload
+  --no-update from old and new build on this machine's units: same 2599
+  files, only the --config path differs, reports identical.
+- 6afe132 daemon: s6-only fields in s6::State (lock, beside,
+  atom_order, svstat/bundle caches, state_reader); mod.rs uses
+  clear_caches()/database_changed()/lock.
+- 6533286 installer: init/s6.rs (s6-linux-init, s6.conf, admin store,
+  sysinit members, runtime relabel, daemon restart, uninstall part).
+  Dry runs (default, --journal=no --resolved=no, --uninstall) identical.
+  (First attempt deleted the wrong range: a reused variable in my
+  script; restored with git checkout and redone.)
+- ef151de runner: supervisor.rs (wanted_up, up_pid); a doc comment that
+  had drifted onto notify_sender_ok is back on wanted_up.
+- The trait is still not fixed: it waits for a second backend.
+
+ae863cd AUTO_MASK= (item 3A, owner's choice: A + dynamic start)
+- automask.rs (base): STATE_DIR/auto-masked and auto-masked.keep.
+- gen s6::sync_auto_mask (after sync_loggers, before stop atoms):
+  candidates = plan units of kind longrun/oneshot named .service/.timer/
+  .path, rx usable (or masked by us), not in plan.boot, no sockets
+  (Planned::has_sockets: enabled socket, Sockets=, NAME.socket, or
+  Service= naming it), not kept, not excluded; then repeatedly drop those
+  a non-candidate, non-masked plan unit depends on (bundles never are
+  candidates, so their members stay). Masked with their logger and
+  .stop atom, `s6-rc-set-change -i`, per group if the batch is refused.
+  Unmask (to usable, -I, set-fix -u then makes it active if needed) when
+  no longer a candidate or AUTO_MASK=no, except while RUN_DIR/dyn/NAME
+  exists. An entry the admin moved out of masked goes to the keep list.
+- install::set_file_state: masked + listed -> disabled (static stays).
+- daemon: can_be_dynamic accepts set-masked + listed service/timer/path;
+  check_job refuses an admin-masked unit with UnitMasked.
+- Bugs found and fixed: Index::load listed set-masked units (the daemon
+  ran `s6-rc -u change` on them: "not a recognized identifier"); the
+  dynamic status ignored CONDITION_FAILED; a second start of a parked
+  dynamic instance didn't restart it (both affected template instances
+  before too); the dynamic logger ran s6-log by name.
+- Sandbox: hold1-4/beside1-3 in the keep list (the section drives s6-rc
+  on them); new checks (masked, listed, static, dynamic start, unmask
+  when repo-new needs it, admin unmask kept, admin mask refused; admin
+  changes use -p, needed for the logger pipeline with JOURNAL=no).
+- This machine's units (scratch STATE_DIR/REPO_DIR, JOURNAL=no): 107
+  units masked (167 set entries); still usable longruns ~16, mostly with
+  sockets (sssd-*, sshd, rpcbind, qemu-*-helper, libvirtd, httpd) or in
+  a bundle (bluetooth, alsa-state).
+
+Tests (final tree): cargo test 79 pass, standalone 3/3/3/2; sandbox
+289/289, SANDBOX_JOURNAL=no 296/296, SANDBOX_FDSTORE=no 277/277 (run
+before the last check.sh -p edit, which only touches the repo-lazy
+lines); shellcheck/bash -n pass.
+
+Not covered / known limits:
+- AUTO_MASK=no reverting is not exercised by the sandbox.
+- An admin `s6 set unmask` + apply while the unit runs as a dynamic
+  instance would give s6-rc a second service of that name in the scan
+  directory; not handled.
+- `s6 live start X` / `s6-rc -u change X` can't start an auto-masked unit
+  (not in the database); systemctl and the bus can. The admin takes it
+  back with `s6 set enable|unmask -p X` (then kept).
+- dist/ shell scripts still run programs by name (not TOOLS=).
+
+### Current state
+
+All of the above committed; nothing booted. The first reload on the real
+system will mask ~107 units.
+
+### Next steps
+
+1. Owner: rebuild the RPMs, reboot s6, check `s6 set status` (masked
+   entries), `cat /var/lib/uinitconverter/auto-masked`, that GNOME's
+   D-Bus-activated services (fprintd, geoclue, localed, timedated,
+   packagekit), timers (snapper-cleanup, btrfs-*) and `systemctl start
+   sshd`-style starts still work, and count idle s6-supervise again
+   (part 40: 136). AUTO_MASK=no in uinitconverter.conf + daemon-reload
+   undoes it.
+2. Owner: `sudo tests/hardencompare.sh snap` on both boots (part 44).
+3. Optional: SYSLOG=syslog-ng on a real boot (/proc/kmsg, SELinux).
+4. Boot loader provider (systemd-boot) and a second init backend (dinit)
+   when the owner decides.
