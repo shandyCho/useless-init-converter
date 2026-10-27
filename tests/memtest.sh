@@ -8,7 +8,7 @@
 #   sudo tests/memtest.sh run [--wait SECS] [--dir DIR] [--max-diff MIB]
 #   tests/memtest.sh report [DIR] [--max-diff MIB]
 #
-# install adds uinitconverter-memtest.service, enabled for systemd and in
+# install adds memtest-uinitconverter.service, enabled for systemd and in
 # the s6 database. On every boot it waits SECS seconds (default 600, counted
 # from its own start, so the time at the LUKS prompt doesn't count), takes a
 # tests/memcompare.sh snapshot into DIR (default ~/uinitconverter-mem/memtest
@@ -23,7 +23,10 @@
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-UNIT=uinitconverter-memtest.service
+# Not uinitconverter-*: the default EXCLUDE (uinitconverter*) would keep it
+# out of the s6 database. OLD_UNIT is the name it had before.
+UNIT=memtest-uinitconverter.service
+OLD_UNIT=uinitconverter-memtest.service
 # MEMTEST_* overrides are for tests/memtest-check.sh.
 LIB=${MEMTEST_LIB:-/usr/local/libexec/uinitconverter-memtest}
 LOG_DIR=${MEMTEST_LOG_DIR:-/var/lib/uinitconverter-memtest}
@@ -92,6 +95,7 @@ install() {
     if command -v restorecon >/dev/null; then
         restorecon -R "$LIB"
     fi
+    remove_old_unit
     cat >"$UNIT_DIR/$UNIT" <<EOF || exit 1
 [Unit]
 Description=uinitconverter memory snapshot (tests/memtest.sh)
@@ -113,10 +117,17 @@ EOF
     echo "Report: $DIR/report.txt (or tests/memtest.sh report). Remove: sudo tests/memtest.sh uninstall"
 }
 
+remove_old_unit() {
+    [ -e "$UNIT_DIR/$OLD_UNIT" ] || return 0
+    systemctl disable "$OLD_UNIT" >/dev/null 2>&1
+    rm -f "$UNIT_DIR/$OLD_UNIT"
+}
+
 uninstall() {
     need_root uninstall
     systemctl disable "$UNIT" >/dev/null 2>&1
     rm -f "$UNIT_DIR/$UNIT"
+    remove_old_unit
     rm -rf "$LIB"
     reload_db
     echo "Removed $UNIT; snapshots and reports are kept."
