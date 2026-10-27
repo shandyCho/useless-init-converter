@@ -6939,3 +6939,68 @@ RPMs are still ga365750. ~/sdcompat-srpms (COPR, part 26) is obsolete.
   NOTES.md and the old repository in its gh command: rerun
   packages/github-release.sh after pushing before publishing.
 
+## 2026-10-27, part 31: sdcompat renamed to uinitconverter (a5f780f)
+
+From this entry on, the project's names are uinitconverter; the entries
+above keep the old names (sdcompat, sdcompatd, /etc/sdcompat, ...).
+
+### Decisions (owner, asked 2026-10-27)
+
+- Rename every sdcompat name to uinitconverter (not only the main command):
+  commands (uinitconverter, uinitconverterd, uinitconverter-gen, -runner,
+  -timers), crates, standalone tools, RPM packages/specs, /etc, /var/lib,
+  /var/log and /usr/libexec paths, SELinux module and types, D-Bus interface
+  org.uinitconverter.Manager and policy file, kernel options
+  (uinitconverter.db=, uinitconverter.initrd.timeout=), GRUB title "Fedora
+  (s6 + uinitconverter)", UINITCONVERTER_* variables, build directories
+  (~/rpmbuild-uinitconverter, ~/rpmbuild-uinitconverter-standalone,
+  ~/uinitconverter-release), CLAUDE.md, docs, tests.
+- No automatic migration: packages/README pair "Moving from sdcompat"
+  (boot systemd, back up /etc/sdcompat, `sudo sdcompat init --uninstall`,
+  dnf remove the 9 old packages, move /var/lib/s6-rc/repository aside, rm
+  /var/lib/sdcompat and /var/log/sdcompat, install the new RPMs, run `sudo
+  uinitconverter init` with the old options, copy edits by hand). It
+  replaces the setup-fedora.sh migration note; the README pair points at it.
+
+### How
+
+- git mv of the 132 tracked paths with sdcompat in them; text replace of
+  sdcompat/SDCOMPAT/Sdcompat in 141 files (not work_history.md). Old empty
+  directories and the old standalone target/ caches removed.
+- Checked first: no code matches our process names by comm (the 15-char
+  limit: uinitconverterd is exactly 15); tests use pgrep -f. cargo fmt was
+  already not clean before, so nothing was reformatted.
+- Leftovers that now read oddly but are harmless (they handle old installs,
+  and the clean switch makes them moot): init's removal of the old
+  setup-script marker and of /etc/uinitconverter/s6/default, and comments
+  like "uinitconverter shipped /etc/uinitconverter/s6/default before" in
+  uinitconverter-gen.
+
+### Tests
+
+- cargo build (no warnings), cargo test, the 4 standalone test suites,
+  bash -n and shellcheck -S warning on every tracked .sh.
+- Sandbox: default 257/257, SANDBOX_JOURNAL=no 264/264,
+  SANDBOX_FDSTORE=no 257/257.
+- packages/github-release.sh on a5f780f: exit 0, 9 RPMs, SHA256SUMS ok;
+  no file, Requires or Provides with "sdcompat" in them.
+- Not tested: a real install of the renamed RPMs, the "Moving from
+  sdcompat" steps on this machine, a boot.
+
+### Current state
+
+Committed through a5f780f (plus this entry), not pushed. Release files for
+v0.1.0 in ~/uinitconverter-release (tag on a5f780f). Obsolete: ~/sdcompat-release,
+~/rpmbuild-sdcompat, ~/rpmbuild-sdcompat-standalone, ~/sdcompat-srpms.
+This machine still runs the old sdcompat RPMs (ga365750) on its s6 boot.
+
+### Next steps
+
+1. Owner: on this machine, follow "Moving from sdcompat" (from the systemd
+   boot), install ~/uinitconverter-release/assets/*.rpm, `sudo
+   uinitconverter init --journal=no --resolved=no --boot-only-s6=yes
+   --selinux=enforcing` (this machine's old choices), boot s6.
+2. Owner: push, make the repository public, choose a license, then
+   `gh release create` (rerun packages/github-release.sh first if new
+   commits should be in the tag).
+
