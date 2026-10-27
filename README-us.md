@@ -359,7 +359,8 @@ Options:
 |---|---|
 | `--dry-run` | Print every command, change nothing (works without root). It ends with the command that applies it: `sudo uinitconverter init` with the same options minus `--dry-run` |
 | `-y`, `--yes` | Don't ask before starting |
-| `--journal=yes\|no` | `no`: no systemd-journald, rsyslog plus one s6-log directory per service (needs `rsyslog` and `uinitconverter-journal-relay`) / `yes`: back to journald |
+| `--journal=yes\|no` | `no`: no systemd-journald, a syslog daemon plus one s6-log directory per service (needs the `--syslog` package and `uinitconverter-journal-relay`) / `yes`: back to journald |
+| `--syslog=rsyslog\|syslog-ng` | The syslog daemon with `--journal=no` (default rsyslog). Its configuration goes to `/etc/uinitconverter/rsyslog.conf` or `syslog-ng.conf`; the distribution's stays as it is. Both write the files of Fedora's rsyslog defaults (`/var/log/messages`, `secure`, `maillog`, `cron`, …) |
 | `--resolved=yes\|no` | `no`: no systemd-resolved on the s6 boot, NetworkManager handles DNS itself / `yes`: back to resolved |
 | `--bus=daemon\|broker` | The s6 boot's system bus: dbus-daemon (default) or dbus-broker as on the systemd boot. dbus-daemon stays installed: the broker falls back to it when dbus-broker isn't installed, journald's socket (journald, or journal-relay with `JOURNAL=no`) isn't there after 10 s, or `dbus-broker-launch` has exited three times in this boot |
 | `--selinux=enforcing\|permissive` | SELinux mode of the s6 entry (`permissive` adds `enforcing=0`). The first run uses permissive |
@@ -599,8 +600,9 @@ and defaults). The most important keys:
 - `DEP_MAP`, `DEP_MAP_ADD`: systemd unit → s6 service from `EXTRA_SOURCE`.
 - `EXTRA_SOURCE`: hand-written s6-rc stores linked into the repository after the generated one (default `/etc/uinitconverter/s6:/etc/s6/sources`).
 - `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: the repository (s6.conf's `repodir`), the generated store, the set a reload commits and installs, and the bundle its commit makes for the boot (`default`).
-- `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR` and excludes the distribution's `rsyslog.service`, since the s6 `syslog` service is the rsyslogd (`INCLUDE` brings it back).
+- `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR` and excludes the distribution's `rsyslog.service` and `syslog-ng.service`, since the s6 `syslog` service is the syslog daemon (`SYSLOG`; `INCLUDE` brings them back).
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
+- `SYSLOG`: the daemon the s6 `syslog` service runs with `JOURNAL=no`: `rsyslog` (default) or `syslog-ng` (`uinitconverter init --syslog=`). Either way the distribution's `rsyslog.service` and `syslog-ng.service` are excluded. syslog-ng won't open `/dev/log` itself when `/run/systemd/system` exists (uinitconverter creates it for `sd_booted()`), so the run script binds it and passes it in `LISTEN_FDS`.
 - `BUS`: `daemon` (default) or `broker`, the system bus of the s6 boot (`uinitconverter init --bus=`); read by the `dbus` s6 service's run script.
 - `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `uinitconverter-sysinit` too, as `uinitconverter init --resolved=no` does, or DNS breaks).
 - `INIT`: the init system units are translated for. Only `s6` exists yet; any other value stops every tool with a configuration error.

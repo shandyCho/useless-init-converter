@@ -13,7 +13,8 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::{exit, Command, Stdio};
 
-use uinitconverter_base::{config::Config, tools};
+use uinitconverter_base::config::{Config, SYSLOGS};
+use uinitconverter_base::tools;
 
 const TITLE: &str = "Fedora (s6 + uinitconverter)";
 const S6LI_BASE: &str = "/etc/s6-linux-init/current";
@@ -58,9 +59,12 @@ anything.
   --default-s6          make the s6 entry the default, also for new kernels
                         (the systemd entry stays in the menu)
   --default-systemd     make the systemd entry the default again
-  --journal=yes|no      no: no systemd-journald, rsyslog + s6-log directories
-                        instead (journalctl and the log lines in systemctl
-                        status won't work; needs uinitconverter-journal-relay)
+  --journal=yes|no      no: no systemd-journald, a syslog daemon + s6-log
+                        directories instead (journalctl and the log lines in
+                        systemctl status won't work; needs
+                        uinitconverter-journal-relay)
+  --syslog=rsyslog|syslog-ng
+                        the syslog daemon with --journal=no (default rsyslog)
   --resolved=yes|no     no: no systemd-resolved on the s6 boot, NetworkManager
                         handles DNS itself (the systemd boot keeps resolved)
   --bus=daemon|broker   the s6 boot's system bus: dbus-daemon, or dbus-broker
@@ -90,6 +94,7 @@ struct Opts {
     journal: Option<bool>,
     resolved: Option<bool>,
     broker: Option<bool>,
+    syslog: Option<String>,
     enforcing: Option<bool>,
     boot_only_s6: Option<bool>,
     grub: bool,
@@ -101,6 +106,7 @@ struct Settings {
     journal: bool,
     resolved: bool,
     broker: bool,
+    syslog: String,
     enforcing: bool,
     boot_only_s6: bool,
     default_s6: bool,
@@ -125,6 +131,7 @@ fn parse_args(args: &[String]) -> Result<Option<Opts>, String> {
         journal: None,
         resolved: None,
         broker: None,
+        syslog: None,
         enforcing: None,
         boot_only_s6: None,
         grub: true,
@@ -145,13 +152,15 @@ fn parse_args(args: &[String]) -> Result<Option<Opts>, String> {
             ("--bus", Some("broker")) => o.broker = Some(true),
             ("--bus", Some("daemon")) => o.broker = Some(false),
             ("--bus", Some(v)) => return Err(format!("--bus: expected daemon or broker, got '{v}'")),
+            ("--syslog", Some(v)) if SYSLOGS.contains(&v) => o.syslog = Some(v.to_string()),
+            ("--syslog", Some(v)) => return Err(format!("--syslog: expected {}, got '{v}'", SYSLOGS.join(" or "))),
             ("--boot-only-s6", Some(v)) => o.boot_only_s6 = Some(yes_no(name, v)?),
             ("--grub", Some(v)) => o.grub = yes_no(name, v)?,
             ("--selinux", Some("enforcing")) => o.enforcing = Some(true),
             ("--selinux", Some("permissive")) => o.enforcing = Some(false),
             ("--selinux", Some(v)) => return Err(format!("--selinux: expected enforcing or permissive, got '{v}'")),
             ("-h" | "--help", None) => return Ok(None),
-            ("--journal" | "--resolved" | "--bus" | "--boot-only-s6" | "--grub" | "--selinux", None) => {
+            ("--journal" | "--resolved" | "--bus" | "--syslog" | "--boot-only-s6" | "--grub" | "--selinux", None) => {
                 return Err(format!("{name} needs a value ({name}=...)"))
             }
             // The old setup-fedora.sh spellings.
@@ -203,34 +212,42 @@ fn set_conf_key(text: &str, key: &str, val: bool) -> Option<String> {
     Some(out)
 }
 
-/// Whether uinitconverter.conf text sets BUS=broker (the last setting
-/// counts; unset is dbus-daemon).
-fn conf_broker(text: &str) -> bool {
-    let v = text
-        .lines()
-        .filter_map(|l| l.trim_start().strip_prefix("BUS")?.strip_prefix('='))
+/// The value uinitconverter.conf text gives KEY (the last setting counts),
+/// lowercased and without quotes; None when unset.
+fn conf_choice(text: &str, key: &str) -> Option<String> {
+    text.lines()
+        .filter_map(|l| l.trim_start().strip_prefix(key)?.strip_prefix('='))
         .last()
-        .map(|v| v.trim().to_ascii_lowercase());
-    v.as_deref() == Some("broker")
+        .map(|v| v.trim().trim_matches('"').trim().to_ascii_lowercase())
 }
 
-/// BUS= as set_conf_key does it: the text with BUS=broker under init's
-/// marker, or without any BUS= for dbus-daemon; None if it already says so.
-fn set_conf_bus(text: &str, broker: bool) -> Option<String> {
-    if conf_broker(text) == broker {
+/// Whether uinitconverter.conf text sets BUS=broker (unset is dbus-daemon).
+fn conf_broker(text: &str) -> bool {
+    conf_choice(text, "BUS").as_deref() == Some("broker")
+}
+
+/// KEY= for option OPT, as set_conf_key does it: the text with KEY=VALUE
+/// under init's marker, or without any KEY= when VALUE is the default;
+/// None if it already says so.
+fn set_conf_choice(text: &str, key: &str, opt: &str, value: &str, default: &str) -> Option<String> {
+    if conf_choice(text, key).as_deref().unwrap_or(default) == value {
         return None;
     }
-    let marker = "# set by uinitconverter init --bus=broker";
+    let marker = format!("# set by uinitconverter init --{opt}=");
     let kept: Vec<&str> = text
         .lines()
-        .filter(|l| !l.trim_start().strip_prefix("BUS").is_some_and(|r| r.starts_with('=')) && *l != marker)
+        .filter(|l| !l.trim_start().strip_prefix(key).is_some_and(|r| r.starts_with('=')) && !l.starts_with(&marker))
         .collect();
     let mut out = kept.join("\n").trim_end_matches('\n').to_string();
-    if broker {
-        out.push_str(&format!("\n\n{marker}\nBUS=broker"));
+    if value != default {
+        out.push_str(&format!("\n\n{marker}{value}\n{key}={value}"));
     }
     out.push('\n');
     Some(out)
+}
+
+fn set_conf_bus(text: &str, broker: bool) -> Option<String> {
+    set_conf_choice(text, "BUS", "bus", if broker { "broker" } else { "daemon" }, "daemon")
 }
 
 /// The words of a file without its # comments.
@@ -266,6 +283,11 @@ fn resolve(o: &Opts) -> Settings {
         journal: o.journal.unwrap_or_else(|| conf_bool(&conf, "JOURNAL")),
         resolved: o.resolved.unwrap_or_else(|| conf_bool(&conf, "RESOLVED")),
         broker: o.broker.unwrap_or_else(|| conf_broker(&conf)),
+        syslog: o
+            .syslog
+            .clone()
+            .or_else(|| conf_choice(&conf, "SYSLOG").filter(|v| SYSLOGS.contains(&v.as_str())))
+            .unwrap_or_else(|| SYSLOGS[0].to_string()),
         // The last run's options file; a first run boots permissive.
         enforcing: o
             .enforcing
@@ -440,6 +462,7 @@ fn check_system(ctx: &Ctx) {
         format!("{SHARE}/selinux/uinitconverter.cil"),
         format!("{SHARE}/s6.conf"),
         format!("{SHARE}/rsyslog.conf"),
+        format!("{SHARE}/syslog-ng.conf"),
         format!("{LIBEXEC}/uinitconverter-gen"),
     ];
     if let Some(p) = packaged.iter().find(|p| !exists(p)) {
@@ -467,7 +490,11 @@ fn check_programs(ctx: &Ctx, s: &Settings) {
     }
     if !s.journal {
         need.push((exists(&format!("{LIBEXEC}/uinitconverter-journal-relay")), "uinitconverter-journal-relay"));
-        need.push((in_path("rsyslogd"), "rsyslog"));
+        if s.syslog == "syslog-ng" {
+            need.push((in_path("syslog-ng"), "syslog-ng"));
+        } else {
+            need.push((in_path("rsyslogd"), "rsyslog"));
+        }
     }
     if s.broker {
         need.push((in_path("dbus-broker-launch"), "dbus-broker"));
@@ -589,6 +616,11 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
                 text = t;
                 changed = true;
             }
+            if let Some(t) = set_conf_choice(&text, "SYSLOG", "syslog", &s.syslog, SYSLOGS[0]) {
+                println!("  SYSLOG={} in {SDC_CONF}", s.syslog);
+                text = t;
+                changed = true;
+            }
             if changed {
                 ctx.put(SDC_CONF, &text, 0o644);
             }
@@ -597,8 +629,9 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
         None => die(&format!("{SDC_CONF} is missing: sudo dnf reinstall uinitconverter")),
     }
     if !s.journal {
-        let conf = read(&format!("{SHARE}/rsyslog.conf")).unwrap_or_default();
-        ctx.put("/etc/uinitconverter/rsyslog.conf", &conf, 0o644);
+        let name = if s.syslog == "syslog-ng" { "syslog-ng.conf" } else { "rsyslog.conf" };
+        let conf = read(&format!("{SHARE}/{name}")).unwrap_or_default();
+        ctx.put(&format!("/etc/uinitconverter/{name}"), &conf, 0o644);
     }
     // The s6 command: uinitconverter's repository stores and boot database.
     // A copy written by an earlier run is replaced; yours is kept.
@@ -628,7 +661,10 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
     sysinit_member(ctx, "journal-relay", !s.journal);
     // Without resolved, "resolv" hands DNS to NetworkManager at boot.
     sysinit_member(ctx, "resolv", !s.resolved);
-    ctx.run(&["mkdir", "-p", "/var/lib/uinitconverter", "/var/log/uinitconverter", "/var/lib/rsyslog"]);
+    // The syslog daemons' state (rsyslog's work directory, syslog-ng's
+    // persist file and control socket), labelled for them by the policy.
+    let syslog_state = if s.syslog == "syslog-ng" { "/var/lib/syslog-ng" } else { "/var/lib/rsyslog" };
+    ctx.run(&["mkdir", "-p", "/var/lib/uinitconverter", "/var/log/uinitconverter", syslog_state]);
 }
 
 fn unit_installed(unit: &str) -> bool {
@@ -946,9 +982,9 @@ fn set_boot_default(ctx: &Ctx, s: &Settings, kver: &str) {
 
 fn plan(s: &Settings, backup: &str) -> String {
     let logs = if s.journal {
-        "systemd-journald as an s6 service (journalctl works)"
+        "systemd-journald as an s6 service (journalctl works)".to_string()
     } else {
-        "rsyslog + s6-log directories, no journal (--journal=no)"
+        format!("{} + s6-log directories, no journal (--journal=no, --syslog={})", s.syslog, s.syslog)
     };
     let dns = if s.resolved {
         "systemd-resolved as on the systemd boot"
@@ -1172,7 +1208,8 @@ mod tests {
         assert!(parse_args(&args(&["--help"])).unwrap().is_none());
         assert_eq!(parse_args(&args(&["--bus=broker"])).unwrap().unwrap().broker, Some(true));
         assert_eq!(parse_args(&args(&["--bus=daemon"])).unwrap().unwrap().broker, Some(false));
-        for bad in ["--journal", "--journal=off", "--selinux=disabled", "--no-journal", "--rpms=/x", "--yes=no", "--bus", "--bus=yes"] {
+        assert_eq!(parse_args(&args(&["--syslog=syslog-ng"])).unwrap().unwrap().syslog.as_deref(), Some("syslog-ng"));
+        for bad in ["--journal", "--journal=off", "--selinux=disabled", "--no-journal", "--rpms=/x", "--yes=no", "--bus", "--bus=yes", "--syslog", "--syslog=metalog"] {
             assert!(parse_args(&args(&[bad])).is_err(), "{bad} accepted");
         }
     }
@@ -1196,6 +1233,14 @@ mod tests {
         assert_eq!(set_conf_bus(&broker, true), None);
         assert_eq!(set_conf_bus(&broker, false).unwrap(), base);
         assert_eq!(set_conf_bus("BUS=broker\nBUS_ADDRESS=x\n", false).unwrap(), "BUS_ADDRESS=x\n");
+        // SYSLOG=: the same, with the value in the marker; quotes are ignored.
+        let ng = set_conf_choice(base, "SYSLOG", "syslog", "syslog-ng", "rsyslog").unwrap();
+        assert_eq!(ng, "# comment\nDEBUG=no\n\n# set by uinitconverter init --syslog=syslog-ng\nSYSLOG=syslog-ng\n");
+        assert_eq!(conf_choice(&ng, "SYSLOG").as_deref(), Some("syslog-ng"));
+        assert_eq!(conf_choice("SYSLOG=\"Syslog-NG\"\n", "SYSLOG").as_deref(), Some("syslog-ng"));
+        assert_eq!(set_conf_choice(&ng, "SYSLOG", "syslog", "syslog-ng", "rsyslog"), None);
+        assert_eq!(set_conf_choice(&ng, "SYSLOG", "syslog", "rsyslog", "rsyslog").unwrap(), base);
+        assert_eq!(set_conf_choice(base, "SYSLOG", "syslog", "rsyslog", "rsyslog"), None);
         // The old script's marker goes too.
         let old = "A=1\n\n# set by setup-fedora.sh --no-resolved\nRESOLVED=no\n";
         assert_eq!(set_conf_key(old, "RESOLVED", true).unwrap(), "A=1\n");

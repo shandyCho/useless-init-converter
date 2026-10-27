@@ -34,7 +34,8 @@ Requires:       uinitconverter-timers = %{version}-%{release}
 Requires:       uinitconverterd = %{version}-%{release}
 Requires(post): policycoreutils
 Requires(postun): policycoreutils
-Recommends:     rsyslog
+# JOURNAL=no: the syslog daemon of the s6 boot (SYSLOG=, uinitconverter init --syslog=).
+Recommends:     (rsyslog or syslog-ng)
 Recommends:     earlyoom
 # The s6 command; uinitconverter init writes /etc/s6.conf for it.
 Recommends:     s6-frontend
@@ -81,6 +82,7 @@ cp -a dist/s6 %{buildroot}%{_sysconfdir}/uinitconverter/s6
 install -d %{buildroot}%{_datadir}/uinitconverter/s6-linux-init
 cp -a dist/s6-linux-init/skel %{buildroot}%{_datadir}/uinitconverter/s6-linux-init/skel
 install -Dm0644 dist/rsyslog.conf %{buildroot}%{_datadir}/uinitconverter/rsyslog.conf
+install -Dm0644 dist/syslog-ng.conf %{buildroot}%{_datadir}/uinitconverter/syslog-ng.conf
 install -Dm0644 dist/s6.conf %{buildroot}%{_datadir}/uinitconverter/s6.conf
 cp -a dist/initramfs/root %{buildroot}%{_datadir}/uinitconverter/initramfs
 install -Dm0755 dist/s6-linux-init/init-selinux %{buildroot}%{_sbindir}/init-selinux
@@ -142,6 +144,9 @@ fi
 %dir %{_localstatedir}/log/uinitconverter
 
 %changelog
+* Wed Oct 28 2026 uinitconverter developers
+- Ships syslog-ng.conf; recommends rsyslog or syslog-ng (SYSLOG=)
+
 * Tue Oct 27 2026 uinitconverter developers
 - uinitconverter init replaces dist/setup-fedora.sh; ships s6.conf for it
 - Requires policycoreutils-python-utils and grubby (used by uinitconverter init)

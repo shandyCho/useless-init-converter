@@ -1,5 +1,33 @@
 #!/bin/sh
-# rsyslog stands in for journald under s6. It uses its own configuration
-# (/etc/uinitconverter/rsyslog.conf, written by the setup script) so that the
-# systemd boot, where journald owns /dev/log, is unaffected.
-exec rsyslogd -n -iNONE -f /etc/uinitconverter/rsyslog.conf
+# The syslog daemon that stands in for journald under s6 (JOURNAL=no).
+# SYSLOG= in uinitconverter.conf (uinitconverter init --syslog=) picks it.
+# Each uses its own configuration under /etc/uinitconverter, written by
+# uinitconverter init, so the systemd boot, where journald owns /dev/log,
+# is unaffected.
+#  - rsyslog (default): rsyslogd binds /dev/log itself (imuxsock).
+#  - syslog-ng: with /run/systemd/system present (uinitconverter's
+#    sd_booted() flag) syslog-ng refuses a plain /dev/log, so it is bound
+#    here and passed as fd 3 with LISTEN_FDS, as systemd's syslog.socket
+#    would (see /etc/uinitconverter/syslog-ng.conf).
+syslog=$(sed -n 's/^[[:space:]]*SYSLOG=[[:space:]]*"\{0,1\}\([A-Za-z-]*\).*/\1/p' /etc/uinitconverter/uinitconverter.conf 2>/dev/null | tail -n 1)
+
+case ${syslog:-rsyslog} in
+syslog-ng)
+    if [ -d /run/systemd/system ]; then
+        export UINITCONVERTER_DEVLOG='systemd-syslog()'
+        exec s6-ipcserver-socketbinder -m -b0 -a 0666 /dev/log sh -c '
+            command -v restorecon >/dev/null && restorecon /dev/log 2>/dev/null
+            export LISTEN_FDS=1 LISTEN_PID=$$
+            exec syslog-ng -F -f /etc/uinitconverter/syslog-ng.conf 3<&0 </dev/null'
+    fi
+    export UINITCONVERTER_DEVLOG='unix-dgram("/dev/log")'
+    exec syslog-ng -F -f /etc/uinitconverter/syslog-ng.conf
+    ;;
+rsyslog)
+    exec rsyslogd -n -iNONE -f /etc/uinitconverter/rsyslog.conf
+    ;;
+*)
+    echo "syslog: SYSLOG=$syslog in uinitconverter.conf: expected rsyslog or syslog-ng; using rsyslog" >&2
+    exec rsyslogd -n -iNONE -f /etc/uinitconverter/rsyslog.conf
+    ;;
+esac

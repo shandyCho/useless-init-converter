@@ -84,6 +84,10 @@ pub struct Config {
     /// Run systemd-journald and send service output to it (journalctl works).
     /// When false, each service gets an s6-log directory under LOG_DIR.
     pub journal: bool,
+    /// The syslog daemon of the s6 "syslog" service when JOURNAL=no
+    /// (SYSLOG=, one of SYSLOGS). Read by that service's run script; here
+    /// it is only checked.
+    pub syslog: String,
     /// When false, systemd-resolved is not translated (RESOLVED=no): the
     /// s6 "resolv" oneshot makes NetworkManager handle DNS on that boot.
     pub resolved: bool,
@@ -116,8 +120,12 @@ const JOURNAL_UNITS: &[&str] = &[
     "systemd-journal-flush.service",
 ];
 
-/// Units added to EXCLUDE and mapped to the s6 "syslog" service when JOURNAL=no.
-const SYSLOG_UNITS: &[&str] = &["rsyslog.service", "syslog.service"];
+/// The values SYSLOG= accepts.
+pub const SYSLOGS: &[&str] = &["rsyslog", "syslog-ng"];
+
+/// Units added to EXCLUDE and mapped to the s6 "syslog" service when
+/// JOURNAL=no: the distribution's syslog daemons, whichever SYSLOG= picks.
+const SYSLOG_UNITS: &[&str] = &["rsyslog.service", "syslog-ng.service", "syslog.service"];
 
 impl Config {
     pub fn defaults() -> Config {
@@ -228,6 +236,7 @@ impl Config {
             halt_cmd: "s6-linux-init-shutdown -h now".into(),
             allow_uids: Vec::new(),
             journal: true,
+            syslog: "rsyslog".into(),
             resolved: true,
             journal_stdout: PathBuf::from("/run/systemd/journal/stdout"),
             transient_dir: PathBuf::from("/run/systemd/transient"),
@@ -296,6 +305,7 @@ impl Config {
                 "REBOOT_CMD" => cfg.reboot_cmd = v,
                 "HALT_CMD" => cfg.halt_cmd = v,
                 "JOURNAL" => cfg.journal = crate::unit::parse_bool(&v).unwrap_or(true),
+                "SYSLOG" => cfg.syslog = v,
                 "RESOLVED" => cfg.resolved = crate::unit::parse_bool(&v).unwrap_or(true),
                 // The system bus: read by the dbus s6 service's run script.
                 "BUS" => {}
@@ -312,6 +322,9 @@ impl Config {
         if !INITS.contains(&cfg.init.as_str()) {
             return Err(format!("{}: INIT={}: supported: {}", path.display(), cfg.init, INITS.join(" ")));
         }
+        if !SYSLOGS.contains(&cfg.syslog.as_str()) {
+            return Err(format!("{}: SYSLOG={}: supported: {}", path.display(), cfg.syslog, SYSLOGS.join(" ")));
+        }
         Ok(cfg.finish())
     }
 
@@ -324,16 +337,17 @@ impl Config {
             }
             // journalctl replaces the per-service s6-log directories.
             self.log_dir = None;
-            // The s6 "syslog" rsyslog has no config with journald; its
+            // The s6 "syslog" daemon has no config with journald; its
             // sockets belong to journald's own translated units.
             self.dep_map.retain(|(a, b)| {
                 !(b == "syslog" && (a == "systemd-journald.socket" || a == "syslog.socket"))
             });
         } else {
-            // The s6 "syslog" service is the rsyslogd; the distribution's
-            // rsyslog.service would start a second one (reading a journal
-            // that does not exist) and write the same files.
-            // INCLUDEd (either name: syslog.service is rsyslog's Alias=):
+            // The s6 "syslog" service is the syslog daemon (SYSLOG=); the
+            // distribution's rsyslog.service or syslog-ng.service would start
+            // a second one (reading a journal that does not exist) and write
+            // the same files.
+            // INCLUDEd (any name: syslog.service is their Alias=):
             // the owner runs the distribution's unit, so dependencies on it
             // go to it, not to the s6 service.
             let included = SYSLOG_UNITS.iter().any(|u| self.include.iter().any(|g| crate::util::fnmatch(g, u)));
@@ -414,6 +428,10 @@ mod tests {
         assert!(Config::load(Some(&f)).unwrap_err().contains("INIT=dinit"));
         std::fs::write(&f, "TOOLS=s6-svc\n").unwrap();
         assert!(Config::load(Some(&f)).is_err());
+        std::fs::write(&f, "SYSLOG=syslog-ng\n").unwrap();
+        assert_eq!(Config::load(Some(&f)).unwrap().syslog, "syslog-ng");
+        std::fs::write(&f, "SYSLOG=metalog\n").unwrap();
+        assert!(Config::load(Some(&f)).unwrap_err().contains("SYSLOG=metalog"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -440,6 +458,8 @@ mod tests {
         assert!(cfg.is_excluded("rsyslog.service"));
         assert_eq!(cfg.mapped_dep("rsyslog.service"), Some("syslog"));
         assert_eq!(cfg.mapped_dep("syslog.service"), Some("syslog"));
+        assert!(cfg.is_excluded("syslog-ng.service"));
+        assert_eq!(cfg.mapped_dep("syslog-ng.service"), Some("syslog"));
         let mut cfg = Config::defaults();
         cfg.journal = false;
         cfg.include.push("rsyslog.service".into());
