@@ -97,10 +97,8 @@ pub struct Daemon {
     pub index: RwLock<Index>,
     pub jobs: Mutex<BTreeMap<u32, Job>>,
     pub next_job: AtomicU32,
-    pub s6_lock: tokio::sync::Mutex<()>,
-    /// Longruns started with s6-svc while another s6-rc change held the
-    /// lock, not yet recorded in s6-rc's state (see s6.rs start_beside).
-    pub beside: Mutex<BTreeSet<String>>,
+    /// The s6 backend's locks and caches (see s6.rs).
+    pub s6: s6::State,
     pub started_targets: Mutex<BTreeSet<String>>,
     pub transient: Mutex<BTreeMap<String, Transient>>,
     pub manager_env: Mutex<Vec<String>>,
@@ -110,8 +108,6 @@ pub struct Daemon {
     pub started: (u64, u64),
     pub boot_done: AtomicBool,
     pub boot_finished: Mutex<Option<(u64, u64)>>,
-    /// (compiled db path, atom names in live state order)
-    pub atom_order: Mutex<Option<(PathBuf, Vec<String>)>>,
     /// Peer-to-peer connections on the private socket (signals go to these too).
     pub private: Mutex<Vec<(u64, Connection)>>,
     /// Template instances started on demand (see dynamic.rs).
@@ -128,14 +124,6 @@ pub struct Daemon {
     pub file_state_cache: Mutex<HashMap<String, String>>,
     /// The s6 set's directories' mtimes the cache was filled under.
     file_state_set_stamp: Mutex<Vec<Option<std::time::SystemTime>>>,
-    /// Short-lived s6-svstat results and per-database bundle contents.
-    /// s6-svstat answers, with when they were taken and the identity of
-    /// the supervise/status file they came from (see svstat_cached()).
-    pub svstat_cache: Mutex<HashMap<String, (std::time::Instant, Option<(u64, u64, i64)>, s6::SvStat)>>,
-    pub bundle_cache: Mutex<HashMap<String, Vec<String>>>,
-    /// Whether the live state-file reader agrees with `s6-rc -a list`
-    /// (None = not verified yet for the current database).
-    pub state_reader: Mutex<(Option<bool>, Option<std::time::Instant>)>,
     pub fdstore: crate::fdstore::Store,
 }
 
@@ -438,8 +426,7 @@ impl Daemon {
     pub(super) fn invalidate_caches(&self) {
         self.unit_cache.lock().unwrap().clear();
         self.file_state_cache.lock().unwrap().clear();
-        self.bundle_cache.lock().unwrap().clear();
-        self.svstat_cache.lock().unwrap().clear();
+        self.s6.clear_caches();
     }
 
     /// The unit an object path names. Checked after unescaping: `_2e_2e_2f`
@@ -490,7 +477,7 @@ impl Daemon {
         self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(true,)).await;
         let cfg = self.cfg.clone();
         let res = {
-            let _guard = self.s6_lock.lock().await;
+            let _guard = self.s6.lock.lock().await;
             // s6-rc-update must see those units as up, or it keeps them down.
             self.reconcile_beside_locked().await;
             tokio::task::spawn_blocking(move || gen::regenerate(&cfg, true))
@@ -509,7 +496,7 @@ impl Daemon {
         }
         *self.index.write().unwrap() = Index::load(&self.cfg);
         self.invalidate_caches();
-        *self.state_reader.lock().unwrap() = (None, None);
+        self.s6.database_changed();
         self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(false,)).await;
         res.map(|_| ())
     }
@@ -1855,8 +1842,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         conn,
         jobs: Mutex::new(BTreeMap::new()),
         next_job: AtomicU32::new(0),
-        s6_lock: tokio::sync::Mutex::new(()),
-        beside: Mutex::new(BTreeSet::new()),
+        s6: s6::State::default(),
         started_targets: Mutex::new(BTreeSet::new()),
         transient: Mutex::new(BTreeMap::new()),
         manager_env: Mutex::new(manager_env),
@@ -1865,7 +1851,6 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         started: (util::now_realtime_usec(), util::now_monotonic_usec()),
         boot_done: AtomicBool::new(true),
         boot_finished: Mutex::new(Some((util::now_realtime_usec(), util::now_monotonic_usec()))),
-        atom_order: Mutex::new(None),
         private: Mutex::new(Vec::new()),
         dynamic: Mutex::new(BTreeMap::new()),
         markers: Mutex::new(BTreeMap::new()),
@@ -1873,9 +1858,6 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         unit_cache: Mutex::new(HashMap::new()),
         file_state_cache: Mutex::new(HashMap::new()),
         file_state_set_stamp: Mutex::new(Vec::new()),
-        svstat_cache: Mutex::new(HashMap::new()),
-        bundle_cache: Mutex::new(HashMap::new()),
-        state_reader: Mutex::new((None, None)),
         fdstore: crate::fdstore::Store::default(),
     });
     daemon.verify_state_reader().await;

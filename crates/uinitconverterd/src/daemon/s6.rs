@@ -1,6 +1,7 @@
 //! s6 / s6-rc backend: unit state queries and job execution.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Mutex;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,41 @@ use crate::loader::Unit;
 use crate::state::{self, keys};
 use crate::tools;
 use crate::util;
+
+/// What the s6 backend keeps in the daemon. The rest of the daemon reaches
+/// it only through Daemon's methods in this file and dynamic.rs, plus
+/// clear_caches() and database_changed() after a reload.
+#[derive(Default)]
+pub struct State {
+    /// Held across s6-rc changes and database updates.
+    pub lock: tokio::sync::Mutex<()>,
+    /// Longruns started with s6-svc while another s6-rc change held the
+    /// lock, not yet recorded in s6-rc's state (see start_beside).
+    pub beside: Mutex<BTreeSet<String>>,
+    /// (compiled db path, atom names in live state order)
+    pub atom_order: Mutex<Option<(PathBuf, Vec<String>)>>,
+    /// Short-lived s6-svstat answers, with when they were taken and the
+    /// identity of the supervise/status file they came from (see
+    /// svstat_cached()).
+    pub svstat_cache: Mutex<HashMap<String, (Instant, Option<(u64, u64, i64)>, SvStat)>>,
+    /// Bundle contents per database.
+    pub bundle_cache: Mutex<HashMap<String, Vec<String>>>,
+    /// Whether the live state-file reader agrees with `s6-rc -a list`
+    /// (None = not verified yet for the current database).
+    pub state_reader: Mutex<(Option<bool>, Option<Instant>)>,
+}
+
+impl State {
+    pub fn clear_caches(&self) {
+        self.bundle_cache.lock().unwrap().clear();
+        self.svstat_cache.lock().unwrap().clear();
+    }
+
+    /// A new database was installed: verify the state reader again.
+    pub fn database_changed(&self) {
+        *self.state_reader.lock().unwrap() = (None, None);
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct SvStat {
@@ -66,7 +102,7 @@ impl Daemon {
     /// Atom names in the order of the live `state` file, cached per compiled db.
     async fn atom_order(&self) -> Vec<String> {
         let db = std::fs::canonicalize(self.cfg.live_dir.join("compiled")).unwrap_or_default();
-        if let Some((cached_db, order)) = self.atom_order.lock().unwrap().as_ref() {
+        if let Some((cached_db, order)) = self.s6.atom_order.lock().unwrap().as_ref() {
             if *cached_db == db {
                 return order.clone();
             }
@@ -81,7 +117,7 @@ impl Daemon {
             .filter(|n| atomic.contains(n))
             .collect();
         order.reverse();
-        *self.atom_order.lock().unwrap() = Some((db, order.clone()));
+        *self.s6.atom_order.lock().unwrap() = Some((db, order.clone()));
         order
     }
 
@@ -105,14 +141,14 @@ impl Daemon {
     /// s6-rc change that s6-rc has not been told about yet.
     pub(super) async fn active_atoms(&self) -> BTreeSet<String> {
         let mut active = self.active_atoms_live().await;
-        active.extend(self.beside.lock().unwrap().iter().cloned());
+        active.extend(self.s6.beside.lock().unwrap().iter().cloned());
         active
     }
 
     async fn active_atoms_live(&self) -> BTreeSet<String> {
         let order = self.atom_order().await;
         let from_file = self.active_from_state_file(&order);
-        let (trusted, last) = *self.state_reader.lock().unwrap();
+        let (trusted, last) = *self.s6.state_reader.lock().unwrap();
         match trusted {
             Some(true) => {
                 if let Some(f) = from_file {
@@ -123,7 +159,7 @@ impl Daemon {
             None => {
                 let due = last.map(|t| t.elapsed() > Duration::from_secs(5)).unwrap_or(true);
                 if due {
-                    self.state_reader.lock().unwrap().1 = Some(Instant::now());
+                    self.s6.state_reader.lock().unwrap().1 = Some(Instant::now());
                     if let (Some(f), Some(r)) = (&from_file, self.active_atoms_s6rc().await) {
                         let mut agree = *f == r;
                         if !agree {
@@ -138,7 +174,7 @@ impl Daemon {
                         if !agree {
                             eprintln!("uinitconverterd: the s6-rc state file layout is not what uinitconverter expects; using `s6-rc -a list` (slower)");
                         }
-                        self.state_reader.lock().unwrap().0 = Some(agree);
+                        self.s6.state_reader.lock().unwrap().0 = Some(agree);
                         return r;
                     }
                 }
@@ -180,11 +216,11 @@ impl Daemon {
 
     /// Atoms contained in a bundle (flattened by s6-rc-db).
     pub(super) async fn bundle_atoms(&self, bundle: &str) -> Vec<String> {
-        if let Some(v) = self.bundle_cache.lock().unwrap().get(bundle) {
+        if let Some(v) = self.s6.bundle_cache.lock().unwrap().get(bundle) {
             return v.clone();
         }
         let v = self.bundle_atoms_uncached(bundle).await;
-        self.bundle_cache.lock().unwrap().insert(bundle.to_string(), v.clone());
+        self.s6.bundle_cache.lock().unwrap().insert(bundle.to_string(), v.clone());
         v
     }
 
@@ -216,7 +252,7 @@ impl Daemon {
             use std::os::unix::fs::MetadataExt;
             std::fs::metadata(self.scandir(atom).join("supervise/status")).ok().map(|m| (m.dev(), m.ino(), m.mtime_nsec() + m.mtime() * 1_000_000_000))
         };
-        if let Some((t, i, v)) = self.svstat_cache.lock().unwrap().get(atom) {
+        if let Some((t, i, v)) = self.s6.svstat_cache.lock().unwrap().get(atom) {
             let same = match (ident, i) {
                 (Some(a), Some(b)) => a == *b,
                 _ => t.elapsed() < Duration::from_millis(500),
@@ -226,7 +262,7 @@ impl Daemon {
             }
         }
         let v = self.svstat(atom).await?;
-        self.svstat_cache.lock().unwrap().insert(atom.to_string(), (Instant::now(), ident, v.clone()));
+        self.s6.svstat_cache.lock().unwrap().insert(atom.to_string(), (Instant::now(), ident, v.clone()));
         Some(v)
     }
 
@@ -238,7 +274,7 @@ impl Daemon {
     }
 
     pub(super) fn forget_unit_state(&self, id: &str) {
-        self.svstat_cache.lock().unwrap().remove(id);
+        self.s6.svstat_cache.lock().unwrap().remove(id);
     }
 
     pub(super) async fn svstat(&self, atom: &str) -> Option<SvStat> {
@@ -432,7 +468,7 @@ impl Daemon {
     }
 
     async fn s6rc(&self, args: &[&str], names: &[String]) -> Result<(), String> {
-        let _guard = self.s6_lock.lock().await;
+        let _guard = self.s6.lock.lock().await;
         self.s6rc_locked(args, names).await
     }
 
@@ -489,7 +525,7 @@ impl Daemon {
         if self.cfg.run_dir.join("shutting-down").exists() {
             return None;
         }
-        if self.s6_lock.try_lock().is_ok() && !self.s6rc_lock_held() {
+        if self.s6.lock.try_lock().is_ok() && !self.s6rc_lock_held() {
             return None;
         }
         let deps = self.all_dependencies(id).await?;
@@ -512,14 +548,14 @@ impl Daemon {
         };
         eprintln!("uinitconverterd: start {id}: s6-rc is busy with another change, starting it beside");
         if start_logger {
-            self.beside.lock().unwrap().insert(logger.clone());
+            self.s6.beside.lock().unwrap().insert(logger.clone());
             let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(self.scandir(&logger)).status().await;
             if !self.wait_up(&logger, Duration::from_secs(10)).await {
                 eprintln!("uinitconverterd: start {id}: logger {logger} did not come up");
                 return Some("failed");
             }
         }
-        self.beside.lock().unwrap().insert(id.to_string());
+        self.s6.beside.lock().unwrap().insert(id.to_string());
         let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(self.scandir(id)).status().await;
         Some(self.wait_ready(id, unit, None).await)
     }
@@ -544,7 +580,7 @@ impl Daemon {
     /// `s6-rc change`; otherwise it starts the rest (oneshots, longruns whose
     /// dependencies are not up, native s6 services).
     async fn start_bundle_beside(&self, id: &str) -> bool {
-        if self.s6_lock.try_lock().is_ok() && !self.s6rc_lock_held() {
+        if self.s6.lock.try_lock().is_ok() && !self.s6rc_lock_held() {
             return false;
         }
         let active = self.active_atoms().await;
@@ -575,16 +611,16 @@ impl Daemon {
     /// Record the longruns start_beside() started as up in s6-rc, once no
     /// other change holds the lock.
     pub(super) async fn reconcile_beside(&self) {
-        if self.beside.lock().unwrap().is_empty() || self.s6rc_lock_held() {
+        if self.s6.beside.lock().unwrap().is_empty() || self.s6rc_lock_held() {
             return;
         }
-        let _guard = self.s6_lock.lock().await;
+        let _guard = self.s6.lock.lock().await;
         self.reconcile_beside_locked().await;
     }
 
     /// The caller holds `s6_lock`.
     pub(super) async fn reconcile_beside_locked(&self) {
-        let ids: Vec<String> = self.beside.lock().unwrap().iter().cloned().collect();
+        let ids: Vec<String> = self.s6.beside.lock().unwrap().iter().cloned().collect();
         for id in ids {
             // Stopped or given up since: s6-rc already considers it down.
             if self.svstat(&id).await.map(|s| s.wanted_up).unwrap_or(false) {
@@ -593,7 +629,7 @@ impl Daemon {
                     eprintln!("uinitconverterd: recording {id} in s6-rc: {e}");
                 }
             }
-            self.beside.lock().unwrap().remove(&id);
+            self.s6.beside.lock().unwrap().remove(&id);
             self.forget_unit_state(&id);
         }
     }
@@ -613,7 +649,7 @@ impl Daemon {
         if !order.iter().any(|a| a.ends_with(".stop")) {
             return;
         }
-        let Ok(_guard) = self.s6_lock.try_lock() else { return };
+        let Ok(_guard) = self.s6.lock.try_lock() else { return };
         let active = self.active_atoms_live().await;
         let mut names = Vec::new();
         let mut job_guards = Vec::new();
@@ -652,8 +688,8 @@ impl Daemon {
     /// about yet (`s6-rc -d change` would do nothing). False if it is not one.
     async fn stop_beside(&self, id: &str, unit: &Unit) -> bool {
         {
-            let _guard = self.s6_lock.lock().await;
-            if !self.beside.lock().unwrap().remove(id) {
+            let _guard = self.s6.lock.lock().await;
+            if !self.s6.beside.lock().unwrap().remove(id) {
                 return false;
             }
         }
