@@ -7404,3 +7404,36 @@ packages only for what is installed.
    tests/memtest.sh collect snapshots on both boots; `ps -o rss,args -C
    uinitconverter-runner` should show `notify-helper ... --unit X` lines.
 2. Item 3 (supervisors) and 4/5 when the owner decides.
+
+## 2026-10-27, part 41: memtest unit never ran on the s6 boot (372b9b2)
+
+Owner found no snapshots after installing memtest (22:21, systemd boot)
+and rebooting into s6: `s6 set status uinitconverter-memtest.service` said
+"not a valid identifier", and `uinitconverter-gen plan` listed it as
+"excluded by configuration". Cause: the default EXCLUDE ends with
+`uinitconverter*` (the package's own units, was `sdcompat*`), which matches
+the test unit's name. The systemd boot took none either, since it was
+installed after that boot was up and Type=simple enable doesn't start it.
+
+372b9b2:
+- tests/memtest.sh: the unit is now memtest-uinitconverter.service (the
+  lib and log directories keep their paths); install and uninstall
+  disable and remove uinitconverter-memtest.service if it is still there.
+  The EXCLUDE glob was left as it is, since it's there on purpose.
+- tests/memtest-check.sh: checks that the old name is replaced and that
+  the unit name is outside `uinitconverter*`. 24/24 pass;
+  bash -n/shellcheck pass. Only the test scripts changed, so cargo and
+  the sandbox suite weren't run.
+- Side note: `uinitconverter-gen` isn't on PATH on this machine; the
+  plan was read with target/debug/uinitconverter-gen.
+
+### Current state
+
+memtest is fixed in the tree but the old install is still on the machine.
+
+### Next steps
+
+1. Owner: `sudo tests/memtest.sh install` again (replaces the old unit),
+   then reboot into each init; on s6 check `s6 set status
+   memtest-uinitconverter.service` and the log.
+2. As in part 40: items 3-5 when the owner decides.
