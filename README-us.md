@@ -148,7 +148,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - Template instances are created on demand without recompiling the database, for example `user@1000.service` and `user-runtime-dir@1000.service`. Their dependencies start first, and units that require a stopped unit are stopped with it. At shutdown, the active oneshot instances are stopped, so their `ExecStop=` runs (systemd-backlight@ saves the brightness); they are recorded in `/run/uinitconverter/dyn-oneshot`, so this also holds after the daemon was restarted. A restarted daemon also takes over the running instances (their service directories in `/run/uinitconverter/dyn`), so it reports and stops them as before.
 - `ExecStop=` of a long-running service also runs when s6-rc stops it directly: at shutdown, `s6 live stop`, `s6 live reset`, a package update removing it. Each such service gets an s6-rc oneshot `UNIT.stop` that depends on it (so s6-rc takes it down first) and runs the `ExecStop=` with `$MAINPID` in its `down`, within `TimeoutStopSec=`. The daemon brings `UNIT.stop` up whenever s6-rc has the service up, and `systemctl stop` lets it run the `ExecStop=` (once). Oneshots with `RemainAfterExit=yes` always ran theirs from their own `down`. Differences: units that depend on the service are stopped beside its `ExecStop=`, not before it (nothing depends on `UNIT.stop`: on an upgrade s6-rc-update would restart every unit that gained a dependency on a new service); and `s6 process restart`/`s6-svc` act on the process alone, so no `ExecStop=` runs then. On-demand instances that have an `ExecStop=` (longruns too) are stopped by the daemon at shutdown.
 - Starting `poweroff.target`, `reboot.target` or `halt.target` (which is how logind powers off) runs the configured shutdown command.
-- D-Bus activation: answers dbus-daemon's `ActivationRequest` and replies with `ActivationFailure` when a start fails.
+- D-Bus activation: answers dbus-daemon's `ActivationRequest` and replies with `ActivationFailure` when a start fails. With `--bus=broker`, dbus-broker-launch starts services through `StartUnit` (with `SystemdService=`) or `StartTransientUnit` (a transient `dbus-:1.N-NAME@K.service` for the others) and watches `JobRemoved` and the unit's `ActiveState`, as with systemd.
 - Authorization: mutating calls need root, a uid in `ALLOW_UIDS`, or a polkit
   grant for systemd's action IDs (`manage-units`, `manage-unit-files`,
   `reload-daemon`, `set-environment`; the policy ships with systemd). Without
@@ -208,7 +208,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 | s6-frontend (recommended) | The `s6` command (see [The `s6` command](#the-s6-command-s6-frontend)); built with the others |
 | mdevd (recommended) | Loads the drivers in the s6 initramfs (`--boot-only-s6=yes`); built with the others |
 | systemd | Stays installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
-| dbus-daemon | The system bus (`--systemd-activation`); dbus-broker stays for the user bus |
+| dbus-daemon | The system bus (`--systemd-activation`), or dbus-broker with `--bus=broker`; dbus-broker stays for the user bus |
 | util-linux | `mount`, `swapon`, `mountpoint` for mount units and early boot; `rfkill` for the radio state |
 | shadow-utils | `useradd` for the system users that stand in for `DynamicUser=` |
 | policycoreutils, policycoreutils-python-utils | `restorecon` and `semodule` for the SELinux module; `semanage` for `uinitconverter init` |
@@ -361,6 +361,7 @@ Options:
 | `-y`, `--yes` | Don't ask before starting |
 | `--journal=yes\|no` | `no`: no systemd-journald, rsyslog plus one s6-log directory per service (needs `rsyslog` and `uinitconverter-journal-relay`) / `yes`: back to journald |
 | `--resolved=yes\|no` | `no`: no systemd-resolved on the s6 boot, NetworkManager handles DNS itself / `yes`: back to resolved |
+| `--bus=daemon\|broker` | The s6 boot's system bus: dbus-daemon (default) or dbus-broker as on the systemd boot. dbus-daemon stays installed: the broker falls back to it when dbus-broker isn't installed, journald's socket (journald, or journal-relay with `JOURNAL=no`) isn't there after 10 s, or `dbus-broker-launch` has exited three times in this boot |
 | `--selinux=enforcing\|permissive` | SELinux mode of the s6 entry (`permissive` adds `enforcing=0`). The first run uses permissive |
 | `--boot-only-s6=yes\|no` | `yes`: boot the s6 entry with uinitconverter's own initramfs instead of Fedora's, so no systemd runs at all (see below; needs `mdevd`) / `no`: back to Fedora's |
 | `--default-s6` / `--default-systemd` | Make the s6 entry the default boot entry, also for kernels installed later / make the systemd entry the default again. The systemd entry stays in the menu either way |
@@ -420,7 +421,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 |---|---|
 | Initramfs | Fedora's (dracut, systemd as its PID 1); with `--boot-only-s6=yes` uinitconverter's: s6-svscan, mdevd, cryptsetup |
 | PID 1 / services | s6-linux-init, s6-rc, uinitconverter |
-| System bus | dbus-daemon (dbus-broker stays for the user bus) |
+| System bus | dbus-daemon, or dbus-broker with `--bus=broker` (dbus-broker stays for the user bus) |
 | Logging | systemd-journald as an s6 service (`--journal=no`: rsyslog + s6-log) |
 | Network / DNS / time | NetworkManager, systemd-resolved (`--resolved=no`: NetworkManager alone), chrony |
 | OOM handling | earlyoom instead of systemd-oomd |
@@ -432,7 +433,8 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 If stage 2 fails, log in on tty9 (Ctrl+Alt+F9) and read
 `/run/uncaught-logs/current`. To boot the s6 database from before the last
 install, add `uinitconverter.db=previous` to the kernel command line. Nothing is
-regenerated at boot.
+regenerated at boot. `uinitconverter.bus=daemon` (or `=broker`) picks the system
+bus for one boot, over `BUS=`.
 
 What an s6 shutdown printed on the console is kept for the next boot in
 `/var/log/uinitconverter/last-shutdown-console.log` (s6's catch-all log) and
@@ -599,6 +601,7 @@ and defaults). The most important keys:
 - `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: the repository (s6.conf's `repodir`), the generated store, the set a reload commits and installs, and the bundle its commit makes for the boot (`default`).
 - `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR` and excludes the distribution's `rsyslog.service`, since the s6 `syslog` service is the rsyslogd (`INCLUDE` brings it back).
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
+- `BUS`: `daemon` (default) or `broker`, the system bus of the s6 boot (`uinitconverter init --bus=`); read by the `dbus` s6 service's run script.
 - `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `uinitconverter-sysinit` too, as `uinitconverter init --resolved=no` does, or DNS breaks).
 - `ALLOW_UIDS`: non-root users allowed to manage units.
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.

@@ -135,7 +135,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 템플릿 인스턴스는 데이터베이스를 다시 컴파일하지 않고 필요할 때 만들어집니다(예: `user@1000.service`, `user-runtime-dir@1000.service`). 의존성이 먼저 시작되고, 멈춘 유닛을 필요로 하는 유닛은 함께 멈춥니다. 종료할 때 활성 상태인 oneshot 인스턴스를 멈춰 `ExecStop=`이 실행됩니다(systemd-backlight@가 밝기를 저장합니다). 이 인스턴스는 `/run/uinitconverter/dyn-oneshot`에 기록되므로 데몬을 다시 시작한 뒤에도 마찬가지입니다. 다시 시작한 데몬은 실행 중인 인스턴스(`/run/uinitconverter/dyn`의 서비스 디렉터리)도 넘겨받아 이전처럼 상태를 보고하고 멈춥니다.
 - 오래 실행되는 서비스의 `ExecStop=`은 s6-rc가 서비스를 직접 멈출 때도 실행됩니다: 종료 시, `s6 live stop`, `s6 live reset`, 패키지 업데이트로 서비스가 없어질 때. 이런 서비스마다 그 서비스에 의존하는 s6-rc oneshot `UNIT.stop`이 생기고(그래서 s6-rc가 이것을 먼저 내립니다), 그 `down`이 `TimeoutStopSec=` 안에서 `$MAINPID`와 함께 `ExecStop=`을 실행합니다. 데몬은 s6-rc가 서비스를 올려 두었으면 `UNIT.stop`도 올리고, `systemctl stop`은 `ExecStop=`을 이것에 맡깁니다(한 번만 실행). `RemainAfterExit=yes`인 oneshot은 원래부터 자기 `down`에서 실행했습니다. 차이점: 그 서비스에 의존하는 유닛은 `ExecStop=`보다 먼저가 아니라 나란히 멈춥니다(`UNIT.stop`에는 아무것도 의존하지 않습니다. 그렇게 하면 업그레이드 때 s6-rc-update가 새 서비스에 대한 의존성이 생긴 유닛을 모두 다시 시작합니다). 또 `s6 process restart`/`s6-svc`는 프로세스에만 작용하므로 그때는 `ExecStop=`이 실행되지 않습니다. `ExecStop=`이 있는 필요 시 인스턴스(longrun 포함)는 종료할 때 데몬이 멈춥니다.
 - `poweroff.target`, `reboot.target`, `halt.target`을 시작하면(logind가 전원을 끄는 방식) 설정된 종료 명령을 실행합니다.
-- D-Bus 활성화: dbus-daemon의 `ActivationRequest`에 응답하고, 시작이 실패하면 `ActivationFailure`로 답합니다.
+- D-Bus 활성화: dbus-daemon의 `ActivationRequest`에 응답하고, 시작이 실패하면 `ActivationFailure`로 답합니다. `--bus=broker`이면 systemd에서처럼 dbus-broker-launch가 `StartUnit`(`SystemdService=`가 있을 때)이나 `StartTransientUnit`(그 밖에는 transient `dbus-:1.N-NAME@K.service`)으로 서비스를 시작하고, `JobRemoved`와 유닛의 `ActiveState`를 지켜봅니다.
 - 권한: 상태를 바꾸는 호출에는 root, `ALLOW_UIDS`에 있는 uid, 또는 systemd의 action ID(`manage-units`, `manage-unit-files`, `reload-daemon`, `set-environment`; 정책 파일은 systemd에 포함)에 대한 polkit 허가가 필요합니다. polkit이 없으면 root가 아닌 호출자는 거부됩니다. `ALLOW_UIDS`는 root와 같은 권한입니다. 유닛 하나에 대한 호출은 systemd처럼 polkit에 `unit`과 `verb` 세부 정보를 넘기므로, 그것으로 판단하는 규칙이 동작합니다. systemd와 같이 `AttachProcessesToUnit`의 유닛 이름이 비어 있으면 호출자 자신의 유닛이며, 권한 없는 호출자도 자신의 `Delegate=yes` 유닛 안에서 자기 프로세스는 옮길 수 있습니다(`user@UID.service`의 `systemd --user`).
 - SELinux 접근 검사를 systemd 262와 같이 polkit보다 먼저, root에게도 합니다. 호출자의 레이블(버스에서, 또는 private 소켓의 `SO_PEERSEC`)이 유닛 파일 레이블에 대해 클래스 `service`의 해당 권한(`start`, `stop`, `reload`, `status`)을, 매니저 호출과 유닛 파일이 없는 유닛은 uinitconverterd 자신의 레이블에 대해 클래스 `system`의 권한(`reload`, `status`, `halt`, `reboot`, `enable`, `start`)을 가져야 합니다. `ListUnits`는 호출자가 볼 수 없는 유닛을 빼고 보여 줍니다. permissive 모드와 permissive 도메인에서는 거부를 기록만 합니다(uinitconverterd의 stderr).
 - D-Bus 활성화 요청은 버스 데몬 자신이 보낸 것만 받아들이며, 활성화 때문에 데이터베이스를 다시 만들지 않습니다.
@@ -176,7 +176,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | s6-frontend (권장) | `s6` 명령([`s6` 명령](#s6-명령-s6-frontend) 참고). 나머지와 함께 빌드됩니다 |
 | mdevd (권장) | s6 initramfs(`--boot-only-s6=yes`)에서 드라이버를 로드합니다. 나머지와 함께 빌드됩니다 |
 | systemd | 설치된 채로 둡니다: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
-| dbus-daemon | 시스템 버스(`--systemd-activation`). 사용자 버스는 dbus-broker가 계속 맡습니다 |
+| dbus-daemon | 시스템 버스(`--systemd-activation`), `--bus=broker`이면 dbus-broker. 사용자 버스는 dbus-broker가 계속 맡습니다 |
 | util-linux | 마운트 유닛과 초기 부팅의 `mount`, `swapon`, `mountpoint`, 무선 상태의 `rfkill` |
 | shadow-utils | `DynamicUser=` 대신 쓰는 시스템 사용자를 만드는 `useradd` |
 | policycoreutils, policycoreutils-python-utils | SELinux 모듈용 `restorecon`, `semodule`. `uinitconverter init`용 `semanage` |
@@ -316,6 +316,7 @@ uinitconverter RPM을 직접 빌드할 수도 있습니다(`packages/build-rpms.
 | `-y`, `--yes` | 시작 전에 묻지 않습니다 |
 | `--journal=yes\|no` | `no`: systemd-journald 없이 rsyslog와 서비스별 s6-log 디렉터리를 씁니다(`rsyslog`와 `uinitconverter-journal-relay` 필요) / `yes`: journald로 되돌립니다 |
 | `--resolved=yes\|no` | `no`: s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / `yes`: resolved로 되돌립니다 |
+| `--bus=daemon\|broker` | s6 부팅의 시스템 버스: dbus-daemon(기본값) 또는 systemd 부팅과 같은 dbus-broker. dbus-daemon은 설치된 채로 둡니다. dbus-broker가 설치되어 있지 않거나, 10초 뒤에도 journald의 소켓(journald, `JOURNAL=no`이면 journal-relay)이 없거나, 이번 부팅에서 `dbus-broker-launch`가 세 번 종료했으면 dbus-daemon으로 대신합니다 |
 | `--selinux=enforcing\|permissive` | s6 항목의 SELinux 모드(`permissive`이면 `enforcing=0` 추가). 처음 실행할 때는 permissive |
 | `--boot-only-s6=yes\|no` | `yes`: s6 항목을 Fedora의 initramfs 대신 uinitconverter의 initramfs로 부팅해 systemd가 전혀 실행되지 않게 합니다(아래 참고, `mdevd` 필요) / `no`: Fedora의 것으로 되돌립니다 |
 | `--default-s6` / `--default-systemd` | s6 항목을 기본 부팅 항목으로 합니다(나중에 설치되는 커널에도) / systemd 항목을 다시 기본값으로 합니다. 어느 쪽이든 systemd 항목은 메뉴에 남습니다 |
@@ -365,7 +366,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 |---|---|
 | Initramfs | Fedora의 것(dracut, systemd가 PID 1). `--boot-only-s6=yes`이면 uinitconverter의 것: s6-svscan, mdevd, cryptsetup |
 | PID 1 / 서비스 | s6-linux-init, s6-rc, uinitconverter |
-| 시스템 버스 | dbus-daemon (사용자 버스용으로 dbus-broker는 유지) |
+| 시스템 버스 | dbus-daemon, `--bus=broker`이면 dbus-broker (사용자 버스용으로 dbus-broker는 유지) |
 | 로그 | s6 서비스로 실행되는 systemd-journald (`--journal=no`: rsyslog + s6-log) |
 | 네트워크 / DNS / 시간 | NetworkManager, systemd-resolved(`--resolved=no`: NetworkManager만), chrony |
 | OOM 처리 | systemd-oomd 대신 earlyoom |
@@ -377,6 +378,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 2단계(stage 2)가 실패하면 tty9(Ctrl+Alt+F9)에서 로그인해 `/run/uncaught-logs/current`를
 읽으세요. 마지막 설치 이전의 s6 데이터베이스로 부팅하려면 커널 명령줄에
 `uinitconverter.db=previous`를 추가하세요. 부팅 때는 아무것도 다시 만들지 않습니다.
+`uinitconverter.bus=daemon`(또는 `=broker`)은 `BUS=`보다 우선해 이번 부팅의 시스템 버스를 정합니다.
 
 s6 종료 때 콘솔에 나온 내용은 다음 부팅에서 `/var/log/uinitconverter/last-shutdown-console.log`
 (s6의 catch-all 로그)와 `last-shutdown-kernel.log`(종료가 시작된 뒤의 커널 로그, auditd가 멈춘 뒤의
@@ -524,6 +526,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: 저장소(s6.conf의 `repodir`), 생성된 스토어, reload가 커밋하고 설치하는 세트, 그 커밋이 부팅용으로 만드는 번들(`default`).
 - `JOURNAL`: `yes`(기본값)이면 systemd-journald를 실행하고 서비스 출력을 보냅니다. `no`이면 `LOG_DIR` 아래 서비스별 s6-log 디렉터리를 쓰고, s6 `syslog` 서비스가 rsyslogd이므로 배포판의 `rsyslog.service`는 제외합니다(`INCLUDE`로 되살릴 수 있습니다).
 - `LOG_DIR`: `JOURNAL=no`일 때 s6-log 디렉터리가 들어갈 위치.
+- `BUS`: s6 부팅의 시스템 버스, `daemon`(기본값) 또는 `broker`(`uinitconverter init --bus=`). `dbus` s6 서비스의 run 스크립트가 읽습니다.
 - `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`uinitconverter init --resolved=no`처럼 `resolv` s6 서비스도 `uinitconverter-sysinit`에 넣어야 DNS가 동작합니다).
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 원하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.

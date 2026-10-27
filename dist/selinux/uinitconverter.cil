@@ -138,3 +138,11 @@
 (allow init_t systemd_rfkill_var_lib_t (dir (getattr search open read write add_name remove_name)))
 (allow init_t systemd_rfkill_var_lib_t (file (create getattr open read write append setattr)))
 (typetransition init_t init_var_lib_t dir "rfkill" systemd_rfkill_var_lib_t)
+;
+; With BUS=broker the dbus s6 service binds the system bus socket itself
+; (s6-ipcserver-socketbinder, as dbus.socket under systemd) and hands it to
+; dbus-broker-launch. The binder also creates PATH.lock while it binds.
+; init_t may create the socket in /run/dbus (system_dbusd_var_run_t) but no
+; file: the lock would be denied and the broker never start (the run script
+; falls back to dbus-daemon). The lock gets init's own type.
+(typetransition init_t system_dbusd_var_run_t file "system_bus_socket.lock" init_var_run_t)

@@ -288,6 +288,8 @@ impl Config {
                 "HALT_CMD" => cfg.halt_cmd = v,
                 "JOURNAL" => cfg.journal = crate::unit::parse_bool(&v).unwrap_or(true),
                 "RESOLVED" => cfg.resolved = crate::unit::parse_bool(&v).unwrap_or(true),
+                // The system bus: read by the dbus s6 service's run script.
+                "BUS" => {}
                 "TRANSIENT_DIR" => cfg.transient_dir = PathBuf::from(&v),
                 "JOURNAL_STDOUT" => cfg.journal_stdout = PathBuf::from(&v),
                 "UDEV_DIR" => cfg.udev_dir = opt(&v),

@@ -61,6 +61,10 @@ anything.
                         status won't work; needs uinitconverter-journal-relay)
   --resolved=yes|no     no: no systemd-resolved on the s6 boot, NetworkManager
                         handles DNS itself (the systemd boot keeps resolved)
+  --bus=daemon|broker   the s6 boot's system bus: dbus-daemon, or dbus-broker
+                        as on the systemd boot (falls back to dbus-daemon if it
+                        can't start; uinitconverter.bus=daemon on the kernel
+                        command line overrides it for one boot)
   --selinux=enforcing|permissive
                         SELinux mode of the s6 entry (first run: permissive,
                         until you have checked for denials)
@@ -83,6 +87,7 @@ struct Opts {
     default_s6: Option<bool>,
     journal: Option<bool>,
     resolved: Option<bool>,
+    broker: Option<bool>,
     enforcing: Option<bool>,
     boot_only_s6: Option<bool>,
     grub: bool,
@@ -93,6 +98,7 @@ struct Opts {
 struct Settings {
     journal: bool,
     resolved: bool,
+    broker: bool,
     enforcing: bool,
     boot_only_s6: bool,
     default_s6: bool,
@@ -116,6 +122,7 @@ fn parse_args(args: &[String]) -> Result<Option<Opts>, String> {
         default_s6: None,
         journal: None,
         resolved: None,
+        broker: None,
         enforcing: None,
         boot_only_s6: None,
         grub: true,
@@ -133,13 +140,16 @@ fn parse_args(args: &[String]) -> Result<Option<Opts>, String> {
             ("--default-systemd", None) => o.default_s6 = Some(false),
             ("--journal", Some(v)) => o.journal = Some(yes_no(name, v)?),
             ("--resolved", Some(v)) => o.resolved = Some(yes_no(name, v)?),
+            ("--bus", Some("broker")) => o.broker = Some(true),
+            ("--bus", Some("daemon")) => o.broker = Some(false),
+            ("--bus", Some(v)) => return Err(format!("--bus: expected daemon or broker, got '{v}'")),
             ("--boot-only-s6", Some(v)) => o.boot_only_s6 = Some(yes_no(name, v)?),
             ("--grub", Some(v)) => o.grub = yes_no(name, v)?,
             ("--selinux", Some("enforcing")) => o.enforcing = Some(true),
             ("--selinux", Some("permissive")) => o.enforcing = Some(false),
             ("--selinux", Some(v)) => return Err(format!("--selinux: expected enforcing or permissive, got '{v}'")),
             ("-h" | "--help", None) => return Ok(None),
-            ("--journal" | "--resolved" | "--boot-only-s6" | "--grub" | "--selinux", None) => {
+            ("--journal" | "--resolved" | "--bus" | "--boot-only-s6" | "--grub" | "--selinux", None) => {
                 return Err(format!("{name} needs a value ({name}=...)"))
             }
             // The old setup-fedora.sh spellings.
@@ -191,6 +201,36 @@ fn set_conf_key(text: &str, key: &str, val: bool) -> Option<String> {
     Some(out)
 }
 
+/// Whether uinitconverter.conf text sets BUS=broker (the last setting
+/// counts; unset is dbus-daemon).
+fn conf_broker(text: &str) -> bool {
+    let v = text
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix("BUS")?.strip_prefix('='))
+        .last()
+        .map(|v| v.trim().to_ascii_lowercase());
+    v.as_deref() == Some("broker")
+}
+
+/// BUS= as set_conf_key does it: the text with BUS=broker under init's
+/// marker, or without any BUS= for dbus-daemon; None if it already says so.
+fn set_conf_bus(text: &str, broker: bool) -> Option<String> {
+    if conf_broker(text) == broker {
+        return None;
+    }
+    let marker = "# set by uinitconverter init --bus=broker";
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.trim_start().strip_prefix("BUS").is_some_and(|r| r.starts_with('=')) && *l != marker)
+        .collect();
+    let mut out = kept.join("\n").trim_end_matches('\n').to_string();
+    if broker {
+        out.push_str(&format!("\n\n{marker}\nBUS=broker"));
+    }
+    out.push('\n');
+    Some(out)
+}
+
 /// The words of a file without its # comments.
 fn words(text: &str) -> Vec<String> {
     text.lines()
@@ -223,6 +263,7 @@ fn resolve(o: &Opts) -> Settings {
     Settings {
         journal: o.journal.unwrap_or_else(|| conf_bool(&conf, "JOURNAL")),
         resolved: o.resolved.unwrap_or_else(|| conf_bool(&conf, "RESOLVED")),
+        broker: o.broker.unwrap_or_else(|| conf_broker(&conf)),
         // The last run's options file; a first run boots permissive.
         enforcing: o
             .enforcing
@@ -426,6 +467,9 @@ fn check_programs(ctx: &Ctx, s: &Settings) {
         need.push((exists(&format!("{LIBEXEC}/uinitconverter-journal-relay")), "uinitconverter-journal-relay"));
         need.push((in_path("rsyslogd"), "rsyslog"));
     }
+    if s.broker {
+        need.push((in_path("dbus-broker-launch"), "dbus-broker"));
+    }
     if s.grub && s.boot_only_s6 {
         need.push((in_path("mdevd"), "mdevd"));
     }
@@ -537,6 +581,11 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
                     text = t;
                     changed = true;
                 }
+            }
+            if let Some(t) = set_conf_bus(&text, s.broker) {
+                println!("  BUS={} in {SDC_CONF}", if s.broker { "broker" } else { "daemon" });
+                text = t;
+                changed = true;
             }
             if changed {
                 ctx.put(SDC_CONF, &text, 0o644);
@@ -904,6 +953,11 @@ fn plan(s: &Settings, backup: &str) -> String {
     } else {
         "NetworkManager without systemd-resolved (s6 boot only; --resolved=no)"
     };
+    let bus = if s.broker {
+        "dbus-broker as on the systemd boot (--bus=broker; dbus-daemon if it can't start)"
+    } else {
+        "dbus-daemon (--bus=daemon)"
+    };
     let grub = if !s.grub {
         "  * GRUB:    unchanged (--grub=no)\n".to_string()
     } else {
@@ -933,6 +987,7 @@ fn plan(s: &Settings, backup: &str) -> String {
          \x20            so services run in their own domains as under systemd)\n\
          \x20 * logs:    {logs}\n\
          \x20 * DNS:     {dns}\n\
+         \x20 * D-Bus:   {bus}\n\
          {grub}\
          \n\
          Nothing about the normal systemd boot changes: systemd, dbus-broker, journald\n\
@@ -985,6 +1040,7 @@ fn next_steps(s: &Settings) -> String {
          \x20 5. If a new s6 database breaks booting, add this to the kernel command\n\
          \x20    line in GRUB (press e):\n\
          \x20      uinitconverter.db=previous    boot the database from before the last change\n\
+         \x20      uinitconverter.bus=daemon     system bus with dbus-daemon for this boot\n\
          {only_s6}\
          \x20 6. To go back: boot the normal Fedora entry (hold Shift or press Esc for the\n\
          \x20    GRUB menu); make it the default again with\n\
@@ -1108,7 +1164,9 @@ mod tests {
         assert!(!o.grub);
         assert_eq!((o.boot_only_s6, o.resolved), (Some(true), Some(true)));
         assert!(parse_args(&args(&["--help"])).unwrap().is_none());
-        for bad in ["--journal", "--journal=off", "--selinux=disabled", "--no-journal", "--rpms=/x", "--yes=no"] {
+        assert_eq!(parse_args(&args(&["--bus=broker"])).unwrap().unwrap().broker, Some(true));
+        assert_eq!(parse_args(&args(&["--bus=daemon"])).unwrap().unwrap().broker, Some(false));
+        for bad in ["--journal", "--journal=off", "--selinux=disabled", "--no-journal", "--rpms=/x", "--yes=no", "--bus", "--bus=yes"] {
             assert!(parse_args(&args(&[bad])).is_err(), "{bad} accepted");
         }
     }
@@ -1124,6 +1182,14 @@ mod tests {
         assert_eq!(off, "# comment\nDEBUG=no\n\n# set by uinitconverter init --journal=no\nJOURNAL=no\n");
         assert_eq!(set_conf_key(&off, "JOURNAL", false), None);
         assert_eq!(set_conf_key(&off, "JOURNAL", true).unwrap(), base);
+        // BUS=: dbus-daemon unless the last setting says broker; BUS_ADDRESS is another key.
+        assert!(!conf_broker("BUS_ADDRESS=broker\n") && conf_broker("BUS=daemon\nBUS= Broker\n"));
+        assert_eq!(set_conf_bus(base, false), None);
+        let broker = set_conf_bus(base, true).unwrap();
+        assert_eq!(broker, "# comment\nDEBUG=no\n\n# set by uinitconverter init --bus=broker\nBUS=broker\n");
+        assert_eq!(set_conf_bus(&broker, true), None);
+        assert_eq!(set_conf_bus(&broker, false).unwrap(), base);
+        assert_eq!(set_conf_bus("BUS=broker\nBUS_ADDRESS=x\n", false).unwrap(), "BUS_ADDRESS=x\n");
         // The old script's marker goes too.
         let old = "A=1\n\n# set by setup-fedora.sh --no-resolved\nRESOLVED=no\n";
         assert_eq!(set_conf_key(old, "RESOLVED", true).unwrap(), "A=1\n");

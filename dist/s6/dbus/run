@@ -1,9 +1,60 @@
 #!/bin/sh
-# The reference dbus-daemon (dnf install dbus-daemon); --systemd-activation
-# makes it ask uinitconverter to start services with SystemdService=.
-mkdir -p /run/dbus
+# The system bus. BUS= in uinitconverter.conf (uinitconverter init --bus=)
+# picks it, uinitconverter.bus=daemon|broker on the kernel command line
+# overrides that for one boot.
+#  - daemon (default): the reference dbus-daemon; --systemd-activation makes
+#    it ask uinitconverter to start services with SystemdService=.
+#  - broker: dbus-broker, as on the systemd boot. dbus-broker-launch starts
+#    services through StartUnit/StartTransientUnit on uinitconverter's
+#    org.freedesktop.systemd1. If it can't run, this falls back to
+#    dbus-daemon rather than boot without a bus.
+bus=$(sed -n 's/^[[:space:]]*BUS=[[:space:]]*\([A-Za-z]*\).*/\1/p' /etc/uinitconverter/uinitconverter.conf 2>/dev/null | tail -n 1)
+for w in $(cat /proc/cmdline 2>/dev/null); do
+    case $w in
+    uinitconverter.bus=*) bus=${w#*=} ;;
+    esac
+done
+
+mkdir -p /run/dbus /run/uinitconverter
 # systemd creates it for dbus.socket with its file_contexts label
 # (system_dbusd_var_run_t); the socket inherits it, and confined services
 # may only connect to a socket with that label.
 command -v restorecon >/dev/null && restorecon /run/dbus 2>/dev/null
+
+if [ "$bus" = broker ]; then
+    # A launcher that keeps exiting (s6 runs this again each time) gives
+    # way to dbus-daemon after three tries in this boot.
+    tries=/run/uinitconverter/dbus-broker-tries
+    n=$(($(cat "$tries" 2>/dev/null || echo 0) + 1))
+    echo "$n" >"$tries"
+    why=
+    if ! command -v dbus-broker-launch >/dev/null; then
+        why="dbus-broker is not installed"
+    elif [ "$n" -gt 3 ]; then
+        why="dbus-broker-launch exited $((n - 1)) times in this boot"
+    else
+        # dbus-broker-launch exits at once without journald's socket
+        # (journald, or journal-relay with JOURNAL=no).
+        i=0
+        while [ ! -S /run/systemd/journal/socket ] && [ "$i" -lt 100 ]; do
+            sleep 0.1
+            i=$((i + 1))
+        done
+        [ -S /run/systemd/journal/socket ] || why="no /run/systemd/journal/socket after 10 s"
+    fi
+    if [ -z "$why" ]; then
+        # As dbus.socket + dbus-broker.service: the socket is bound first
+        # (clients wait in its backlog, so the bus counts as ready now) and
+        # passed as fd 3 with LISTEN_FDS; fd 3 was the readiness pipe.
+        rm -f /run/dbus/system_bus_socket
+        # OOMScoreAdjust= and LimitNOFILE= of dbus-broker.service.
+        echo -900 >/proc/self/oom_score_adj
+        exec s6-softlimit -o 16384 \
+            s6-ipcserver-socketbinder -a 0666 /run/dbus/system_bus_socket sh -c '
+            echo >&3
+            export LISTEN_FDS=1 LISTEN_PID=$$
+            exec dbus-broker-launch --scope system --audit 3<&0 </dev/null'
+    fi
+    echo "dbus: dbus-daemon instead of dbus-broker: $why" >&2
+fi
 exec dbus-daemon --system --nofork --nopidfile --systemd-activation --print-address=3
