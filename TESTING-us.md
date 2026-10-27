@@ -130,6 +130,16 @@ To check that the core works without the standalone `uinitconverter-fdstore`, ru
 holds the fds itself, so `check.sh` checks that they are gone after the daemon
 restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
+To test the system bus with dbus-broker instead of dbus-daemon, run
+`sandbox.sh` and `check.sh` with `SANDBOX_BUS=broker` in front (needs
+`dbus-broker` and `unshare`). `dbus-broker-launch` takes its socket the systemd
+way (`LISTEN_FDS`) and always logs to `/run/systemd/journal/socket`, so it runs
+in a user+mount namespace with the same uid, a tmpfs `/run` and a stand-in
+journal (journal-relay's socket with `SANDBOX_JOURNAL=no`, else one that writes
+`~/sdc/broker-journal.log`). In this mode `check.sh` also checks that a service
+without `SystemdService=` starts as a transient unit from `StartTransientUnit`
+(`dbus-:1.N-org.example.Trans@K.service`).
+
 On a machine with uinitconverter's SELinux module installed, `/usr/bin/s6-rc-update`
 runs as `init_t` when you start it (that is what lets `sudo s6 live install`
 work), and `init_t` can't open the sandbox's files. So `sandbox.sh` copies

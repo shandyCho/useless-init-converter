@@ -128,6 +128,15 @@ uinitconverter의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-up
 `sandbox.sh`와 `check.sh`를 실행하세요. 그러면 데몬이 fd를 직접 보관하므로, 데몬을 다시 시작한
 뒤 fd가 사라졌는지를 확인합니다. 독립 도구는 `tests/sandbox.sh`가 `standalone/`에서 빌드합니다.
 
+시스템 버스를 dbus-daemon 대신 dbus-broker로 시험하려면 `SANDBOX_BUS=broker`를 앞에 붙여
+`sandbox.sh`와 `check.sh`를 실행하세요(`dbus-broker`와 `unshare`가 필요합니다).
+`dbus-broker-launch`는 소켓을 systemd 방식(`LISTEN_FDS`)으로 받고 항상
+`/run/systemd/journal/socket`에 로그를 보내므로, 같은 uid의 사용자·마운트 네임스페이스에서
+tmpfs `/run`과 대역 journal(`SANDBOX_JOURNAL=no`이면 journal-relay의 소켓, 아니면
+`~/sdc/broker-journal.log`에 쓰는 소켓)을 붙여 실행합니다. 이 모드에서 `check.sh`는
+`SystemdService=`가 없는 서비스가 `StartTransientUnit`의 transient unit
+(`dbus-:1.N-org.example.Trans@K.service`)으로 시작되는지도 확인합니다.
+
 이어서 Fedora의 진짜 `systemctl`로 샌드박스를 조작해 보세요.
 
 ```sh

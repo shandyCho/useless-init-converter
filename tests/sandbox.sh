@@ -7,6 +7,8 @@
 # SANDBOX_JOURNAL=no sets it up as a JOURNAL=no install (per-service s6-log).
 # SANDBOX_FDSTORE=no runs it without the standalone uinitconverter-fdstore (the
 # daemon then holds the fds itself).
+# SANDBOX_BUS=broker runs the bus with dbus-broker-launch instead of
+# dbus-daemon --systemd-activation (needs dbus-broker and unshare).
 #
 # Needs `cargo build` in this workspace; the standalone tools it uses
 # (uinitconverter-notify, uinitconverter-fdstore, uinitconverter-journal-relay,
@@ -552,6 +554,32 @@ cat > "$U/late.service" <<EOF
 ExecStart=/bin/sh -c 'echo started >> $R/late.out; exec sleep 1000'
 EOF
 
+# Without SystemdService=: dbus-daemon runs Exec= itself, dbus-broker-launch
+# asks for a transient unit dbus-:1.N-org.example.Trans@K.service.
+cat > "$W/trans.sh" <<EOF
+#!/bin/sh
+echo transient >> $R/trans.out
+exec sleep 1000
+EOF
+chmod +x "$W/trans.sh"
+cat > "$W/dbus-services/org.example.Trans.service" <<EOF
+[D-BUS Service]
+Name=org.example.Trans
+Exec=$W/trans.sh
+EOF
+# A unit that fails: the caller must get an error, not wait for its timeout.
+cat > "$W/dbus-services/org.example.Fail.service" <<EOF
+[D-BUS Service]
+Name=org.example.Fail
+Exec=/bin/false
+SystemdService=failact.service
+EOF
+cat > "$U/failact.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/false
+EOF
+
 # --- units wanted by devices (udev SYSTEMD_WANTS), from a fake udev database ---
 mkdir -p "$W/udev/tags/systemd" "$W/udev/data"
 udev_dev() { # udev_dev ID DATA-LINES...
@@ -783,9 +811,54 @@ cat > "$W/bus.conf" <<EOF
   </policy>
 </busconfig>
 EOF
-dbus-daemon --config-file="$W/bus.conf" --systemd-activation --nofork --nopidfile >"$W/dbus.log" 2>&1 &
-echo $! >> "$W/pids"
-sleep 0.3
+if [ "${SANDBOX_BUS:-daemon}" = broker ]; then
+    # dbus-broker-launch takes its listening socket the systemd way and
+    # always logs to /run/systemd/journal/socket. It gets a private mount
+    # namespace (same uid, so the bus sees real peer credentials) with a
+    # tmpfs /run holding a stand-in journal: the relay's socket with
+    # JOURNAL=no, else a sink writing to broker-journal.log.
+    JDIR=$R/jrelay
+    if [ "${SANDBOX_JOURNAL:-yes}" != no ]; then
+        JDIR=$R/jnative
+        mkdir -p "$JDIR"
+        python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+s.bind(sys.argv[1])
+with open(sys.argv[2], "ab", buffering=0) as f:
+    while True:
+        f.write(s.recv(65536) + b"\n")
+' "$JDIR/socket" "$W/broker-journal.log" >/dev/null 2>&1 &
+        echo $! >> "$W/pids"
+    fi
+    cat > "$W/listen-fd.py" <<'PYT'
+import os, socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(sys.argv[1])
+s.listen(64)
+os.dup2(s.fileno(), 3)
+os.set_inheritable(3, True)
+os.environ.update(LISTEN_FDS="1", LISTEN_PID=str(os.getpid()))
+os.execvp(sys.argv[2], sys.argv[2:])
+PYT
+    mkdir -p "$W/oldrun"
+    # unshare and sh exec, so the PID in pids is the launcher's.
+    DBUS_SYSTEM_BUS_ADDRESS="unix:path=$R/bus" \
+    unshare -U --map-current-user -m --keep-caps sh -c '
+        mount --rbind /run "$1/oldrun" && mount -t tmpfs tmpfs /run &&
+        mkdir -p /run/user /run/systemd/journal &&
+        mount --rbind "$1/oldrun/user" /run/user &&
+        mount --bind "$2" /run/systemd/journal || exit 1
+        exec python3 "$1/listen-fd.py" "$3" dbus-broker-launch --scope system --config-file "$1/bus.conf"
+    ' sh "$W" "$JDIR" "$R/bus" >"$W/dbus.log" 2>&1 &
+    echo $! >> "$W/pids"
+    sleep 0.5
+    kill -0 $! 2>/dev/null || { cat "$W/dbus.log" >&2; echo "dbus-broker-launch failed" >&2; exit 1; }
+else
+    dbus-daemon --config-file="$W/bus.conf" --systemd-activation --nofork --nopidfile >"$W/dbus.log" 2>&1 &
+    echo $! >> "$W/pids"
+    sleep 0.3
+fi
 "$DAEMON" $C daemon --address "unix:path=$R/bus" >"$W/daemon.log" 2>&1 &
 echo $! > "$W/daemon.pid"
 sleep 0.5

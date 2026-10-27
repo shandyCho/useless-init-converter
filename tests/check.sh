@@ -562,7 +562,20 @@ sleep 1.5
 [ ! -e "$R/act.out" ] && ok "forged ActivationRequest ignored" || bad "forged ActivationRequest started act.service"
 $B --timeout=3 call org.example.Act / org.example.Act Ping >/dev/null 2>&1
 sleep 1
-expect_eq "real activation via dbus-daemon" "$(cat "$R/act.out" 2>/dev/null)" "activated"
+expect_eq "real activation through the bus" "$(cat "$R/act.out" 2>/dev/null)" "activated"
+# No SystemdService=: dbus-broker-launch starts a transient unit through
+# StartTransientUnit (its own cgroup), dbus-daemon runs Exec= itself.
+$B --timeout=3 call org.example.Trans / org.example.Trans Ping >/dev/null 2>&1
+sleep 1
+expect_eq "activation without SystemdService= ran Exec=" "$(cat "$R/trans.out" 2>/dev/null)" "transient"
+if [ "${SANDBOX_BUS:-daemon}" = broker ]; then
+    $B call $MGR ListUnits | grep -q 'dbus-.*org.example.Trans@[0-9]*.service" "[^"]*" "loaded" "active"' &&
+        ok "it runs as a transient unit (StartTransientUnit)" || bad "no active transient dbus-*-org.example.Trans@N.service"
+fi
+t0=$(date +%s)
+e=$($B --timeout=20 call org.example.Fail / org.example.Fail Ping 2>&1)
+t=$(($(date +%s) - t0))
+[ "$t" -lt 10 ] && ok "failed activation answered in ${t}s ($e)" || bad "failed activation took ${t}s ($e)"
 
 section "start beside a busy s6-rc change"
 L="s6-rc -l $R/live"
