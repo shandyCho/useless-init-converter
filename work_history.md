@@ -7437,3 +7437,92 @@ memtest is fixed in the tree but the old install is still on the machine.
    then reboot into each init; on s6 check `s6 set status
    memtest-uinitconverter.service` and the log.
 2. As in part 40: items 3-5 when the owner decides.
+
+## 2026-10-28, part 42: memtest results, 3 boots each (no code change)
+
+Owner ran memtest on 3 s6 and 3 systemd boots (~/uinitconverter-mem/
+memtest, report.txt, all at uptime ~615-626 s, GDM greeter).
+
+- PASS: total - available median s6 1164.7 vs systemd 1179.4 MiB (-14.7).
+  Spread within an init is ~20 MiB (s6 1145.5-1166.2, systemd
+  1171.1-1179.7), so the two are equal within noise.
+- "used" +107 MiB is Cached -144 (no journald files in the page cache on
+  s6), not more memory in use; total - available is the figure to read.
+- s6 side: init group +66 MiB PSS (s6-supervise x255 32.2, runner helpers
+  x37 37.0, uinitconverterd 7.5), kernel cost of 414 vs 77 processes
+  (PageTables +17, SUnreclaim +13, KernelStack +6), logging -36 (no
+  journald; rsyslogd 2.4 vs 15.4).
+- On-demand socket activation (f930166) shows on the real boot: iscsid,
+  virt*d, dmeventd are no longer running on s6 (part 35 had ~31 MiB of
+  them); running services 25 (s6) vs 35 (systemd).
+- RPMs from 31d9726 were installed 2026-10-27 23:57, so the 23:10 s6
+  snapshot is the old build (dbus-daemon) and 00:12/00:45 the new one
+  (dbus-broker as the s6 bus). The figures barely change between them.
+- The notify helper re-exec (720c44c) does not show: in all three s6
+  snapshots the same ~11 runner processes have RssAnon 1.5-2.8 MB (the
+  sandbox's re-executed helper had 384 kB), and the runner total stays at
+  35.5-37.0 MiB. The snapshot records only comm, so it can't say which
+  units these are or whether the exec failed (its error goes to the
+  service's log; nothing in /var/log/uinitconverter or /var/log/messages).
+
+### Next steps
+
+1. On the next s6 boot: `ps -o pid,rss,args -C uinitconverter-runner`
+   (are there `notify-helper ... --unit X` lines?), and look for
+   "notify helper: exec" in those units' logs and for AVCs
+   (`sudo ausearch -m AVC -ts boot | grep runner`). If the exec works,
+   find what the ~2 MB processes are.
+2. Optional: memcompare snap could record args for the init group, so a
+   snapshot names the runner kinds.
+3. Items 3-5 of part 40 when the owner decides.
+
+## 2026-10-28, part 43: helper re-exec confirmed, on-demand runners' SELinux heap (08d57db)
+
+Owner, s6 boot (uptime ~18 min): `ps -o pid,rss,args -C uinitconverter-runner`
+shows `uinitconverter-runner notify-helper ... --unit X` for chronyd,
+polkit, systemd-logind, cups, user@1000 and systemd-hostnamed; no AVCs
+for the runner (`ausearch -m AVC -ts boot`). So 720c44c works on the real
+boot; part 42's snapshots were taken before it was installed, or the ~2 MB
+processes were something else (below).
+
+Read from /proc/PID/status (RssAnon, KiB):
+- notify helpers 168-184 (were 1.5-2.7 MB). Their RSS of ~3.5 MB in ps is
+  file pages of the shared binary.
+- on-demand runners: iscsid, iscsiuio, dm-event 280; virt*d 1540-2164,
+  lvm2-lvmpolld 2772. None of them ever started its service (process
+  age = boot, no children). The difference: the virt*d and lvmpolld
+  sockets are filesystem paths, iscsid/iscsiuio abstract, dm-event FIFOs.
+  bind_unix() calls selinux::restorecon(), which was selinux_restorecon();
+  libselinux keeps that file_contexts handle until the process exits.
+  Measured with ctypes as a user: selabel_open +1.25 MB RssAnon,
+  selabel_close + malloc_trim(0) gives back ~0.9 MB; one open takes
+  ~0.5 ms.
+- Other ~2 MB processes: user@1000's PAM parent 2704 (known, part 40),
+  journal-relay 1788, uinitconverterd 4196.
+
+08d57db:
+- selinux::restorecon() now calls label_as() on the path itself
+  (selabel_open, lstat, lookup, lsetfilecon, close) and label_as_with
+  calls malloc_trim(0) after selabel_close. The selinux_restorecon symbol
+  is no longer loaded. Difference: lsetfilecon runs even when the label
+  is already right; label_as already worked this way for the private /dev.
+- Expected: the 9 filesystem-socket on-demand runners drop from ~1.5-2.8
+  MB to ~0.3-0.6 MB RssAnon, ~12-15 MiB in total.
+- Tests: cargo build no warnings, `cargo test` all pass, sandbox 278/278.
+  The sandbox runs unprivileged, so lib() is None there and the SELinux
+  path is not exercised; only the real boot can show it.
+
+### Current state
+
+Notify helper re-exec verified on the real s6 boot. The SELinux heap fix
+is committed, not built into RPMs or booted yet.
+
+### Next steps
+
+1. Owner: rebuild/install the RPMs, reboot s6, then check RssAnon of the
+   on-demand runners, e.g. `for p in $(pgrep -f -- 'runner run --on-demand');
+   do grep -H RssAnon /proc/$p/status; done`, and that the socket files
+   keep their labels (`ls -Z /run/libvirt /run/lvm`, expect
+   virt*_var_run_t / lvm_var_run_t as on systemd) with no new AVCs.
+2. Optional: memcompare snap could record args for the init group.
+3. Items 3-5 of part 40 when the owner decides.
