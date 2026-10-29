@@ -8088,11 +8088,36 @@ units masked on this machine).
 
 ### Next steps
 
-1. Owner: review, commit, rebuild and install the RPMs. The install's
-   reload (or `systemctl daemon-reload`) unmasks the 90 units; check
+1. Owner: review, commit, rebuild and install the RPMs, then reload:
+   the install itself runs none (no file trigger of ours; dnf's
+   `systemctl daemon-reload` reaches uinitconverterd only on an s6 boot).
+   On the systemd boot `sudo uinitconverter reload --no-update`, on the
+   s6 boot restart the daemon, then `systemctl daemon-reload`. Check
    `s6 set status` has no masked entries left, that
    /var/lib/uinitconverter/auto-masked is gone, and after a while that
    `ls /run/uinitconverter/dyn` holds only running instances.
 2. Then a memtest round on the s6 boot (s6-supervise count back to
    ~255 minus the collected ones).
+3. Earlier next steps (part 50) unchanged.
+
+## 2026-10-30, part 53: 0b3fec7 RPMs installed, leftovers unmasked (no code change)
+
+Built with packages/build-rpms.sh (0.1.0-1.20261030060150.g0b3fec7, the
+five core packages; standalone ones unchanged, not rebuilt). Owner
+installed them on the systemd boot. The install ran no reload (I had
+said it would; corrected in part 52's next steps), so the 90 units
+stayed masked until the owner ran `sudo uinitconverter reload
+--no-update` at 07:32.
+
+Checked afterwards: `s6 set status` 351 entries, 0 masked;
+/var/lib/uinitconverter/auto-masked and auto-masked.keep gone; new
+compiled database (07:32).
+
+### Next steps
+
+1. Owner: boot s6, check that the units that were masked start again
+   from the database (GNOME's D-Bus services, timers), and after a
+   while that `ls /run/uinitconverter/dyn` holds only running
+   instances.
+2. A memtest round on the s6 boot (s6-supervise back to ~255).
 3. Earlier next steps (part 50) unchanged.
