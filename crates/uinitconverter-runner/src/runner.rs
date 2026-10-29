@@ -406,7 +406,9 @@ impl Runner {
                     }
                 }
             } else if let Some(g) = self.gid {
-                unsafe { libc::setresgid(g, g, g) };
+                if unsafe { libc::setresgid(g, g, g) } < 0 {
+                    return (EXIT_GROUP, format!("setgid {g}: {}", errno()));
+                }
             }
         } else if self.user.is_none() && switch_ids {
             // Group=/SupplementaryGroups= without User=.

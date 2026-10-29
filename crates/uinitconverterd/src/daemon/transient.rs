@@ -246,6 +246,19 @@ fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str
     Ok(out)
 }
 
+/// A line of the unit file must stay one `Key=value` line: the caller
+/// chooses property names and values, and a newline (or a trailing `\`,
+/// a continuation) would add lines of its own.
+fn check_line(key: &str, val: &str) -> Result<(), String> {
+    if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(format!("Invalid transient property name {key:?}"));
+    }
+    if val.contains(['\n', '\r']) || val.ends_with('\\') {
+        return Err(format!("Invalid value for transient property {key}"));
+    }
+    Ok(())
+}
+
 pub fn unit_file(name: &str, props: &[(String, OwnedValue)]) -> Result<String, String> {
     let is_timer = name.ends_with(".timer");
     let mut sections: Vec<(&'static str, Vec<String>)> = vec![("Unit", Vec::new()), (if is_timer { "Timer" } else { "Service" }, Vec::new())];
@@ -254,6 +267,7 @@ pub fn unit_file(name: &str, props: &[(String, OwnedValue)]) -> Result<String, S
             continue;
         }
         for (sec, key, val) in render(k, v, is_timer)? {
+            check_line(&key, &val)?;
             if let Some(s) = sections.iter_mut().find(|(n, _)| *n == sec) {
                 s.1.push(format!("{key}={val}"));
             } else {
@@ -293,6 +307,10 @@ impl Daemon {
         fs::create_dir_all(&self.cfg.transient_dir).map_err(|e| e.to_string())?;
         let mut files = vec![(name.to_string(), unit_file(name, props)?)];
         for (n, p) in aux {
+            // Becomes a file name in TRANSIENT_DIR, as the main name does.
+            if crate::loader::parse_name(n).is_none() {
+                return Err(format!("Invalid unit name {n}"));
+            }
             files.push((n.clone(), unit_file(n, p)?));
         }
         for (n, text) in files {
@@ -394,6 +412,29 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prop(k: &str, v: Value<'_>) -> (String, OwnedValue) {
+        (k.to_string(), v.try_to_owned().unwrap())
+    }
+
+    #[test]
+    fn lines_cannot_be_injected() {
+        // A value or property name with a newline would add its own lines.
+        let bad = [
+            prop("Description", Value::from("x\nExecStartPre=/bin/false")),
+            prop("Description", Value::from("x\\")),
+            prop("User=root\nGroup", Value::from("x")),
+            prop("WorkingDirectory", Value::from(vec!["/a", "b\nc"])),
+        ];
+        for p in bad {
+            assert!(unit_file("a.service", std::slice::from_ref(&p)).is_err(), "{p:?}");
+        }
+        // Exec lines and Environment= quote their words: newlines stay inside.
+        let exec = Value::from(vec![("/bin/echo".to_string(), vec!["echo".to_string(), "a\nb".to_string()], false)]);
+        let text = unit_file("a.service", &[prop("ExecStart", exec), prop("Description", Value::from("ok"))]).unwrap();
+        assert!(text.contains("ExecStart=@\"/bin/echo\" \"echo\" \"a\\nb\"\n"), "{text}");
+        assert!(text.contains("Description=ok\n"), "{text}");
+    }
 
     #[test]
     fn scope_round_trip() {

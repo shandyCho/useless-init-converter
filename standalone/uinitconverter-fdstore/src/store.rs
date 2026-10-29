@@ -212,10 +212,11 @@ impl Store {
             // Only root (or the daemon's own user, in tests) may use the store.
             let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
             let mut len = std::mem::size_of::<libc::ucred>() as u32;
-            unsafe {
-                libc::getsockopt(c, libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut _ as *mut libc::c_void, &mut len);
-            }
-            if cred.uid != 0 && cred.uid != me {
+            // A failed lookup leaves the zeroed ucred, which would read as root.
+            let r = unsafe {
+                libc::getsockopt(c, libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut _ as *mut libc::c_void, &mut len)
+            };
+            if r < 0 || (cred.uid != 0 && cred.uid != me) {
                 continue;
             }
             if !same_domain(c, own.as_deref()) {

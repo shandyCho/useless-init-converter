@@ -1032,11 +1032,19 @@ impl Daemon {
         if crate::loader::parse_name(name).is_none() {
             return Err(err(E_INVALID_ARGS, format!("Invalid unit name {name}")));
         }
-        if self.kind_of(name).is_some() || self.dynamic_kind(name).is_some() {
-            return Err(err("org.freedesktop.systemd1.UnitExists", format!("Unit {name} already exists.")));
+        for n in std::iter::once(name).chain(aux.iter().map(|(n, _)| n.as_str())) {
+            if self.kind_of(n).is_some() || self.dynamic_kind(n).is_some() {
+                return Err(err("org.freedesktop.systemd1.UnitExists", format!("Unit {n} already exists.")));
+            }
         }
         self.write_transient(name, props, aux).map_err(|e| {
-            if e.contains("not supported") { err(E_NOT_SUPPORTED, e) } else { err("org.freedesktop.systemd1.UnitExists", e) }
+            if e.contains("not supported") {
+                err(E_NOT_SUPPORTED, e)
+            } else if e.starts_with("Invalid") {
+                err(E_INVALID_ARGS, e)
+            } else {
+                err("org.freedesktop.systemd1.UnitExists", e)
+            }
         })?;
         let (id, unit) = self.load_unit(name);
         if !unit.is_loaded() {
