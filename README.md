@@ -472,14 +472,16 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
   `disabled`, `masked`는 `masked`입니다(`static`, `indirect`, `alias`는 systemd가 보는
   그대로입니다).
 - **자동 마스킹(`AUTO_MASK=yes`, 기본값).** 부팅이 끌어들이지 않고 `usable`인 변환된
-  서비스·타이머·path 중, 남아 있는 서비스가 의존하지 않는 것은 reload가 `masked`로
-  옮깁니다(로거와 `UNIT.stop`도 함께). 데이터베이스에 없으므로 할 일 없이 대기하는
+  서비스·타이머·path 중, 실행 중이 아니고 남아 있는 서비스가 의존하지 않는 것은 reload가
+  `masked`로 옮깁니다(로거와 `UNIT.stop`도 함께). 실행 중인 것은 멈춘 뒤의 reload에서
+  마스킹됩니다. 데이터베이스에 없으므로 할 일 없이 대기하는
   `s6-supervise`가 생기지 않습니다. 이 서비스들은 `systemctl start`, D-Bus 활성화, 타이머,
   udev가 요청하면 uinitconverterd가 `user@UID`처럼 동적 서비스로 띄웁니다(실행되는 동안만
   감독). 실행 중에는 `s6-rc -a list`가 아니라 `s6-svstat`에만 보입니다. `systemctl
   is-enabled`와 `status`는 `disabled`로 보여 줍니다. 무엇을 마스킹했는지는
   `/var/lib/uinitconverter/auto-masked`에 있고, 무엇이 그 서비스에 의존하게 되면 다음
-  reload가 `usable`로 되돌립니다. 관리자가 `s6 set enable|unmask`로 꺼낸 서비스는
+  reload가 `usable`로 되돌립니다(그때 실행 중이면 멈췄다가 데이터베이스에서 다시
+  시작합니다). 관리자가 `s6 set enable|unmask`로 꺼낸 서비스는
   `auto-masked.keep`에 기록되어 다시는 자동으로 마스킹되지 않습니다. 관리자가 직접
   `s6 set mask`한 서비스는 지금처럼 시작이 거부됩니다. `AUTO_MASK=no`이면 다음 reload가
   자동으로 마스킹한 것을 모두 `usable`로 되돌립니다.

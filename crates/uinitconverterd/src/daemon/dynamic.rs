@@ -48,7 +48,7 @@ impl Daemon {
         }
         // Masked in the set by the generator, not by the admin.
         if crate::install::set_rx(&self.cfg, id) == Some("masked")
-            && uinitconverter_base::automask::masked(&self.cfg).contains(id)
+            && uinitconverter_base::automask::is_masked(&self.cfg, id)
         {
             return matches!(unit.utype(), "service" | "timer" | "path") && !self.cfg.is_excluded(id);
         }

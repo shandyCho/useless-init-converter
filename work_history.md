@@ -7865,3 +7865,117 @@ covered by cargo test and the sandbox only.
 ### Next steps
 
 1. Earlier next steps (part 46) unchanged.
+
+## 2026-10-29, part 49: memtest results reread, 7 s6 / 3 systemd (no code change)
+
+report.txt regenerated (`tests/memtest.sh report`, exit 0): PASS,
+total - available median s6 1164.7 vs systemd 1179.4 MiB (-14.7).
+
+- mem-s6-20261029-080637.tsv is not a greeter snapshot: total - available
+  2590 MiB, with firefox 441, claude 340, Isolated Web Co 240,
+  gnome-software 165, flatpak-system-helper 155 MiB PSS: someone logged
+  in before the 600 s ran out. It should be removed (or moved aside)
+  before the median is read; without it the s6 median is 1155.1 (-24.3).
+- Since mem-s6-20261028-072937 (the RPMs with the notify helper re-exec,
+  see part 43) the runner group is 21.3-21.4 MiB instead of 35.5-37.0
+  (37 processes; those with RssAnon > 1 MB: 1 instead of 12). The two
+  clean snapshots on that build: total - available 1145.3 and 1140.9.
+- The three systemd snapshots are all from 2026-10-27/28; more systemd
+  boots would tighten its median.
+
+### Next steps
+
+1. Owner: delete or move mem-s6-20261029-080637.tsv, rerun
+   `tests/memtest.sh report`.
+2. Earlier next steps (part 46) unchanged.
+
+## 2026-10-29, part 50: review of the s6 backend modules and AUTO_MASK (no code change)
+
+Owner asked for a review of part 46's modules and AUTO_MASK. The module
+split (3936b5b, 6afe132, 6533286, ef151de) was a code move checked by
+identical generator output and dry runs, so the review read ae863cd.
+
+Findings (from reading the code; 1 checked against s6-rc 0.7.0.0's
+doc/s6-rc-update.html: "The service has disappeared in the new
+compiled. In this case, the old service will simply be stopped"):
+1. MEDIUM, gen s6.rs auto_mask_candidates/sync_auto_mask: candidates are
+   not checked against the live state. A `usable` service that is up in
+   the live database (started by systemctl, D-Bus activation or a timer)
+   and becomes a candidate is masked, and s6-rc-update stops it during
+   the reload. The first reload after installing ae863cd does this to
+   every running one of the ~107 candidates (D-Bus services of the GNOME
+   session, anything started by hand); later, any daemon-reload (package
+   installs) does it to a running unit whose last dependent went away.
+   Fix: leave out candidates that are up in the live database (mask them
+   at a later reload, once down), as sync_auto_mask already does the
+   other way for running dynamic instances.
+2. LOW, same function: the "running as a dynamic instance" guard checks
+   only RUN_DIR/dyn/NAME, which longruns have. An active oneshot
+   (RemainAfterExit=yes) has RUN_DIR/dyn-oneshot/NAME instead, so it is
+   unmasked while active: the database then shows it inactive, a start
+   runs ExecStart= again, and the stale marker makes load_dynamic count
+   it as dynamic too after a daemon restart.
+3. LOW, race: reload_db holds s6.lock, but dyn_start takes only the
+   unit's lock, so a dynamic start between the guard's check and
+   s6-rc-update can give the scan directory the same name twice (the
+   case the guard is there for). Needs an unmask at the same reload.
+4. Minor, efficiency: set_file_state and can_be_dynamic read
+   STATE_DIR/auto-masked on every call (once per unit for
+   ListUnitFiles).
+
+Not a security problem: auto-masked units start through the same paths
+(polkit-checked jobs, D-Bus activation) as before; STATE_DIR is root's.
+
+While fixing 2-3 it turned out the generator's guard (keep a running
+dynamic instance masked) can't work on its own: s6-rc-set-fix -u, run
+in commit_and_install, makes a masked dependency of an active service
+active (doc/s6-rc-set-fix.html), so exactly when a dependent appears the
+unit enters the database beside its dynamic instance. And a fifth bug:
+5. check_job's reload for a new unit file (systemctl start without
+   daemon-reload) now masks it, and the start then failed with "not
+   translated to s6-rc" instead of running it on demand.
+
+### Fixes (owner: "fix all")
+
+- Generator: auto_mask_candidates takes the live database's up services
+  (`s6-rc -a list`); a usable one that is up is not a candidate (masked
+  at a later reload). If the list can't be read, nothing new is masked.
+  The guard checks dyn/ and dyn-oneshot/ (automask::running_dynamic);
+  it only matters without the daemon now. New pub auto_mask_moving()
+  (what a reload may mask or unmask, live state ignored: a superset) and
+  regenerate_plan() (regenerate with the caller's plan).
+- Daemon reload_db: plan + auto_mask_moving first; the moving units'
+  locks (all taken with try_lock, retried after 50 ms, so no lock-order
+  deadlock with a job starting dependencies), before s6.lock as jobs do;
+  dynamic instances among them are stopped (dyn_stop, with dependents)
+  and the ones that were up are started from the database after the
+  update (the handover is a restart, logged "back to the database,
+  restarted from it"); the index is reloaded before s6.lock and the unit
+  locks are released. run_job decides database vs dynamic after the unit
+  lock, so no job sees a unit half-moved.
+- check_job: after its reload, a unit that can be dynamic is accepted.
+- automask::is_masked: cached by (mtime, inode, size); set_file_state and
+  can_be_dynamic use it.
+- README pair: not running / masked later; restarted when it goes back.
+
+Tests: cargo test 80 pass (automask round_trip covers the cache);
+sandbox 301/301, SANDBOX_JOURNAL=no 308/308, SANDBOX_FDSTORE=no 289/289
+(12 new checks each: new unit started without a reload, AUTO_MASK=no
+unmasks, an active dynamic oneshot handed back to the database active
+and its marker gone, a database service that is up stays in it and is
+masked once down); shellcheck/bash -n pass. Not covered: the lock retry
+under contention, the `s6-rc -a list` failure branch.
+
+### Current state
+
+Committed, not installed. The installed RPMs (from c371d2f) contain
+ae863cd without these fixes, and /var/lib/uinitconverter/auto-masked
+doesn't exist yet: no reload has masked anything on this machine.
+
+### Next steps
+
+1. Owner: rebuild and install the core RPMs before the next
+   daemon-reload or package install (or set AUTO_MASK=no until then),
+   then part 46's step 1 (check what got masked, that on-demand starts
+   work, count idle s6-supervise).
+2. Earlier next steps unchanged.

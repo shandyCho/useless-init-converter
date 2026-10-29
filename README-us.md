@@ -540,14 +540,16 @@ How it fits together:
   has them).
 - **Automatic masking (`AUTO_MASK=yes`, the default).** A reload moves to
   `masked` the translated services, timers and paths that are `usable`, not
-  pulled in by the boot, and that no service staying in the database
-  depends on (with their logger and `UNIT.stop`). Out of the database they
+  pulled in by the boot, not running, and that no service staying in the
+  database depends on (with their logger and `UNIT.stop`); one that runs
+  is masked at a later reload, once it is down. Out of the database they
   have no idle `s6-supervise`. When `systemctl start`, D-Bus activation, a
   timer or udev asks for one, uinitconverterd runs it as a dynamic service,
   like `user@UID` (supervised only while it runs); then `s6-svstat` shows it,
   `s6-rc -a list` doesn't. `systemctl is-enabled` and `status` show them
   `disabled`. `/var/lib/uinitconverter/auto-masked` lists them; once
-  something depends on one, the next reload puts it back to `usable`. A
+  something depends on one, the next reload puts it back to `usable` (if it
+  runs then, it is stopped and started again from the database). A
   service you move out with `s6 set enable|unmask` is recorded in
   `auto-masked.keep` and never masked automatically again; one you
   `s6 set mask` yourself is refused as before. With `AUTO_MASK=no` the next

@@ -721,11 +721,18 @@ fn break_cycles(plan: &mut Plan) {
 /// its service definitions and installs them as the boot database (and
 /// the live one when `update_live`).
 pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> {
-    let plan = plan(cfg);
+    regenerate_plan(cfg, plan(cfg), update_live)
+}
+
+/// regenerate() with a plan the caller made (uinitconverterd, which looks
+/// at it first: auto_mask_moving).
+pub fn regenerate_plan(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResult, String> {
     // Config::load accepts only config::INITS, which is just "s6" so far;
     // another backend is chosen here by cfg.init.
     s6::regenerate(cfg, plan, update_live)
 }
+
+pub use s6::auto_mask_moving;
 
 pub fn report(plan: &Plan) -> String {
     let mut s = String::new();

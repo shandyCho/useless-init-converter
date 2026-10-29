@@ -967,6 +967,38 @@ elif grep -q "masked" "$W/last-error"; then
 else
     bad "admin-masked start: $(cat "$W/last-error")"
 fi
+# A new unit file started without a reload: the start's reload masks it,
+# and it runs on demand.
+printf '[Service]\nExecStart=/bin/sleep 1000\n' > "$W/units/repo-fresh.service"
+call StartUnit ss repo-fresh.service replace
+expect_state repo-fresh.service active/running
+expect_eq "a new unit started without a reload is masked" "$(rx repo-fresh.service)" "masked"
+call StopUnit ss repo-fresh.service replace
+# AUTO_MASK=no puts back what it masked; an active dynamic oneshot goes
+# back to the database started (stopped first: same name in both).
+printf '[Service]\nExecStart=/bin/sleep 1000\n' > "$W/units/repo-busy.service"
+printf '[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n' > "$W/units/repo-once.service"
+call Reload && expect_eq "a new oneshot is masked" "$(rx repo-once.service)" "masked"
+call StartUnit ss repo-once.service replace
+expect_state repo-once.service active/exited
+{ grep -v '^AUTO_MASK=' "$W/uinitconverter.conf"; echo AUTO_MASK=no; } > "$W/noauto.conf"
+restart_daemon "$W/noauto.conf"
+call Reload
+expect_eq "AUTO_MASK=no unmasks what it masked" "$(rx repo-busy.service)" "usable"
+expect_eq "an active dynamic oneshot goes back to the database" "$(rx repo-once.service)" "usable"
+expect_state repo-once.service active/exited
+[ -e "$R/run/dyn-oneshot/repo-once.service" ] && bad "repo-once.service still marked dynamic" || ok "and is no longer a dynamic instance"
+# A service up in the database is not masked: s6-rc-update would stop it.
+call StartUnit ss repo-busy.service replace
+expect_state repo-busy.service active/running
+restart_daemon "$W/uinitconverter.conf"
+call Reload
+expect_eq "a service up in the database stays in it" "$(rx repo-busy.service)" "usable"
+expect_state repo-busy.service active/running
+call StopUnit ss repo-busy.service replace
+call StopUnit ss repo-once.service replace
+call Reload
+expect_eq "and is masked once down" "$(rx repo-busy.service)" "masked"
 in_default repo-new.service && ok "the default bundle has it" || bad "repo-new.service not in the default bundle"
 s6-rc-set-change -r "$W/repo" current usable hello.service 2>/dev/null
 call Reload

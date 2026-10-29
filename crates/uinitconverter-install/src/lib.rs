@@ -323,7 +323,7 @@ pub fn set_file_state(cfg: &Config, name: &str, state: String) -> String {
         Some("always" | "active") if state == "disabled" => "enabled".into(),
         Some("usable") => "disabled".into(),
         // Masked by AUTO_MASK=: still started on demand, as a disabled unit.
-        Some("masked") if uinitconverter_base::automask::masked(cfg).contains(name) => "disabled".into(),
+        Some("masked") if uinitconverter_base::automask::is_masked(cfg, name) => "disabled".into(),
         Some("masked") => "masked".into(),
         _ => state,
     }

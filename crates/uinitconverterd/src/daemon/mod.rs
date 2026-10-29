@@ -476,14 +476,49 @@ impl Daemon {
     async fn reload_db(&self) -> Result<(), String> {
         self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(true,)).await;
         let cfg = self.cfg.clone();
+        let (plan, moving) = tokio::task::spawn_blocking(move || {
+            let plan = gen::plan(&cfg);
+            let moving = gen::auto_mask_moving(&cfg, &plan);
+            (plan, moving)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        // AUTO_MASK= moves these into or out of the database: no job runs
+        // on them until the new database and index are in place (a start
+        // from the old database would be stopped by s6-rc-update, a dynamic
+        // instance would meet the database's service of the same name).
+        // Taken before s6.lock, as jobs do.
+        let unit_guards = self.lock_units(&moving).await;
+        // A dynamic instance of one going back to the database: stop it now
+        // and start it from the database after the update.
+        let mut restart = Vec::new();
+        for id in &moving {
+            if self.dynamic_kind(id).is_none() {
+                continue;
+            }
+            let before = self.active_dynamic().await;
+            let (_, unit) = self.load_unit(id);
+            self.dyn_stop(id, &unit).await;
+            let after = self.active_dynamic().await;
+            restart.extend(before.difference(&after).cloned());
+        }
+        if !restart.is_empty() {
+            eprintln!("uinitconverterd: {}: back to the database, restarted from it", restart.join(" "));
+        }
+        let cfg = self.cfg.clone();
         let res = {
             let _guard = self.s6.lock.lock().await;
             // s6-rc-update must see those units as up, or it keeps them down.
             self.reconcile_beside_locked().await;
-            tokio::task::spawn_blocking(move || gen::regenerate(&cfg, true))
+            let res = tokio::task::spawn_blocking(move || gen::regenerate_plan(&cfg, plan, true))
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
+            // Before s6.lock and the units' locks go: a job must find each
+            // unit where the new database has it.
+            *self.index.write().unwrap() = Index::load(&self.cfg);
+            res
         };
+        drop(unit_guards);
         if let Ok(r) = &res {
             eprintln!(
                 "uinitconverterd: reloaded: {} units, database {}",
@@ -494,11 +529,44 @@ impl Daemon {
                 eprintln!("uinitconverterd: set {}: {c}", self.cfg.set_name);
             }
         }
-        *self.index.write().unwrap() = Index::load(&self.cfg);
         self.invalidate_caches();
         self.s6.database_changed();
+        for id in &restart {
+            let r = self.start_any(id).await;
+            if r != "done" {
+                eprintln!("uinitconverterd: {id}: start from the database: {r}");
+            }
+        }
         self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(false,)).await;
         res.map(|_| ())
+    }
+
+    /// The locks of all `ids`, taken without waiting while holding some: a
+    /// job holding one may be starting a dependency whose lock we'd hold.
+    async fn lock_units(&self, ids: &BTreeSet<String>) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+        loop {
+            let guards: Vec<_> = ids.iter().map_while(|id| self.unit_lock(id).try_lock_owned().ok()).collect();
+            if guards.len() == ids.len() {
+                return guards;
+            }
+            drop(guards);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Dynamic instances that are up: longruns whose supervisor says so,
+    /// active oneshots.
+    async fn active_dynamic(&self) -> BTreeSet<String> {
+        let all: Vec<(String, Kind, bool)> =
+            self.dynamic.lock().unwrap().iter().map(|(n, d)| (n.clone(), d.kind, d.active)).collect();
+        let mut up = BTreeSet::new();
+        for (id, kind, active) in all {
+            let on = if kind == Kind::Oneshot { active } else { self.svstat(&id).await.map(|s| s.up).unwrap_or(false) };
+            if on {
+                up.insert(id);
+            }
+        }
+        up
     }
 
     // ---- jobs ----
@@ -582,7 +650,8 @@ impl Daemon {
             if allow_reload && !self.cfg.is_excluded(&id) {
                 let _ = self.reload_db().await;
             }
-            if self.kind_of(&id).is_none() {
+            // AUTO_MASK= may have left it out of the database: on demand.
+            if self.kind_of(&id).is_none() && !self.can_be_dynamic(&id, &unit) {
                 let why = if self.cfg.is_excluded(&id) {
                     "excluded by uinitconverter configuration".to_string()
                 } else {

@@ -341,13 +341,34 @@ fn sync_loggers(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// The services up in the live database (`s6-rc -a list`): none without
+/// one; Err if it can't be read.
+fn live_up(cfg: &Config) -> Result<BTreeSet<String>, String> {
+    if fs::symlink_metadata(cfg.live_dir.join("compiled")).is_err() {
+        return Ok(BTreeSet::new());
+    }
+    let out = run(Command::new(tools::path("s6-rc")).arg("-l").arg(&cfg.live_dir).args(["-a", "list"]))?;
+    Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
+}
+
 /// The services AUTO_MASK= masks: translated services, timers and paths
 /// that are `usable` in the set (or masked by an earlier run of this), not
 /// pulled in by the boot, without .socket units (their runner binds them
 /// and the fd store holds them), not taken back by the admin, and on which only
 /// such services depend (s6-rc refuses a set where a service that stays
 /// depends on a masked one; a bundle that contains one keeps it).
-fn auto_mask_candidates(cfg: &Config, plan: &Plan, ours: &BTreeSet<String>, kept: &BTreeSet<String>) -> BTreeSet<String> {
+///
+/// `up`: the services up in the live database, which a `usable` one must
+/// not be: s6-rc-update stops a service that leaves the database, so it is
+/// masked at a later reload, once down. None: all, up or not (the superset
+/// the daemon locks).
+fn auto_mask_candidates(
+    cfg: &Config,
+    plan: &Plan,
+    ours: &BTreeSet<String>,
+    kept: &BTreeSet<String>,
+    up: Option<&BTreeSet<String>>,
+) -> BTreeSet<String> {
     let rx = |n: &str| install::set_rx(cfg, n);
     let mut e: BTreeSet<String> = plan
         .units
@@ -356,7 +377,7 @@ fn auto_mask_candidates(cfg: &Config, plan: &Plan, ours: &BTreeSet<String>, kept
         .filter(|p| [".service", ".timer", ".path"].iter().any(|s| p.id.ends_with(s)))
         .filter(|p| !p.has_sockets && !plan.boot.contains(&p.id) && !kept.contains(&p.id) && !cfg.is_excluded(&p.id))
         .filter(|p| match rx(&p.id) {
-            Some("usable") => true,
+            Some("usable") => up.is_none_or(|u| !u.contains(&p.id)),
             Some("masked") => ours.contains(&p.id),
             _ => false,
         })
@@ -434,13 +455,10 @@ fn set_change_groups(cfg: &Config, rx: &str, groups: &[(String, Vec<String>)]) -
     moved
 }
 
-/// AUTO_MASK=: mask the candidates (auto_mask_candidates) and unmask, back
-/// to `usable`, what this masked and is no longer one (something now
-/// depends on it, or AUTO_MASK=no). A service the admin moved out of
-/// `masked` is kept as the admin left it from then on. One running as a
-/// dynamic instance stays masked until it stops: in the database it would
-/// get a second supervisor under the same name.
-fn sync_auto_mask(cfg: &Config, plan: &Plan, changes: &mut Vec<String>) -> Result<(), String> {
+/// The generator's list and the admin's keep list, with the services the
+/// admin moved out of `masked` since (returned) taken over into the keep
+/// list, and those gone from the set forgotten.
+fn auto_mask_lists(cfg: &Config) -> (BTreeSet<String>, BTreeSet<String>, Vec<String>) {
     let mut ours = automask::masked(cfg);
     let mut kept = automask::kept(cfg);
     let taken_back: Vec<String> =
@@ -449,14 +467,51 @@ fn sync_auto_mask(cfg: &Config, plan: &Plan, changes: &mut Vec<String>) -> Resul
         ours.remove(n);
         kept.insert(n.clone());
     }
+    ours.retain(|n| install::set_rx(cfg, n).is_some());
+    (ours, kept, taken_back)
+}
+
+/// The services a reload with `plan` may move into or out of the database
+/// by AUTO_MASK=: uinitconverterd holds their jobs during the reload, and
+/// stops those running as dynamic instances first (see sync_auto_mask).
+/// A superset: services up in the live database are counted as masked.
+pub fn auto_mask_moving(cfg: &Config, plan: &Plan) -> BTreeSet<String> {
+    let (ours, kept, _) = auto_mask_lists(cfg);
+    let want = if cfg.auto_mask { auto_mask_candidates(cfg, plan, &ours, &kept, None) } else { BTreeSet::new() };
+    let unmask = ours.iter().filter(|n| !want.contains(*n)).cloned();
+    let mask = want.iter().filter(|n| install::set_rx(cfg, n) != Some("masked")).cloned();
+    unmask.chain(mask).collect()
+}
+
+/// AUTO_MASK=: mask the candidates (auto_mask_candidates) and unmask, back
+/// to `usable`, what this masked and is no longer one (something now
+/// depends on it, or AUTO_MASK=no). A service the admin moved out of
+/// `masked` is kept as the admin left it from then on.
+///
+/// One running as a dynamic instance would get a second supervisor under
+/// the same name in the database: uinitconverterd stops it before the
+/// reload (auto_mask_moving) and starts it again from the database after.
+/// Run without the daemon, this leaves such a one masked instead; s6-rc-
+/// set-fix -u still unmasks it if an active service needs it.
+fn sync_auto_mask(cfg: &Config, plan: &Plan, changes: &mut Vec<String>) -> Result<(), String> {
+    let (mut ours, kept, taken_back) = auto_mask_lists(cfg);
     if !taken_back.is_empty() {
         changes.push(format!("{} moved out of masked by the admin: no longer masked automatically", taken_back.join(" ")));
     }
-    // Gone from the set (unit removed): forget it.
-    ours.retain(|n| install::set_rx(cfg, n).is_some());
-
-    let want = if cfg.auto_mask { auto_mask_candidates(cfg, plan, &ours, &kept) } else { BTreeSet::new() };
-    let running = |n: &str| cfg.run_dir.join("dyn").join(n).exists();
+    let want = if !cfg.auto_mask {
+        BTreeSet::new()
+    } else {
+        match live_up(cfg) {
+            Ok(up) => auto_mask_candidates(cfg, plan, &ours, &kept, Some(&up)),
+            Err(e) => {
+                // Can't tell what runs: mask nothing new.
+                eprintln!("uinitconverter-gen: AUTO_MASK=: {e}");
+                let all = auto_mask_candidates(cfg, plan, &ours, &kept, None);
+                all.into_iter().filter(|n| ours.contains(n)).collect()
+            }
+        }
+    };
+    let running = |n: &str| automask::running_dynamic(cfg, n);
     let unmask: Vec<(String, Vec<String>)> = ours
         .iter()
         .filter(|n| !want.contains(*n) && !running(n))
