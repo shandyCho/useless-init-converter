@@ -7838,3 +7838,30 @@ Fixes committed, not installed or booted.
    build-rpm.sh) and the core RPMs; on the s6 boot,
    `sudo tests/linkwatch-check.sh` (runs as root, so still unblocked).
 2. Earlier next steps (part 46) unchanged.
+
+## 2026-10-29, part 48: linkwatch fix verified on the s6 boot (no code change)
+
+Owner installed the RPMs built from c371d2f (all uinitconverter*
+packages, 0.1.0-1.20261029115139/1202xx.gc371d2f, so 0d4fe70 and
+0badc0f included) and ran `sudo tests/linkwatch-check.sh` on the s6 boot:
+
+- uinitconverter-linkwatch up
+- a waiter named s6-rc-update got the missed start event after 12 s
+- a plain s6-ftrig-wait was left alone (exit 99 after 15 s)
+- linkwatch logged "s6-rc-update (pid 11802) waited 11 s for
+  /run/uinitconverter/lwtest/svc, whose supervisor runs: sent its start
+  event"
+- no SELinux denials
+
+So the uid check and the write through /proc/PID/fd/N still unblock a
+root waiter, and the SELinux module allows opening the fd that way.
+
+### Current state
+
+Security fixes of part 47 committed, installed and the linkwatch path
+verified on the real boot. Daemon-side fixes (0badc0f) installed;
+covered by cargo test and the sandbox only.
+
+### Next steps
+
+1. Earlier next steps (part 46) unchanged.
