@@ -7763,3 +7763,78 @@ system will mask ~107 units.
 3. Optional: SYSLOG=syslog-ng on a real boot (/proc/kmsg, SELinux).
 4. Boot loader provider (systemd-boot) and a second init backend (dinit)
    when the owner decides.
+
+## 2026-10-29, part 47: whole-project security review (no code change)
+
+Owner asked for a vulnerability check of the whole project, skarnet's
+sources excluded. Read-only review: daemon (polkit, SELinux checks,
+names, private socket, activation, transient units), runner (privilege
+drop, notify socket), fd stores, standalone tools, generated scripts,
+root shell scripts, SELinux module. Nothing changed, nothing committed.
+
+Findings (from reading the code, not reproduced):
+1. HIGH, uinitconverter-linkwatch (runs as root, no --under in
+   dist/s6/uinitconverter-linkwatch/run): picks targets only by comm
+   names (s6-ftrigrd / s6-rc-update), which any process can set, then
+   opens the path readlink() gave for /proc/PID/fd/N, by path, without
+   O_NOFOLLOW or an owner/type check, and writes to it. An unprivileged
+   user can get root to write into files it chooses. Fix: only consider
+   s6-ftrigrd processes (and parents) with uid 0 and the real binary
+   (/proc/PID/exe); open /proc/PID/fd/N itself (or O_NOFOLLOW + fstat:
+   FIFO, root-owned, same dev/ino as the fd); default --under to the
+   live scandir.
+2. LOW (needs manage-units), daemon/transient.rs: auxiliary unit names
+   of StartTransientUnit are not validated (transient_dir.join(name):
+   "../" or an absolute name writes outside TRANSIENT_DIR), and property
+   names and plain string values are written unescaped (a newline adds
+   unit-file lines). manage-units already means root, so hardening; it
+   matters for SELinux-confined callers allowed only `start`. Fix:
+   valid_name() on each aux name; reject '\n' / '=' in keys and '\n' in
+   values (or quote them).
+3. Minor: fd stores (core fdstore.rs and standalone store.rs) don't
+   check getsockopt(SO_PEERCRED)'s result (a zeroed ucred reads as uid
+   0); runner.rs ~409 setresgid unchecked for User=root + Group=;
+   notify_sender_ok accepts any process with the unit's uid (wider than
+   systemd's NotifyAccess=main default).
+
+Checked and fine: polkit fails closed, uid from the bus; SELinux
+checks before polkit; object paths and names validated (no '/');
+private socket SO_PEERCRED + 0600; ActivationRequest only from the bus
+driver; unit names hex-encoded in generated run scripts; privilege
+drop order; journal-relay reads only regular-file memfds and caps
+streams; images umask 077; earlier fixes (PrivateTmp 0700, PIDFile,
+diagnostics) still in place.
+
+### Fixes (owner: "could you fix them?")
+
+- 0d4fe70 linkwatch (finding 1): waiter and parent must run entirely as
+  our uid (/proc/PID/status Uid: all four; uid, not 0, so the
+  unprivileged sandbox still works and gains nothing); the event is
+  written by opening /proc/PID/fd/N, after fstat: FIFO, owned by our
+  uid, same dev/ino as the path. --under in the run script not added:
+  the uid check makes it unnecessary, and the real service dirs and
+  linkwatch-check.sh's test dir lie in different trees. README pair.
+- 0badc0f (findings 2, 3): aux names checked with parse_name and
+  against existing units; transient lines checked (alphanumeric key, no
+  \n/\r or trailing backslash in values; Exec/Environment words are
+  quoted already), errors as InvalidArgs; SO_PEERCRED result checked in
+  both fd stores; setresgid checked for User=root + Group=.
+- Not changed: notify_sender_ok's uid rule (deliberate, see its
+  comment; owner's call).
+
+Tests: cargo test 80 pass (new lines_cannot_be_injected); linkwatch's
+test extended (other-uid waiter, regular file named like a fifo), and
+fails with either check removed; standalone 3/3/3/2; sandbox 289/289,
+SANDBOX_JOURNAL=no 296/296, SANDBOX_FDSTORE=no 277/277. Aux-name check
+not covered by a test (needs the daemon over the bus).
+
+### Current state
+
+Fixes committed, not installed or booted.
+
+### Next steps
+
+1. Owner: rebuild the linkwatch RPM (standalone/uinitconverter-linkwatch/
+   build-rpm.sh) and the core RPMs; on the s6 boot,
+   `sudo tests/linkwatch-check.sh` (runs as root, so still unblocked).
+2. Earlier next steps (part 46) unchanged.
