@@ -45,9 +45,6 @@ pub struct Planned {
     /// under systemd it is started on the first activity, so its runner
     /// binds the sockets and waits (`run --on-demand`).
     pub on_demand: bool,
-    /// A service with .socket units: bound by its runner and held by the
-    /// fd store, so it stays in the database (AUTO_MASK= leaves it alone).
-    pub has_sockets: bool,
     pub warnings: Vec<String>,
     pub timings: Timings,
 }
@@ -541,13 +538,6 @@ pub fn plan(cfg: &Config) -> Plan {
                 stop_atom,
                 socket_deps,
                 on_demand: false,
-                // Any socket the runner would bind, enabled or not: Sockets=,
-                // NAME.socket, or one naming it in Service= (has_sockets).
-                has_sockets: kind == Kind::Longrun
-                    && unit.utype() == "service"
-                    && (has_sockets
-                        || !unit.get_words("Service", "Sockets").is_empty()
-                        || ld.load(&format!("{}.socket", id.trim_end_matches(".service"))).is_loaded()),
                 warnings,
                 timings: Timings::of(unit),
             },
@@ -725,14 +715,14 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
 }
 
 /// regenerate() with a plan the caller made (uinitconverterd, which looks
-/// at it first: auto_mask_moving).
+/// at the auto-masked list first: auto_masked).
 pub fn regenerate_plan(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResult, String> {
     // Config::load accepts only config::INITS, which is just "s6" so far;
     // another backend is chosen here by cfg.init.
     s6::regenerate(cfg, plan, update_live)
 }
 
-pub use s6::auto_mask_moving;
+pub use s6::auto_masked;
 
 pub fn report(plan: &Plan) -> String {
     let mut s = String::new();

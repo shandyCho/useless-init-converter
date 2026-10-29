@@ -145,7 +145,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - Package installs and updates: the systemd RPM's file triggers run `systemctl daemon-reload`, which regenerates the s6 database, so a newly installed unit gets its s6 service right away (with dnf, GNOME Software or PackageKit alike); the new service starts as enabled or disabled in the s6 set as systemd's preset made it. On an update, the package's scriptlets mark its units with `Markers=+needs-restart`/`+needs-reload` (`SetUnitProperties`), and `systemctl enqueue-marked` (`EnqueueMarkedJobs`) then restarts the running ones or reloads them, as with systemd. For user units, the file trigger reloads `user@*.service` (the user manager re-executes on `ReloadSignal=`; the reload waits for its `RELOADING=1`/`READY=1`, as with `Type=notify-reload` everywhere) and runs `systemctl --user -M UID@ enqueue-marked` in each user manager, which goes through `systemd-run --pipe` (stdio passed as file descriptors) and `systemd-stdio-bridge`.
 - Transient units: `StartTransientUnit` for `.scope` and `.slice` units, with `PIDs` or `PIDFDs` (used by logind, podman and flatpak). Also `AttachProcessesToUnit`, `Scope.Abandon`, and the reference-counting calls (accepted). Scopes and slices are recorded in `/run/uinitconverter/units`, so a restarted daemon takes them over (session scopes keep working).
 - **`systemd-run`**: transient `.service`, `.timer` and `.path` units, including auxiliary units (`--on-calendar`/`--on-active` send a timer and its service). Properties become a unit file in `/run/systemd/transient/`. `systemd-run --wait` gets `PropertiesChanged` and the exit status. Finished transient units are unloaded.
-- Template instances are created on demand without recompiling the database, for example `user@1000.service` and `user-runtime-dir@1000.service`. Their dependencies start first, and units that require a stopped unit are stopped with it. At shutdown, the active oneshot instances are stopped, so their `ExecStop=` runs (systemd-backlight@ saves the brightness); they are recorded in `/run/uinitconverter/dyn-oneshot`, so this also holds after the daemon was restarted. A restarted daemon also takes over the running instances (their service directories in `/run/uinitconverter/dyn`), so it reports and stops them as before.
+- Template instances are created on demand without recompiling the database, for example `user@1000.service` and `user-runtime-dir@1000.service`. Their dependencies start first, and units that require a stopped unit are stopped with it. At shutdown, the active oneshot instances are stopped, so their `ExecStop=` runs (systemd-backlight@ saves the brightness); they are recorded in `/run/uinitconverter/dyn-oneshot`, so this also holds after the daemon was restarted. A restarted daemon also takes over the running instances (their service directories in `/run/uinitconverter/dyn`), so it reports and stops them as before. An instance whose service ended on its own (`Restart=` done with it) loses its `s6-supervise` and logger after 10 s: its result (`inactive`/`failed`) still shows, units that require it keep running, as under systemd, and the next start creates it again.
 - `ExecStop=` of a long-running service also runs when s6-rc stops it directly: at shutdown, `s6 live stop`, `s6 live reset`, a package update removing it. Each such service gets an s6-rc oneshot `UNIT.stop` that depends on it (so s6-rc takes it down first) and runs the `ExecStop=` with `$MAINPID` in its `down`, within `TimeoutStopSec=`. The daemon brings `UNIT.stop` up whenever s6-rc has the service up, and `systemctl stop` lets it run the `ExecStop=` (once). Oneshots with `RemainAfterExit=yes` always ran theirs from their own `down`. Differences: units that depend on the service are stopped beside its `ExecStop=`, not before it (nothing depends on `UNIT.stop`: on an upgrade s6-rc-update would restart every unit that gained a dependency on a new service); and `s6 process restart`/`s6-svc` act on the process alone, so no `ExecStop=` runs then. On-demand instances that have an `ExecStop=` (longruns too) are stopped by the daemon at shutdown.
 - Starting `poweroff.target`, `reboot.target` or `halt.target` (which is how logind powers off) runs the configured shutdown command.
 - D-Bus activation: answers dbus-daemon's `ActivationRequest` and replies with `ActivationFailure` when a start fails. With `--bus=broker`, dbus-broker-launch starts services through `StartUnit` (with `SystemdService=`) or `StartTransientUnit` (a transient `dbus-:1.N-NAME@K.service` for the others) and watches `JobRemoved` and the unit's `ActiveState`, as with systemd.
@@ -538,22 +538,13 @@ How it fits together:
   show the set: `enabled` for `always`/`active`, `disabled` for `usable`,
   `masked` for `masked` (`static`, `indirect` and `alias` stay as systemd
   has them).
-- **Automatic masking (`AUTO_MASK=yes`, the default).** A reload moves to
-  `masked` the translated services, timers and paths that are `usable`, not
-  pulled in by the boot, not running, and that no service staying in the
-  database depends on (with their logger and `UNIT.stop`); one that runs
-  is masked at a later reload, once it is down. Out of the database they
-  have no idle `s6-supervise`. When `systemctl start`, D-Bus activation, a
-  timer or udev asks for one, uinitconverterd runs it as a dynamic service,
-  like `user@UID` (supervised only while it runs); then `s6-svstat` shows it,
-  `s6-rc -a list` doesn't. `systemctl is-enabled` and `status` show them
-  `disabled`. `/var/lib/uinitconverter/auto-masked` lists them; once
-  something depends on one, the next reload puts it back to `usable` (if it
-  runs then, it is stopped and started again from the database). A
-  service you move out with `s6 set enable|unmask` is recorded in
-  `auto-masked.keep` and never masked automatically again; one you
-  `s6 set mask` yourself is refused as before. With `AUTO_MASK=no` the next
-  reload puts everything it masked back to `usable`.
+- Automatic masking (`AUTO_MASK=`) is gone. The services an earlier
+  version masked (`/var/lib/uinitconverter/auto-masked`) go back to
+  `usable` at the next reload, and `auto-masked` and `auto-masked.keep`
+  are removed once the list is empty; one running as a dynamic service
+  then is stopped and started again from the database. Until then they
+  are still started dynamically on request. `AUTO_MASK=` left in the
+  configuration is ignored.
 - `systemctl daemon-reload` and `uinitconverter reload` (also run by dnf's file
   triggers when packages change) regenerate the store, sync the repository,
   then commit `current` and install it as the boot and live database. Before
@@ -624,7 +615,6 @@ and defaults). The most important keys:
 - `INIT`: the init system units are translated for. Only `s6` exists yet; any other value stops every tool with a configuration error.
 - `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `uinitconverter init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. The shell scripts and s6 service definitions in `dist/` still run them by name.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
-- `AUTO_MASK`: `yes` (default) masks the services the boot doesn't use in the s6 set and starts them dynamically on request (see "Automatic masking" above).
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
 - `INCLUDE`: by default lets through the systemd services that work under uinitconverter: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight (screen/keyboard brightness kept across boots) and the sleep services. The radio state (rfkill) is kept by the `rfkill` s6 oneshot instead of systemd-rfkill: util-linux `rfkill` restores each device's soft block at boot and the state is saved at shutdown, in systemd-rfkill's own files (`/var/lib/systemd/rfkill/ID_PATH:TYPE`), so the systemd boot entry shares it. Unlike systemd-rfkill it saves only at a clean shutdown, and a device that appears after the boot's udev settle keeps its state.
 

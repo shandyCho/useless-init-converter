@@ -344,8 +344,9 @@ impl Daemon {
         let _ = fs::remove_dir_all(self.cfg.unit_run_dir(id));
     }
 
-    /// Unload finished transient units and watch on-demand units for state
-    /// changes (systemd-run --wait waits for PropertiesChanged).
+    /// Unload finished transient units, remove the supervisors of on-demand
+    /// services that ended (collect_exited), and watch on-demand units for
+    /// state changes (systemd-run --wait waits for PropertiesChanged).
     pub(super) async fn watch_dynamic(&self, last: &mut HashMap<String, (String, String)>) {
         let names: Vec<String> = self.dynamic.lock().unwrap().keys().cloned().collect();
         let active = self.active_atoms().await;
@@ -385,6 +386,9 @@ impl Daemon {
                     &("org.freedesktop.systemd1.Service", svc, Vec::<String>::new())).await;
             }
             if !self.is_transient_file(&unit) {
+                if self.collect_exited(&id, &unit, 10_000_000).await {
+                    last.remove(&id);
+                }
                 continue;
             }
             // CollectMode=inactive: unload after it has been inactive for a while,

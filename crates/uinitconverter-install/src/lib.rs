@@ -314,7 +314,7 @@ pub fn set_rx(cfg: &Config, name: &str) -> Option<&'static str> {
 /// the [Install] links (`systemctl disable` leaves the set alone), so for a
 /// unit the set lists, enabled and disabled come from the set. static,
 /// indirect, alias and the others are about the unit file and stay. A
-/// service AUTO_MASK= masked is disabled.
+/// service the removed AUTO_MASK= left masked is disabled.
 pub fn set_file_state(cfg: &Config, name: &str, state: String) -> String {
     if !matches!(state.as_str(), "enabled" | "enabled-runtime" | "disabled") {
         return state;
@@ -322,7 +322,7 @@ pub fn set_file_state(cfg: &Config, name: &str, state: String) -> String {
     match set_rx(cfg, name) {
         Some("always" | "active") if state == "disabled" => "enabled".into(),
         Some("usable") => "disabled".into(),
-        // Masked by AUTO_MASK=: still started on demand, as a disabled unit.
+        // Left masked by AUTO_MASK=: still started on demand, as a disabled unit.
         Some("masked") if uinitconverter_base::automask::is_masked(cfg, name) => "disabled".into(),
         Some("masked") => "masked".into(),
         _ => state,

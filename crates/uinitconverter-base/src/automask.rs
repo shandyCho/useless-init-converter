@@ -1,10 +1,10 @@
-//! Services the generator masked in the s6 set on its own (AUTO_MASK=yes):
-//! translated units nothing boots or depends on, left out of the database
-//! so they have no idle s6-supervise, and started by uinitconverterd as
-//! dynamic instances when something asks for them. STATE_DIR/auto-masked
-//! lists them; STATE_DIR/auto-masked.keep lists the ones the admin moved
-//! out of `masked` afterwards, which are never masked again. A service
-//! the admin masked is in neither and stays refused, as before.
+//! What the removed AUTO_MASK= left behind. It masked, in the s6 set,
+//! translated units nothing booted or depended on, and uinitconverterd ran
+//! them as dynamic instances on request; STATE_DIR/auto-masked lists them,
+//! STATE_DIR/auto-masked.keep the ones the admin took back. Reloads now
+//! put the listed ones back to `usable` and remove both files once the
+//! list is empty; until then the daemon still starts a listed one on
+//! demand. A service the admin masked is not listed and stays refused.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -71,14 +71,20 @@ pub fn running_dynamic(cfg: &Config, name: &str) -> bool {
     ["dyn", "dyn-oneshot"].iter().any(|d| cfg.run_dir.join(d).join(name).exists())
 }
 
-/// The services the admin took back.
-pub fn kept(cfg: &Config) -> BTreeSet<String> {
-    read(keep_path(cfg))
-}
-
-pub fn save(cfg: &Config, masked: &BTreeSet<String>, kept: &BTreeSet<String>) -> Result<(), String> {
-    write(list_path(cfg), masked)?;
-    write(keep_path(cfg), kept)
+/// Writes what is still masked; with nothing left, removes the list and
+/// the admin's keep list.
+pub fn save(cfg: &Config, masked: &BTreeSet<String>) -> Result<(), String> {
+    if masked.is_empty() {
+        for p in [list_path(cfg), keep_path(cfg)] {
+            match fs::remove_file(&p) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("{}: {e}", p.display())),
+            }
+        }
+        return Ok(());
+    }
+    write(list_path(cfg), masked)
 }
 
 #[cfg(test)]
@@ -91,17 +97,20 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let mut cfg = Config::defaults();
         cfg.state_dir = dir.clone();
-        assert!(masked(&cfg).is_empty() && kept(&cfg).is_empty());
+        assert!(masked(&cfg).is_empty());
         let m: BTreeSet<String> = ["a.service", "b.timer"].iter().map(|s| s.to_string()).collect();
-        let k: BTreeSet<String> = ["c.service"].iter().map(|s| s.to_string()).collect();
-        save(&cfg, &m, &k).unwrap();
+        save(&cfg, &m).unwrap();
+        fs::write(keep_path(&cfg), "c.service\n").unwrap();
         assert_eq!(masked(&cfg), m);
-        assert_eq!(kept(&cfg), k);
         assert!(is_masked(&cfg, "a.service") && !is_masked(&cfg, "c.service"));
-        let m2: BTreeSet<String> = ["c.service"].iter().map(|s| s.to_string()).collect();
+        let m2: BTreeSet<String> = ["b.timer"].iter().map(|s| s.to_string()).collect();
         // A new file (write_atomic renames) is read again.
-        save(&cfg, &m2, &k).unwrap();
-        assert!(!is_masked(&cfg, "a.service") && is_masked(&cfg, "c.service"));
+        save(&cfg, &m2).unwrap();
+        assert!(!is_masked(&cfg, "a.service") && is_masked(&cfg, "b.timer"));
+        // Nothing left: both lists go.
+        save(&cfg, &BTreeSet::new()).unwrap();
+        assert!(!list_path(&cfg).exists() && !keep_path(&cfg).exists());
+        assert!(!is_masked(&cfg, "b.timer"));
         let _ = fs::remove_dir_all(&dir);
     }
 }

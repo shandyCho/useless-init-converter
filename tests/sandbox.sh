@@ -415,6 +415,20 @@ Type=notify
 ExecStart=/bin/sh -c 'echo instance %i up; $NOTIFY --ready; exec sleep 1000'
 EOF
 
+# quit@N exits with status N after a second (an idle-exit D-Bus service);
+# its supervisor goes then, while quitter@N, which requires it, runs on.
+cat > "$U/quit@.service" <<EOF
+[Service]
+ExecStart=/bin/sh -c 'sleep 1; exit %i'
+EOF
+cat > "$U/quitter@.service" <<EOF
+[Unit]
+Requires=quit@%i.service
+After=quit@%i.service
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+
 # --- Conflicts= (like gdm.service vs getty@tty1.service) ---
 cat > "$U/winner.service" <<EOF
 [Unit]
@@ -647,11 +661,6 @@ cat > "$U/beside.target" <<EOF
 [Unit]
 Wants=beside3.service
 EOF
-# The section drives s6-rc itself on these: they stay in the database, as
-# if the admin had taken them back from AUTO_MASK=.
-mkdir -p "$W/state"
-printf '%s\n' hold1.service hold2.service hold3.service hold4.service \
-    beside1.service beside2.service beside3.service >"$W/state/auto-masked.keep"
 
 # --- socket started on its own, re-activated after its service exits ---
 # Like systemd-rfkill.socket: a static socket with ListenSpecial= (here a

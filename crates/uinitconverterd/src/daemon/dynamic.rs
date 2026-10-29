@@ -35,9 +35,9 @@ fn write(path: PathBuf, content: &str, exec: bool) -> std::io::Result<()> {
 }
 
 impl Daemon {
-    /// Instances of templates, transient units and the units AUTO_MASK=
-    /// left out of the database are created on demand; other units come
-    /// from the compiled database.
+    /// Instances of templates, transient units and the units the removed
+    /// AUTO_MASK= left masked (until a reload puts them back) are created
+    /// on demand; other units come from the compiled database.
     pub(super) fn can_be_dynamic(&self, id: &str, unit: &Unit) -> bool {
         if !unit.is_loaded() || self.kind_of(id).is_some() {
             return false;
@@ -296,6 +296,11 @@ impl Daemon {
             let (_, du) = self.load_unit(&dep);
             Box::pin(self.dyn_stop(&dep, &du)).await;
         }
+        self.dyn_remove(id, unit).await
+    }
+
+    /// dyn_stop() of `id` alone: its dependents stay.
+    async fn dyn_remove(&self, id: &str, unit: &Unit) -> &'static str {
         let Some(kind) = self.dynamic_kind(id) else { return "done" };
         if kind == Kind::Oneshot {
             let active = self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false);
@@ -344,6 +349,32 @@ impl Daemon {
         let _ = fs::remove_dir_all(&dir);
         self.dynamic.lock().unwrap().remove(id);
         "done"
+    }
+
+    /// A longrun instance whose service ended on its own (Restart= done
+    /// with it) leaves its s6-supervise, and its logger's, behind until a
+    /// stop: remove them once it has been down for `after` µs. Its
+    /// dependents stay, as systemd keeps Requires= dependents of a unit
+    /// that exited, and the state files keep its result for `status`; the
+    /// next start creates it again. Skipped while a job holds the unit.
+    pub(super) async fn collect_exited(&self, id: &str, unit: &Unit, after: u64) -> bool {
+        let down_since = |sv: &super::s6::SvStat| {
+            let since = crate::state::for_unit(&self.cfg.run_dir, id).get_u64(crate::state::keys::INACTIVE_ENTER);
+            !sv.up && !sv.wanted_up && since > 0 && crate::util::now_realtime_usec().saturating_sub(since) > after
+        };
+        if unit.utype() != "service" || self.dynamic_kind(id) != Some(Kind::Longrun) {
+            return false;
+        }
+        if !self.svstat(id).await.is_some_and(|sv| down_since(&sv)) {
+            return false;
+        }
+        let Ok(_guard) = self.unit_lock(id).try_lock_owned() else { return false };
+        // Again under the lock: a start may have run in between.
+        if !self.svstat(id).await.is_some_and(|sv| down_since(&sv)) {
+            return false;
+        }
+        self.dyn_remove(id, unit).await;
+        true
     }
 
     /// Shutdown: s6-rc doesn't know the on-demand instances, so run their

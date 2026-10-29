@@ -478,12 +478,12 @@ impl Daemon {
         let cfg = self.cfg.clone();
         let (plan, moving) = tokio::task::spawn_blocking(move || {
             let plan = gen::plan(&cfg);
-            let moving = gen::auto_mask_moving(&cfg, &plan);
+            let moving = gen::auto_masked(&cfg);
             (plan, moving)
         })
         .await
         .map_err(|e| e.to_string())?;
-        // AUTO_MASK= moves these into or out of the database: no job runs
+        // What AUTO_MASK= masked goes back into the database: no job runs
         // on them until the new database and index are in place (a start
         // from the old database would be stopped by s6-rc-update, a dynamic
         // instance would meet the database's service of the same name).
@@ -641,7 +641,7 @@ impl Daemon {
         let transient = self.transient.lock().unwrap().contains_key(&id);
         let dynamic = self.dynamic_kind(&id).is_some() || self.can_be_dynamic(&id, &unit);
         if !transient && !dynamic && self.kind_of(&id).is_none() && jtype != "stop" {
-            // Masked in the s6 set by the admin (AUTO_MASK='s are dynamic).
+            // Masked in the s6 set by the admin (AUTO_MASK='s leftovers are dynamic).
             if crate::install::set_rx(&self.cfg, &id) == Some("masked") {
                 return Err(err(E_MASKED, format!("Unit {name} is masked in the s6 set ({}).", self.cfg.set_name)));
             }
@@ -650,7 +650,7 @@ impl Daemon {
             if allow_reload && !self.cfg.is_excluded(&id) {
                 let _ = self.reload_db().await;
             }
-            // AUTO_MASK= may have left it out of the database: on demand.
+            // AUTO_MASK='s leftovers are out of the database: on demand.
             if self.kind_of(&id).is_none() && !self.can_be_dynamic(&id, &unit) {
                 let why = if self.cfg.is_excluded(&id) {
                     "excluded by uinitconverter configuration".to_string()

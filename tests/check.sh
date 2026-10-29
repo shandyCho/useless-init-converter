@@ -385,6 +385,28 @@ left() { pgrep -u "$(id -u)" -f '^s6-supervise inst@h\.service(/log)?$' >/dev/nu
 tries=25
 while [ $tries -gt 0 ] && left; do tries=$((tries - 1)); sleep 0.2; done
 left && bad "inst@h's supervisor still runs after the scan directory was repaired" || ok "repaired scan directory ends the leftover supervisor"
+# An instance whose service ended on its own loses its supervisor after
+# 10 s; its result stays, and so does what requires it.
+call StartUnit ss quitter@0.service replace
+call StartUnit ss quit@3.service replace
+expect_state quitter@0.service active/running
+expect_state quit@0.service inactive/dead
+expect_state quit@3.service failed/failed
+gone() { [ ! -e "$R/run/dyn/$1" ] && ! pgrep -u "$(id -u)" -xf "s6-supervise $1" >/dev/null; }
+tries=100
+while [ $tries -gt 0 ] && ! { gone quit@0.service && gone quit@3.service; }; do tries=$((tries - 1)); sleep 0.2; done
+gone quit@0.service && ok "an ended instance's supervisor goes" || bad "quit@0's supervisor still there"
+gone quit@3.service && ok "a failed one's too" || bad "quit@3's supervisor still there"
+gone quitter@0.service && bad "quitter@0 was removed with quit@0" || ok "what requires it keeps its supervisor"
+expect_state quit@0.service inactive/dead
+expect_state quit@3.service failed/failed
+expect_state quitter@0.service active/running
+call StartUnit ss quit@0.service replace
+tries=25
+while [ $tries -gt 0 ] && [ ! -d "$R/run/dyn/quit@0.service" ]; do tries=$((tries - 1)); sleep 0.2; done
+[ -d "$R/run/dyn/quit@0.service" ] && ok "a new start creates it again" || bad "quit@0 not started again"
+call StopUnit ss quitter@0.service replace
+call ResetFailedUnit s quit@3.service
 
 section "conflicts"
 expect_state winner.service active/running
@@ -928,17 +950,7 @@ rx() { s6-rc-set-status -r "$W/repo" current "$1" 2>/dev/null | cut -d/ -f2; }
 in_default() { s6-rc-db -l "$R/live" contents default 2>/dev/null | grep -qx "$1"; }
 expect_eq "enabled unit starts active in the set" "$(rx hello.service)" "active"
 printf '[Service]\nExecStart=/bin/sleep 1000\n' > "$W/units/repo-helper.service"
-# AUTO_MASK=yes: nothing boots or needs it, so it leaves the database and
-# starts as a dynamic instance.
-call Reload && expect_eq "a new unit not enabled is masked (AUTO_MASK=)" "$(rx repo-helper.service)" "masked"
-grep -qx repo-helper.service "$W/state/auto-masked" && ok "it is listed in auto-masked" || bad "repo-helper.service not in $W/state/auto-masked"
-# No [Install]: static, as on systemd; never "masked".
-expect_eq "UnitFileState of an auto-masked service" "$(prop repo-helper.service Unit UnitFileState)" "static"
-call StartUnit ss repo-helper.service replace
-expect_state repo-helper.service active/running
-[ -d "$R/run/dyn/repo-helper.service" ] && ok "it runs as a dynamic instance" || bad "repo-helper.service not in RUN_DIR/dyn"
-call StopUnit ss repo-helper.service replace
-expect_state repo-helper.service inactive/dead
+call Reload && expect_eq "a new unit not enabled starts usable" "$(rx repo-helper.service)" "usable"
 cat > "$W/units/repo-new.service" <<EOF
 [Unit]
 Requires=repo-helper.service
@@ -951,12 +963,8 @@ EOF
 "$GEN" --config "$W/uinitconverter.conf" enable repo-new.service >/dev/null
 call Reload && expect_eq "a new enabled unit starts active" "$(rx repo-new.service)" "active"
 expect_eq "what an active service needs is made active (s6-rc-set-fix -u)" "$(rx repo-helper.service)" "active"
-grep -qx repo-helper.service "$W/state/auto-masked" && bad "repo-helper.service still in auto-masked" || ok "an auto-masked service something needs is unmasked"
 printf '[Service]\nExecStart=/bin/sleep 1000\n' > "$W/units/repo-lazy.service"
-call Reload && expect_eq "another unused unit is masked" "$(rx repo-lazy.service)" "masked"
-s6-rc-set-change -r "$W/repo" -p current usable repo-lazy.service 2>/dev/null
-call Reload && expect_eq "the admin's unmask is kept" "$(rx repo-lazy.service)" "usable"
-grep -qx repo-lazy.service "$W/state/auto-masked.keep" && ok "and recorded in auto-masked.keep" || bad "repo-lazy.service not in auto-masked.keep"
+call Reload
 # -p: with JOURNAL=no its logger is in the same pipeline.
 s6-rc-set-change -r "$W/repo" -p current masked repo-lazy.service 2>/dev/null
 call Reload
@@ -967,38 +975,42 @@ elif grep -q "masked" "$W/last-error"; then
 else
     bad "admin-masked start: $(cat "$W/last-error")"
 fi
-# A new unit file started without a reload: the start's reload masks it,
-# and it runs on demand.
+# A new unit file started without a reload: the start reloads first.
 printf '[Service]\nExecStart=/bin/sleep 1000\n' > "$W/units/repo-fresh.service"
 call StartUnit ss repo-fresh.service replace
 expect_state repo-fresh.service active/running
-expect_eq "a new unit started without a reload is masked" "$(rx repo-fresh.service)" "masked"
+expect_eq "a new unit started without a reload is in the set" "$(rx repo-fresh.service)" "usable"
 call StopUnit ss repo-fresh.service replace
-# AUTO_MASK=no puts back what it masked; an active dynamic oneshot goes
-# back to the database started (stopped first: same name in both).
+# What the removed AUTO_MASK= masked (listed in STATE_DIR/auto-masked) is
+# started on demand until a reload puts it back in the database; one
+# running then is stopped and started from the database. To get there:
+# masked and listed while marked dynamic, so the reload leaves them out.
 printf '[Service]\nExecStart=/bin/sleep 1000\n' > "$W/units/repo-busy.service"
 printf '[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n' > "$W/units/repo-once.service"
-call Reload && expect_eq "a new oneshot is masked" "$(rx repo-once.service)" "masked"
-call StartUnit ss repo-once.service replace
-expect_state repo-once.service active/exited
-{ grep -v '^AUTO_MASK=' "$W/uinitconverter.conf"; echo AUTO_MASK=no; } > "$W/noauto.conf"
-restart_daemon "$W/noauto.conf"
 call Reload
-expect_eq "AUTO_MASK=no unmasks what it masked" "$(rx repo-busy.service)" "usable"
-expect_eq "an active dynamic oneshot goes back to the database" "$(rx repo-once.service)" "usable"
-expect_state repo-once.service active/exited
-[ -e "$R/run/dyn-oneshot/repo-once.service" ] && bad "repo-once.service still marked dynamic" || ok "and is no longer a dynamic instance"
-# A service up in the database is not masked: s6-rc-update would stop it.
+s6-rc-set-change -r "$W/repo" -p current masked repo-busy.service repo-once.service 2>/dev/null
+printf '%s\n' repo-busy.service repo-once.service > "$W/state/auto-masked"
+echo repo-lazy.service > "$W/state/auto-masked.keep"
+mkdir -p "$R/run/dyn/repo-busy.service" "$R/run/dyn-oneshot"
+: > "$R/run/dyn-oneshot/repo-once.service"
+call Reload
+expect_eq "a running one stays masked" "$(rx repo-busy.service)" "masked"
+rm -rf "$R/run/dyn/repo-busy.service" "$R/run/dyn-oneshot/repo-once.service"
+expect_eq "UnitFileState of a leftover" "$(prop repo-busy.service Unit UnitFileState)" "static"
 call StartUnit ss repo-busy.service replace
 expect_state repo-busy.service active/running
-restart_daemon "$W/uinitconverter.conf"
+[ -d "$R/run/dyn/repo-busy.service" ] && ok "a leftover runs as a dynamic instance" || bad "repo-busy.service not in RUN_DIR/dyn"
+call StartUnit ss repo-once.service replace
+expect_state repo-once.service active/exited
 call Reload
-expect_eq "a service up in the database stays in it" "$(rx repo-busy.service)" "usable"
+expect_eq "a reload unmasks the leftovers" "$(rx repo-busy.service)/$(rx repo-once.service)" "usable/usable"
+[ ! -e "$W/state/auto-masked" ] && [ ! -e "$W/state/auto-masked.keep" ] && ok "and removes the lists" || bad "auto-masked lists left"
 expect_state repo-busy.service active/running
+[ -d "$R/run/dyn/repo-busy.service" ] && bad "repo-busy.service still dynamic" || ok "a running leftover is started from the database"
+expect_state repo-once.service active/exited
+[ -e "$R/run/dyn-oneshot/repo-once.service" ] && bad "repo-once.service still marked dynamic" || ok "an active leftover oneshot too"
 call StopUnit ss repo-busy.service replace
 call StopUnit ss repo-once.service replace
-call Reload
-expect_eq "and is masked once down" "$(rx repo-busy.service)" "masked"
 in_default repo-new.service && ok "the default bundle has it" || bad "repo-new.service not in the default bundle"
 s6-rc-set-change -r "$W/repo" current usable hello.service 2>/dev/null
 call Reload

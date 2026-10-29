@@ -341,75 +341,6 @@ fn sync_loggers(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// The services up in the live database (`s6-rc -a list`): none without
-/// one; Err if it can't be read.
-fn live_up(cfg: &Config) -> Result<BTreeSet<String>, String> {
-    if fs::symlink_metadata(cfg.live_dir.join("compiled")).is_err() {
-        return Ok(BTreeSet::new());
-    }
-    let out = run(Command::new(tools::path("s6-rc")).arg("-l").arg(&cfg.live_dir).args(["-a", "list"]))?;
-    Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
-}
-
-/// The services AUTO_MASK= masks: translated services, timers and paths
-/// that are `usable` in the set (or masked by an earlier run of this), not
-/// pulled in by the boot, without .socket units (their runner binds them
-/// and the fd store holds them), not taken back by the admin, and on which only
-/// such services depend (s6-rc refuses a set where a service that stays
-/// depends on a masked one; a bundle that contains one keeps it).
-///
-/// `up`: the services up in the live database, which a `usable` one must
-/// not be: s6-rc-update stops a service that leaves the database, so it is
-/// masked at a later reload, once down. None: all, up or not (the superset
-/// the daemon locks).
-fn auto_mask_candidates(
-    cfg: &Config,
-    plan: &Plan,
-    ours: &BTreeSet<String>,
-    kept: &BTreeSet<String>,
-    up: Option<&BTreeSet<String>>,
-) -> BTreeSet<String> {
-    let rx = |n: &str| install::set_rx(cfg, n);
-    let mut e: BTreeSet<String> = plan
-        .units
-        .values()
-        .filter(|p| matches!(p.kind, Kind::Longrun | Kind::Oneshot))
-        .filter(|p| [".service", ".timer", ".path"].iter().any(|s| p.id.ends_with(s)))
-        .filter(|p| !p.has_sockets && !plan.boot.contains(&p.id) && !kept.contains(&p.id) && !cfg.is_excluded(&p.id))
-        .filter(|p| match rx(&p.id) {
-            Some("usable") => up.is_none_or(|u| !u.contains(&p.id)),
-            Some("masked") => ours.contains(&p.id),
-            _ => false,
-        })
-        .map(|p| p.id.clone())
-        .collect();
-    let mut dependents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for p in plan.units.values() {
-        for d in &p.deps {
-            dependents.entry(d.as_str()).or_default().push(p.id.as_str());
-        }
-    }
-    loop {
-        let blocked: Vec<String> = e
-            .iter()
-            .filter(|x| {
-                dependents
-                    .get(x.as_str())
-                    .into_iter()
-                    .flatten()
-                    .any(|u| !e.contains(*u) && rx(u) != Some("masked"))
-            })
-            .cloned()
-            .collect();
-        if blocked.is_empty() {
-            return e;
-        }
-        for b in blocked {
-            e.remove(&b);
-        }
-    }
-}
-
 /// A service with its logger and ExecStop= oneshot, the ones the set has:
 /// s6-rc masks a pipeline as a whole, and the oneshot depends on it.
 fn with_companions(cfg: &Config, plan: &Plan, id: &str) -> Vec<String> {
@@ -421,14 +352,12 @@ fn with_companions(cfg: &Config, plan: &Plan, id: &str) -> Vec<String> {
 }
 
 /// s6-rc-set-change RX for groups of services: all at once, and if the
-/// set refuses that (masking one a service from a hand-written store
-/// depends on), group by group, leaving out the groups it refuses. Returns the ids of
-/// the groups that moved.
+/// set refuses that, group by group, leaving out the groups it refuses.
+/// Returns the ids of the groups that moved.
 fn set_change_groups(cfg: &Config, rx: &str, groups: &[(String, Vec<String>)]) -> Vec<String> {
-    // Masking must not leave a remaining service depending on a masked one
-    // (-i: refuse). Unmasking to usable may leave an active service depending
-    // on a usable one: set-fix -u before the commit makes it active.
-    let fail = if rx == "masked" { "-i" } else { "-I" };
+    // Unmasking to usable may leave an active service depending on a
+    // usable one: set-fix -u before the commit makes it active.
+    let fail = "-I";
     let change = |names: &[String]| {
         run(Command::new(tools::path("s6-rc-set-change"))
             .arg("-r")
@@ -455,66 +384,27 @@ fn set_change_groups(cfg: &Config, rx: &str, groups: &[(String, Vec<String>)]) -
     moved
 }
 
-/// The generator's list and the admin's keep list, with the services the
-/// admin moved out of `masked` since (returned) taken over into the keep
-/// list, and those gone from the set forgotten.
-fn auto_mask_lists(cfg: &Config) -> (BTreeSet<String>, BTreeSet<String>, Vec<String>) {
-    let mut ours = automask::masked(cfg);
-    let mut kept = automask::kept(cfg);
-    let taken_back: Vec<String> =
-        ours.iter().filter(|n| install::set_rx(cfg, n).is_some_and(|rx| rx != "masked")).cloned().collect();
-    for n in &taken_back {
-        ours.remove(n);
-        kept.insert(n.clone());
-    }
-    ours.retain(|n| install::set_rx(cfg, n).is_some());
-    (ours, kept, taken_back)
+/// The services AUTO_MASK= (removed) masked that are still masked in the
+/// set: each reload puts them back in the database. uinitconverterd holds
+/// their jobs during the reload, and stops those running as dynamic
+/// instances first (see undo_auto_mask).
+pub fn auto_masked(cfg: &Config) -> BTreeSet<String> {
+    automask::masked(cfg).into_iter().filter(|n| install::set_rx(cfg, n) == Some("masked")).collect()
 }
 
-/// The services a reload with `plan` may move into or out of the database
-/// by AUTO_MASK=: uinitconverterd holds their jobs during the reload, and
-/// stops those running as dynamic instances first (see sync_auto_mask).
-/// A superset: services up in the live database are counted as masked.
-pub fn auto_mask_moving(cfg: &Config, plan: &Plan) -> BTreeSet<String> {
-    let (ours, kept, _) = auto_mask_lists(cfg);
-    let want = if cfg.auto_mask { auto_mask_candidates(cfg, plan, &ours, &kept, None) } else { BTreeSet::new() };
-    let unmask = ours.iter().filter(|n| !want.contains(*n)).cloned();
-    let mask = want.iter().filter(|n| install::set_rx(cfg, n) != Some("masked")).cloned();
-    unmask.chain(mask).collect()
-}
-
-/// AUTO_MASK=: mask the candidates (auto_mask_candidates) and unmask, back
-/// to `usable`, what this masked and is no longer one (something now
-/// depends on it, or AUTO_MASK=no). A service the admin moved out of
-/// `masked` is kept as the admin left it from then on.
-///
-/// One running as a dynamic instance would get a second supervisor under
-/// the same name in the database: uinitconverterd stops it before the
-/// reload (auto_mask_moving) and starts it again from the database after.
-/// Run without the daemon, this leaves such a one masked instead; s6-rc-
-/// set-fix -u still unmasks it if an active service needs it.
-fn sync_auto_mask(cfg: &Config, plan: &Plan, changes: &mut Vec<String>) -> Result<(), String> {
-    let (mut ours, kept, taken_back) = auto_mask_lists(cfg);
-    if !taken_back.is_empty() {
-        changes.push(format!("{} moved out of masked by the admin: no longer masked automatically", taken_back.join(" ")));
-    }
-    let want = if !cfg.auto_mask {
-        BTreeSet::new()
-    } else {
-        match live_up(cfg) {
-            Ok(up) => auto_mask_candidates(cfg, plan, &ours, &kept, Some(&up)),
-            Err(e) => {
-                // Can't tell what runs: mask nothing new.
-                eprintln!("uinitconverter-gen: AUTO_MASK=: {e}");
-                let all = auto_mask_candidates(cfg, plan, &ours, &kept, None);
-                all.into_iter().filter(|n| ours.contains(n)).collect()
-            }
-        }
-    };
-    let running = |n: &str| automask::running_dynamic(cfg, n);
+/// AUTO_MASK= used to mask unused services in the set and run them as
+/// dynamic instances; it is gone, so put what it masked back to `usable`
+/// (with their logger and ExecStop= oneshot), as AUTO_MASK=no did, and
+/// remove its lists once nothing is left. One running as a dynamic
+/// instance would get a second supervisor under the same name: run
+/// without the daemon (which stops it first), this leaves it masked for a
+/// later reload; s6-rc-set-fix -u still unmasks it if an active service
+/// needs it.
+fn undo_auto_mask(cfg: &Config, plan: &Plan, changes: &mut Vec<String>) -> Result<(), String> {
+    let mut ours = auto_masked(cfg);
     let unmask: Vec<(String, Vec<String>)> = ours
         .iter()
-        .filter(|n| !want.contains(*n) && !running(n))
+        .filter(|n| !automask::running_dynamic(cfg, n))
         .map(|n| (n.clone(), with_companions(cfg, plan, n)))
         .collect();
     let unmasked = set_change_groups(cfg, "usable", &unmask);
@@ -522,22 +412,9 @@ fn sync_auto_mask(cfg: &Config, plan: &Plan, changes: &mut Vec<String>) -> Resul
         ours.remove(n);
     }
     if !unmasked.is_empty() {
-        changes.push(format!("{} -> usable (no longer masked automatically)", unmasked.join(" ")));
+        changes.push(format!("{} -> usable (AUTO_MASK= is gone)", unmasked.join(" ")));
     }
-    let mask: Vec<(String, Vec<String>)> = want
-        .iter()
-        .filter(|n| install::set_rx(cfg, n) != Some("masked"))
-        .map(|n| (n.clone(), with_companions(cfg, plan, n)))
-        .collect();
-    let masked = set_change_groups(cfg, "masked", &mask);
-    ours.extend(masked.iter().cloned());
-    if !masked.is_empty() {
-        changes.push(format!(
-            "{} -> masked (nothing boots or needs them: started on demand, AUTO_MASK=)",
-            masked.join(" ")
-        ));
-    }
-    automask::save(cfg, &ours, &kept)
+    automask::save(cfg, &ours)
 }
 
 /// A longrun's `.stop` oneshot (see write_stop_atom) takes its service's
@@ -736,7 +613,7 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
     let res = repo_sync(cfg)
         .and_then(|_| sync_essentials(cfg, &mut set_changes))
         .and_then(|_| sync_loggers(cfg, &mut set_changes))
-        .and_then(|_| sync_auto_mask(cfg, &plan, &mut set_changes))
+        .and_then(|_| undo_auto_mask(cfg, &plan, &mut set_changes))
         .and_then(|_| sync_stop_atoms(cfg, &mut set_changes))
         .and_then(|_| commit_and_install(cfg, update_live, &mut set_changes));
     let updated_live = match res {

@@ -132,7 +132,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 패키지 설치와 업데이트: systemd RPM의 파일 트리거가 `systemctl daemon-reload`를 실행하고, 이것이 s6 데이터베이스를 재생성하므로 새로 설치된 유닛은 바로 s6 서비스가 됩니다(dnf, GNOME 소프트웨어, PackageKit 모두 같습니다). 새 서비스는 systemd의 preset이 정한 대로 s6 세트에서 활성 또는 비활성으로 시작합니다. 업데이트 때는 패키지 스크립트렛이 유닛에 `Markers=+needs-restart`/`+needs-reload`를 표시하고(`SetUnitProperties`), 이어서 `systemctl enqueue-marked`(`EnqueueMarkedJobs`)가 실행 중인 유닛을 systemd처럼 재시작하거나 다시 읽게 합니다. 사용자 유닛의 경우 파일 트리거가 `user@*.service`를 reload하고(사용자 매니저가 `ReloadSignal=`을 받아 다시 실행됩니다. 모든 `Type=notify-reload`와 마찬가지로 reload는 `RELOADING=1`/`READY=1`을 기다립니다), 각 사용자 매니저에서 `systemctl --user -M UID@ enqueue-marked`를 실행합니다. 이것은 `systemd-run --pipe`(표준 입출력을 파일 디스크립터로 전달)와 `systemd-stdio-bridge`를 거칩니다.
 - 임시(transient) 유닛: `.scope`와 `.slice` 유닛에 대한 `StartTransientUnit`(`PIDs` 또는 `PIDFDs`; logind, podman, flatpak이 사용). `AttachProcessesToUnit`, `Scope.Abandon`, 참조 카운트 호출(수락만 함)도 지원합니다. scope와 slice는 `/run/uinitconverter/units`에 기록되므로 다시 시작한 데몬이 넘겨받습니다(세션 scope가 계속 동작합니다).
 - **`systemd-run`**: 보조 유닛을 포함한 임시 `.service`, `.timer`, `.path` 유닛(`--on-calendar`/`--on-active`는 타이머와 서비스를 함께 보냅니다). 속성은 `/run/systemd/transient/`의 유닛 파일이 됩니다. `systemd-run --wait`는 `PropertiesChanged`와 종료 상태를 받습니다. 끝난 임시 유닛은 언로드됩니다.
-- 템플릿 인스턴스는 데이터베이스를 다시 컴파일하지 않고 필요할 때 만들어집니다(예: `user@1000.service`, `user-runtime-dir@1000.service`). 의존성이 먼저 시작되고, 멈춘 유닛을 필요로 하는 유닛은 함께 멈춥니다. 종료할 때 활성 상태인 oneshot 인스턴스를 멈춰 `ExecStop=`이 실행됩니다(systemd-backlight@가 밝기를 저장합니다). 이 인스턴스는 `/run/uinitconverter/dyn-oneshot`에 기록되므로 데몬을 다시 시작한 뒤에도 마찬가지입니다. 다시 시작한 데몬은 실행 중인 인스턴스(`/run/uinitconverter/dyn`의 서비스 디렉터리)도 넘겨받아 이전처럼 상태를 보고하고 멈춥니다.
+- 템플릿 인스턴스는 데이터베이스를 다시 컴파일하지 않고 필요할 때 만들어집니다(예: `user@1000.service`, `user-runtime-dir@1000.service`). 의존성이 먼저 시작되고, 멈춘 유닛을 필요로 하는 유닛은 함께 멈춥니다. 종료할 때 활성 상태인 oneshot 인스턴스를 멈춰 `ExecStop=`이 실행됩니다(systemd-backlight@가 밝기를 저장합니다). 이 인스턴스는 `/run/uinitconverter/dyn-oneshot`에 기록되므로 데몬을 다시 시작한 뒤에도 마찬가지입니다. 다시 시작한 데몬은 실행 중인 인스턴스(`/run/uinitconverter/dyn`의 서비스 디렉터리)도 넘겨받아 이전처럼 상태를 보고하고 멈춥니다. 서비스가 스스로 끝난(`Restart=`도 끝난) 인스턴스는 10초 뒤 `s6-supervise`와 로거를 정리합니다. 결과(`inactive`/`failed`)는 그대로 보이고, 그 인스턴스를 필요로 하는 유닛은 systemd처럼 계속 실행되며, 다음 시작이 다시 만듭니다.
 - 오래 실행되는 서비스의 `ExecStop=`은 s6-rc가 서비스를 직접 멈출 때도 실행됩니다: 종료 시, `s6 live stop`, `s6 live reset`, 패키지 업데이트로 서비스가 없어질 때. 이런 서비스마다 그 서비스에 의존하는 s6-rc oneshot `UNIT.stop`이 생기고(그래서 s6-rc가 이것을 먼저 내립니다), 그 `down`이 `TimeoutStopSec=` 안에서 `$MAINPID`와 함께 `ExecStop=`을 실행합니다. 데몬은 s6-rc가 서비스를 올려 두었으면 `UNIT.stop`도 올리고, `systemctl stop`은 `ExecStop=`을 이것에 맡깁니다(한 번만 실행). `RemainAfterExit=yes`인 oneshot은 원래부터 자기 `down`에서 실행했습니다. 차이점: 그 서비스에 의존하는 유닛은 `ExecStop=`보다 먼저가 아니라 나란히 멈춥니다(`UNIT.stop`에는 아무것도 의존하지 않습니다. 그렇게 하면 업그레이드 때 s6-rc-update가 새 서비스에 대한 의존성이 생긴 유닛을 모두 다시 시작합니다). 또 `s6 process restart`/`s6-svc`는 프로세스에만 작용하므로 그때는 `ExecStop=`이 실행되지 않습니다. `ExecStop=`이 있는 필요 시 인스턴스(longrun 포함)는 종료할 때 데몬이 멈춥니다.
 - `poweroff.target`, `reboot.target`, `halt.target`을 시작하면(logind가 전원을 끄는 방식) 설정된 종료 명령을 실행합니다.
 - D-Bus 활성화: dbus-daemon의 `ActivationRequest`에 응답하고, 시작이 실패하면 `ActivationFailure`로 답합니다. `--bus=broker`이면 systemd에서처럼 dbus-broker-launch가 `StartUnit`(`SystemdService=`가 있을 때)이나 `StartTransientUnit`(그 밖에는 transient `dbus-:1.N-NAME@K.service`)으로 서비스를 시작하고, `JobRemoved`와 유닛의 `ActiveState`를 지켜봅니다.
@@ -471,20 +471,11 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
   `list-unit-files`는 세트를 보여 줍니다: `always`/`active`는 `enabled`, `usable`은
   `disabled`, `masked`는 `masked`입니다(`static`, `indirect`, `alias`는 systemd가 보는
   그대로입니다).
-- **자동 마스킹(`AUTO_MASK=yes`, 기본값).** 부팅이 끌어들이지 않고 `usable`인 변환된
-  서비스·타이머·path 중, 실행 중이 아니고 남아 있는 서비스가 의존하지 않는 것은 reload가
-  `masked`로 옮깁니다(로거와 `UNIT.stop`도 함께). 실행 중인 것은 멈춘 뒤의 reload에서
-  마스킹됩니다. 데이터베이스에 없으므로 할 일 없이 대기하는
-  `s6-supervise`가 생기지 않습니다. 이 서비스들은 `systemctl start`, D-Bus 활성화, 타이머,
-  udev가 요청하면 uinitconverterd가 `user@UID`처럼 동적 서비스로 띄웁니다(실행되는 동안만
-  감독). 실행 중에는 `s6-rc -a list`가 아니라 `s6-svstat`에만 보입니다. `systemctl
-  is-enabled`와 `status`는 `disabled`로 보여 줍니다. 무엇을 마스킹했는지는
-  `/var/lib/uinitconverter/auto-masked`에 있고, 무엇이 그 서비스에 의존하게 되면 다음
-  reload가 `usable`로 되돌립니다(그때 실행 중이면 멈췄다가 데이터베이스에서 다시
-  시작합니다). 관리자가 `s6 set enable|unmask`로 꺼낸 서비스는
-  `auto-masked.keep`에 기록되어 다시는 자동으로 마스킹되지 않습니다. 관리자가 직접
-  `s6 set mask`한 서비스는 지금처럼 시작이 거부됩니다. `AUTO_MASK=no`이면 다음 reload가
-  자동으로 마스킹한 것을 모두 `usable`로 되돌립니다.
+- 자동 마스킹(`AUTO_MASK=`)은 없앴습니다. 이전 버전이 마스킹한 서비스
+  (`/var/lib/uinitconverter/auto-masked`)는 다음 reload가 `usable`로 되돌리고, 목록이
+  비면 `auto-masked`와 `auto-masked.keep`을 지웁니다. 그때 동적 서비스로 실행 중인 것은
+  멈췄다가 데이터베이스에서 다시 시작합니다. 되돌리기 전까지는 요청이 오면 지금처럼
+  동적으로 띄웁니다. 설정에 남은 `AUTO_MASK=`는 무시됩니다.
 - `systemctl daemon-reload`와 `uinitconverter reload`(패키지가 바뀌면 dnf의 파일 트리거도 실행)는
   스토어를 다시 만들고 저장소를 동기화한 뒤 `current`를 커밋해 부팅 및 live 데이터베이스로
   설치합니다. 커밋 전에 `s6-rc-set-fix -u`를 실행해 `active` 서비스가 의존하는 것을
@@ -547,7 +538,6 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `INIT`: 유닛을 변환할 대상 init 시스템. 지금은 `s6`만 있고, 다른 값이면 모든 도구가 설정 오류로 멈춥니다.
 - `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `uinitconverter init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
-- `AUTO_MASK`: `yes`(기본값)이면 부팅에 쓰이지 않는 서비스를 s6 세트에서 자동으로 `masked`로 두고 요청이 오면 동적으로 띄웁니다(위의 "자동 마스킹" 참고).
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 원하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
 - `INCLUDE`: 기본값으로 uinitconverter에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight(화면·키보드 밝기를 부팅 사이에 유지), 절전 서비스)를 통과시킵니다. 무선 상태(rfkill)는 systemd-rfkill 대신 `rfkill` s6 oneshot이 유지합니다. 부팅 때 util-linux `rfkill`로 장치마다 soft block을 되살리고, 종료할 때 상태를 systemd-rfkill 자신의 파일(`/var/lib/systemd/rfkill/ID_PATH:TYPE`)에 저장하므로 systemd 부팅 항목과 상태를 공유합니다. systemd-rfkill과 달리 정상 종료할 때만 저장하며, 부팅 중 udev settle 뒤에 나타난 장치는 상태를 그대로 둡니다.
 
