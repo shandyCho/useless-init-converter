@@ -8029,7 +8029,7 @@ reading the code (nothing timed):
    aside to get a median for the current build only.
 2. Earlier next steps (part 50) unchanged.
 
-## 2026-10-29, part 52: AUTO_MASK removed, ended dynamic instances collected (uncommitted)
+## 2026-10-29, part 52: AUTO_MASK removed, ended dynamic instances collected (d570432)
 
 Owner, after part 51's trade-offs: roll AUTO_MASK back to the earlier
 behaviour and fix the lingering supervisors.
@@ -8083,7 +8083,7 @@ back to the database. The first test run failed once on my check
 
 ### Current state
 
-Uncommitted on main. Installed RPMs are e6c0c97 (AUTO_MASK active, 90
+Committed (d570432). Installed RPMs are e6c0c97 (AUTO_MASK active, 90
 units masked on this machine).
 
 ### Next steps
