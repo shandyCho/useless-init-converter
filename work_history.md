@@ -7979,3 +7979,120 @@ doesn't exist yet: no reload has masked anything on this machine.
    then part 46's step 1 (check what got masked, that on-demand starts
    work, count idle s6-supervise).
 2. Earlier next steps unchanged.
+
+## 2026-10-29, part 51: memory comparison with AUTO_MASK installed (no code change)
+
+Owner booted systemd (snapshot mem-systemd-20261029-225004) and asked
+for the s6/systemd comparison. Installed: RPMs from e6c0c97
+(1.20261029175108), /var/lib/uinitconverter/auto-masked has 90 units.
+mem-s6-20261029-080637 (the logged-in one, part 49) is gone. New s6
+snapshot mem-s6-20261029-222000 is the first with AUTO_MASK.
+
+`tests/memtest.sh report`: 4 systemd, 7 s6, PASS. total - available
+median s6 1157.5 vs systemd 1175.3 MiB (-17.8). All four systemd
+snapshots lie within 1171-1180; s6 within 1141-1166.
+
+Latest pair (systemd 225004, s6 222000):
+- total - available 1171.2 vs 1157.5 (-13.7); used +107 as in earlier
+  parts (see part 42: total - available is the figure to read).
+- PSS all 550.4 vs 544.1 (-6.3): init +38.7 (s6-supervise x155 19.8,
+  runner helpers x37 21.4, uinitconverterd 7.3), logging -39.4
+  (journald 32.4 and rsyslogd 15.3 vs s6-log x48 5.9 + rsyslogd 2.4).
+- Kernel side s6 higher: SUnreclaim +18.4, PageTables +12.1,
+  KernelStack +4.4 (314 vs 77 user processes).
+
+AUTO_MASK effect, s6 142823 (before) vs 222000 (after): s6-supervise
+255 -> 155, -12.4 MiB PSS; init group 62.8 -> 49.8; PageTables -4.3,
+KernelStack -1.8. total - available still +16.6 between them, inside the
+boot-to-boot spread of the s6 snapshots (25 MiB) and with Cached +211
+MiB, so not attributable to AUTO_MASK.
+
+Owner then asked for AUTO_MASK's trade-offs (memory, start time); from
+reading the code (nothing timed):
+- An auto-masked unit started by systemctl/bus/timer becomes a dynamic
+  instance (dynamic.rs dyn_start): its dependencies started one by one by
+  the daemon, service directory written, `s6-svlink` (waits for
+  s6-svscan to spawn s6-supervise), then `s6-svc -u`. A database unit
+  only needs `s6-svc -u` on a supervisor that already runs. Extra cost:
+  a few process spawns and a rescan per first start; not measured.
+- Found: a non-transient dynamic instance whose service exits by itself
+  (idle-exit D-Bus services, timer jobs) keeps its s6-supervise (and
+  logger) until `systemctl stop`, a reload moving it back, or shutdown:
+  watch_dynamic (transient.rs) collects transient units only. So the
+  saving shrinks with every unit used once per boot, and README's
+  "supervised only while it runs" is not accurate. Fixed in part 52.
+
+### Next steps
+
+1. More boots of both (especially systemd, and s6 with AUTO_MASK) to
+   tighten the medians; the pre-AUTO_MASK s6 snapshots could be moved
+   aside to get a median for the current build only.
+2. Earlier next steps (part 50) unchanged.
+
+## 2026-10-29, part 52: AUTO_MASK removed, ended dynamic instances collected (uncommitted)
+
+Owner, after part 51's trade-offs: roll AUTO_MASK back to the earlier
+behaviour and fix the lingering supervisors.
+
+AUTO_MASK removed (not a git revert: ae863cd/e6c0c97 also carry fixes
+that stay: Index::load dropping set-masked units, the dynamic status
+with CONDITION_FAILED, restart of a parked dynamic instance, s6-log
+through TOOLS=, UnitMasked for admin-masked units, the start's reload
+for a new unit file):
+- Why a cleanup stays: this machine has 90 units masked by e6c0c97, and
+  the RPM install's dnf trigger runs a reload with the new generator. A
+  plain removal would leave them masked and, without can_be_dynamic,
+  unstartable (GNOME's D-Bus services).
+- gen s6.rs: candidates, live_up and the keep-list handling gone;
+  undo_auto_mask() puts every listed unit still masked back to usable
+  (with logger and .stop atom), except one running as a dynamic instance
+  (left for a later reload, as before); pub auto_masked() is what the
+  daemon locks and hands back in reload_db (unchanged otherwise).
+  set_change_groups only unmasks now (-I). Planned::has_sockets removed.
+- automask.rs: save() writes what is left, and with nothing left removes
+  auto-masked and auto-masked.keep. is_masked stays: until the reload,
+  listed units still start dynamically and show `disabled`.
+- Config: auto_mask field removed; an AUTO_MASK= line is ignored without
+  a warning (the owner's /etc/uinitconverter.conf has none).
+- dist/uinitconverter.conf and both READMEs: the section is replaced by
+  the note about leftovers; the config key line is gone.
+
+Lingering supervisors (part 51):
+- dynamic.rs collect_exited(), called from watch_dynamic (every second)
+  for non-transient dynamic units: a .service longrun instance that s6
+  reports down and not wanted up (Restart= done with it), with
+  INACTIVE_ENTER older than 10 s, is removed with dyn_remove() (dyn_stop
+  without stopping dependents, since systemd keeps Requires= dependents
+  of a unit that exited). Checked again under the unit's lock, taken
+  with try_lock (skipped while a job holds it). State files stay, so
+  status still shows inactive/failed; the next start recreates it.
+- Not collected: instances parked by a failed condition or dependency
+  (their runner stays up, paused, as for database longruns), timers and
+  paths.
+
+Tests: cargo test 80 pass, standalone 3/3/3/2; sandbox 303/303,
+SANDBOX_JOURNAL=no 310/310, SANDBOX_FDSTORE=no 291/291; bash -n and
+shellcheck pass. New checks: quit@0 (exits 0) and quit@3 (exits 3) lose
+their supervisors, keep inactive/failed, quitter@0 (Requires= quit@0)
+keeps running, a new start recreates quit@0; leftovers (masked +
+listed, set up with fake dyn markers so the reload leaves them masked)
+start dynamically, show static, and the next reload unmasks them,
+removes both lists, hands the running longrun and the active oneshot
+back to the database. The first test run failed once on my check
+(StartUnit returns before the job creates the directory); now polled.
+
+### Current state
+
+Uncommitted on main. Installed RPMs are e6c0c97 (AUTO_MASK active, 90
+units masked on this machine).
+
+### Next steps
+
+1. Owner: review, commit, rebuild and install the RPMs. The install's
+   reload (or `systemctl daemon-reload`) unmasks the 90 units; check
+   `s6 set status` has no masked entries left, that
+   /var/lib/uinitconverter/auto-masked is gone, and after a while that
+   `ls /run/uinitconverter/dyn` holds only running instances.
+2. Then a memtest round on the s6 boot (s6-supervise count back to
+   ~255 minus the collected ones).
+3. Earlier next steps (part 50) unchanged.
