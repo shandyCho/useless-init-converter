@@ -33,7 +33,11 @@ fifo whose event already came gets a duplicate that the waiter no longer looks
 at.
 
 It needs to read the waiting processes' `/proc/PID/fd`: run it as the same
-user as they are (root on a real system).
+user as they are (root on a real system). Waiters that don't run entirely
+as that user (real, effective, saved and fs uid), or whose parent doesn't,
+are ignored, since any process can take those names. The `s` is written
+through the waiter's own descriptor (`/proc/PID/fd/N`), never by path, and
+only into a FIFO owned by that user that is the same file as the path.
 
 ## Build
 

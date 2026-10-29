@@ -13,6 +13,11 @@
 //! touched: a fifo whose event already came gets a duplicate, which the
 //! waiter has stopped looking at.
 //!
+//! Only waiters that run entirely as our own user are considered (root on
+//! the real system): a process's name is anyone's to choose. The event is
+//! written through the waiter's own descriptor (/proc/PID/fd/N), never by
+//! path, and only into a FIFO of our user that is the file the path names.
+//!
 //! Standalone: reads no configuration. Polls /proc.
 
 use std::collections::HashSet;
@@ -49,6 +54,28 @@ fn parse_stat(s: &str) -> Option<(u32, u64)> {
     Some((f.get(1)?.parse().ok()?, f.get(19)?.parse().ok()?))
 }
 
+/// Whether every uid of the process (real, effective, saved, fs) is `uid`.
+fn runs_as(proc_dir: &Path, pid: u32, uid: u32) -> bool {
+    let Ok(s) = fs::read_to_string(proc_dir.join(pid.to_string()).join("status")) else { return false };
+    let Some(line) = s.lines().find_map(|l| l.strip_prefix("Uid:")) else { return false };
+    let ids: Vec<&str> = line.split_whitespace().collect();
+    ids.len() == 4 && ids.iter().all(|i| i.parse() == Ok(uid))
+}
+
+/// Write the start event through the waiter's descriptor `fd_link`
+/// (/proc/PID/fd/N): only if it is a FIFO owned by `uid` and the same file
+/// as `fifo`, the path it was selected by.
+fn send_event(fd_link: &Path, fifo: &Path, uid: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let mut f = fs::OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(fd_link)?;
+    let got = f.metadata()?;
+    let named = fs::metadata(fifo)?;
+    if !got.file_type().is_fifo() || got.uid() != uid || (got.dev(), got.ino()) != (named.dev(), named.ino()) {
+        return Err(std::io::Error::other("not the waiter's fifo, left alone"));
+    }
+    f.write_all(b"s")
+}
+
 fn comm(proc_dir: &Path, pid: u32) -> Option<String> {
     fs::read_to_string(proc_dir.join(pid.to_string()).join("comm")).ok().map(|s| s.trim_end().to_string())
 }
@@ -77,6 +104,8 @@ struct Watch {
     after: f64,
     hz: f64,
     under: Option<PathBuf>,
+    /// Our uid: waiters (and their parents) must run as it.
+    uid: u32,
     /// (s6-ftrigrd PID, fifo) already sent to.
     sent: HashSet<(u32, PathBuf)>,
 }
@@ -106,34 +135,33 @@ impl Watch {
             let Some(parent) = comm(&self.proc_dir, ppid).filter(|c| WAITERS.contains(&c.as_str())) else {
                 continue;
             };
+            if !runs_as(&self.proc_dir, pid, self.uid) || !runs_as(&self.proc_dir, ppid, self.uid) {
+                continue;
+            }
             alive.insert(pid);
             let waited = uptime - start as f64 / self.hz;
             if waited < self.after {
                 continue;
             }
-            // Each fifo is open twice (read end and s6-ftrigrd's own writer).
-            let mut fifos: Vec<PathBuf> = fs::read_dir(e.path().join("fd"))
+            // (fifo, descriptor): each fifo is open twice (read end and
+            // s6-ftrigrd's own writer); one descriptor is enough.
+            let mut fifos: Vec<(PathBuf, PathBuf)> = fs::read_dir(e.path().join("fd"))
                 .into_iter()
                 .flatten()
                 .flatten()
-                .filter_map(|fd| fs::read_link(fd.path()).ok())
-                .filter(|p| !p.to_string_lossy().ends_with(" (deleted)") && servicedir_of(p).is_some())
-                .filter(|p| self.under.as_ref().is_none_or(|u| p.starts_with(u)))
+                .filter_map(|fd| Some((fs::read_link(fd.path()).ok()?, fd.path())))
+                .filter(|(p, _)| !p.to_string_lossy().ends_with(" (deleted)") && servicedir_of(p).is_some())
+                .filter(|(p, _)| self.under.as_ref().is_none_or(|u| p.starts_with(u)))
                 .collect();
             fifos.sort();
-            fifos.dedup();
-            for fifo in fifos {
+            fifos.dedup_by(|a, b| a.0 == b.0);
+            for (fifo, fd_link) in fifos {
                 let svc = servicedir_of(&fifo).unwrap();
                 if self.sent.contains(&(pid, fifo.clone())) || !lock_held(&svc.join("supervise/lock")) {
                     continue;
                 }
                 self.sent.insert((pid, fifo.clone()));
-                let res = fs::OpenOptions::new()
-                    .write(true)
-                    .custom_flags(libc::O_NONBLOCK)
-                    .open(&fifo)
-                    .and_then(|mut f| f.write_all(b"s"));
-                match res {
+                match send_event(&fd_link, &fifo, self.uid) {
                     Ok(()) => {
                         eprintln!(
                             "uinitconverter-linkwatch: {parent} (pid {ppid}) waited {waited:.0} s for {}, whose supervisor runs: sent its start event",
@@ -179,7 +207,8 @@ fn main() {
         }
     }
     let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
-    let mut w = Watch { proc_dir: PathBuf::from("/proc"), after, hz, under, sent: HashSet::new() };
+    let uid = unsafe { libc::geteuid() };
+    let mut w = Watch { proc_dir: PathBuf::from("/proc"), after, hz, under, uid, sent: HashSet::new() };
     loop {
         w.scan();
         if once {
@@ -227,13 +256,16 @@ mod tests {
             p
         };
         let (up, down) = (fifo("up.service"), fifo("down.service"));
-        let proc_entry = |pid: u32, comm: &str, ppid: u32, start: u64| {
+        let me = unsafe { libc::geteuid() };
+        let proc_as = |pid: u32, comm: &str, ppid: u32, start: u64, uid: u32| {
             let d = proc_dir.join(pid.to_string());
             fs::create_dir_all(d.join("fd")).unwrap();
             fs::write(d.join("comm"), format!("{comm}\n")).unwrap();
+            fs::write(d.join("status"), format!("Name:\t{comm}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")).unwrap();
             fs::write(d.join("stat"), format!("{pid} ({comm}) S {ppid} 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 {start} 0 0")).unwrap();
             d
         };
+        let proc_entry = |pid: u32, comm: &str, ppid: u32, start: u64| proc_as(pid, comm, ppid, start, me);
         proc_entry(50, "s6-rc-update", 1, 0);
         let d = proc_entry(100, "s6-ftrigrd", 50, 100);
         for (i, f) in [&up, &up, &down].iter().enumerate() {
@@ -243,6 +275,14 @@ mod tests {
         proc_entry(60, "s6-rc", 1, 0);
         let d2 = proc_entry(101, "s6-ftrigrd", 60, 100);
         std::os::unix::fs::symlink(&up, d2.join("fd/3")).unwrap();
+        // Anyone can call a process s6-ftrigrd: one running as another
+        // user is left alone, though its parent is our s6-rc-update.
+        let d3 = proc_as(102, "s6-ftrigrd", 50, 100, me.wrapping_add(1));
+        std::os::unix::fs::symlink(&up, d3.join("fd/3")).unwrap();
+        // A descriptor of the right name that is no fifo is not written to.
+        let reg = tmp.join("up.service/event/ftrig1:@40000000:reg");
+        fs::write(&reg, "").unwrap();
+        std::os::unix::fs::symlink(&reg, d.join("fd/6")).unwrap();
         fs::write(proc_dir.join("uptime"), "20.5 1.0\n").unwrap();
 
         // The supervisor's lock, held by another process.
@@ -260,7 +300,7 @@ mod tests {
         let mut reader = fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(&up).unwrap();
 
         // Started at 100 ticks = 1 s, so waited 19.5 s: not yet with --after 30.
-        let mut w = Watch { proc_dir: proc_dir.clone(), after: 30.0, hz: 100.0, under: None, sent: HashSet::new() };
+        let mut w = Watch { proc_dir: proc_dir.clone(), after: 30.0, hz: 100.0, under: None, uid: me, sent: HashSet::new() };
         assert!(w.scan().is_empty());
         w.after = 10.0;
         w.under = Some(tmp.join("elsewhere"));
@@ -271,6 +311,7 @@ mod tests {
         let _ = reader.read_to_end(&mut got);
         assert_eq!(got, b"s");
         assert!(w.scan().is_empty(), "sent once only");
+        assert_eq!(fs::read(&reg).unwrap(), b"", "a regular file is never written");
 
         drop(child.stdin.take());
         let _ = child.wait();
