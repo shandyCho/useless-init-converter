@@ -8121,3 +8121,207 @@ compiled database (07:32).
    instances.
 2. A memtest round on the s6 boot (s6-supervise back to ~255).
 3. Earlier next steps (part 50) unchanged.
+
+## 2026-10-30, part 54: s6 boot with 0b3fec7 checked (no code change)
+
+Owner booted s6 (16:56, logged in 17:10) and asked what to do next. Part
+53's checks, run unprivileged:
+- `s6 set status` 351 entries, 0 masked; auto-masked lists gone.
+- `ls /run/uinitconverter/dyn`: only user@1000.service, running. Nothing
+  dynamic exited on this boot, so collect_exited (part 52) is still covered
+  by the sandbox suite only, not by a real boot.
+- s6-supervise 255, the expected count without AUTO_MASK.
+- Units that were masked start from the database: timedatectl, localectl
+  and hostnamectl answered; busctl Ping activated geoclue, fprintd and
+  packagekit (one of the three pings answered "Access denied", not traced
+  to which; all six units were active afterwards). User session: 29 running
+  services, no failed ones. Timers: snapper-timeline and snapper-cleanup ran
+  (snapper-cleanup Result=success), dnf-makecache ran, the others are
+  scheduled.
+- memtest snapshot mem-s6-20261030-170601 (at the greeter, before login):
+  total - available 1156.8 vs 1171.2 in the latest systemd snapshot (-14.4);
+  medians 4 systemd / 8 s6: 1175.3 vs 1157.1 (-18.1), inside the 50 MiB limit.
+
+Only failed unit: dnf-makecache.service at 17:05:36, exit 1, /var/log/dnf5.log:
+"Could not resolve host: mirrors.fedoraproject.org". The active connection
+is the "iPhone" hotspot; resolving works now. Probably no network yet before
+login, not confirmed: NetworkManager's s6 log is empty, so there is no time
+for when it connected. Next timer run 20:05.
+
+/etc/uinitconverter/uinitconverter.conf.rpmnew differs from the installed
+file only by new comment lines and the three lines init set (JOURNAL, RESOLVED,
+BUS), so nothing is lost by keeping the installed one.
+
+### Current state
+
+0b3fec7 installed and working on the s6 boot. Part 53's steps 1-2 are done.
+
+### Next steps
+
+1. Owner: s6 snapshot taken (harden-s6-20261030-171915.tsv, 17:19). Next:
+   `sudo tests/hardencompare.sh snap` on the next systemd boot, then
+   `tests/hardencompare.sh report` (part 44).
+2. Optional: SYSLOG=syslog-ng on a real boot (/proc/kmsg, SELinux).
+3. Boot loader provider (systemd-boot) and a second init backend (dinit)
+   when the owner decides.
+
+## 2026-10-30, part 55: hardencompare result read (no code change)
+
+Owner ran `tests/hardencompare.sh report` (systemd 17:43, s6 17:19; part 44's
+step). 25 services on both, 48 WEAKER, 101 DIFF, exit 1. Checked against the
+raw TSVs, the unit files and sandbox.rs; nothing was changed.
+
+WEAKER by kind:
+- 33 `/home`, `/root`, `/run/user` (11 units): real, small. ProtectHome=yes
+  mounts a rw tmpfs mode 0000 (sandbox.rs:323), systemd's is read-only;
+  no MS_NOEXEC either. ProtectHome=tmpfs (firewalld): rw 0755, systemd ro.
+  Contents are still hidden; only a root service with DAC_OVERRIDE could write
+  there, and to an empty tmpfs. Any fix has to label before going read-only.
+- 9 `/usr/lib/modules`: false positive. `tmpfs ro bind` vs `tmpfs ro`, hidden
+  and read-only on both; mount_weaker() counts the lost "bind" (make_inaccessible
+  mounts a tmpfs where systemd binds its inaccessible dir).
+- 3 `/dev` (accounts-daemon, firewalld, polkit): real, small. private_dev()
+  never makes /dev read-only; systemd's is ro. CAP_MKNOD is dropped and
+  DevicePolicy's BPF program is there on both, which limits it.
+- 2 ns_user (colord, upower): real, known: PrivateUsers= was left out on
+  purpose (see the sandbox work that listed it). Both have no effective
+  capabilities and NoNewPrivileges, so the practical gain is small.
+- 1 ns_mnt (rtkit): not a weakening. Unit sets only PrivateNetwork=; systemd's
+  mount namespace is not a file system restriction there (rtkit chroots
+  itself on both). Only limit_core differs besides.
+
+Not in the report, most important: **the system bus**. dist/s6/dbus/run starts
+dbus-broker from s6 outside any unit: cgroup `/`, so snap (system.slice only)
+never saw it. dbus-broker.service sets ProtectSystem=full, PrivateTmp=,
+PrivateDevices=. Systemd snapshot: private mnt ns, /usr and /etc ro, private
+/tmp, private /dev, seccomp mode 2 with 3 filters, 1 BPF program. Live on s6
+(pid 1760 launcher, 1910 broker): seccomp 0; its mountinfo has the same mount
+points and flags as an ordinary process's (/ rw, host /tmp, host /dev). Same
+uid 81, same SELinux domain (system_dbusd_t), which still confines it. Listed
+by the report as "Running only on systemd". Also in cgroup `/` on s6, so also
+never compared: rsyslogd, systemd-udevd, earlyoom, agetty (all root, seccomp 0)
+and uinitconverter's own processes. systemd-udevd is missing on the systemd side
+too (not in the report's lists; probably its processes sit in a sub-cgroup,
+which main_pid doesn't read; not confirmed).
+
+Other coverage limits:
+- Seccomp filter counts differ both ways: fewer on s6 for bluetooth 5/3, bolt
+  11/9, accounts-daemon 19/18, chronyd 23/22, fwupd 28/27, polkit 31/30; more
+  for firewalld 20/22, logind 26/27, upower 14/15. Script calls these DIFF.
+  Not traced; /proc can't say which rules differ, so this is open.
+- Only one side ran: geoclue, gssproxy, malcontent-timerd, rsyslog, homed,
+  hostnamed, journald, localed, machined, oomd, resolved, userdbd (systemd);
+  flatpak-system-helper, packagekit, passim (s6). Uncompared.
+- Equal on all 25: uid, gid, nnp, seccomp mode, SELinux context, BPF program
+  count. No capability added on s6 (the one cap row: ModemManager's inheritable
+  sys_admin, present on systemd only).
+
+Stricter or functional DIFFs, not weaknesses:
+- `/run` ro on s6 under ProtectSystem=strict, rw on systemd (bluetooth, polkit,
+  colord, upower, accounts-daemon, switcheroo-control): sandbox.rs doesn't keep
+  /run writable as systemd does. A service writing to /run outside its
+  RuntimeDirectory would get EROFS on s6 only. No failure seen; not checked for.
+- `/sys` ro on s6, rw on systemd with ProtectKernelTunables= and no
+  PrivateNetwork=: cause on the systemd side not traced.
+- RLIMIT_NOFILE hard 4096 on s6 (inherited from PID 1), 524288 on systemd: cups
+  gets soft 4096 instead of 65535. core soft 0 vs unlimited. nproc differs by
+  RAM reserved, no meaning.
+
+### Current state
+
+Same code as part 54. The hardening comparison has been run on both boots: no
+privilege-level regression among the 25 compared, but the system bus runs
+without its unit's sandbox and the seccomp counts are unexplained.
+
+### Next steps
+
+1. Run the system bus with dbus-broker.service's sandbox on s6 and make snap see
+   it and the other services in cgroup `/` (it has to look outside system.slice).
+2. ProtectHome= and PrivateDevices= read-only as systemd (label first, then ro;
+   /dev's submounts must keep their flags); keep /run writable under strict.
+3. hardencompare.sh: drop the bind-only false positive for a read-only mount;
+   treat a lower seccomp filter count as something to look at.
+4. Trace the seccomp count differences (bluetooth first: fewest directives).
+5. PrivateUsers= and RLIMIT_NOFILE hard limit: owner's decision.
+6. Earlier steps unchanged: SYSLOG=syslog-ng on a real boot; boot loader
+   provider and dinit when the owner decides.
+
+## 2026-10-30, part 56: part 55's fix order carried out (465df67)
+
+Owner: "go ahead with the fix order". All four steps of part 55's list.
+
+**1. System bus.** New runner command `confine UNIT -- COMMAND` (runner.rs
+cmd_confine): the unit's cgroup and BPF, sandbox, limits, bounding set,
+seccomp, then execvp with the caller's environment and fds (the readiness pipe
+stays open). No User= or stdio handling. dist/s6/dbus/run (broker only) execs
+it with dbus-broker.service, by absolute path (the runner is in
+/usr/libexec/uinitconverter), replacing s6-softlimit; LimitNOFILE= now also sets
+the hard limit. Not for dbus-daemon: dbus-daemon.service has no sandbox settings.
+A failing confine exits, so the existing three tries lead to dbus-daemon, and
+`uinitconverter.bus=daemon` on the kernel command line avoids it.
+
+hardencompare snap now also reads the root cgroup (not kernel threads, PID 1, s6
+or uinitconverter; named by program: dbus-broker*, rsyslogd -> rsyslog.service,
+else COMM.service; the oldest process per name) and sub-cgroups of a service
+(systemd-udevd.service/udev).
+
+**2. Sandbox.** ProtectHome=yes|tmpfs read-only, set after the rw loop: labelling
+needs them writable, and bind_rw("/run") is recursive, so it would clear the flag
+on /run/user. private_dev() makes /dev read-only, not recursively (/dev/null,
+/dev/shm, /dev/pts stay usable; set_mount_attr without AT_RECURSIVE, as systemd's
+bind_remount_one). /run stays writable under ProtectSystem=strict: six units
+showed rw on systemd.
+
+**3. Script.** Read-only on both with the same mount point and type is not weaker
+(the 9 /usr/lib/modules rows; test also covers a read-only path on another file
+system staying WEAKER). Fewer seccomp filters: CHECK, counted on its own line, no
+effect on the exit status.
+
+**4. Seccomp counts traced.** Measured real systemd 262 per directive with
+`systemd-run --user` (transient, unprivileged): 3 per setting; RestrictAddress
+Families 2; MemoryDenyWriteExecute 0 (PR_SET_MDWE); SystemCallArchitectures 1;
+ProtectKernelTunables 2; SystemCallFilter 3, or 1 after SystemCallArchitectures=
+native, like LockPersonality (it loads after the architecture filter). Our side
+merges SystemCallFilter= and SystemCallArchitectures= into 1 filter holding all
+ABIs. The model reproduces all 25 units on both snapshots exactly, except chronyd,
++1 on both (presumably its own filter, not confirmed).
+
+So the only missing rule was ProtectKernelTunables='s _sysctl (EPERM). On kernel
+7.2 that syscall is gone, so the gain is the errno (ENOSYS otherwise). Added; it is
+3 filters here, 2 on systemd (the x32 one matches nothing). The other differences
+are bookkeeping. Limit: the model compares counts per directive, not filter
+contents; the rules were written from seccomp-util.c earlier and tested separately.
+
+Bugs of mine this session: `[ -s /proc/... ]` is always false (procfs size 0), which
+emptied a check in part 55's analysis and failed a test here; both caught and fixed.
+
+Tests: cargo build no warnings; cargo test all pass (new: read_only_mounts_as_systemd,
+in a user namespace; protect_kernel_tunables_blocks_sysctl); standalone 3+3+3+2 pass;
+hardencompare-check 37/37; sandbox default 311/311, SANDBOX_JOURNAL=no 318/318,
+SANDBOX_FDSTORE=no 299/299, SANDBOX_BUS=broker 312/312; bash -n and shellcheck clean.
+Confine is tested also under `unshare -Urm` with the bus's settings. The real
+dbus-broker.service loads through it (stopped at setrlimit, unprivileged).
+
+**Not tested: a real s6 boot.** Real root, SELinux enforcing, the cgroup BPF program
+on the bus, and the boot itself. tests/hardencompare.sh report on the old snapshots:
+39 weaker, 6 CHECK (old snapshots only show the script's change).
+
+### Current state
+
+465df67 committed, not built into RPMs or booted. Installed: 0b3fec7.
+
+### Next steps
+
+1. Owner: build and install the RPMs, then `sudo uinitconverter reload --no-update`
+   (the RPM install doesn't reload, part 53), boot s6. Check: `pgrep -x dbus-broker-lau`,
+   `cat /proc/PID/cgroup` (system.slice/dbus-broker.service), Seccomp_filters 3,
+   `s6-rc -a list | grep dbus`, a GNOME login, `ausearch -m AVC -ts boot`,
+   /run/uinitconverter/dbus-broker-tries = 1. If the bus misbehaves, boot with
+   `uinitconverter.bus=daemon`.
+2. Owner: `sudo tests/hardencompare.sh snap` on both boots (both: snap changed), then
+   report. Expected: of the 39, only 3 left (colord, upower ns_user; rtkit ns_mnt), 1 CHECK
+   (bolt). New rows are expected for udevd, rsyslog and earlyoom, which run without their
+   units' sandbox on s6 and weren't compared before; decide on those from the data.
+3. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
+4. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the
+   owner decides.
