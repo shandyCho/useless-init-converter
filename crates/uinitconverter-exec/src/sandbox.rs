@@ -54,6 +54,12 @@ const AT_RECURSIVE: i32 = 0x8000;
 
 /// Recursively set or clear read-only on the mount at `path`.
 fn set_readonly(path: &str, ro: bool) -> Result<(), String> {
+    set_mount_attr(path, ro, AT_RECURSIVE as libc::c_uint, 0)
+}
+
+/// `at_flags`: for mount_setattr. `keep`: the flags the remount of the
+/// fallback must repeat, as it replaces them.
+fn set_mount_attr(path: &str, ro: bool, at_flags: libc::c_uint, keep: libc::c_ulong) -> Result<(), String> {
     let attr = MountAttr {
         attr_set: if ro { MOUNT_ATTR_RDONLY } else { 0 },
         attr_clr: if ro { 0 } else { MOUNT_ATTR_RDONLY },
@@ -66,7 +72,7 @@ fn set_readonly(path: &str, ro: bool) -> Result<(), String> {
             libc::SYS_mount_setattr,
             libc::AT_FDCWD,
             p.as_ptr(),
-            AT_RECURSIVE as libc::c_uint,
+            at_flags,
             &attr as *const MountAttr,
             std::mem::size_of::<MountAttr>(),
         )
@@ -75,7 +81,7 @@ fn set_readonly(path: &str, ro: bool) -> Result<(), String> {
         return Ok(());
     }
     // Fallback for old kernels: non-recursive remount.
-    let flags = libc::MS_BIND | libc::MS_REMOUNT | if ro { libc::MS_RDONLY } else { 0 };
+    let flags = libc::MS_BIND | libc::MS_REMOUNT | keep | if ro { libc::MS_RDONLY } else { 0 };
     mount("none", path, None, flags, None)
 }
 
@@ -293,7 +299,7 @@ impl Sandbox {
             }
             "strict" => {
                 bind_ro("/")?;
-                for d in ["/dev", "/proc", "/sys"] {
+                for d in ["/dev", "/proc", "/sys", "/run"] {
                     rw.insert(d.to_string());
                 }
                 // As systemd, /home, /root and /run/user stay writable; they
@@ -309,6 +315,7 @@ impl Sandbox {
             other => return Err(format!("unsupported ProtectSystem={other}")),
         }
 
+        let mut hidden_home = Vec::new();
         match self.protect_home.as_str() {
             "" => {}
             mode @ ("yes" | "read-only" | "tmpfs") => {
@@ -324,6 +331,7 @@ impl Sandbox {
                         // As systemd's mount_tmpfs: the label of the path it covers
                         // (admin_home_t for /root), not tmpfs_t.
                         crate::selinux::label_as(&[(d.to_string(), d.to_string())]);
+                        hidden_home.push(d);
                     }
                 }
             }
@@ -345,9 +353,15 @@ impl Sandbox {
         for p in &rw {
             bind_rw(p)?;
         }
+        // Read-only as systemd's. Only now: labelling needs them writable, and
+        // the recursive bind of /run above cleared the flag on /run/user.
+        for d in hidden_home {
+            set_readonly(d, true)?;
+        }
 
         // Writable even under ProtectSystem=strict: the private dirs live in
-        // RUN_DIR, which strict made read-only, and a bind keeps that flag.
+        // RUN_DIR, which strict may have made read-only (it needn't be under
+        // /run), and a bind keeps that flag.
         if let Some((tmp, vtmp)) = &self.private_tmp {
             bind(&tmp.display().to_string(), "/tmp")?;
             set_readonly("/tmp", false)?;
@@ -502,7 +516,10 @@ fn private_dev(staging: &str) -> Result<(), String> {
         }
     }
     crate::selinux::label_as(&labels);
-    mount(staging, "/dev", None, libc::MS_MOVE, None)
+    mount(staging, "/dev", None, libc::MS_MOVE, None)?;
+    // As systemd: read-only, but not recursively, or /dev/null, /dev/shm and
+    // /dev/pts would be too.
+    set_mount_attr("/dev", true, 0, libc::MS_NOSUID | libc::MS_NOEXEC)
 }
 
 /// PrivateNetwork=: bring up "lo" in the new network namespace.
@@ -761,5 +778,57 @@ mod tests {
         let reset = "[Service]\nCapabilityBoundingSet=CAP_SYS_ADMIN\nCapabilityBoundingSet=\nCapabilityBoundingSet=CAP_NET_ADMIN\n";
         assert_eq!(bounding_set(&test_unit(reset)), Some(net));
         assert_eq!(bounding_set(&test_unit("[Service]\nUser=x\n")), None);
+    }
+
+    /// In a user namespace, where this process counts as root for mounts.
+    #[test]
+    fn read_only_mounts_as_systemd() {
+        let dir = std::env::temp_dir().join(format!("uinitconverter-sandbox-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let unit = test_unit("[Service]\nProtectSystem=strict\nProtectHome=yes\nPrivateDevices=yes\n");
+        let sandbox = Sandbox::from_unit(&unit, &dir, Vec::new());
+        sandbox.prepare().unwrap();
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let code = (|| {
+                if unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) } < 0
+                    || fs::write("/proc/self/setgroups", "deny").is_err()
+                    || fs::write("/proc/self/uid_map", format!("0 {uid} 1")).is_err()
+                    || fs::write("/proc/self/gid_map", format!("0 {gid} 1")).is_err()
+                {
+                    return 77;
+                }
+                if let Err(e) = sandbox.apply() {
+                    eprintln!("apply: {e}");
+                    return 2;
+                }
+                let info = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+                // The last mount at a path is the one on top.
+                let ro = |p: &str| {
+                    info.lines().rev().map(|l| l.split(' ').collect::<Vec<_>>()).find(|f| f[4] == p)
+                        .map(|f| f[5].split(',').any(|o| o == "ro"))
+                };
+                let want = [("/dev", true), ("/dev/shm", false), ("/home", true), ("/run/user", true), ("/run", false), ("/usr", true)];
+                for (i, (p, expected)) in want.iter().enumerate() {
+                    if ro(p).is_some_and(|r| r != *expected) {
+                        eprintln!("{p}: read-only {:?}, expected {expected}", ro(p));
+                        return 10 + i as i32;
+                    }
+                }
+                if fs::OpenOptions::new().write(true).open("/dev/null").is_err() {
+                    return 3;
+                }
+                0
+            })();
+            unsafe { libc::_exit(code) };
+        }
+        let mut status = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+        let _ = fs::remove_dir_all(&dir);
+        match libc::WEXITSTATUS(status) {
+            77 => eprintln!("no user namespaces, skipping"),
+            code => assert_eq!(code, 0),
+        }
     }
 }

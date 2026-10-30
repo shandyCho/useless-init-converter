@@ -47,9 +47,11 @@ if [ "$bus" = broker ]; then
         # (clients wait in its backlog, so the bus counts as ready now) and
         # passed as fd 3 with LISTEN_FDS; fd 3 was the readiness pipe.
         rm -f /run/dbus/system_bus_socket
-        # OOMScoreAdjust= and LimitNOFILE= of dbus-broker.service.
+        # OOMScoreAdjust= of dbus-broker.service; confine applies the rest of
+        # it (cgroup, LimitNOFILE=, ProtectSystem=, PrivateTmp=, PrivateDevices=).
+        # If that fails, this exits and the tries above lead to dbus-daemon.
         echo -900 >/proc/self/oom_score_adj
-        exec s6-softlimit -o 16384 \
+        exec /usr/libexec/uinitconverter/uinitconverter-runner confine dbus-broker.service -- \
             s6-ipcserver-socketbinder -a 0666 /run/dbus/system_bus_socket sh -c '
             echo >&3
             export LISTEN_FDS=1 LISTEN_PID=$$

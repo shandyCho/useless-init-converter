@@ -370,7 +370,9 @@ sudo tests/hardencompare.sh snap     # ~/uinitconverter-mem/harden/harden-<init>
 tests/hardencompare.sh report        # the latest snapshot of each init
 ```
 
-For each service running on both boots it lists the settings that differ.
+It reads the services in `system.slice` and the programs in the root cgroup
+(s6 services that aren't units, named by program). For each service running on
+both boots it lists the settings that differ.
 `WEAKER` means the s6 boot confines it less (no_new_privs off, less
 seccomp, added capabilities, a host namespace instead of a private one, a
 read-only mount now read-write, root instead of a user, an unconfined
@@ -380,7 +382,9 @@ snapshot. `tests/hardencompare.sh compare SYSTEMD.tsv S6.tsv` compares two
 files of your choice. `/proc` doesn't show which syscalls a seccomp filter
 allows, so `SystemCallFilter=`, `RestrictAddressFamilies=`,
 `MemoryDenyWriteExecute=` and the like are compared only by the number of
-filters. `tests/hardencompare-check.sh` checks the script itself,
+filters. Fewer on s6 is marked `CHECK` and doesn't change the exit status: the
+count also differs by design (`SystemCallFilter=` without
+`SystemCallArchitectures=` is one filter on s6, three on systemd). `tests/hardencompare-check.sh` checks the script itself,
 unprivileged.
 
 ## If the s6 boot fails

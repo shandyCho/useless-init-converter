@@ -44,7 +44,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | `uinitconverterd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | 데몬용 최소 클라이언트(private 소켓 또는 버스)와, 서비스 로그 보기(`journalctl -u`, `JOURNAL=no`이면 s6-log 디렉터리)입니다. |
 | | `stop-instances` | `rc.shutdown`이 실행합니다. s6-rc가 서비스를 멈추기 전에, 그 서비스들 뒤에 순서가 잡힌 요청 시 인스턴스(`user@UID` 등)를 멈추라고 데몬에 요청합니다. |
-| `uinitconverter-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 롱런의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. |
+| `uinitconverter-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 롱런의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. `confine UNIT -- COMMAND`는 s6가 직접 시작하는 프로그램에 유닛의 cgroup, 제한, 샌드박스를 적용합니다(`--bus=broker`의 시스템 버스). |
 | `uinitconverter-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
 | `uinitconverter` | 위의 모든 명령(`stop-instances`/`stop-atom` 제외) | 사용자가 쓰는 명령(`/usr/bin/uinitconverter`)입니다. 명령을 맡은 도구를 실행하므로 `uinitconverter reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
 | | `init` | s6 부팅 항목을 설정합니다([Fedora에 배포하기](#fedora에-배포하기-먼저-vm에서-해-보세요) 참고). |

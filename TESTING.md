@@ -347,7 +347,8 @@ sudo tests/hardencompare.sh snap     # ~/uinitconverter-mem/harden/harden-<init>
 tests/hardencompare.sh report        # 각 init의 최신 스냅샷끼리 비교
 ```
 
-두 부팅 모두에서 실행 중인 서비스마다 다른 설정을 한 줄씩 보여 줍니다.
+`system.slice`의 서비스와 루트 cgroup에서 도는 프로그램(유닛이 아닌 s6 서비스, 프로그램
+이름으로 표시)을 읽습니다. 두 부팅 모두에서 실행 중인 서비스마다 다른 설정을 한 줄씩 보여 줍니다.
 `WEAKER`는 s6 쪽이 덜 막혀 있다는 뜻입니다(no_new_privs 꺼짐, seccomp 약해짐,
 capability 추가, 사설 대신 호스트 네임스페이스, 읽기 전용이던 마운트가 읽기-쓰기,
 사용자 대신 root, unconfined SELinux 도메인, cgroup BPF 프로그램 없음). 그 밖의
@@ -355,7 +356,9 @@ capability 추가, 사설 대신 호스트 네임스페이스, 읽기 전용이�
 없으면 2입니다. 두 파일을 직접 고르려면 `tests/hardencompare.sh compare
 SYSTEMD.tsv S6.tsv`를 쓰세요. seccomp 필터가 허용하는 시스템 호출은 `/proc`에
 나오지 않아서 `SystemCallFilter=`, `RestrictAddressFamilies=`,
-`MemoryDenyWriteExecute=` 같은 설정은 필터 개수로만 비교됩니다.
+`MemoryDenyWriteExecute=` 같은 설정은 필터 개수로만 비교됩니다. s6 쪽 필터가 적으면
+`CHECK`로 표시하며 종료 코드에는 영향을 주지 않습니다. 설계상 개수가 다른 경우도 있습니다:
+`SystemCallArchitectures=` 없는 `SystemCallFilter=`는 s6에서 필터 1개, systemd에서 3개입니다.
 `tests/hardencompare-check.sh`는 스크립트 자체를 root 없이 검사합니다.
 
 ## s6 부팅이 실패할 때

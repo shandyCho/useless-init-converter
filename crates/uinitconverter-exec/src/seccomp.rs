@@ -250,8 +250,8 @@ impl Filter {
 //
 // RestrictAddressFamilies=, RestrictNamespaces=, MemoryDenyWriteExecute=,
 // LockPersonality=, RestrictRealtime=, RestrictSUIDSGID= and the syscall
-// parts of ProtectClock=, ProtectKernelModules=, ProtectKernelLogs=,
-// ProtectHostname= and PrivateDevices=. Built like systemd's seccomp-util.c:
+// parts of ProtectKernelTunables=, ProtectClock=, ProtectKernelModules=,
+// ProtectKernelLogs=, ProtectHostname= and PrivateDevices=. Built like systemd's seccomp-util.c:
 // one allow-by-default filter per setting and architecture, with the same
 // rules and errnos.
 
@@ -478,6 +478,15 @@ pub fn restrictions(unit: &Unit) -> Vec<Restriction> {
             }
         }
         out.push(Restriction { what: "RestrictSUIDSGID=", rules, native_only: false });
+    }
+    if on("ProtectKernelTunables") {
+        // Three filters on x86_64 where systemd has two (it skips x32, which has
+        // no _sysctl, so that one matches nothing).
+        out.push(Restriction {
+            what: "ProtectKernelTunables=",
+            rules: vec![rule("_sysctl", libc::EPERM, vec![])],
+            native_only: false,
+        });
     }
     if on("ProtectClock") {
         out.push(deny_group("ProtectClock=", "@clock"));
@@ -798,6 +807,35 @@ mod load_tests {
     }
 
     /// RestrictAddressFamilies=AF_UNIX and RestrictNamespaces=yes in a child.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn protect_kernel_tunables_blocks_sysctl() {
+        if unsafe { libc::dlopen(c"libseccomp.so.2".as_ptr(), libc::RTLD_NOW) }.is_null() {
+            eprintln!("libseccomp.so.2 not available, skipping");
+            return;
+        }
+        let unit = test_unit("[Service]\nProtectKernelTunables=yes\n");
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let code = (|| {
+                if apply_restrictions(&unit).is_err() {
+                    return 2;
+                }
+                // The kernel has no _sysctl: ENOSYS without the filter.
+                if unsafe { libc::syscall(libc::SYS__sysctl, 0) } == 0
+                    || std::io::Error::last_os_error().raw_os_error() != Some(libc::EPERM)
+                {
+                    return 3;
+                }
+                0
+            })();
+            unsafe { libc::_exit(code) };
+        }
+        let mut status = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+    }
+
     #[test]
     fn restrictions_take_effect() {
         if unsafe { libc::dlopen(c"libseccomp.so.2".as_ptr(), libc::RTLD_NOW) }.is_null() {

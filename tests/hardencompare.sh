@@ -9,7 +9,8 @@
 #
 # snap writes DIR/harden-INIT-TIME.tsv (DIR: ~/uinitconverter-mem/harden of
 # the user who ran sudo). Take one on each boot, after the services you care
-# about have started. compare lists, per service running on both, what
+# about have started. It covers system.slice and what runs in the root cgroup
+# (s6 services that aren't units, named by program). compare lists, per service running on both, what
 # differs: WEAKER where the s6 boot confines it less (no_new_privs off,
 # less seccomp, more capabilities, a host namespace instead of a private
 # one, a read-write mount that was read-only, root instead of a user, an
@@ -19,7 +20,9 @@
 #
 # /proc doesn't show which syscalls a seccomp filter allows, so
 # SystemCallFilter=, RestrictAddressFamilies=, MemoryDenyWriteExecute= and
-# the like show only as the number of filters.
+# the like show only as the number of filters. Fewer on s6 is marked CHECK, not
+# WEAKER: the count differs by design too (SystemCallFilter= without
+# SystemCallArchitectures= is one filter on s6, three on systemd).
 set -u
 
 # HARDEN_* overrides are for tests/hardencompare-check.sh.
@@ -29,7 +32,7 @@ NS="mnt net uts ipc pid user cgroup"
 CAPS="chown dac_override dac_read_search fowner fsetid kill setgid setuid setpcap linux_immutable net_bind_service net_broadcast net_admin net_raw ipc_lock ipc_owner sys_module sys_rawio sys_chroot sys_ptrace sys_pacct sys_admin sys_boot sys_nice sys_resource sys_time sys_tty_config mknod lease audit_write audit_control setfcap mac_override mac_admin syslog wake_alarm block_suspend audit_read perfmon bpf checkpoint_restore"
 
 usage() {
-    sed -n '2,23s/^# \{0,1\}//p' "$0" >&2
+    sed -n '2,26s/^# \{0,1\}//p' "$0" >&2
     exit 2
 }
 
@@ -69,9 +72,9 @@ cap_names() {
     echo "${out:-none}"
 }
 
-# The service's main process: the oldest one in its cgroup that isn't
-# uinitconverter's or s6's (under s6 the runner exec()s into the service, so
-# the main process has the runner's PID).
+# The service's main process: the oldest one in its cgroup or below it (udevd's
+# are in a sub-cgroup) that isn't uinitconverter's or s6's (under s6 the runner
+# exec()s into the service, so the main process has the runner's PID).
 main_pid() {
     local best="" bt=0 p st t
     while read -r p; do
@@ -81,8 +84,30 @@ main_pid() {
         # Field 22 (starttime), counted after the ")" that ends comm.
         t=$(echo "${st##*) }" | cut -d' ' -f20)
         if [ -z "$best" ] || [ "$t" -lt "$bt" ]; then best=$p bt=$t; fi
-    done <"$1/cgroup.procs"
+    done < <(find "$1" -name cgroup.procs -exec cat {} + 2>/dev/null)
     echo "$best"
+}
+
+# The services in the root cgroup, as "UNIT PID", oldest process per unit:
+# not kernel threads (no command line), PID 1, s6 or uinitconverter.
+root_services() {
+    local p c u st t
+    declare -A pid start
+    while read -r p; do
+        [ "$p" != 1 ] && [ -r "/proc/$p/comm" ] || continue
+        [ -n "$(tr -d '\0' <"/proc/$p/cmdline" 2>/dev/null | head -c 1)" ] || continue
+        c=$(cat "/proc/$p/comm" 2>/dev/null) || continue
+        case $c in
+            uinitconverter* | s6-*) continue ;;
+            dbus-broker*) u=dbus-broker.service ;;
+            rsyslogd) u=rsyslog.service ;;
+            *) u=$c.service ;;
+        esac
+        st=$(cat "/proc/$p/stat" 2>/dev/null) || continue
+        t=$(echo "${st##*) }" | cut -d' ' -f20)
+        if [ -z "${pid[$u]:-}" ] || [ "$t" -lt "${start[$u]}" ]; then pid[$u]=$p start[$u]=$t; fi
+    done <"$CGROOT/cgroup.procs"
+    for u in "${!pid[@]}"; do echo "$u ${pid[$u]}"; done | sort
 }
 
 # One "unit NAME FIELD VALUE" row per setting of PID.
@@ -162,6 +187,9 @@ snap() {
             [ -n "$p" ] || continue
             fields "$u" "$p" "$cg"
         done
+        root_services | while read -r u p; do
+            fields "$u" "$p" "$CGROOT"
+        done
     } >"$out.tmp" && mv "$out.tmp" "$out" || exit 2
     [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER:" "$dir" 2>/dev/null
     echo "$out: $(awk -F'\t' '$1 == "unit" && $3 == "pid"' "$out" | wc -l) services ($init)"
@@ -194,14 +222,19 @@ compare() {
     function mount_weaker(a, b,   A, B) {
         split(a, A, " "); split(b, B, " ")
         if (A[3] == "ro" && B[3] == "rw") return 1
+        # Read-only and the same type on both: how it got there does not matter
+        # (systemd binds its empty inaccessible directory, s6 mounts an empty tmpfs).
+        if (A[3] == "ro" && B[3] == "ro" && A[1] == B[1] && A[2] == B[2]) return 0
         if (A[1] != B[1]) return length(A[1]) > length(B[1])
         return A[4] == "bind" && B[4] != "bind"
     }
     function seltype(c,   s) { split(c, s, ":"); return s[3] }
-    # "W" when the s6 value (b) confines less than systemd (a), else "D".
+    # "W" when the s6 value (b) confines less than systemd (a), "C" when it may,
+    # else "D".
     function judge(f, a, b,   x) {
         if (f == "nnp") return (a == 1 && b != 1) ? "W" : "D"
         if (f == "seccomp") return (b + 0 < a + 0) ? "W" : "D"
+        if (f == "seccomp_filters") return (b + 0 < a + 0) ? "C" : "D"
         if (f ~ /^cap/) { x = setdiff(b, a); return x != "" ? "W" : "D" }
         if (f ~ /^ns_/) return (a == "private" && b == "host") ? "W" : "D"
         if (f ~ /^mount:/) return mount_weaker(a, b) ? "W" : "D"
@@ -218,7 +251,7 @@ compare() {
         for (u in units) list[++n] = u
         # Sorted by name (insertion sort: no asort outside gawk).
         for (i = 2; i <= n; i++) { x = list[i]; for (j = i - 1; j > 0 && list[j] > x; j--) list[j + 1] = list[j]; list[j + 1] = x }
-        weak = 0; diff = 0; both = 0; o1 = ""; o2 = ""
+        weak = 0; diff = 0; both = 0; check = 0; o1 = ""; o2 = ""
         for (i = 1; i <= n; i++) {
             u = list[i]
             if (!((1, u) in has)) { o2 = o2 " " u; continue }
@@ -239,12 +272,14 @@ compare() {
                     a = length(a) > 40 ? "..." : a; b = length(b) > 40 ? "..." : b
                 }
                 if (j == "W") w++; else d++
-                lines = lines sprintf("  %s %s: systemd=%s s6=%s%s\n", j == "W" ? "WEAKER" : "DIFF  ", f, a == "" ? "(none)" : a, b == "" ? "(none)" : b, extra)
+                if (j == "C") check++
+                lines = lines sprintf("  %s %s: systemd=%s s6=%s%s\n", j == "W" ? "WEAKER" : (j == "C" ? "CHECK " : "DIFF  "), f, a == "" ? "(none)" : a, b == "" ? "(none)" : b, extra)
             }
             weak += w; diff += d
             if (lines != "") printf "\n%s: %d weaker, %d different\n%s", u, w, d, lines
         }
         printf "\nServices on both boots: %d; settings weaker on s6: %d, different: %d\n", both, weak, diff
+        if (check) printf "Services with fewer seccomp filters on s6 (CHECK): %d\n", check
         if (o1 != "") printf "Running only on systemd:%s\n", o1
         if (o2 != "") printf "Running only on s6:%s\n", o2
         printf "Result: %s\n", weak ? "WEAKER on s6 (see above)" : "nothing weaker on s6"

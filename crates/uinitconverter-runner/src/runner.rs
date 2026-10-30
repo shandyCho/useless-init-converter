@@ -471,6 +471,43 @@ impl Runner {
         (EXIT_EXEC, format!("exec {path}: {}", errno()))
     }
 
+    /// `confine`: the unit's cgroup, limits and sandbox on this process, then
+    /// exec() ARGV with the environment and file descriptors it was given (a
+    /// run script's readiness pipe). Only returns on failure.
+    pub fn cmd_confine(&mut self, argv: &[String]) -> i32 {
+        if argv.is_empty() {
+            eprintln!("uinitconverter-runner: confine: no command");
+            return 1;
+        }
+        let Err(e) = self.confine(argv);
+        log(self.id(), &format!("confine: {e}"));
+        1
+    }
+
+    fn confine(&mut self, argv: &[String]) -> Result<std::convert::Infallible, String> {
+        self.enter_cgroup();
+        if self.is_root {
+            self.sandbox.prepare()?;
+            self.sandbox.apply()?;
+        }
+        self.apply_limits()?;
+        if sandbox::no_new_privileges(&self.unit, self.is_root) {
+            unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+        }
+        if let (true, Some(bset)) = (self.is_root, sandbox::bounding_set(&self.unit)) {
+            sandbox::drop_bounding_set(bset)?;
+        }
+        crate::seccomp::apply_restrictions(&self.unit)?;
+        if let Some(f) = crate::seccomp::Filter::from_unit(&self.unit).map_err(|e| format!("SystemCallFilter=: {e}"))? {
+            f.apply()?;
+        }
+        let c_argv: Vec<CString> = argv.iter().map(|a| cstr(a)).collect();
+        let mut p_argv: Vec<*const libc::c_char> = c_argv.iter().map(|c| c.as_ptr()).collect();
+        p_argv.push(std::ptr::null());
+        unsafe { libc::execvp(p_argv[0], p_argv.as_ptr()) };
+        Err(format!("exec {}: {}", argv[0], errno()))
+    }
+
     /// Connect to journald's stdout stream (the protocol PID 1 uses). journald
     /// attributes the stream to the unit through our cgroup.
     fn journal_stream(&self, cmd: &ExecCommand) -> Option<i32> {

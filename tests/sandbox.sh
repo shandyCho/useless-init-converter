@@ -247,6 +247,16 @@ out.append("dev " + " ".join(sorted(os.listdir("/dev"))))
 out.append("netdevs " + " ".join(l.split(":")[0].strip() for l in open("/proc/net/dev").readlines()[2:]))
 open(sys.argv[1], "w").write("\n".join(out) + "\n")
 PYT
+# Not started: for `uinitconverter-runner confine` (as the system bus's unit).
+cat > "$U/confined.service" <<EOF
+[Service]
+ExecStart=/bin/true
+LimitNOFILE=512:512
+RestrictRealtime=yes
+ProtectSystem=full
+PrivateTmp=yes
+PrivateDevices=yes
+EOF
 cat > "$U/harden.service" <<EOF
 [Service]
 Type=oneshot

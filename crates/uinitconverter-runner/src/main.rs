@@ -27,6 +27,9 @@ usage: uinitconverter-runner [--config PATH] COMMAND [--config PATH] [--mainpid 
   stop-exec    ExecStop= with $MAINPID (called by uinitconverterd)
   stop-atom    `down` of UNIT.stop: ExecStop= when s6-rc stops a longrun
   reload-exec  ExecReload= with $MAINPID (called by uinitconverterd)
+  confine UNIT -- COMMAND [ARGS]
+               exec COMMAND with UNIT's cgroup, limits and sandbox (for what
+               s6 starts itself, as the system bus; not User= or stdio)
   notify-helper ...
                internal: the Type=notify helper `run` starts
 ";
@@ -157,7 +160,7 @@ fn main() {
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
     let a = parse_internal(&args[1..]);
-    let mut r = match runner::Runner::new(cfg.clone(), &a.unit, matches!(cmd.as_str(), "run" | "up")) {
+    let mut r = match runner::Runner::new(cfg.clone(), &a.unit, matches!(cmd.as_str(), "run" | "up" | "confine")) {
         Ok(r) => r,
         Err(e) => exit(setup_failed(&cfg, &cmd, &a.unit, &e)),
     };
@@ -174,6 +177,7 @@ fn main() {
         "stop-exec" => r.cmd_stop_exec(a.main_pid),
         "stop-atom" => r.cmd_stop_atom(),
         "reload-exec" => r.cmd_reload(a.main_pid),
+        "confine" => r.cmd_confine(&a.rest),
         other => die(&format!("unknown command {other} (see uinitconverter-runner help)")),
     };
     exit(code);

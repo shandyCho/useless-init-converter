@@ -193,6 +193,31 @@ expect_eq "'+' command is not filtered" "$(cat "$R/scf-plus.out" 2>/dev/null)" "
 expect_state scf-allow.service inactive/dead
 expect_eq "fwupd's allow list: mlock fails with EPERM" "$(cat "$R/scf-allow.out" 2>/dev/null)" "errno 1"
 
+section "uinitconverter-runner confine"
+RN=$(dirname "$0")/../target/debug/uinitconverter-runner
+CF=$W/uinitconverter.conf
+out=$(CONFINE_VAR=kept "$RN" --config "$CF" confine confined.service -- sh -c \
+    'echo "$CONFINE_VAR $(ulimit -n) $(sed -n "s/^Seccomp_filters:\t//p" /proc/self/status)"; echo fd >&9' 9>"$R/confine.fd")
+expect_eq "confine: runs the command with the unit's limits and filters, keeps its environment" "$out" "kept 512 6"
+expect_eq "confine: keeps its file descriptors" "$(cat "$R/confine.fd" 2>/dev/null)" "fd"
+"$RN" --config "$CF" confine no-such.service -- true 2>/dev/null
+expect_eq "confine: fails for a unit that doesn't load" "$?" "1"
+"$RN" --config "$CF" confine confined.service -- 2>/dev/null
+expect_eq "confine: fails without a command" "$?" "1"
+if unshare -Urm true 2>/dev/null; then
+    # shellcheck disable=SC2016  # expanded by the inner shell
+    unshare -Urm "$RN" --config "$CF" confine confined.service -- sh -c '
+        cat /proc/self/mountinfo >"$0"
+        echo x >/dev/null && echo devnull-ok >>"$0"' "$R/confine.mnt" 2>"$R/confine.err"
+    top() { awk -v p="$1" '$5 == p { l = $6 " " $(NF - 2) } END { print l }' "$R/confine.mnt" 2>/dev/null; }
+    case $(top /dev) in ro,*tmpfs) ok "confine as root: private /dev, read-only" ;; *) bad "confine as root: /dev is $(top /dev): $(cat "$R/confine.err")" ;; esac
+    case $(top /usr) in ro,*) ok "confine as root: ProtectSystem=full" ;; *) bad "confine as root: /usr is $(top /usr)" ;; esac
+    grep -q '^devnull-ok$' "$R/confine.mnt" && ok "confine as root: /dev/null writable" || bad "confine as root: /dev/null not writable"
+    awk '$5 == "/tmp" && $4 != "/"' "$R/confine.mnt" | grep -q . && ok "confine as root: private /tmp" || bad "confine as root: /tmp not private"
+else
+    echo "SKIP confine as root (no user namespaces)"
+fi
+
 section "other sandboxing settings"
 call StartUnit ss harden.service replace
 expect_state harden.service inactive/dead
