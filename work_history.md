@@ -9029,3 +9029,15 @@ Part 76 uncommitted on main. Not built. Installed and booted: g567c7b9, without 
 3. Owner, over about 20 shutdowns: TESTING's "Shutdown order" row and `sudo grep -E 'gnome-shell.*segfault' /var/log/messages | tail -3`. If a SEGV comes back: the backtrace (part 71's step 3).
 4. PrivateUsers=: owner's decision (recommended: leave out). The script keeps exiting 1 until then.
 5. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
+
+## 2026-10-31, part 77: part 76 committed (df289c9), RPMs built from it (no code change)
+
+Owner: commit and build. df289c9 on main, not pushed; it includes part 76's history entry, whose "uncommitted" is now out of date. `packages/build-rpms.sh`: exit 0, 0.1.0-1.20261031223325.gdf289c9.fc45 (not dirty), 5 RPMs in ~/rpmbuild-uinitconverter/rpms. Read from the uinitconverter RPM: the rlimitinh rule in the .cil, the new comment in init-selinux. Not installed: needs sudo.
+
+### Current state
+
+Built, not installed. Installed and booted: g567c7b9, without the rule. This entry uncommitted.
+
+### Next steps
+
+Part 76's, from its step 1's `sudo dnf upgrade` (commit and build are done).
