@@ -9121,3 +9121,15 @@ Branch refactor-readability, not merged, not pushed. Installed and booted: gdf28
 
 1. Owner: merge refactor-readability, `packages/build-rpms.sh`, install, reboot to s6, and the usual checks (`ausearch -m AVC -ts boot`, hardencompare). If confine-vm's "didn't finish" comes back, read console-plain.log.txt before anything else.
 2. Part 79's step 1 (login-screen shutdowns); steps 2-4 as listed there.
+
+## 2026-11-01, part 81: refactor merged to main (no code change)
+
+Owner: merge to main. Fast-forward from 50ba61a to 3531a32 (7 commits), so main and refactor-readability point at the same commit; the branch wasn't deleted. cargo test on main: 83 passed, 0 failed.
+
+### Current state
+
+main is 7 commits ahead of origin/main, not pushed. This entry uncommitted. Not built into RPMs; installed and booted: gdf289c9.
+
+### Next steps
+
+Part 80's, from building the RPMs (the merge is done).
