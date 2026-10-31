@@ -9133,3 +9133,33 @@ main is 7 commits ahead of origin/main, not pushed. This entry uncommitted. Not 
 ### Next steps
 
 Part 80's, from building the RPMs (the merge is done).
+
+## 2026-11-01, part 82: what could be replaced by other packages (survey, no code change)
+
+Owner: commit part 81 (2579ed8, on branch history-part-81, because main is the default branch) and find what in this project could be replaced by other packages. Read the code and history, `cargo tree`, `dnf repoquery` on Fedora 45. Nothing was tried or compiled against these crates.
+
+Recommended:
+1. jiff (rust-jiff-devel 0.2.37) for named time zones in calendar.rs. Removes TzGuard, setenv and tzset, and with them the daemon's switches_tz() workaround in props.rs, which exists because setenv isn't thread-safe. Risk: DST results must match today's mktime ones; needs tests first.
+2. rustix instead of raw libc, a piece at a time: inotify in pathunit.rs, fd passing in base/fdstore.rs first. rustix 1.1.5 is already in the tree through zbus for runner, daemon, timers and gen, not for the `uinitconverter` command. Core has about 715 `libc::` uses and 318 lines with `unsafe`. Standalone stays libc only (session decision), and code after fork() needs care.
+
+To try before deciding: a private s6-fdholderd instead of standalone/uinitconverter-fdstore; the tools are installed. The history rejected s6-rc's own s6rc-fdholder, not a separate instance, and it fits s6-native-goal. Expected problems, from memory of the tools and not checked: one process per fd stored or fetched, with about 12 call sites in the runner; FileDescriptorStoreMax and same-file dedupe move to the client.
+
+Owner's decision: uinitconverter-notify. Fedora has the real systemd-notify in Mode A, and dist/ doesn't use this tool (spec Recommends, a dispatch entry). It exists for other service managers. Not checked here: systemd-notify under the s6 boot.
+
+Not recommended:
+- libseccomp, selinux, pam crates for the dlopen bindings: they would make the library a load-time dependency of the runner, which starts every service, so a broken library stops the boot instead of skipping the feature. Also -devel at build time. Reverses a deliberate decision.
+- libbpf-rs: bpf.rs follows systemd's hand-assembled programs and names; hardencompare compares them.
+- croner, dotenvy-style, ini crates: OnCalendar=, unit files and EnvironmentFile= have systemd's own syntax.
+- sd-notify crate: no caller PID in credentials or BARRIER wait in what the tool needs (from memory).
+- shlex, signal tables, unit name escaping: about 10 to 75 lines each, not worth a dependency. bats for tests/check.sh: churn with no new coverage.
+- linkwatch and journal-relay: nothing equivalent found; socklog isn't packaged. skarnet RPMs: Fedora has none.
+
+Already delegated: dist/early calls systemd-tmpfiles, systemd-sysusers, sysctl, systemd-vconsole-setup, zram-generator.
+
+### Current state
+
+Part 81's commit is on history-part-81, not on main. This entry uncommitted. Otherwise as part 81.
+
+### Next steps
+
+As part 81, then items 1 and 2 above if the owner wants them.
