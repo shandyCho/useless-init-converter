@@ -8879,7 +8879,7 @@ Docs match the code as of 5cfce20, on branch readme-systemd-comparison. The othe
 
 Part 68's.
 
-## 2026-10-31, part 69: log directory 0750; core dumps kept on s6 (b5bebd3)
+## 2026-10-31, part 71: log directory 0750; core dumps kept on s6 (b5bebd3)
 
 Owner: fix the log directory permissions and the gnome-shell segfaults at shutdown.
 
@@ -8912,7 +8912,8 @@ Memory not rerun: one more service, so expect part 61's figures to rise slightly
 
 ### Current state
 
-Part 69 committed as b5bebd3 and merged to main, not pushed. Not built. Installed and booted: g3f517cf, without it. gnome-shell's shutdown SEGV is still happening and still unexplained.
+Part 71 committed as b5bebd3 and fast-forwarded to main, not pushed. Not built. The work was uncommitted on readme-systemd-comparison, not main as assumed (the
+branch changed during the session), so the merge also brought that branch's 5cfce20 and 8d412e1 (parts 68-70, docs and history only) into main. origin/main..main is 5 commits. Installed and booted: g3f517cf, without it. gnome-shell's shutdown SEGV is still happening and still unexplained.
 
 ### Next steps
 
