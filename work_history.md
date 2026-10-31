@@ -8654,3 +8654,20 @@ RPMs. Installed and booted: g79f56a3.dirty (part 59, without this fix).
 3. Why some boots end within a minute or two (part 61).
 4. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
 5. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
+
+## 2026-10-31, part 64: RPMs built from 86f2b3c (no code change)
+
+Owner: commit part 63 and build. Committed 4460613 and 86f2b3c on the branch, not merged to main.
+`packages/build-rpms.sh`: exit 0, 10 min, 0.1.0-1.20261031174358.g86f2b3c (not dirty) in
+~/rpmbuild-uinitconverter/rpms. The fix is in the uinitconverter RPM's /etc/uinitconverter/s6/syslog/run
+(read from the package). Not installed: needs sudo.
+
+### Current state
+
+Built, not installed. Installed and booted: g79f56a3.dirty. Merge to main still open.
+
+### Next steps
+
+Part 63's, with step 1 now: `git switch main && git merge --ff-only
+confine-rsyslog-earlyoom-udevd`; `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`; `sudo
+uinitconverter reload --no-update`; boot s6; then part 63's checks.
