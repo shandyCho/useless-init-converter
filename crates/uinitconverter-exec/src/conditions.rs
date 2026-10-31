@@ -27,11 +27,17 @@ pub struct Evaluation {
 }
 
 pub fn evaluate(unit: &Unit) -> Evaluation {
-    let mut ev = Evaluation { conditions_ok: true, asserts_ok: true, ..Default::default() };
+    let mut ev = Evaluation {
+        conditions_ok: true,
+        asserts_ok: true,
+        ..Default::default()
+    };
     for (prefix, is_assert) in [("Condition", false), ("Assert", true)] {
         let mut results = Vec::new();
         for key in unit.file.keys_in("Unit") {
-            let Some(kind) = key.strip_prefix(prefix) else { continue };
+            let Some(kind) = key.strip_prefix(prefix) else {
+                continue;
+            };
             for raw in unit.get_all("Unit", key) {
                 let mut p = raw.as_str();
                 let trigger = p.starts_with('|');
@@ -57,7 +63,10 @@ pub fn evaluate(unit: &Unit) -> Evaluation {
         let trigger_ok = triggers.is_empty() || triggers.iter().any(|r| r.state > 0);
         let ok = normal_ok && trigger_ok;
         if !ok && ev.failure.is_none() {
-            if let Some(r) = results.iter().find(|r| r.state < 0 && (!r.trigger || !trigger_ok)) {
+            if let Some(r) = results
+                .iter()
+                .find(|r| r.state < 0 && (!r.trigger || !trigger_ok))
+            {
                 ev.failure = Some(format!(
                     "{}={}{} was not met",
                     r.key,
@@ -83,12 +92,18 @@ fn check(kind: &str, p: &str) -> bool {
         "PathExists" => fs::symlink_metadata(path).is_ok() && path.exists(),
         "PathExistsGlob" => glob_any(p),
         "PathIsDirectory" => path.is_dir(),
-        "PathIsSymbolicLink" => fs::symlink_metadata(path).map(|m| m.file_type().is_symlink()).unwrap_or(false),
+        "PathIsSymbolicLink" => fs::symlink_metadata(path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false),
         "PathIsMountPoint" => is_mount_point(path),
         "PathIsReadWrite" => access(p, libc::W_OK) && !is_ro_mount(path),
         "PathIsEncrypted" => false,
-        "DirectoryNotEmpty" => fs::read_dir(path).map(|mut d| d.next().is_some()).unwrap_or(false),
-        "FileNotEmpty" => fs::metadata(path).map(|m| m.is_file() && m.len() > 0).unwrap_or(false),
+        "DirectoryNotEmpty" => fs::read_dir(path)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false),
+        "FileNotEmpty" => fs::metadata(path)
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false),
         "FileIsExecutable" => fs::metadata(path)
             .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
             .unwrap_or(false),
@@ -111,12 +126,16 @@ fn check(kind: &str, p: &str) -> bool {
 }
 
 fn access(p: &str, mode: i32) -> bool {
-    let Ok(c) = std::ffi::CString::new(p) else { return false };
+    let Ok(c) = std::ffi::CString::new(p) else {
+        return false;
+    };
     unsafe { libc::access(c.as_ptr(), mode) == 0 }
 }
 
 fn glob_any(pattern: &str) -> bool {
-    let Ok(c) = std::ffi::CString::new(pattern) else { return false };
+    let Ok(c) = std::ffi::CString::new(pattern) else {
+        return false;
+    };
     unsafe {
         let mut g: libc::glob_t = std::mem::zeroed();
         let r = libc::glob(c.as_ptr(), 0, None, &mut g);
@@ -127,15 +146,21 @@ fn glob_any(pattern: &str) -> bool {
 }
 
 fn is_mount_point(p: &Path) -> bool {
-    let (Ok(m), Some(parent)) = (fs::metadata(p), p.parent()) else { return false };
+    let (Ok(m), Some(parent)) = (fs::metadata(p), p.parent()) else {
+        return false;
+    };
     if p == Path::new("/") {
         return true;
     }
-    fs::metadata(parent).map(|pm| pm.dev() != m.dev()).unwrap_or(false)
+    fs::metadata(parent)
+        .map(|pm| pm.dev() != m.dev())
+        .unwrap_or(false)
 }
 
 fn is_ro_mount(p: &Path) -> bool {
-    let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) else { return false };
+    let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) else {
+        return false;
+    };
     unsafe {
         let mut st: libc::statvfs = std::mem::zeroed();
         libc::statvfs(c.as_ptr(), &mut st) == 0 && st.f_flag & libc::ST_RDONLY != 0
@@ -188,7 +213,10 @@ pub fn detect_virtualization() -> &'static str {
         return "microsoft";
     }
     let cpu = fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
-    if cpu.lines().any(|l| l.starts_with("flags") && l.contains(" hypervisor")) {
+    if cpu
+        .lines()
+        .any(|l| l.starts_with("flags") && l.contains(" hypervisor"))
+    {
         return "vm-other";
     }
     "none"

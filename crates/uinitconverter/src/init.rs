@@ -31,7 +31,8 @@ const KI_PLUGIN: &str = "/usr/lib/kernel/install.d/90-uinitconverter.install";
 /// packaged one (kernel-install prefers /etc).
 const OLD_KI_PLUGIN: &str = "/etc/kernel/install.d/90-uinitconverter.install";
 const BLS_DIR: &str = "/boot/loader/entries";
-const CORE_PACKAGES: &str = "uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd";
+const CORE_PACKAGES: &str =
+    "uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd";
 /// Where the packages Fedora does not have come from.
 const RELEASES: &str = "https://github.com/shandyCho/useless-init-converter/releases";
 /// The packages init may ask for that Fedora does not have: built with
@@ -148,23 +149,46 @@ fn parse_args(args: &[String]) -> Result<Option<Opts>, String> {
             ("--resolved", Some(v)) => o.resolved = Some(yes_no(name, v)?),
             ("--bus", Some("broker")) => o.broker = Some(true),
             ("--bus", Some("daemon")) => o.broker = Some(false),
-            ("--bus", Some(v)) => return Err(format!("--bus: expected daemon or broker, got '{v}'")),
+            ("--bus", Some(v)) => {
+                return Err(format!("--bus: expected daemon or broker, got '{v}'"))
+            }
             ("--syslog", Some(v)) if SYSLOGS.contains(&v) => o.syslog = Some(v.to_string()),
-            ("--syslog", Some(v)) => return Err(format!("--syslog: expected {}, got '{v}'", SYSLOGS.join(" or "))),
+            ("--syslog", Some(v)) => {
+                return Err(format!(
+                    "--syslog: expected {}, got '{v}'",
+                    SYSLOGS.join(" or ")
+                ))
+            }
             ("--boot-only-s6", Some(v)) => o.boot_only_s6 = Some(yes_no(name, v)?),
             ("--grub", Some(v)) => o.grub = yes_no(name, v)?,
             ("--selinux", Some("enforcing")) => o.enforcing = Some(true),
             ("--selinux", Some("permissive")) => o.enforcing = Some(false),
-            ("--selinux", Some(v)) => return Err(format!("--selinux: expected enforcing or permissive, got '{v}'")),
+            ("--selinux", Some(v)) => {
+                return Err(format!(
+                    "--selinux: expected enforcing or permissive, got '{v}'"
+                ))
+            }
             ("-h" | "--help", None) => return Ok(None),
-            ("--journal" | "--resolved" | "--bus" | "--syslog" | "--boot-only-s6" | "--grub" | "--selinux", None) => {
-                return Err(format!("{name} needs a value ({name}=...)"))
-            }
+            (
+                "--journal" | "--resolved" | "--bus" | "--syslog" | "--boot-only-s6" | "--grub"
+                | "--selinux",
+                None,
+            ) => return Err(format!("{name} needs a value ({name}=...)")),
             // The old setup-fedora.sh spellings.
-            ("--no-journal" | "--no-resolved" | "--enforcing" | "--no-grub" | "--no-boot-only-s6", None) => {
-                return Err(format!("unknown option {a}; see uinitconverter init --help (it is --NAME=yes|no now)"))
+            (
+                "--no-journal" | "--no-resolved" | "--enforcing" | "--no-grub"
+                | "--no-boot-only-s6",
+                None,
+            ) => {
+                return Err(format!(
+                    "unknown option {a}; see uinitconverter init --help (it is --NAME=yes|no now)"
+                ))
             }
-            _ => return Err(format!("unknown option {a} (see uinitconverter init --help)")),
+            _ => {
+                return Err(format!(
+                    "unknown option {a} (see uinitconverter init --help)"
+                ))
+            }
         }
     }
     Ok(Some(o))
@@ -183,7 +207,10 @@ fn conf_bool(text: &str, key: &str) -> bool {
 
 /// The marker line above a KEY=no that init wrote.
 fn conf_marker(key: &str) -> String {
-    format!("# set by uinitconverter init --{}=no", key.to_ascii_lowercase())
+    format!(
+        "# set by uinitconverter init --{}=no",
+        key.to_ascii_lowercase()
+    )
 }
 
 /// uinitconverter.conf text with KEY set: false writes KEY=no, true removes the
@@ -197,7 +224,10 @@ fn set_conf_key(text: &str, key: &str, val: bool) -> Option<String> {
     let kept: Vec<&str> = text
         .lines()
         .filter(|l| {
-            let setting = l.trim_start().strip_prefix(key).is_some_and(|r| r.starts_with('='));
+            let setting = l
+                .trim_start()
+                .strip_prefix(key)
+                .is_some_and(|r| r.starts_with('='));
             !setting && *l != marker && *l != old_marker
         })
         .collect();
@@ -233,7 +263,12 @@ fn set_conf_choice(text: &str, key: &str, opt: &str, value: &str, default: &str)
     let marker = format!("# set by uinitconverter init --{opt}=");
     let kept: Vec<&str> = text
         .lines()
-        .filter(|l| !l.trim_start().strip_prefix(key).is_some_and(|r| r.starts_with('=')) && !l.starts_with(&marker))
+        .filter(|l| {
+            !l.trim_start()
+                .strip_prefix(key)
+                .is_some_and(|r| r.starts_with('='))
+                && !l.starts_with(&marker)
+        })
         .collect();
     let mut out = kept.join("\n").trim_end_matches('\n').to_string();
     if value != default {
@@ -244,7 +279,13 @@ fn set_conf_choice(text: &str, key: &str, opt: &str, value: &str, default: &str)
 }
 
 fn set_conf_bus(text: &str, broker: bool) -> Option<String> {
-    set_conf_choice(text, "BUS", "bus", if broker { "broker" } else { "daemon" }, "daemon")
+    set_conf_choice(
+        text,
+        "BUS",
+        "bus",
+        if broker { "broker" } else { "daemon" },
+        "daemon",
+    )
 }
 
 /// The words of a file without its # comments.
@@ -286,9 +327,9 @@ fn resolve(o: &Opts, cfg: &Config) -> Settings {
             .or_else(|| conf_choice(&conf, "SYSLOG").filter(|v| SYSLOGS.contains(&v.as_str())))
             .unwrap_or_else(|| SYSLOGS[0].to_string()),
         // The last run's options file; a first run boots permissive.
-        enforcing: o
-            .enforcing
-            .unwrap_or_else(|| read(BOOT_OPTIONS).is_some_and(|t| !words(&t).iter().any(|w| w == "enforcing=0"))),
+        enforcing: o.enforcing.unwrap_or_else(|| {
+            read(BOOT_OPTIONS).is_some_and(|t| !words(&t).iter().any(|w| w == "enforcing=0"))
+        }),
         boot_only_s6: o.boot_only_s6.unwrap_or_else(|| exists(BOOT_ONLY_S6_FILE)),
         default_s6: o
             .default_s6
@@ -312,8 +353,14 @@ fn die(msg: &str) -> ! {
 
 /// A program's stdout, or None if it can't run or fails.
 fn output(argv: &[&str]) -> Option<String> {
-    let out = Command::new(tools::path(argv[0])).args(&argv[1..]).stderr(Stdio::null()).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    let out = Command::new(tools::path(argv[0]))
+        .args(&argv[1..])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// Whether a program exits 0 (output discarded).
@@ -445,13 +492,18 @@ fn check_system(ctx: &Ctx) {
     let id = read("/etc/os-release")
         .unwrap_or_default()
         .lines()
-        .find_map(|l| l.strip_prefix("ID=").map(|v| v.trim_matches('"').to_string()))
+        .find_map(|l| {
+            l.strip_prefix("ID=")
+                .map(|v| v.trim_matches('"').to_string())
+        })
         .unwrap_or_else(|| "unknown".into());
     if id != "fedora" {
         if ctx.dry && std::env::var("UINITCONVERTER_INIT_ANY_OS").as_deref() == Ok("1") {
             warn(&format!("not Fedora ({id}); dry run only"));
         } else {
-            die(&format!("uinitconverter init is for Fedora (found ID={id})"));
+            die(&format!(
+                "uinitconverter init is for Fedora (found ID={id})"
+            ));
         }
     }
     // What the steps copy or run; the configure step reads the two
@@ -488,7 +540,10 @@ fn check_programs(ctx: &Ctx, s: &Settings) {
         need.push((in_path("grub2-editenv"), "grub2-tools"));
     }
     if !s.journal {
-        need.push((exists(&format!("{LIBEXEC}/uinitconverter-journal-relay")), "uinitconverter-journal-relay"));
+        need.push((
+            exists(&format!("{LIBEXEC}/uinitconverter-journal-relay")),
+            "uinitconverter-journal-relay",
+        ));
         if s.syslog == "syslog-ng" {
             need.push((in_path("syslog-ng"), "syslog-ng"));
         } else {
@@ -503,7 +558,10 @@ fn check_programs(ctx: &Ctx, s: &Settings) {
     }
     let missing: Vec<&str> = need.iter().filter(|(ok, _)| !ok).map(|(_, p)| *p).collect();
     if !missing.is_empty() {
-        let mut msg = format!("missing packages for these settings: sudo dnf install {}", missing.join(" "));
+        let mut msg = format!(
+            "missing packages for these settings: sudo dnf install {}",
+            missing.join(" ")
+        );
         if missing.iter().any(|p| SKARNET_PACKAGES.contains(p)) {
             msg += "; build s6-linux-init and mdevd with dist/rpm/build-skarnet-rpms.sh";
         }
@@ -577,7 +635,10 @@ fn check_luks(ctx: &Ctx) {
         }
     }
     if !late.is_empty() {
-        warn(&format!("not unlocked by the initramfs: {}", late.join(" ")));
+        warn(&format!(
+            "not unlocked by the initramfs: {}",
+            late.join(" ")
+        ));
         warn("  Under s6 nothing opens these (systemd-cryptsetup@ units are systemd-only),");
         warn("  so filesystems on them will not be mounted. Add them to the initramfs with");
         warn("  rd.luks.uuid= on the kernel command line, or leave them unused for this test.");
@@ -603,7 +664,10 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
                 }
             }
             if let Some(t) = set_conf_bus(&text, s.broker) {
-                println!("  BUS={} in {conf_path}", if s.broker { "broker" } else { "daemon" });
+                println!(
+                    "  BUS={} in {conf_path}",
+                    if s.broker { "broker" } else { "daemon" }
+                );
                 text = t;
                 changed = true;
             }
@@ -617,17 +681,27 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
             }
         }
         None if ctx.dry => warn(&format!("{conf_path} is missing")),
-        None => die(&format!("{conf_path} is missing: sudo dnf reinstall uinitconverter")),
+        None => die(&format!(
+            "{conf_path} is missing: sudo dnf reinstall uinitconverter"
+        )),
     }
     if !s.journal {
-        let name = if s.syslog == "syslog-ng" { "syslog-ng.conf" } else { "rsyslog.conf" };
+        let name = if s.syslog == "syslog-ng" {
+            "syslog-ng.conf"
+        } else {
+            "rsyslog.conf"
+        };
         let conf = read(&format!("{SHARE}/{name}")).unwrap_or_default();
         ctx.put(&format!("/etc/uinitconverter/{name}"), &conf, 0o644);
     }
     s6::configure(ctx, s);
     // The syslog daemons' state (rsyslog's work directory, syslog-ng's
     // persist file and control socket), labelled for them by the policy.
-    let syslog_state = if s.syslog == "syslog-ng" { "/var/lib/syslog-ng" } else { "/var/lib/rsyslog" };
+    let syslog_state = if s.syslog == "syslog-ng" {
+        "/var/lib/syslog-ng"
+    } else {
+        "/var/lib/rsyslog"
+    };
     let (state, logs) = (ctx.cfg.state_dir.display().to_string(), log_dir(&ctx.cfg));
     ctx.run(&["mkdir", "-p", &state, syslog_state]);
     // Every service's output is in there, with s6-log's mode 644: only for
@@ -637,7 +711,10 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
 
 /// LOG_DIR, also when JOURNAL=yes leaves it unset (a later --journal=no needs it).
 fn log_dir(cfg: &Config) -> String {
-    cfg.log_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_else(|| DEFAULT_LOG_DIR.into())
+    cfg.log_dir
+        .as_ref()
+        .map(|d| d.display().to_string())
+        .unwrap_or_else(|| DEFAULT_LOG_DIR.into())
 }
 
 fn unit_installed(cfg: &Config, unit: &str) -> bool {
@@ -650,12 +727,19 @@ fn enable_units(ctx: &Ctx) {
         if unit_installed(&ctx.cfg, u) {
             ctx.run(&["systemctl", "--no-reload", "enable", u]);
         } else {
-            warn(&format!("{u} is not installed; the s6 boot runs without it"));
+            warn(&format!(
+                "{u} is not installed; the s6 boot runs without it"
+            ));
         }
     }
     if rpm_installed("gdm") {
         ctx.run(&["systemctl", "--no-reload", "enable", "gdm.service"]);
-        ctx.run(&["systemctl", "--no-reload", "set-default", "graphical.target"]);
+        ctx.run(&[
+            "systemctl",
+            "--no-reload",
+            "set-default",
+            "graphical.target",
+        ]);
     }
 }
 
@@ -666,10 +750,19 @@ fn build_database(ctx: &Ctx) {
     if ctx.dry {
         return;
     }
-    let report = ctx.cfg.state_dir.join("current/report.txt").display().to_string();
+    let report = ctx
+        .cfg
+        .state_dir
+        .join("current/report.txt")
+        .display()
+        .to_string();
     println!("  report: {report}");
     let text = read(&report).unwrap_or_default();
-    for l in text.lines().filter(|l| ["translated:", "skipped:", "cycles broken:"].iter().any(|k| l.starts_with(k))) {
+    for l in text.lines().filter(|l| {
+        ["translated:", "skipped:", "cycles broken:"]
+            .iter()
+            .any(|k| l.starts_with(k))
+    }) {
         println!("  {l}");
     }
     let n = text.lines().filter(|l| l.contains("warning:")).count();
@@ -688,7 +781,11 @@ fn setup_selinux(ctx: &Ctx) {
     // ... and the whole s6 tree must stay there, so that services enter their
     // own domains as under systemd (see the policy module). The package's
     // %post loaded it; loading it again is cheap and covers a relabel.
-    ctx.run(&["semodule", "-i", &format!("{SHARE}/selinux/uinitconverter.cil")]);
+    ctx.run(&[
+        "semodule",
+        "-i",
+        &format!("{SHARE}/selinux/uinitconverter.cil"),
+    ]);
     let mut paths: Vec<String> = [
         S6LI_BASE,
         LIBEXEC,
@@ -712,7 +809,9 @@ fn setup_selinux(ctx: &Ctx) {
 fn s6_entries() -> Vec<String> {
     list_dir(BLS_DIR, |n| n.ends_with(".conf"))
         .into_iter()
-        .filter(|f| read(f).is_some_and(|t| t.lines().any(|l| l.starts_with(&format!("title {TITLE}")))))
+        .filter(|f| {
+            read(f).is_some_and(|t| t.lines().any(|l| l.starts_with(&format!("title {TITLE}"))))
+        })
         .collect()
 }
 
@@ -754,7 +853,11 @@ fn add_grub_entry(ctx: &Ctx, s: &Settings) {
     }
     say(&format!("Adding boot entry: {TITLE}"));
     let args = boot_args(s.enforcing);
-    ctx.put(BOOT_OPTIONS, &format!("# Extra kernel options for the \"{TITLE}\" boot entries.\n{args}\n"), 0o644);
+    ctx.put(
+        BOOT_OPTIONS,
+        &format!("# Extra kernel options for the \"{TITLE}\" boot entries.\n{args}\n"),
+        0o644,
+    );
     let kernel = if ctx.dry && !in_path("grubby") {
         "/boot/vmlinuz-KVER".to_string()
     } else {
@@ -762,7 +865,10 @@ fn add_grub_entry(ctx: &Ctx, s: &Settings) {
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| die("grubby --default-kernel failed"))
     };
-    let kver = kernel.strip_prefix("/boot/vmlinuz-").unwrap_or(&kernel).to_string();
+    let kver = kernel
+        .strip_prefix("/boot/vmlinuz-")
+        .unwrap_or(&kernel)
+        .to_string();
     // The plugin builds the s6 initramfs (--boot-only-s6=yes) while this file
     // exists, for the kernels below and for every later one.
     if s.boot_only_s6 {
@@ -839,7 +945,12 @@ fn set_boot_default(ctx: &Ctx, s: &Settings, kver: &str) {
         .map(|n| n.trim_end_matches(".conf").to_string());
     match id {
         Some(id) => ctx.run(&["grub2-editenv", "-", "set", &format!("saved_entry={id}")]),
-        None if ctx.dry => ctx.run(&["grub2-editenv", "-", "set", &format!("saved_entry=ID-{kver}~uinitconverter")]),
+        None if ctx.dry => ctx.run(&[
+            "grub2-editenv",
+            "-",
+            "set",
+            &format!("saved_entry=ID-{kver}~uinitconverter"),
+        ]),
         None => {
             warn(&format!("no s6 entry for {kver}: the default is unchanged"));
             return;
@@ -854,7 +965,10 @@ fn plan(s: &Settings, backup: &str) -> String {
     let logs = if s.journal {
         "systemd-journald as an s6 service (journalctl works)".to_string()
     } else {
-        format!("{} + s6-log directories, no journal (--journal=no, --syslog={})", s.syslog, s.syslog)
+        format!(
+            "{} + s6-log directories, no journal (--journal=no, --syslog={})",
+            s.syslog, s.syslog
+        )
     };
     let dns = if s.resolved {
         "systemd-resolved as on the systemd boot"
@@ -962,15 +1076,24 @@ fn next_steps(s: &Settings) -> String {
 
 fn uninstall(ctx: &Ctx, args: &[String]) -> ! {
     say("Removing the s6 boot entry and what uinitconverter init wrote");
-    ctx.confirm(&format!("Remove the '{TITLE}' boot entry, {S6LI_BASE} and the boot settings?"));
+    ctx.confirm(&format!(
+        "Remove the '{TITLE}' boot entry, {S6LI_BASE} and the boot settings?"
+    ));
     systemd_default(ctx);
     remove_grub_entry(ctx);
-    for f in [OLD_KI_PLUGIN, BOOT_OPTIONS, BOOT_DEFAULT_FILE, BOOT_ONLY_S6_FILE] {
+    for f in [
+        OLD_KI_PLUGIN,
+        BOOT_OPTIONS,
+        BOOT_DEFAULT_FILE,
+        BOOT_ONLY_S6_FILE,
+    ] {
         if exists(f) {
             ctx.run(&["rm", "-f", f]);
         }
     }
-    for img in list_dir("/boot", |n| n.starts_with("initramfs-") && n.ends_with("-s6.img")) {
+    for img in list_dir("/boot", |n| {
+        n.starts_with("initramfs-") && n.ends_with("-s6.img")
+    }) {
         ctx.run(&["rm", "-f", &img]);
     }
     s6::uninstall(ctx);
@@ -987,8 +1110,16 @@ fn uninstall(ctx: &Ctx, args: &[String]) -> ! {
 
 /// The end of a --dry-run: the command that would apply what was shown.
 fn dry_run_end(args: &[String]) -> String {
-    let rest: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--dry-run").collect();
-    let cmd = if rest.is_empty() { "sudo uinitconverter init".to_string() } else { format!("sudo uinitconverter init {}", rest.join(" ")) };
+    let rest: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|a| *a != "--dry-run")
+        .collect();
+    let cmd = if rest.is_empty() {
+        "sudo uinitconverter init".to_string()
+    } else {
+        format!("sudo uinitconverter init {}", rest.join(" "))
+    };
     format!("\nDry run: nothing was changed. To apply this, run:\n  {cmd}\n")
 }
 
@@ -1011,11 +1142,18 @@ pub fn main(args: &[String]) -> ! {
             exit(2);
         }
     };
-    let stamp = output(&["date", "+%Y%m%d-%H%M%S"]).map(|s| s.trim().to_string()).unwrap_or_else(|| "now".into());
+    let stamp = output(&["date", "+%Y%m%d-%H%M%S"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "now".into());
     let ctx = Ctx {
         dry: opts.dry,
         yes: opts.yes,
-        backup: cfg.state_dir.join("setup-backup").join(&stamp).display().to_string(),
+        backup: cfg
+            .state_dir
+            .join("setup-backup")
+            .join(&stamp)
+            .display()
+            .to_string(),
         cfg,
     };
     check_system(&ctx);
@@ -1057,26 +1195,71 @@ mod tests {
     #[test]
     fn dry_run_end_drops_the_flag() {
         assert!(dry_run_end(&args(&["--dry-run"])).contains("  sudo uinitconverter init\n"));
-        assert!(dry_run_end(&args(&["--journal=no", "--dry-run", "--uninstall"]))
-            .contains("  sudo uinitconverter init --journal=no --uninstall\n"));
+        assert!(
+            dry_run_end(&args(&["--journal=no", "--dry-run", "--uninstall"]))
+                .contains("  sudo uinitconverter init --journal=no --uninstall\n")
+        );
     }
 
     #[test]
     fn options() {
-        let o = parse_args(&args(&["--default-s6", "--journal=no", "--selinux=enforcing", "-y"])).unwrap().unwrap();
+        let o = parse_args(&args(&[
+            "--default-s6",
+            "--journal=no",
+            "--selinux=enforcing",
+            "-y",
+        ]))
+        .unwrap()
+        .unwrap();
         assert_eq!(o.default_s6, Some(true));
         assert_eq!(o.journal, Some(false));
         assert_eq!(o.resolved, None);
         assert_eq!(o.enforcing, Some(true));
         assert!(o.yes && o.grub && !o.dry);
-        let o = parse_args(&args(&["--grub=no", "--boot-only-s6=yes", "--resolved=yes"])).unwrap().unwrap();
+        let o = parse_args(&args(&[
+            "--grub=no",
+            "--boot-only-s6=yes",
+            "--resolved=yes",
+        ]))
+        .unwrap()
+        .unwrap();
         assert!(!o.grub);
         assert_eq!((o.boot_only_s6, o.resolved), (Some(true), Some(true)));
         assert!(parse_args(&args(&["--help"])).unwrap().is_none());
-        assert_eq!(parse_args(&args(&["--bus=broker"])).unwrap().unwrap().broker, Some(true));
-        assert_eq!(parse_args(&args(&["--bus=daemon"])).unwrap().unwrap().broker, Some(false));
-        assert_eq!(parse_args(&args(&["--syslog=syslog-ng"])).unwrap().unwrap().syslog.as_deref(), Some("syslog-ng"));
-        for bad in ["--journal", "--journal=off", "--selinux=disabled", "--no-journal", "--rpms=/x", "--yes=no", "--bus", "--bus=yes", "--syslog", "--syslog=metalog"] {
+        assert_eq!(
+            parse_args(&args(&["--bus=broker"]))
+                .unwrap()
+                .unwrap()
+                .broker,
+            Some(true)
+        );
+        assert_eq!(
+            parse_args(&args(&["--bus=daemon"]))
+                .unwrap()
+                .unwrap()
+                .broker,
+            Some(false)
+        );
+        assert_eq!(
+            parse_args(&args(&["--syslog=syslog-ng"]))
+                .unwrap()
+                .unwrap()
+                .syslog
+                .as_deref(),
+            Some("syslog-ng")
+        );
+        for bad in [
+            "--journal",
+            "--journal=off",
+            "--selinux=disabled",
+            "--no-journal",
+            "--rpms=/x",
+            "--yes=no",
+            "--bus",
+            "--bus=yes",
+            "--syslog",
+            "--syslog=metalog",
+        ] {
             assert!(parse_args(&args(&[bad])).is_err(), "{bad} accepted");
         }
     }
@@ -1089,25 +1272,46 @@ mod tests {
         assert!(conf_bool("JOURNALX=no\n", "JOURNAL"));
         assert_eq!(set_conf_key(base, "JOURNAL", true), None);
         let off = set_conf_key(base, "JOURNAL", false).unwrap();
-        assert_eq!(off, "# comment\nDEBUG=no\n\n# set by uinitconverter init --journal=no\nJOURNAL=no\n");
+        assert_eq!(
+            off,
+            "# comment\nDEBUG=no\n\n# set by uinitconverter init --journal=no\nJOURNAL=no\n"
+        );
         assert_eq!(set_conf_key(&off, "JOURNAL", false), None);
         assert_eq!(set_conf_key(&off, "JOURNAL", true).unwrap(), base);
         // BUS=: dbus-daemon unless the last setting says broker; BUS_ADDRESS is another key.
         assert!(!conf_broker("BUS_ADDRESS=broker\n") && conf_broker("BUS=daemon\nBUS= Broker\n"));
         assert_eq!(set_conf_bus(base, false), None);
         let broker = set_conf_bus(base, true).unwrap();
-        assert_eq!(broker, "# comment\nDEBUG=no\n\n# set by uinitconverter init --bus=broker\nBUS=broker\n");
+        assert_eq!(
+            broker,
+            "# comment\nDEBUG=no\n\n# set by uinitconverter init --bus=broker\nBUS=broker\n"
+        );
         assert_eq!(set_conf_bus(&broker, true), None);
         assert_eq!(set_conf_bus(&broker, false).unwrap(), base);
-        assert_eq!(set_conf_bus("BUS=broker\nBUS_ADDRESS=x\n", false).unwrap(), "BUS_ADDRESS=x\n");
+        assert_eq!(
+            set_conf_bus("BUS=broker\nBUS_ADDRESS=x\n", false).unwrap(),
+            "BUS_ADDRESS=x\n"
+        );
         // SYSLOG=: the same, with the value in the marker; quotes are ignored.
         let ng = set_conf_choice(base, "SYSLOG", "syslog", "syslog-ng", "rsyslog").unwrap();
         assert_eq!(ng, "# comment\nDEBUG=no\n\n# set by uinitconverter init --syslog=syslog-ng\nSYSLOG=syslog-ng\n");
         assert_eq!(conf_choice(&ng, "SYSLOG").as_deref(), Some("syslog-ng"));
-        assert_eq!(conf_choice("SYSLOG=\"Syslog-NG\"\n", "SYSLOG").as_deref(), Some("syslog-ng"));
-        assert_eq!(set_conf_choice(&ng, "SYSLOG", "syslog", "syslog-ng", "rsyslog"), None);
-        assert_eq!(set_conf_choice(&ng, "SYSLOG", "syslog", "rsyslog", "rsyslog").unwrap(), base);
-        assert_eq!(set_conf_choice(base, "SYSLOG", "syslog", "rsyslog", "rsyslog"), None);
+        assert_eq!(
+            conf_choice("SYSLOG=\"Syslog-NG\"\n", "SYSLOG").as_deref(),
+            Some("syslog-ng")
+        );
+        assert_eq!(
+            set_conf_choice(&ng, "SYSLOG", "syslog", "syslog-ng", "rsyslog"),
+            None
+        );
+        assert_eq!(
+            set_conf_choice(&ng, "SYSLOG", "syslog", "rsyslog", "rsyslog").unwrap(),
+            base
+        );
+        assert_eq!(
+            set_conf_choice(base, "SYSLOG", "syslog", "rsyslog", "rsyslog"),
+            None
+        );
         // The old script's marker goes too.
         let old = "A=1\n\n# set by setup-fedora.sh --no-resolved\nRESOLVED=no\n";
         assert_eq!(set_conf_key(old, "RESOLVED", true).unwrap(), "A=1\n");
@@ -1115,7 +1319,10 @@ mod tests {
 
     #[test]
     fn boot_settings() {
-        assert_eq!(boot_args(true), "init=/usr/sbin/init-selinux plymouth.enable=0 rd.plymouth=0");
+        assert_eq!(
+            boot_args(true),
+            "init=/usr/sbin/init-selinux plymouth.enable=0 rd.plymouth=0"
+        );
         assert!(boot_args(false).ends_with(" enforcing=0"));
         assert_eq!(words("# s6: comment\ns6\n"), ["s6"]);
         assert!(words("# x\ninit=/a enforcing=0 # y\n").contains(&"enforcing=0".to_string()));
@@ -1125,10 +1332,20 @@ mod tests {
     fn luks() {
         let tab = "# c\nluks-a UUID=a none\nluks-b UUID=b none\nhome /dev/sdb1 none\n";
         let late = |cmdline| -> Vec<String> {
-            luks_volumes(tab, cmdline).into_iter().filter(|(_, early)| !early).map(|(n, _)| n).collect()
+            luks_volumes(tab, cmdline)
+                .into_iter()
+                .filter(|(_, early)| !early)
+                .map(|(n, _)| n)
+                .collect()
         };
-        assert_eq!(late("root=x rd.luks.uuid=luks-a quiet\n"), ["luks-b", "home"]);
-        assert_eq!(late("rd.luks.uuid=a rd.luks.name=b=x rd.luks.uuid=/dev/sdb1"), Vec::<String>::new());
+        assert_eq!(
+            late("root=x rd.luks.uuid=luks-a quiet\n"),
+            ["luks-b", "home"]
+        );
+        assert_eq!(
+            late("rd.luks.uuid=a rd.luks.name=b=x rd.luks.uuid=/dev/sdb1"),
+            Vec::<String>::new()
+        );
         assert_eq!(luks_volumes(tab, "").len(), 3);
     }
 }

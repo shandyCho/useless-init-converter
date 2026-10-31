@@ -25,7 +25,8 @@ pub fn where_of(unit: &Unit) -> String {
 /// Mount points currently mounted (octal escapes in mountinfo decoded).
 pub fn mounted_points() -> Vec<String> {
     // Bytes: one mount point that isn't UTF-8 must not hide all the others.
-    let text = String::from_utf8_lossy(&fs::read("/proc/self/mountinfo").unwrap_or_default()).into_owned();
+    let text =
+        String::from_utf8_lossy(&fs::read("/proc/self/mountinfo").unwrap_or_default()).into_owned();
     text.lines()
         .filter_map(|l| l.split_whitespace().nth(4))
         .map(decode_octal)
@@ -39,7 +40,10 @@ fn decode_octal(s: &str) -> String {
     while i < b.len() {
         if b[i] == b'\\' && i + 3 < b.len() {
             // From the bytes: a str slice could split a character.
-            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 4]).ok().and_then(|o| u8::from_str_radix(o, 8).ok()) {
+            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 4])
+                .ok()
+                .and_then(|o| u8::from_str_radix(o, 8).ok())
+            {
                 out.push(v);
                 i += 4;
                 continue;
@@ -58,7 +62,9 @@ pub fn is_mounted(where_: &str) -> bool {
 }
 
 pub fn swap_active(what: &str) -> bool {
-    let real = fs::canonicalize(what).map(|p| p.display().to_string()).unwrap_or_else(|_| what.to_string());
+    let real = fs::canonicalize(what)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| what.to_string());
     fs::read_to_string("/proc/swaps")
         .unwrap_or_default()
         .lines()
@@ -88,7 +94,10 @@ pub fn mount_up(unit: &Unit) -> i32 {
     };
     if !Path::new(&where_).exists() {
         let _ = fs::create_dir_all(&where_);
-        if let Some(mode) = unit.get("Mount", "DirectoryMode").and_then(|m| u32::from_str_radix(&m, 8).ok()) {
+        if let Some(mode) = unit
+            .get("Mount", "DirectoryMode")
+            .and_then(|m| u32::from_str_radix(&m, 8).ok())
+        {
             if let Ok(c) = std::ffi::CString::new(where_.as_str()) {
                 unsafe { libc::chmod(c.as_ptr(), mode) };
             }
@@ -133,7 +142,9 @@ pub fn mount_down(unit: &Unit) -> i32 {
 }
 
 pub fn swap_up(unit: &Unit) -> i32 {
-    let Some(what) = unit.get("Swap", "What") else { return 1 };
+    let Some(what) = unit.get("Swap", "What") else {
+        return 1;
+    };
     if swap_active(&what) {
         return 0;
     }
@@ -149,7 +160,9 @@ pub fn swap_up(unit: &Unit) -> i32 {
 }
 
 pub fn swap_down(unit: &Unit) -> i32 {
-    let Some(what) = unit.get("Swap", "What") else { return 0 };
+    let Some(what) = unit.get("Swap", "What") else {
+        return 0;
+    };
     if !swap_active(&what) {
         return 0;
     }

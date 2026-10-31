@@ -30,7 +30,12 @@ fn unit_arg(args: &[String]) -> String {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--" => return it.next().cloned().unwrap_or_else(|| die("missing unit name")),
+            "--" => {
+                return it
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| die("missing unit name"))
+            }
             "--unit-hex" => {
                 let hex = it.next().cloned().unwrap_or_default();
                 let bytes: Vec<u8> = (0..hex.len() / 2)
@@ -77,7 +82,9 @@ fn main() {
     let code = match cmd.as_str() {
         "timer-run" => timer::cmd_timer_run(cfg, &unit),
         "path-run" => pathunit::cmd_path_run(cfg, &unit),
-        other => die(&format!("unknown command {other} (see uinitconverter-timers help)")),
+        other => die(&format!(
+            "unknown command {other} (see uinitconverter-timers help)"
+        )),
     };
     exit(code);
 }

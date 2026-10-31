@@ -136,7 +136,10 @@ struct DErr {
 type R<T> = Result<T, DErr>;
 
 fn err(name: &'static str, msg: impl Into<String>) -> DErr {
-    DErr { name, msg: msg.into() }
+    DErr {
+        name,
+        msg: msg.into(),
+    }
 }
 
 fn zerr(e: zbus::Error) -> DErr {
@@ -180,7 +183,10 @@ fn apply_markers(mut cur: BTreeSet<String>, words: &[String]) -> Result<BTreeSet
 async fn wait_cgroups_empty(dirs: &[PathBuf], limit: Duration) -> usize {
     let start = std::time::Instant::now();
     loop {
-        let left = dirs.iter().filter(|d| !util::cgroup_pids(d).is_empty()).count();
+        let left = dirs
+            .iter()
+            .filter(|d| !util::cgroup_pids(d).is_empty())
+            .count();
         if left == 0 || start.elapsed() >= limit {
             return left;
         }
@@ -193,14 +199,22 @@ fn socket_service(id: &str, unit: &Unit) -> Option<String> {
     if !id.ends_with(".socket") || unit.get_bool("Socket", "Accept", false) {
         return None;
     }
-    Some(unit.get("Socket", "Service").unwrap_or_else(|| format!("{}.service", id.trim_end_matches(".socket"))))
+    Some(
+        unit.get("Socket", "Service")
+            .unwrap_or_else(|| format!("{}.service", id.trim_end_matches(".socket"))),
+    )
 }
 
 fn shutdown_action(id: &str) -> Option<&'static str> {
     match id {
         "poweroff.target" | "systemd-poweroff.service" => Some("poweroff"),
-        "reboot.target" | "systemd-reboot.service" | "ctrl-alt-del.target" | "kexec.target"
-        | "systemd-kexec.service" | "soft-reboot.target" | "systemd-soft-reboot.service" => Some("reboot"),
+        "reboot.target"
+        | "systemd-reboot.service"
+        | "ctrl-alt-del.target"
+        | "kexec.target"
+        | "systemd-kexec.service"
+        | "soft-reboot.target"
+        | "systemd-soft-reboot.service" => Some("reboot"),
         "halt.target" | "systemd-halt.service" => Some("halt"),
         _ => None,
     }
@@ -215,7 +229,9 @@ fn subcgroup(sub: &str) -> Option<&str> {
     if rel.is_empty() {
         return Some("");
     }
-    rel.split('/').all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains('\0')).then_some(rel)
+    rel.split('/')
+        .all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains('\0'))
+        .then_some(rel)
 }
 
 /// The unit a cgroup belongs to, as the system manager sees it: the
@@ -237,7 +253,8 @@ fn pids_from_pidfds(v: &OwnedValue) -> Vec<u32> {
     if let Value::Array(a) = &**v {
         for item in a.iter() {
             if let Value::Fd(fd) = item {
-                let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd())).unwrap_or_default();
+                let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))
+                    .unwrap_or_default();
                 if let Some(pid) = info
                     .lines()
                     .find_map(|l| l.strip_prefix("Pid:"))
@@ -328,7 +345,13 @@ impl Daemon {
     }
 
     async fn require_privileged(&self, c: &Peer, msg: &Message) -> R<()> {
-        self.authorize_with(c, msg, "org.freedesktop.systemd1.manage-units", HashMap::new()).await
+        self.authorize_with(
+            c,
+            msg,
+            "org.freedesktop.systemd1.manage-units",
+            HashMap::new(),
+        )
+        .await
     }
 
     /// manage-units for one unit, with the details systemd passes to polkit:
@@ -337,10 +360,14 @@ impl Daemon {
         let details = HashMap::from([
             ("unit".to_string(), unit.to_string()),
             ("verb".to_string(), verb.to_string()),
-            ("polkit.message".to_string(), format!("Authentication is required to {verb} '{unit}'.")),
+            (
+                "polkit.message".to_string(),
+                format!("Authentication is required to {verb} '{unit}'."),
+            ),
             ("polkit.gettext_domain".to_string(), "systemd".to_string()),
         ]);
-        self.authorize_with(c, msg, "org.freedesktop.systemd1.manage-units", details).await
+        self.authorize_with(c, msg, "org.freedesktop.systemd1.manage-units", details)
+            .await
     }
 
     async fn authorize(&self, c: &Peer, msg: &Message, action: &str) -> R<()> {
@@ -349,7 +376,13 @@ impl Daemon {
 
     /// Root and ALLOW_UIDS pass; other callers on the bus are checked with
     /// polkit using systemd's action IDs (the policy ships with systemd).
-    async fn authorize_with(&self, c: &Peer, msg: &Message, action: &str, details: HashMap<String, String>) -> R<()> {
+    async fn authorize_with(
+        &self,
+        c: &Peer,
+        msg: &Message,
+        action: &str,
+        details: HashMap<String, String>,
+    ) -> R<()> {
         match self.caller_uid(c, msg).await {
             Some(0) => return Ok(()),
             Some(u) if self.cfg.allow_uids.contains(&u) => return Ok(()),
@@ -358,10 +391,17 @@ impl Daemon {
         }
         // Peer-to-peer callers are root-only; polkit needs a bus name.
         let hdr = msg.header();
-        let Some(sender) = hdr.sender().map(|s| s.to_string()).filter(|_| c.uid.is_none()) else {
+        let Some(sender) = hdr
+            .sender()
+            .map(|s| s.to_string())
+            .filter(|_| c.uid.is_none())
+        else {
             return Err(err(E_ACCESS, "Access denied"));
         };
-        let interactive = hdr.primary().flags().contains(zbus::message::Flags::AllowInteractiveAuth);
+        let interactive = hdr
+            .primary()
+            .flags()
+            .contains(zbus::message::Flags::AllowInteractiveAuth);
         drop(hdr);
         let mut subject_details: HashMap<String, Value<'static>> = HashMap::new();
         subject_details.insert("name".into(), Value::from(sender));
@@ -380,7 +420,10 @@ impl Daemon {
             // No polkit: fail closed.
             return Err(err(E_ACCESS, "Access denied"));
         };
-        match reply.body().deserialize::<((bool, bool, HashMap<String, String>),)>() {
+        match reply
+            .body()
+            .deserialize::<((bool, bool, HashMap<String, String>),)>()
+        {
             Ok(((true, _, _),)) => Ok(()),
             Ok(((false, true, _),)) => Err(err(
                 "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired",
@@ -395,7 +438,8 @@ impl Daemon {
         let resolved = self.index.read().unwrap().resolve(name).to_string();
         if let Some(t) = self.transient.lock().unwrap().get(&resolved) {
             let mut file = UnitFile::default();
-            file.entries.push(("Unit".into(), "Description".into(), t.description.clone()));
+            file.entries
+                .push(("Unit".into(), "Description".into(), t.description.clone()));
             return (
                 resolved.clone(),
                 Unit {
@@ -415,7 +459,10 @@ impl Daemon {
         let unit = Loader::new(&self.cfg).load(&resolved);
         // Not-found units are re-read every time (systemd retries them too).
         if unit.load_state != LoadState::NotFound {
-            self.unit_cache.lock().unwrap().insert(resolved, unit.clone());
+            self.unit_cache
+                .lock()
+                .unwrap()
+                .insert(resolved, unit.clone());
         }
         (unit.id.clone(), unit)
     }
@@ -427,7 +474,11 @@ impl Daemon {
         let set = self.cfg.repo_dir.join("sources").join(&self.cfg.set_name);
         let stamp: Vec<_> = ["", "always", "active", "usable", "masked"]
             .iter()
-            .map(|d| std::fs::metadata(set.join(d)).and_then(|m| m.modified()).ok())
+            .map(|d| {
+                std::fs::metadata(set.join(d))
+                    .and_then(|m| m.modified())
+                    .ok()
+            })
             .collect();
         let mut last = self.file_state_set_stamp.lock().unwrap();
         if *last != stamp {
@@ -461,12 +512,25 @@ impl Daemon {
     fn valid_name(name: &str) -> R<()> {
         match crate::loader::parse_name(name) {
             Some(_) => Ok(()),
-            None => Err(err(E_INVALID_ARGS, format!("Unit name {name} is not valid."))),
+            None => Err(err(
+                E_INVALID_ARGS,
+                format!("Unit name {name} is not valid."),
+            )),
         }
     }
 
-    async fn emit(&self, path: &str, iface: &str, member: &str, body: &(impl serde::Serialize + zbus::zvariant::DynamicType)) {
-        if let Err(e) = self.conn.emit_signal(None::<&str>, path, iface, member, body).await {
+    async fn emit(
+        &self,
+        path: &str,
+        iface: &str,
+        member: &str,
+        body: &(impl serde::Serialize + zbus::zvariant::DynamicType),
+    ) {
+        if let Err(e) = self
+            .conn
+            .emit_signal(None::<&str>, path, iface, member, body)
+            .await
+        {
             eprintln!("uinitconverterd: emit {member}: {e}");
         }
         let peers: Vec<(u64, Connection)> = self.private.lock().unwrap().clone();
@@ -476,18 +540,23 @@ impl Daemon {
             // every later signal and so every job: drop it, as systemd drops
             // a client whose queue overflows. It reconnects when it needs to.
             let send = p.emit_signal(None::<&str>, path, iface, member, body);
-            if tokio::time::timeout(std::time::Duration::from_millis(500), send).await.is_err() {
+            if tokio::time::timeout(std::time::Duration::from_millis(500), send)
+                .await
+                .is_err()
+            {
                 eprintln!("uinitconverterd: a private-socket client is not reading its messages; disconnecting it");
                 self.private.lock().unwrap().retain(|(i, _)| *i != id);
                 tokio::spawn(async move {
-                    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), p.close()).await;
+                    let _ =
+                        tokio::time::timeout(std::time::Duration::from_secs(1), p.close()).await;
                 });
             }
         }
     }
 
     async fn reload_db(&self) -> Result<(), String> {
-        self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(true,)).await;
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(true,))
+            .await;
         let cfg = self.cfg.clone();
         let (plan, moving) = tokio::task::spawn_blocking(move || {
             let plan = gen::plan(&cfg);
@@ -516,7 +585,10 @@ impl Daemon {
             restart.extend(before.difference(&after).cloned());
         }
         if !restart.is_empty() {
-            eprintln!("uinitconverterd: {}: back to the database, restarted from it", restart.join(" "));
+            eprintln!(
+                "uinitconverterd: {}: back to the database, restarted from it",
+                restart.join(" ")
+            );
         }
         let cfg = self.cfg.clone();
         let res = {
@@ -550,7 +622,8 @@ impl Daemon {
                 eprintln!("uinitconverterd: {id}: start from the database: {r}");
             }
         }
-        self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(false,)).await;
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(false,))
+            .await;
         res.map(|_| ())
     }
 
@@ -558,7 +631,10 @@ impl Daemon {
     /// job holding one may be starting a dependency whose lock we'd hold.
     async fn lock_units(&self, ids: &BTreeSet<String>) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
         loop {
-            let guards: Vec<_> = ids.iter().map_while(|id| self.unit_lock(id).try_lock_owned().ok()).collect();
+            let guards: Vec<_> = ids
+                .iter()
+                .map_while(|id| self.unit_lock(id).try_lock_owned().ok())
+                .collect();
             if guards.len() == ids.len() {
                 return guards;
             }
@@ -570,11 +646,20 @@ impl Daemon {
     /// Dynamic instances that are up: longruns whose supervisor says so,
     /// active oneshots.
     async fn active_dynamic(&self) -> BTreeSet<String> {
-        let all: Vec<(String, Kind, bool)> =
-            self.dynamic.lock().unwrap().iter().map(|(n, d)| (n.clone(), d.kind, d.active)).collect();
+        let all: Vec<(String, Kind, bool)> = self
+            .dynamic
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(n, d)| (n.clone(), d.kind, d.active))
+            .collect();
         let mut up = BTreeSet::new();
         for (id, kind, active) in all {
-            let on = if kind == Kind::Oneshot { active } else { self.svstat(&id).await.map(|s| s.up).unwrap_or(false) };
+            let on = if kind == Kind::Oneshot {
+                active
+            } else {
+                self.svstat(&id).await.map(|s| s.up).unwrap_or(false)
+            };
             if on {
                 up.insert(id);
             }
@@ -586,16 +671,28 @@ impl Daemon {
 
     fn new_job(&self, unit: &str, jtype: &str) -> u32 {
         let id = self.next_job.fetch_add(1, Ordering::SeqCst) + 1;
-        self.jobs
-            .lock()
-            .unwrap()
-            .insert(id, Job { id, unit: unit.into(), jtype: jtype.into(), state: "waiting", canceled: false });
+        self.jobs.lock().unwrap().insert(
+            id,
+            Job {
+                id,
+                unit: unit.into(),
+                jtype: jtype.into(),
+                state: "waiting",
+                canceled: false,
+            },
+        );
         id
     }
 
     /// Validate a job request; returns the canonical unit id. `manual`: asked
     /// for by a client, so RefuseManualStart=/RefuseManualStop= apply.
-    async fn check_job(&self, name: &str, jtype: &str, allow_reload: bool, manual: bool) -> R<(String, Unit)> {
+    async fn check_job(
+        &self,
+        name: &str,
+        jtype: &str,
+        allow_reload: bool,
+        manual: bool,
+    ) -> R<(String, Unit)> {
         let (id, unit) = self.load_unit(name);
         if jtype == "start" && shutdown_action(&id).is_some() {
             return Ok((id, unit));
@@ -604,7 +701,10 @@ impl Daemon {
             LoadState::NotFound => return Err(err(E_NO_UNIT, format!("Unit {name} not found."))),
             LoadState::Masked => return Err(err(E_MASKED, format!("Unit {name} is masked."))),
             LoadState::BadSetting => {
-                return Err(err(E_LOAD_FAILED, unit.load_error.clone().unwrap_or_default()))
+                return Err(err(
+                    E_LOAD_FAILED,
+                    unit.load_error.clone().unwrap_or_default(),
+                ))
             }
             LoadState::Loaded => {}
         }
@@ -616,7 +716,9 @@ impl Daemon {
         if starts && self.cfg.run_dir.join("shutting-down").exists() {
             return Err(err(
                 E_DESTRUCTIVE,
-                format!("Transaction for {id}/{jtype} is destructive (the system is shutting down)."),
+                format!(
+                    "Transaction for {id}/{jtype} is destructive (the system is shutting down)."
+                ),
             ));
         }
         if starts && self.kind_of(&id).is_none() && !self.cfg.is_excluded(&id) {
@@ -639,13 +741,21 @@ impl Daemon {
             return Err(err(E_ONLY_BY_DEP, format!("Operation refused, unit {name} may be requested by dependency only (it is configured to refuse manual start/stop).")));
         }
         if jtype == "reload" && !Self::can_reload(&unit) {
-            return Err(err(E_NOT_APPLICABLE, format!("Job type reload is not applicable for unit {name}.")));
+            return Err(err(
+                E_NOT_APPLICABLE,
+                format!("Job type reload is not applicable for unit {name}."),
+            ));
         }
         // As systemd, a reload behind a queued or running start-type job is
         // accepted and runs after it (jobs on a unit are serialized);
         // unit_status() would say "activating" for that job and refuse.
         if jtype == "reload" {
-            let behind_job = self.jobs.lock().unwrap().values().any(|j| j.unit == id && j.jtype != "stop");
+            let behind_job = self
+                .jobs
+                .lock()
+                .unwrap()
+                .values()
+                .any(|j| j.unit == id && j.jtype != "stop");
             let active = self.active_atoms().await;
             if !behind_job && self.unit_status(&id, &active, &unit).await.active != "active" {
                 return Err(err(E_INACTIVE, format!("Unit {name} is not active.")));
@@ -656,7 +766,13 @@ impl Daemon {
         if !transient && !dynamic && self.kind_of(&id).is_none() && jtype != "stop" {
             // Masked in the s6 set by the admin (AUTO_MASK='s leftovers are dynamic).
             if crate::install::set_rx(&self.cfg, &id) == Some("masked") {
-                return Err(err(E_MASKED, format!("Unit {name} is masked in the s6 set ({}).", self.cfg.set_name)));
+                return Err(err(
+                    E_MASKED,
+                    format!(
+                        "Unit {name} is masked in the s6 set ({}).",
+                        self.cfg.set_name
+                    ),
+                ));
             }
             // New unit file since the last reload: translate it now (not for
             // bus activation, which any user can trigger).
@@ -674,7 +790,10 @@ impl Daemon {
                         .cloned()
                         .unwrap_or_else(|| "not translated to s6-rc".into())
                 };
-                return Err(err(E_LOAD_FAILED, format!("Unit {name} cannot be managed: {why}.")));
+                return Err(err(
+                    E_LOAD_FAILED,
+                    format!("Unit {name} cannot be managed: {why}."),
+                ));
             }
         }
         Ok((id, unit))
@@ -696,7 +815,10 @@ impl Daemon {
                     _ => self.cfg.halt_cmd.clone(),
                 };
                 eprintln!("uinitconverterd: {id} requested, running: {cmd}");
-                let _ = tokio::process::Command::new("/bin/sh").arg("-c").arg(cmd).spawn();
+                let _ = tokio::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(cmd)
+                    .spawn();
                 return "done";
             }
         }
@@ -706,7 +828,13 @@ impl Daemon {
             // logout).
             let active = || async {
                 match self.dynamic_kind(id) {
-                    Some(Kind::Oneshot) => self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false),
+                    Some(Kind::Oneshot) => self
+                        .dynamic
+                        .lock()
+                        .unwrap()
+                        .get(id)
+                        .map(|d| d.active)
+                        .unwrap_or(false),
                     Some(_) => self.svstat(id).await.map(|s| s.up).unwrap_or(false),
                     None => false,
                 }
@@ -718,7 +846,13 @@ impl Daemon {
                     if self.is_transient_file(unit) {
                         self.remove_transient_file(id);
                     }
-                    self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitRemoved", &(id.to_string(), op(unit_path(id)))).await;
+                    self.emit(
+                        MANAGER_PATH,
+                        MANAGER_IFACE,
+                        "UnitRemoved",
+                        &(id.to_string(), op(unit_path(id))),
+                    )
+                    .await;
                     r
                 }
                 "restart" => self.dyn_restart(id, unit).await,
@@ -770,7 +904,10 @@ impl Daemon {
     /// unit inactive (systemd's job result "invalid").
     async fn reload_if_active(&self, id: &str, unit: &Unit) -> &'static str {
         let active = self.active_atoms().await;
-        if !matches!(self.unit_status(id, &active, unit).await.active, "active" | "reloading") {
+        if !matches!(
+            self.unit_status(id, &active, unit).await.active,
+            "active" | "reloading"
+        ) {
             return "invalid";
         }
         self.do_reload(id).await
@@ -779,25 +916,47 @@ impl Daemon {
     async fn finish_job(&self, job: u32, id: &str, result: &str) {
         self.jobs.lock().unwrap().remove(&job);
         self.forget_unit_state(id);
-        self.emit(MANAGER_PATH, MANAGER_IFACE, "JobRemoved", &(job, op(job_path(job)), id.to_string(), result.to_string()))
-            .await;
+        self.emit(
+            MANAGER_PATH,
+            MANAGER_IFACE,
+            "JobRemoved",
+            &(job, op(job_path(job)), id.to_string(), result.to_string()),
+        )
+        .await;
         let (_, unit) = self.load_unit(id);
         let active = self.active_atoms().await;
         let st = self.unit_status(id, &active, &unit).await;
         let mut changed: HashMap<String, Value<'static>> = HashMap::new();
         changed.insert("ActiveState".into(), Value::from(st.active.to_string()));
         changed.insert("SubState".into(), Value::from(st.sub.to_string()));
-        self.emit(&unit_path(id), PROPS_IFACE, "PropertiesChanged", &(UNIT_IFACE, changed, Vec::<String>::new()))
-            .await;
+        self.emit(
+            &unit_path(id),
+            PROPS_IFACE,
+            "PropertiesChanged",
+            &(UNIT_IFACE, changed, Vec::<String>::new()),
+        )
+        .await;
     }
 
     pub(super) fn unit_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        self.unit_locks.lock().unwrap().entry(id.to_string()).or_default().clone()
+        self.unit_locks
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_default()
+            .clone()
     }
 
     /// Run a registered job: wait for earlier jobs on the same unit, honour
     /// CancelJob while waiting, then emit JobRemoved.
-    async fn execute_job(&self, job: u32, id: &str, unit: &Unit, jtype: &str, mode: &str) -> &'static str {
+    async fn execute_job(
+        &self,
+        job: u32,
+        id: &str,
+        unit: &Unit,
+        jtype: &str,
+        mode: &str,
+    ) -> &'static str {
         let lock = self.unit_lock(id);
         let _guard = lock.lock().await;
         let canceled = {
@@ -810,7 +969,11 @@ impl Daemon {
                 _ => true,
             }
         };
-        let result = if canceled { "canceled" } else { self.run_job(id, unit, jtype, mode).await };
+        let result = if canceled {
+            "canceled"
+        } else {
+            self.run_job(id, unit, jtype, mode).await
+        };
         self.finish_job(job, id, result).await;
         result
     }
@@ -825,22 +988,42 @@ impl Daemon {
         Ok(())
     }
 
-    async fn job_method(&self, c: &Peer, msg: &Message, name: &str, mode: &str, jtype: &str) -> R<()> {
+    async fn job_method(
+        &self,
+        c: &Peer,
+        msg: &Message,
+        name: &str,
+        mode: &str,
+        jtype: &str,
+    ) -> R<()> {
         Self::valid_name(name)?;
         let id = self.index.read().unwrap().resolve(name).to_string();
-        self.mac_unit(c, msg, &id, access::job_access(jtype)).await?;
+        self.mac_unit(c, msg, &id, access::job_access(jtype))
+            .await?;
         self.require_unit(c, msg, &id, jtype).await?;
         let (id, unit) = self.check_job(name, jtype, true, true).await?;
         let job = self.new_job(&id, jtype);
         self.reply_job(c, msg, job).await?;
-        self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), id.clone())).await;
+        self.emit(
+            MANAGER_PATH,
+            MANAGER_IFACE,
+            "JobNew",
+            &(job, op(job_path(job)), id.clone()),
+        )
+        .await;
         self.execute_job(job, &id, &unit, jtype, mode).await;
         Ok(())
     }
 
     /// Runtime property changes: only Markers= is kept (package scriptlets
     /// mark units for EnqueueMarkedJobs); the others are accepted and ignored.
-    async fn set_unit_properties(&self, c: &Peer, msg: &Message, name: &str, props: &[(String, OwnedValue)]) -> R<()> {
+    async fn set_unit_properties(
+        &self,
+        c: &Peer,
+        msg: &Message,
+        name: &str,
+        props: &[(String, OwnedValue)],
+    ) -> R<()> {
         Self::valid_name(name)?;
         let id = self.index.read().unwrap().resolve(name).to_string();
         self.mac_unit(c, msg, &id, "start").await?;
@@ -850,7 +1033,10 @@ impl Daemon {
                 continue;
             }
             let words: Vec<String> = match &**v {
-                Value::Array(a) => a.iter().filter_map(|x| <&str>::try_from(x).ok().map(String::from)).collect(),
+                Value::Array(a) => a
+                    .iter()
+                    .filter_map(|x| <&str>::try_from(x).ok().map(String::from))
+                    .collect(),
                 _ => return Err(err(E_INVALID_ARGS, "Markers= takes a string array")),
             };
             let (id, unit) = self.load_unit(name);
@@ -858,7 +1044,8 @@ impl Daemon {
                 return Err(err(E_NO_UNIT, format!("Unit {name} not found.")));
             }
             let mut all = self.markers.lock().unwrap();
-            let m = apply_markers(all.get(&id).cloned().unwrap_or_default(), &words).map_err(|e| err(E_INVALID_ARGS, e))?;
+            let m = apply_markers(all.get(&id).cloned().unwrap_or_default(), &words)
+                .map_err(|e| err(E_INVALID_ARGS, e))?;
             if m.is_empty() {
                 all.remove(&id);
             } else {
@@ -877,10 +1064,20 @@ impl Daemon {
         let marked = std::mem::take(&mut *self.markers.lock().unwrap());
         let mut queued = Vec::new();
         for (name, m) in marked {
-            let jtype = if m.contains("needs-restart") { "try-restart" } else { "reload" };
+            let jtype = if m.contains("needs-restart") {
+                "try-restart"
+            } else {
+                "reload"
+            };
             // As systemd: a unit the caller may not act on is skipped.
-            if let Err(e) = self.mac_unit(c, msg, &name, access::job_access(jtype)).await {
-                eprintln!("uinitconverterd: {name}: failed to enqueue marked job: {}", e.msg);
+            if let Err(e) = self
+                .mac_unit(c, msg, &name, access::job_access(jtype))
+                .await
+            {
+                eprintln!(
+                    "uinitconverterd: {name}: failed to enqueue marked job: {}",
+                    e.msg
+                );
                 continue;
             }
             match self.check_job(&name, jtype, true, false).await {
@@ -890,7 +1087,8 @@ impl Daemon {
                 Err(e) => eprintln!("uinitconverterd: marked {name}: {}", e.msg),
             }
         }
-        let paths: Vec<ObjectPath<'static>> = queued.iter().map(|(job, ..)| op(job_path(*job))).collect();
+        let paths: Vec<ObjectPath<'static>> =
+            queued.iter().map(|(job, ..)| op(job_path(*job))).collect();
         if let Err(e) = self.reply(c, msg, &(paths,)).await {
             let mut jobs = self.jobs.lock().unwrap();
             for (job, ..) in &queued {
@@ -899,10 +1097,18 @@ impl Daemon {
             return Err(e);
         }
         for (job, id, ..) in &queued {
-            self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(*job, op(job_path(*job)), id.clone())).await;
+            self.emit(
+                MANAGER_PATH,
+                MANAGER_IFACE,
+                "JobNew",
+                &(*job, op(job_path(*job)), id.clone()),
+            )
+            .await;
         }
         futures_util::future::join_all(
-            queued.iter().map(|(job, id, unit, jtype)| self.execute_job(*job, id, unit, jtype, "fail")),
+            queued
+                .iter()
+                .map(|(job, id, unit, jtype)| self.execute_job(*job, id, unit, jtype, "fail")),
         )
         .await;
         Ok(())
@@ -913,7 +1119,13 @@ impl Daemon {
         let res = match self.check_job(&name, "start", false, true).await {
             Ok((id, unit)) => {
                 let job = self.new_job(&id, "start");
-                self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), id.clone())).await;
+                self.emit(
+                    MANAGER_PATH,
+                    MANAGER_IFACE,
+                    "JobNew",
+                    &(job, op(job_path(job)), id.clone()),
+                )
+                .await;
                 let r = self.execute_job(job, &id, &unit, "start", "replace").await;
                 if r == "done" {
                     Ok(())
@@ -974,14 +1186,22 @@ impl Daemon {
             for n in inside {
                 let (_, u) = self.load_unit(&n);
                 self.dyn_stop(&n, &u).await;
-                self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitRemoved", &(n.clone(), op(unit_path(&n)))).await;
+                self.emit(
+                    MANAGER_PATH,
+                    MANAGER_IFACE,
+                    "UnitRemoved",
+                    &(n.clone(), op(unit_path(&n))),
+                )
+                .await;
             }
             let scopes: Vec<String> = self
                 .transient
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|(n, t)| t.kind == "scope" && t.cgroup.starts_with(&dir) && n.as_str() != id)
+                .filter(|(n, t)| {
+                    t.kind == "scope" && t.cgroup.starts_with(&dir) && n.as_str() != id
+                })
                 .map(|(n, _)| n.clone())
                 .collect();
             for sc in scopes {
@@ -993,7 +1213,13 @@ impl Daemon {
             crate::cgroup::remove(&dir);
             self.transient.lock().unwrap().remove(id);
             let _ = std::fs::remove_dir_all(self.cfg.unit_run_dir(id));
-            self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitRemoved", &(id.to_string(), op(unit_path(id)))).await;
+            self.emit(
+                MANAGER_PATH,
+                MANAGER_IFACE,
+                "UnitRemoved",
+                &(id.to_string(), op(unit_path(id))),
+            )
+            .await;
             return;
         }
         crate::cgroup::kill_all(&dir, libc::SIGTERM, 0);
@@ -1016,18 +1242,24 @@ impl Daemon {
         self.mac_check(c, msg, None, "start").await?;
         self.require_privileged(c, msg).await?;
         type Aux = Vec<(String, Vec<(String, OwnedValue)>)>;
-        let (name, mode, props, aux): (String, String, Vec<(String, OwnedValue)>, Aux) = Self::args(msg)?;
+        let (name, mode, props, aux): (String, String, Vec<(String, OwnedValue)>, Aux) =
+            Self::args(msg)?;
         // The name becomes a cgroup and a state directory: as for the job
         // methods, only valid unit names (no '/', no "..").
         Self::valid_name(&name)?;
         if name.ends_with(".service") || name.ends_with(".timer") || name.ends_with(".path") {
-            return self.start_transient_file(c, msg, &name, &mode, &props, &aux).await;
+            return self
+                .start_transient_file(c, msg, &name, &mode, &props, &aux)
+                .await;
         }
         let kind: &'static str = if name.ends_with(".scope") {
             "scope"
         } else if name.ends_with(".slice") {
             if crate::cgroup::slice_path(&name).as_os_str().is_empty() {
-                return Err(err(E_INVALID_ARGS, "The root slice cannot be created as a transient unit."));
+                return Err(err(
+                    E_INVALID_ARGS,
+                    "The root slice cannot be created as a transient unit.",
+                ));
             }
             "slice"
         } else {
@@ -1037,16 +1269,26 @@ impl Daemon {
             ));
         };
         if self.transient.lock().unwrap().contains_key(&name) {
-            return Err(err("org.freedesktop.systemd1.UnitExists", format!("Unit {name} already exists.")));
+            return Err(err(
+                "org.freedesktop.systemd1.UnitExists",
+                format!("Unit {name} already exists."),
+            ));
         }
         let mut pids: Vec<u32> = Vec::new();
-        let mut slice = if kind == "scope" { "system.slice".to_string() } else { String::new() };
+        let mut slice = if kind == "scope" {
+            "system.slice".to_string()
+        } else {
+            String::new()
+        };
         let mut description = name.clone();
         let mut send_sighup = false;
         for (k, v) in &props {
             match k.as_str() {
                 "PIDs" => {
-                    if let Ok(list) = <Vec<u32>>::try_from(v.try_clone().map_err(|e| err(E_INVALID_ARGS, e.to_string()))?) {
+                    if let Ok(list) = <Vec<u32>>::try_from(
+                        v.try_clone()
+                            .map_err(|e| err(E_INVALID_ARGS, e.to_string()))?,
+                    ) {
                         pids.extend(list);
                     }
                 }
@@ -1079,10 +1321,14 @@ impl Daemon {
             }
             crate::cgroup::unit_cgroup_dir(&name, &slice)
         };
-        std::fs::create_dir_all(&dir).map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
         for p in &pids {
             if let Err(e) = std::fs::write(dir.join("cgroup.procs"), p.to_string()) {
-                return Err(err(E_FAILED, format!("cannot move PID {p} into {}: {e}", dir.display())));
+                return Err(err(
+                    E_FAILED,
+                    format!("cannot move PID {p} into {}: {e}", dir.display()),
+                ));
             }
         }
         let st = state::for_unit(&self.cfg.run_dir, &name);
@@ -1090,13 +1336,31 @@ impl Daemon {
         if kind == "slice" {
             slice = crate::cgroup::parent_slice(&name);
         }
-        let t = Transient { kind, cgroup: dir, send_sighup, slice, description };
+        let t = Transient {
+            kind,
+            cgroup: dir,
+            send_sighup,
+            slice,
+            description,
+        };
         transient::save_scope(&self.cfg.run_dir, &name, &t);
         self.transient.lock().unwrap().insert(name.clone(), t);
         let job = self.new_job(&name, "start");
         self.reply_job(c, msg, job).await?;
-        self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitNew", &(name.clone(), op(unit_path(&name)))).await;
-        self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), name.clone())).await;
+        self.emit(
+            MANAGER_PATH,
+            MANAGER_IFACE,
+            "UnitNew",
+            &(name.clone(), op(unit_path(&name))),
+        )
+        .await;
+        self.emit(
+            MANAGER_PATH,
+            MANAGER_IFACE,
+            "JobNew",
+            &(job, op(job_path(job)), name.clone()),
+        )
+        .await;
         self.finish_job(job, &name, "done").await;
         Ok(())
     }
@@ -1116,7 +1380,10 @@ impl Daemon {
         }
         for n in std::iter::once(name).chain(aux.iter().map(|(n, _)| n.as_str())) {
             if self.kind_of(n).is_some() || self.dynamic_kind(n).is_some() {
-                return Err(err("org.freedesktop.systemd1.UnitExists", format!("Unit {n} already exists.")));
+                return Err(err(
+                    "org.freedesktop.systemd1.UnitExists",
+                    format!("Unit {n} already exists."),
+                ));
             }
         }
         self.write_transient(name, props, aux).map_err(|e| {
@@ -1131,7 +1398,11 @@ impl Daemon {
         let (id, unit) = self.load_unit(name);
         if !unit.is_loaded() {
             self.remove_transient_file(name);
-            return Err(err(E_LOAD_FAILED, unit.load_error.unwrap_or_else(|| format!("Unit {name} failed to load."))));
+            return Err(err(
+                E_LOAD_FAILED,
+                unit.load_error
+                    .unwrap_or_else(|| format!("Unit {name} failed to load.")),
+            ));
         }
         if let Err(e) = self.store_stdio(&id, props) {
             self.remove_transient_file(&id);
@@ -1142,8 +1413,20 @@ impl Daemon {
             self.remove_transient_file(&id);
             return Err(e);
         }
-        self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitNew", &(id.clone(), op(unit_path(&id)))).await;
-        self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), id.clone())).await;
+        self.emit(
+            MANAGER_PATH,
+            MANAGER_IFACE,
+            "UnitNew",
+            &(id.clone(), op(unit_path(&id))),
+        )
+        .await;
+        self.emit(
+            MANAGER_PATH,
+            MANAGER_IFACE,
+            "JobNew",
+            &(job, op(job_path(job)), id.clone()),
+        )
+        .await;
         self.execute_job(job, &id, &unit, "start", mode).await;
         Ok(())
     }
@@ -1156,13 +1439,21 @@ impl Daemon {
     async fn attach_processes(&self, c: &Peer, msg: &Message) -> R<()> {
         let (name, sub, pids): (String, String, Vec<u32>) = Self::args(msg)?;
         let Some(sub) = subcgroup(&sub) else {
-            return Err(err(E_INVALID_ARGS, format!("Control group path is not normalized: {sub}")));
+            return Err(err(
+                E_INVALID_ARGS,
+                format!("Control group path is not normalized: {sub}"),
+            ));
         };
         let name = if name.is_empty() {
             let pid = self.caller_pid(c, msg).await.unwrap_or(0);
             util::proc_cgroup(pid)
                 .and_then(|cg| unit_of_cgroup(&cg))
-                .ok_or_else(|| err(E_NO_UNIT_FOR_PID, format!("PID {pid} does not belong to any loaded unit.")))?
+                .ok_or_else(|| {
+                    err(
+                        E_NO_UNIT_FOR_PID,
+                        format!("PID {pid} does not belong to any loaded unit."),
+                    )
+                })?
         } else {
             name
         };
@@ -1176,12 +1467,19 @@ impl Daemon {
         };
         let own = |pid: &u32| {
             use std::os::unix::fs::MetadataExt;
-            std::fs::metadata(format!("/proc/{pid}")).ok().map(|m| m.uid()) == caller
-                && util::proc_cgroup(*pid).and_then(|cg| unit_of_cgroup(&cg)).as_deref() == Some(id.as_str())
+            std::fs::metadata(format!("/proc/{pid}"))
+                .ok()
+                .map(|m| m.uid())
+                == caller
+                && util::proc_cgroup(*pid)
+                    .and_then(|cg| unit_of_cgroup(&cg))
+                    .as_deref()
+                    == Some(id.as_str())
         };
         let delegated = caller.is_some_and(|u| u != 0)
             && caller_unit.as_deref() == Some(id.as_str())
-            && (unit.get_bool("Service", "Delegate", false) || unit.get_bool("Scope", "Delegate", false))
+            && (unit.get_bool("Service", "Delegate", false)
+                || unit.get_bool("Scope", "Delegate", false))
             && pids.iter().all(own);
         if !delegated {
             self.require_privileged(c, msg).await?;
@@ -1190,7 +1488,8 @@ impl Daemon {
         if !sub.is_empty() {
             dir = dir.join(sub);
         }
-        std::fs::create_dir_all(&dir).map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
         for p in pids {
             std::fs::write(dir.join("cgroup.procs"), p.to_string())
                 .map_err(|e| err(E_FAILED, format!("cannot move PID {p}: {e}")))?;
@@ -1211,7 +1510,9 @@ impl Daemon {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(_, t)| t.kind == "scope" && t.cgroup != root && !util::cgroup_pids(&t.cgroup).is_empty())
+            .filter(|(_, t)| {
+                t.kind == "scope" && t.cgroup != root && !util::cgroup_pids(&t.cgroup).is_empty()
+            })
             .map(|(n, t)| (n.clone(), t.cgroup.clone()))
             .collect();
         for (name, _) in &scopes {
@@ -1223,7 +1524,10 @@ impl Daemon {
         if left > 0 {
             eprintln!("uinitconverterd: {left} scopes still not empty at shutdown, going on");
         } else if t.elapsed() >= Duration::from_secs(2) {
-            eprintln!("uinitconverterd: stopping the scopes took {:.1} s", t.elapsed().as_secs_f64());
+            eprintln!(
+                "uinitconverterd: stopping the scopes took {:.1} s",
+                t.elapsed().as_secs_f64()
+            );
         }
     }
 
@@ -1240,7 +1544,13 @@ impl Daemon {
             self.transient.lock().unwrap().remove(&name);
             crate::cgroup::remove(&dir);
             let _ = std::fs::remove_dir_all(self.cfg.unit_run_dir(&name));
-            self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitRemoved", &(name.clone(), op(unit_path(&name)))).await;
+            self.emit(
+                MANAGER_PATH,
+                MANAGER_IFACE,
+                "UnitRemoved",
+                &(name.clone(), op(unit_path(&name))),
+            )
+            .await;
         }
     }
 
@@ -1266,11 +1576,20 @@ impl Daemon {
             op(unit_path(id)),
             job_id,
             job_type,
-            op(if job_id > 0 { job_path(job_id) } else { "/".into() }),
+            op(if job_id > 0 {
+                job_path(job_id)
+            } else {
+                "/".into()
+            }),
         )
     }
 
-    async fn list_units(&self, states: &[String], patterns: &[String], names: Option<&[String]>) -> Vec<UnitEntry> {
+    async fn list_units(
+        &self,
+        states: &[String],
+        patterns: &[String],
+        names: Option<&[String]>,
+    ) -> Vec<UnitEntry> {
         let active = self.active_atoms().await;
         let ids: Vec<String> = match names {
             Some(n) => n.to_vec(),
@@ -1283,12 +1602,16 @@ impl Daemon {
             .collect();
         // Status queries spawn s6-svstat: run them concurrently.
         let entries = futures_util::future::join_all(
-            selected.iter().map(|(id, unit)| self.unit_entry(id, unit, &active)),
+            selected
+                .iter()
+                .map(|(id, unit)| self.unit_entry(id, unit, &active)),
         )
         .await;
         entries
             .into_iter()
-            .filter(|e| states.is_empty() || states.iter().any(|s| *s == e.2 || *s == e.3 || *s == e.4))
+            .filter(|e| {
+                states.is_empty() || states.iter().any(|s| *s == e.2 || *s == e.3 || *s == e.4)
+            })
             .collect()
     }
 
@@ -1297,7 +1620,11 @@ impl Daemon {
         let mut candidates = Vec::new();
         for id in ids {
             let st = state::for_unit(&self.cfg.run_dir, &id);
-            if st.get(keys::RESULT).map(|r| !matches!(r.as_str(), "success" | "running")).unwrap_or(false) {
+            if st
+                .get(keys::RESULT)
+                .map(|r| !matches!(r.as_str(), "success" | "running"))
+                .unwrap_or(false)
+            {
                 candidates.push(id);
             }
         }
@@ -1332,12 +1659,17 @@ impl Daemon {
             let active = self.active_atoms().await;
             return Ok(self.unit_props(&id, &unit, &active, only).await);
         }
-        if let Some(job) = path.strip_prefix(JOB_PREFIX).and_then(|j| j.parse::<u32>().ok()) {
+        if let Some(job) = path
+            .strip_prefix(JOB_PREFIX)
+            .and_then(|j| j.parse::<u32>().ok())
+        {
             // A finished job's object is gone: systemd (sd-bus) answers
             // UnknownObject here, not NoSuchJob, and logind's
             // manager_job_is_active() only treats UnknownObject as "done";
             // anything else keeps the user in "closing" forever.
-            let p = self.job_props(job).ok_or_else(|| err(E_UNKNOWN_OBJECT, format!("Unknown object '{path}'.")))?;
+            let p = self
+                .job_props(job)
+                .ok_or_else(|| err(E_UNKNOWN_OBJECT, format!("Unknown object '{path}'.")))?;
             let mut m = Ifaces::new();
             m.insert("org.freedesktop.systemd1.Job".into(), p);
             return Ok(m);
@@ -1369,9 +1701,15 @@ impl Daemon {
                         }
                     }
                 }
-                Err(err(E_UNKNOWN_PROPERTY, format!("Unknown property {iface}.{prop}")))
+                Err(err(
+                    E_UNKNOWN_PROPERTY,
+                    format!("Unknown property {iface}.{prop}"),
+                ))
             }
-            "Set" => Err(err(E_READ_ONLY, "Properties are read-only in uinitconverter")),
+            "Set" => Err(err(
+                E_READ_ONLY,
+                "Properties are read-only in uinitconverter",
+            )),
             _ => Err(err(E_UNKNOWN_METHOD, format!("Unknown method {member}"))),
         }
     }
@@ -1383,11 +1721,21 @@ impl Daemon {
             "/org/freedesktop" => introspect::node("", &["systemd1".into()]),
             MANAGER_PATH => introspect::node(introspect::MANAGER, &["unit".into(), "job".into()]),
             "/org/freedesktop/systemd1/unit" => {
-                let kids: Vec<String> = self.known_units().iter().map(|u| util::bus_label_escape(u)).collect();
+                let kids: Vec<String> = self
+                    .known_units()
+                    .iter()
+                    .map(|u| util::bus_label_escape(u))
+                    .collect();
                 introspect::node("", &kids)
             }
             "/org/freedesktop/systemd1/job" => {
-                let kids: Vec<String> = self.jobs.lock().unwrap().keys().map(|k| k.to_string()).collect();
+                let kids: Vec<String> = self
+                    .jobs
+                    .lock()
+                    .unwrap()
+                    .keys()
+                    .map(|k| k.to_string())
+                    .collect();
                 introspect::node("", &kids)
             }
             p if p.starts_with(UNIT_PREFIX) => introspect::node(introspect::UNIT, &[]),
@@ -1401,9 +1749,18 @@ impl Daemon {
 
     async fn handle_call(self: Arc<Self>, c: Peer, msg: Message) {
         let hdr = msg.header();
-        let path = hdr.path().map(|p| p.as_str().to_string()).unwrap_or_default();
-        let iface = hdr.interface().map(|i| i.as_str().to_string()).unwrap_or_default();
-        let member = hdr.member().map(|m| m.as_str().to_string()).unwrap_or_default();
+        let path = hdr
+            .path()
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_default();
+        let iface = hdr
+            .interface()
+            .map(|i| i.as_str().to_string())
+            .unwrap_or_default();
+        let member = hdr
+            .member()
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
         drop(hdr);
         let r = self.dispatch(&c, &msg, &path, &iface, &member).await;
         if let Err(e) = r {
@@ -1411,12 +1768,26 @@ impl Daemon {
         }
     }
 
-    async fn dispatch(&self, c: &Peer, msg: &Message, path: &str, iface: &str, member: &str) -> R<()> {
+    async fn dispatch(
+        &self,
+        c: &Peer,
+        msg: &Message,
+        path: &str,
+        iface: &str,
+        member: &str,
+    ) -> R<()> {
         // systemd's mac_selinux_filter: the built-in interfaces of every
         // object below the manager are checked against the manager.
-        let builtin = matches!(iface, PROPS_IFACE | "org.freedesktop.DBus.Introspectable" | "org.freedesktop.DBus.Peer");
+        let builtin = matches!(
+            iface,
+            PROPS_IFACE | "org.freedesktop.DBus.Introspectable" | "org.freedesktop.DBus.Peer"
+        );
         if builtin && access::path_below(path, MANAGER_PATH) {
-            let perm = if iface == PROPS_IFACE && member == "Set" { "reload" } else { "status" };
+            let perm = if iface == PROPS_IFACE && member == "Set" {
+                "reload"
+            } else {
+                "status"
+            };
             self.mac_check(c, msg, None, perm).await?;
         }
         match iface {
@@ -1458,7 +1829,10 @@ impl Daemon {
                 return self.unit_method(c, msg, &name, member).await;
             }
         }
-        if let Some(job) = path.strip_prefix(JOB_PREFIX).and_then(|j| j.parse::<u32>().ok()) {
+        if let Some(job) = path
+            .strip_prefix(JOB_PREFIX)
+            .and_then(|j| j.parse::<u32>().ok())
+        {
             if !self.jobs.lock().unwrap().contains_key(&job) {
                 return Err(err(E_UNKNOWN_OBJECT, format!("Unknown object '{path}'.")));
             }
@@ -1471,7 +1845,10 @@ impl Daemon {
                 return self.reply(c, msg, &()).await;
             }
         }
-        Err(err(E_UNKNOWN_METHOD, format!("Unknown method {member} or interface {iface}.")))
+        Err(err(
+            E_UNKNOWN_METHOD,
+            format!("Unknown method {member} or interface {iface}."),
+        ))
     }
 
     async fn unit_method(&self, c: &Peer, msg: &Message, name: &str, member: &str) -> R<()> {
@@ -1520,14 +1897,21 @@ impl Daemon {
                 j.canceled = true;
                 Ok(())
             }
-            Some(_) => Err(err(E_NOT_SUPPORTED, "Job is already running and cannot be cancelled")),
+            Some(_) => Err(err(
+                E_NOT_SUPPORTED,
+                "Job is already running and cannot be cancelled",
+            )),
         }
     }
 
     fn reset_failed(&self, name: &str) {
         let (id, _) = self.load_unit(name);
         let st = state::for_unit(&self.cfg.run_dir, &id);
-        if st.get(keys::RESULT).map(|r| r != "success").unwrap_or(false) {
+        if st
+            .get(keys::RESULT)
+            .map(|r| r != "success")
+            .unwrap_or(false)
+        {
             st.set(keys::RESULT, "success");
         }
         // A soft-failed start: inactive from now on, but still restarted by
@@ -1546,13 +1930,17 @@ impl Daemon {
         // The supervised pid is a wrapper for PAMName=, Type=forking and
         // MAINPID=; the runner records the real main process.
         let main = if self.kind_of(&id) == Some(Kind::Longrun) {
-            self.svstat(&id).await.map(|s| s.pid).filter(|&p| p > 0).map(|p| {
-                state::for_unit(&self.cfg.run_dir, &id)
-                    .get(keys::MAIN_PID)
-                    .and_then(|m| m.parse::<u32>().ok())
-                    .filter(|&m| m > 1 && std::path::Path::new(&format!("/proc/{m}")).exists())
-                    .unwrap_or(p)
-            })
+            self.svstat(&id)
+                .await
+                .map(|s| s.pid)
+                .filter(|&p| p > 0)
+                .map(|p| {
+                    state::for_unit(&self.cfg.run_dir, &id)
+                        .get(keys::MAIN_PID)
+                        .and_then(|m| m.parse::<u32>().ok())
+                        .filter(|&m| m > 1 && std::path::Path::new(&format!("/proc/{m}")).exists())
+                        .unwrap_or(p)
+                })
         } else {
             None
         };
@@ -1588,7 +1976,8 @@ impl Daemon {
 
     async fn file_op_done(&self) {
         self.invalidate_caches();
-        self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitFilesChanged", &()).await;
+        self.emit(MANAGER_PATH, MANAGER_IFACE, "UnitFilesChanged", &())
+            .await;
     }
 
     fn write_manager_env(&self) {
@@ -1596,7 +1985,11 @@ impl Daemon {
         let mut text = String::new();
         for e in env {
             if let Some((k, v)) = e.split_once('=') {
-                let v = v.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$").replace('`', "\\`");
+                let v = v
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('$', "\\$")
+                    .replace('`', "\\`");
                 text.push_str(&format!("{k}=\"{v}\"\n"));
             }
         }
@@ -1608,8 +2001,12 @@ impl Daemon {
             "GetUnit" => {
                 let (name,): (String,) = Self::args(msg)?;
                 let (id, unit) = self.load_unit(&name);
-                let known = self.kind_of(&id).is_some() || self.transient.lock().unwrap().contains_key(&id);
-                if !known && (unit.load_state == LoadState::NotFound || crate::loader::parse_name(&name).is_none()) {
+                let known =
+                    self.kind_of(&id).is_some() || self.transient.lock().unwrap().contains_key(&id);
+                if !known
+                    && (unit.load_state == LoadState::NotFound
+                        || crate::loader::parse_name(&name).is_none())
+                {
                     return Err(err(E_NO_UNIT, format!("Unit {name} not loaded.")));
                 }
                 self.mac_check(c, msg, Some(&unit), "status").await?;
@@ -1632,11 +2029,19 @@ impl Daemon {
                         self.mac_unit(c, msg, &u, "status").await?;
                         self.reply(c, msg, &(op(unit_path(&u)),)).await
                     }
-                    None => Err(err(E_NO_UNIT_FOR_PID, format!("PID {pid} does not belong to any loaded unit."))),
+                    None => Err(err(
+                        E_NO_UNIT_FOR_PID,
+                        format!("PID {pid} does not belong to any loaded unit."),
+                    )),
                 }
             }
-            "StartUnit" | "StopUnit" | "ReloadUnit" | "RestartUnit" | "TryRestartUnit"
-            | "ReloadOrRestartUnit" | "ReloadOrTryRestartUnit" => {
+            "StartUnit"
+            | "StopUnit"
+            | "ReloadUnit"
+            | "RestartUnit"
+            | "TryRestartUnit"
+            | "ReloadOrRestartUnit"
+            | "ReloadOrTryRestartUnit" => {
                 let (name, mode): (String, String) = Self::args(msg)?;
                 let jtype = match member {
                     "StartUnit" => "start",
@@ -1680,21 +2085,38 @@ impl Daemon {
                 let dir = self.cgroup_dir_of(&id, &unit);
                 let procs: Vec<(String, u32, String)> = util::cgroup_pids(&dir)
                     .into_iter()
-                    .map(|p| (util::proc_cgroup(p).unwrap_or_default(), p, util::proc_cmdline(p)))
+                    .map(|p| {
+                        (
+                            util::proc_cgroup(p).unwrap_or_default(),
+                            p,
+                            util::proc_cmdline(p),
+                        )
+                    })
                     .collect();
                 self.reply(c, msg, &(procs,)).await
             }
             "StartTransientUnit" => self.start_transient(c, msg).await,
             "AttachProcessesToUnit" => self.attach_processes(c, msg).await,
             "SetUnitProperties" => {
-                let (name, _runtime, props): (String, bool, Vec<(String, OwnedValue)>) = Self::args(msg)?;
+                let (name, _runtime, props): (String, bool, Vec<(String, OwnedValue)>) =
+                    Self::args(msg)?;
                 self.set_unit_properties(c, msg, &name, &props).await
             }
             "EnqueueMarkedJobs" => self.enqueue_marked(c, msg).await,
             // Reference counting is accepted and ignored.
             "RefUnit" | "UnrefUnit" | "AbandonScope" => {
                 let (name,): (String,) = Self::args(msg)?;
-                self.mac_unit(c, msg, &name, if member == "AbandonScope" { "stop" } else { "start" }).await?;
+                self.mac_unit(
+                    c,
+                    msg,
+                    &name,
+                    if member == "AbandonScope" {
+                        "stop"
+                    } else {
+                        "start"
+                    },
+                )
+                .await?;
                 self.require_privileged(c, msg).await?;
                 self.reply(c, msg, &()).await
             }
@@ -1722,27 +2144,49 @@ impl Daemon {
             }
             "ListJobs" => {
                 self.mac_check(c, msg, None, "status").await?;
-                let jobs: Vec<(u32, String, String, String, ObjectPath<'static>, ObjectPath<'static>)> = self
+                let jobs: Vec<(
+                    u32,
+                    String,
+                    String,
+                    String,
+                    ObjectPath<'static>,
+                    ObjectPath<'static>,
+                )> = self
                     .jobs
                     .lock()
                     .unwrap()
                     .values()
-                    .map(|j| (j.id, j.unit.clone(), j.jtype.clone(), j.state.to_string(), op(job_path(j.id)), op(unit_path(&j.unit))))
+                    .map(|j| {
+                        (
+                            j.id,
+                            j.unit.clone(),
+                            j.jtype.clone(),
+                            j.state.to_string(),
+                            op(job_path(j.id)),
+                            op(unit_path(&j.unit)),
+                        )
+                    })
                     .collect();
                 self.reply(c, msg, &(jobs,)).await
             }
             "ListUnits" => {
-                let v = self.visible_units(c, msg, self.list_units(&[], &[], None).await).await;
+                let v = self
+                    .visible_units(c, msg, self.list_units(&[], &[], None).await)
+                    .await;
                 self.reply(c, msg, &(v,)).await
             }
             "ListUnitsFiltered" => {
                 let (states,): (Vec<String>,) = Self::args(msg)?;
-                let v = self.visible_units(c, msg, self.list_units(&states, &[], None).await).await;
+                let v = self
+                    .visible_units(c, msg, self.list_units(&states, &[], None).await)
+                    .await;
                 self.reply(c, msg, &(v,)).await
             }
             "ListUnitsByPatterns" => {
                 let (states, patterns): (Vec<String>, Vec<String>) = Self::args(msg)?;
-                let v = self.visible_units(c, msg, self.list_units(&states, &patterns, None).await).await;
+                let v = self
+                    .visible_units(c, msg, self.list_units(&states, &patterns, None).await)
+                    .await;
                 self.reply(c, msg, &(v,)).await
             }
             "ListUnitsByNames" => {
@@ -1758,12 +2202,19 @@ impl Daemon {
             }
             "Reload" | "Reexecute" => {
                 self.mac_check(c, msg, None, "reload").await?;
-                self.authorize(c, msg, "org.freedesktop.systemd1.reload-daemon").await?;
+                self.authorize(c, msg, "org.freedesktop.systemd1.reload-daemon")
+                    .await?;
                 self.reload_db().await.map_err(|e| err(E_FAILED, e))?;
                 self.reply(c, msg, &()).await
             }
             "PowerOff" | "Reboot" | "Halt" => {
-                self.mac_check(c, msg, None, if member == "Reboot" { "reboot" } else { "halt" }).await?;
+                self.mac_check(
+                    c,
+                    msg,
+                    None,
+                    if member == "Reboot" { "reboot" } else { "halt" },
+                )
+                .await?;
                 self.require_privileged(c, msg).await?;
                 let cmd = match member {
                     "PowerOff" => self.cfg.poweroff_cmd.clone(),
@@ -1771,15 +2222,20 @@ impl Daemon {
                     _ => self.cfg.halt_cmd.clone(),
                 };
                 self.reply(c, msg, &()).await?;
-                let _ = tokio::process::Command::new("/bin/sh").arg("-c").arg(cmd).spawn();
+                let _ = tokio::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(cmd)
+                    .spawn();
                 Ok(())
             }
-            "KExec" | "SoftReboot" | "SwitchRoot" | "Exit" => {
-                Err(err(E_NOT_SUPPORTED, format!("{member} is not supported by uinitconverter")))
-            }
+            "KExec" | "SoftReboot" | "SwitchRoot" | "Exit" => Err(err(
+                E_NOT_SUPPORTED,
+                format!("{member} is not supported by uinitconverter"),
+            )),
             "SetEnvironment" | "UnsetEnvironment" | "UnsetAndSetEnvironment" => {
                 self.mac_check(c, msg, None, "reload").await?;
-                self.authorize(c, msg, "org.freedesktop.systemd1.set-environment").await?;
+                self.authorize(c, msg, "org.freedesktop.systemd1.set-environment")
+                    .await?;
                 let (unset, set): (Vec<String>, Vec<String>) = match member {
                     "SetEnvironment" => (Vec::new(), Self::args::<(Vec<String>,)>(msg)?.0),
                     "UnsetEnvironment" => (Self::args::<(Vec<String>,)>(msg)?.0, Vec::new()),
@@ -1813,7 +2269,8 @@ impl Daemon {
                     .filter(|(p, s)| {
                         let n = p.rsplit('/').next().unwrap_or(p);
                         (states.is_empty() || states.contains(s))
-                            && (patterns.is_empty() || patterns.iter().any(|pat| util::fnmatch(pat, n)))
+                            && (patterns.is_empty()
+                                || patterns.iter().any(|pat| util::fnmatch(pat, n)))
                     })
                     .collect();
                 self.reply(c, msg, &(v,)).await
@@ -1821,12 +2278,14 @@ impl Daemon {
             "GetUnitFileState" => {
                 self.mac_check(c, msg, None, "status").await?;
                 let (name,): (String,) = Self::args(msg)?;
-                let st = install::unit_file_state(&self.cfg, &name).map_err(|e| err(E_NO_UNIT, e))?;
+                let st =
+                    install::unit_file_state(&self.cfg, &name).map_err(|e| err(E_NO_UNIT, e))?;
                 let st = install::set_file_state(&self.cfg, &name, st);
                 self.reply(c, msg, &(st,)).await
             }
             "EnableUnitFiles" | "ReenableUnitFiles" | "EnableUnitFilesWithFlags" => {
-                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files").await?;
+                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files")
+                    .await?;
                 let (files, runtime, force) = if member == "EnableUnitFilesWithFlags" {
                     let (f, flags): (Vec<String>, u64) = Self::args(msg)?;
                     (f, flags & FLAG_RUNTIME != 0, flags & FLAG_FORCE != 0)
@@ -1835,23 +2294,32 @@ impl Daemon {
                 };
                 let mut all = Vec::new();
                 if member == "ReenableUnitFiles" {
-                    all.extend(install::disable(&self.cfg, &files, runtime).map_err(|e| err(E_FAILED, e))?);
+                    all.extend(
+                        install::disable(&self.cfg, &files, runtime)
+                            .map_err(|e| err(E_FAILED, e))?,
+                    );
                 }
-                let (info, ch) = install::enable(&self.cfg, &files, runtime, force).map_err(|e| err(E_FAILED, e))?;
+                let (info, ch) = install::enable(&self.cfg, &files, runtime, force)
+                    .map_err(|e| err(E_FAILED, e))?;
                 all.extend(ch);
                 self.reply(c, msg, &(info, changes(all))).await?;
                 self.file_op_done().await;
                 Ok(())
             }
-            "DisableUnitFiles" | "DisableUnitFilesWithFlags" | "DisableUnitFilesWithFlagsAndInstallInfo" => {
-                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files").await?;
+            "DisableUnitFiles"
+            | "DisableUnitFilesWithFlags"
+            | "DisableUnitFilesWithFlagsAndInstallInfo" => {
+                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files")
+                    .await?;
                 let (files, runtime) = if member == "DisableUnitFiles" {
                     Self::args::<(Vec<String>, bool)>(msg)?
                 } else {
                     let (f, flags): (Vec<String>, u64) = Self::args(msg)?;
                     (f, flags & FLAG_RUNTIME != 0)
                 };
-                let ch = changes(install::disable(&self.cfg, &files, runtime).map_err(|e| err(E_FAILED, e))?);
+                let ch = changes(
+                    install::disable(&self.cfg, &files, runtime).map_err(|e| err(E_FAILED, e))?,
+                );
                 if member == "DisableUnitFilesWithFlagsAndInstallInfo" {
                     self.reply(c, msg, &(true, ch)).await?;
                 } else {
@@ -1861,67 +2329,86 @@ impl Daemon {
                 Ok(())
             }
             "MaskUnitFiles" => {
-                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files").await?;
+                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files")
+                    .await?;
                 let (files, runtime, force): (Vec<String>, bool, bool) = Self::args(msg)?;
-                let ch = install::mask(&self.cfg, &files, runtime, force).map_err(|e| err(E_FAILED, e))?;
+                let ch = install::mask(&self.cfg, &files, runtime, force)
+                    .map_err(|e| err(E_FAILED, e))?;
                 self.reply(c, msg, &(changes(ch),)).await?;
                 self.file_op_done().await;
                 Ok(())
             }
             "UnmaskUnitFiles" => {
-                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files").await?;
+                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files")
+                    .await?;
                 let (files, runtime): (Vec<String>, bool) = Self::args(msg)?;
-                let ch = install::unmask(&self.cfg, &files, runtime).map_err(|e| err(E_FAILED, e))?;
+                let ch =
+                    install::unmask(&self.cfg, &files, runtime).map_err(|e| err(E_FAILED, e))?;
                 self.reply(c, msg, &(changes(ch),)).await?;
                 self.file_op_done().await;
                 Ok(())
             }
             "PresetUnitFiles" | "PresetUnitFilesWithMode" => {
-                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files").await?;
+                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files")
+                    .await?;
                 let (files, mode, runtime, force) = if member == "PresetUnitFiles" {
                     let (f, r, fo): (Vec<String>, bool, bool) = Self::args(msg)?;
                     (f, "full".to_string(), r, fo)
                 } else {
                     Self::args::<(Vec<String>, String, bool, bool)>(msg)?
                 };
-                let (info, ch) = install::preset(&self.cfg, &files, &mode, runtime, force).map_err(|e| err(E_FAILED, e))?;
+                let (info, ch) = install::preset(&self.cfg, &files, &mode, runtime, force)
+                    .map_err(|e| err(E_FAILED, e))?;
                 self.reply(c, msg, &(info, changes(ch))).await?;
                 self.file_op_done().await;
                 Ok(())
             }
             "PresetAllUnitFiles" => {
                 self.mac_check(c, msg, None, "enable").await?;
-                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files").await?;
+                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files")
+                    .await?;
                 let (mode, runtime, force): (String, bool, bool) = Self::args(msg)?;
                 let names: Vec<String> = install::list_unit_files(&self.cfg)
                     .into_iter()
                     .filter(|(_, s)| s == "enabled" || s == "disabled")
                     .map(|(p, _)| p.rsplit('/').next().unwrap_or(&p).to_string())
                     .collect();
-                let (_, ch) = install::preset(&self.cfg, &names, &mode, runtime, force).map_err(|e| err(E_FAILED, e))?;
+                let (_, ch) = install::preset(&self.cfg, &names, &mode, runtime, force)
+                    .map_err(|e| err(E_FAILED, e))?;
                 self.reply(c, msg, &(changes(ch),)).await?;
                 self.file_op_done().await;
                 Ok(())
             }
             "GetDefaultTarget" => {
                 self.mac_check(c, msg, None, "status").await?;
-                let t = install::get_default_target(&self.cfg).ok_or_else(|| err(E_NO_UNIT, "No default target"))?;
+                let t = install::get_default_target(&self.cfg)
+                    .ok_or_else(|| err(E_NO_UNIT, "No default target"))?;
                 self.reply(c, msg, &(t,)).await
             }
             "SetDefaultTarget" => {
                 self.mac_check(c, msg, None, "enable").await?;
-                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files").await?;
+                self.authorize(c, msg, "org.freedesktop.systemd1.manage-unit-files")
+                    .await?;
                 let (name, _force): (String, bool) = Self::args(msg)?;
-                let ch = install::set_default_target(&self.cfg, &name).map_err(|e| err(E_FAILED, e))?;
+                let ch =
+                    install::set_default_target(&self.cfg, &name).map_err(|e| err(E_FAILED, e))?;
                 self.reply(c, msg, &(changes(ch),)).await?;
                 self.file_op_done().await;
                 Ok(())
             }
             "Dump" => {
                 self.mac_check(c, msg, None, "status").await?;
-                self.reply(c, msg, &("uinitconverter does not implement Dump\n".to_string(),)).await
+                self.reply(
+                    c,
+                    msg,
+                    &("uinitconverter does not implement Dump\n".to_string(),),
+                )
+                .await
             }
-            _ => Err(err(E_UNKNOWN_METHOD, format!("Unknown method {member} or interface {MANAGER_IFACE}."))),
+            _ => Err(err(
+                E_UNKNOWN_METHOD,
+                format!("Unknown method {member} or interface {MANAGER_IFACE}."),
+            )),
         }
     }
 }
@@ -1939,10 +2426,15 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         Bus::Address(a) => zbus::connection::Builder::address(a.as_str()),
     }
     .map_err(|e| e.to_string())?;
-    let conn = builder.build().await.map_err(|e| format!("connecting to D-Bus: {e}"))?;
+    let conn = builder
+        .build()
+        .await
+        .map_err(|e| format!("connecting to D-Bus: {e}"))?;
     let mut stream = MessageStream::from(&conn);
 
-    let dbus = zbus::fdo::DBusProxy::new(&conn).await.map_err(|e| e.to_string())?;
+    let dbus = zbus::fdo::DBusProxy::new(&conn)
+        .await
+        .map_err(|e| e.to_string())?;
     let rule = zbus::MatchRule::builder()
         .msg_type(MsgType::Signal)
         .interface("org.freedesktop.systemd1.Activator")
@@ -1973,7 +2465,10 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         label_cache: Mutex::new(HashMap::new()),
         started: (util::now_realtime_usec(), util::now_monotonic_usec()),
         boot_done: AtomicBool::new(true),
-        boot_finished: Mutex::new(Some((util::now_realtime_usec(), util::now_monotonic_usec()))),
+        boot_finished: Mutex::new(Some((
+            util::now_realtime_usec(),
+            util::now_monotonic_usec(),
+        ))),
         private: Mutex::new(Vec::new()),
         dynamic: Mutex::new(BTreeMap::new()),
         markers: Mutex::new(BTreeMap::new()),
@@ -1985,7 +2480,11 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     });
     daemon.verify_state_reader().await;
     daemon.load_dynamic();
-    daemon.transient.lock().unwrap().extend(transient::load_scopes(&daemon.cfg.run_dir));
+    daemon
+        .transient
+        .lock()
+        .unwrap()
+        .extend(transient::load_scopes(&daemon.cfg.run_dir));
     if let Some(def) = daemon.index.read().unwrap().default_target.clone() {
         daemon.started_targets.lock().unwrap().insert(def);
     }
@@ -2015,7 +2514,10 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     let store_path = daemon.cfg.run_dir.join("fdstore");
     if !crate::fdstore::is_served(&store_path) {
         let cfg = daemon.cfg.clone();
-        if let Err(e) = daemon.fdstore.serve(&store_path, move |key| crate::fdstore::limit(&cfg, key)) {
+        if let Err(e) = daemon
+            .fdstore
+            .serve(&store_path, move |key| crate::fdstore::limit(&cfg, key))
+        {
             eprintln!("uinitconverterd: fd store unavailable: {e}");
         }
     }
@@ -2109,7 +2611,9 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
             let _ = h.await;
         }
         Some(_) => {}
-        None if daemon.cfg.run_dir.join("shutting-down").exists() => daemon.stop_dynamic_at_shutdown().await,
+        None if daemon.cfg.run_dir.join("shutting-down").exists() => {
+            daemon.stop_dynamic_at_shutdown().await
+        }
         None => {}
     }
     if let Some(flag) = &daemon.cfg.booted_flag {
@@ -2134,8 +2638,14 @@ mod tests {
     fn markers_syntax() {
         let m = apply_markers(set(&["needs-reload"]), &words(&["+needs-restart"])).unwrap();
         assert_eq!(m, set(&["needs-reload", "needs-restart"]));
-        assert_eq!(apply_markers(m.clone(), &words(&["-needs-reload"])).unwrap(), set(&["needs-restart"]));
-        assert_eq!(apply_markers(m.clone(), &words(&["needs-reload"])).unwrap(), set(&["needs-reload"]));
+        assert_eq!(
+            apply_markers(m.clone(), &words(&["-needs-reload"])).unwrap(),
+            set(&["needs-restart"])
+        );
+        assert_eq!(
+            apply_markers(m.clone(), &words(&["needs-reload"])).unwrap(),
+            set(&["needs-reload"])
+        );
         assert_eq!(apply_markers(m, &[]).unwrap(), set(&[]));
         assert!(apply_markers(set(&[]), &words(&["+needs-restart", "needs-reload"])).is_err());
         assert!(apply_markers(set(&[]), &words(&["+bogus"])).is_err());
@@ -2161,16 +2671,25 @@ mod tests {
         std::fs::create_dir_all(&empty).unwrap();
         std::fs::write(busy.join("cgroup.procs"), "123\n").unwrap();
         std::fs::write(empty.join("cgroup.procs"), "").unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let dirs = [busy.clone(), empty.clone()];
             // Nothing to wait for: at once.
             let t = std::time::Instant::now();
-            assert_eq!(wait_cgroups_empty(std::slice::from_ref(&empty), Duration::from_secs(5)).await, 0);
+            assert_eq!(
+                wait_cgroups_empty(std::slice::from_ref(&empty), Duration::from_secs(5)).await,
+                0
+            );
             assert!(t.elapsed() < Duration::from_secs(1));
             // Never empties: gives up at the limit and says how many.
             let t = std::time::Instant::now();
-            assert_eq!(wait_cgroups_empty(&dirs, Duration::from_millis(100)).await, 1);
+            assert_eq!(
+                wait_cgroups_empty(&dirs, Duration::from_millis(100)).await,
+                1
+            );
             assert!(t.elapsed() >= Duration::from_millis(100));
             // Waits until the last process has left.
             let p = busy.join("cgroup.procs");

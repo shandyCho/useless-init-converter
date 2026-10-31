@@ -13,8 +13,8 @@ use crate::config::Config;
 use crate::loader::{Loader, Unit};
 use crate::state::{self, UnitState};
 use crate::util;
-use uinitconverter_base::unit::parse_timespan_usec;
 pub use uinitconverter_base::timerspec::*;
+use uinitconverter_base::unit::parse_timespan_usec;
 
 fn persistent_stamp(cfg: &Config, timer: &str) -> PathBuf {
     cfg.state_dir.join("timers").join(timer)
@@ -53,8 +53,14 @@ impl Runner {
         // unit still running (or skipped by a condition) after the trigger
         // would leave the elapse in the past and re-trigger at once.
         let last_trigger = self.st.get_u64(LAST_TRIGGER_MONO);
-        let unit_active = self.target_st.get_u64("inactive-exit-mono").max(last_trigger);
-        let unit_inactive = self.target_st.get_u64("inactive-enter-mono").max(last_trigger);
+        let unit_active = self
+            .target_st
+            .get_u64("inactive-exit-mono")
+            .max(last_trigger);
+        let unit_inactive = self
+            .target_st
+            .get_u64("inactive-enter-mono")
+            .max(last_trigger);
         let mut mono = u64::MAX;
         for (key, _, us) in monotonic(&self.timer) {
             let at = match key {
@@ -62,7 +68,11 @@ impl Runner {
                     if self.fired_once.contains(&(key, us)) {
                         continue;
                     }
-                    let at = if key == "OnActiveSec" { self.started_mono + us } else { us };
+                    let at = if key == "OnActiveSec" {
+                        self.started_mono + us
+                    } else {
+                        us
+                    };
                     // As systemd: a one-time elapse that had passed when this
                     // timer (re)started is done if the timer has triggered
                     // since boot (dnf-makecache's OnBootSec= on a restart).
@@ -119,26 +129,38 @@ impl Runner {
             match crate::client::connect(&self.cfg).await {
                 Ok(c) => *conn = Some(c),
                 Err(e) => {
-                    eprintln!("uinitconverter[{}]: cannot reach the daemon (will retry): {e}", self.timer.id);
+                    eprintln!(
+                        "uinitconverter[{}]: cannot reach the daemon (will retry): {e}",
+                        self.timer.id
+                    );
                     return false;
                 }
             }
         }
         let c = conn.as_ref().unwrap();
-        match crate::client::manager_call(c, "StartUnit", &(self.target.as_str(), "replace")).await {
+        match crate::client::manager_call(c, "StartUnit", &(self.target.as_str(), "replace")).await
+        {
             Ok(_) => {}
             Err(e) if e.contains("org.freedesktop") => {
                 // The daemon answered with an error (unit missing, masked, ...).
-                eprintln!("uinitconverter[{}]: starting {} failed: {e}", self.timer.id, self.target);
+                eprintln!(
+                    "uinitconverter[{}]: starting {} failed: {e}",
+                    self.timer.id, self.target
+                );
             }
             Err(e) => {
-                eprintln!("uinitconverter[{}]: lost connection to the daemon (will retry): {e}", self.timer.id);
+                eprintln!(
+                    "uinitconverter[{}]: lost connection to the daemon (will retry): {e}",
+                    self.timer.id
+                );
                 *conn = None;
                 return false;
             }
         }
-        self.st.set(LAST_TRIGGER, &util::now_realtime_usec().to_string());
-        self.st.set(LAST_TRIGGER_MONO, &util::now_monotonic_usec().to_string());
+        self.st
+            .set(LAST_TRIGGER, &util::now_realtime_usec().to_string());
+        self.st
+            .set(LAST_TRIGGER_MONO, &util::now_monotonic_usec().to_string());
         if self.timer.get_bool("Timer", "Persistent", false) {
             let _ = util::write_atomic(
                 &persistent_stamp(&self.cfg, &self.timer.id),
@@ -153,7 +175,10 @@ pub fn cmd_timer_run(cfg: Config, name: &str) -> i32 {
     let ld = Loader::new(&cfg);
     let timer = ld.load(name);
     if !timer.is_loaded() {
-        eprintln!("uinitconverter: timer {name}: {}", timer.load_state.as_str());
+        eprintln!(
+            "uinitconverter: timer {name}: {}",
+            timer.load_state.as_str()
+        );
         return 1;
     }
     for (raw, spec) in calendars(&timer) {
@@ -189,7 +214,10 @@ pub fn cmd_timer_run(cfg: Config, name: &str) -> i32 {
         fired_once: Vec::new(),
         delay: None,
     };
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("uinitconverter: {e}");
@@ -223,7 +251,10 @@ pub fn cmd_timer_run(cfg: Config, name: &str) -> i32 {
             if next_rt == 0 && next_mono == 0 {
                 // OnUnitActiveSec=/OnUnitInactiveSec= are armed once the unit
                 // has run or the timer has triggered: keep waiting for that.
-                if monotonic(&r.timer).iter().any(|(k, _, _)| matches!(*k, "OnUnitActiveSec" | "OnUnitInactiveSec")) {
+                if monotonic(&r.timer)
+                    .iter()
+                    .any(|(k, _, _)| matches!(*k, "OnUnitActiveSec" | "OnUnitInactiveSec"))
+                {
                     tokio::time::sleep(Duration::from_secs(30)).await;
                     continue;
                 }
@@ -261,7 +292,11 @@ pub fn cmd_timer_run(cfg: Config, name: &str) -> i32 {
                 if due_mono {
                     for (key, _, us) in monotonic(&r.timer) {
                         if matches!(key, "OnBootSec" | "OnStartupSec" | "OnActiveSec") {
-                            let at = if key == "OnActiveSec" { r.started_mono + us } else { us };
+                            let at = if key == "OnActiveSec" {
+                                r.started_mono + us
+                            } else {
+                                us
+                            };
                             if at <= now_mono {
                                 r.fired_once.push((key, us));
                             }

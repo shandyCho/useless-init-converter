@@ -33,9 +33,13 @@ Run `uinitconverter COMMAND --help` or see the tool's own usage for details.
 /// first argument (the standalone tools take only the options).
 fn tool_for(cmd: &str) -> Option<(&'static str, bool)> {
     Some(match cmd {
-        "reload" | "plan" | "enable" | "disable" | "mask" | "unmask" | "preset" | "is-enabled" => ("uinitconverter-gen", true),
+        "reload" | "plan" | "enable" | "disable" | "mask" | "unmask" | "preset" | "is-enabled" => {
+            ("uinitconverter-gen", true)
+        }
         "daemon" | "start" | "stop" | "restart" | "log" => ("uinitconverterd", true),
-        "run" | "finish" | "up" | "down" | "stop-exec" | "reload-exec" => ("uinitconverter-runner", true),
+        "run" | "finish" | "up" | "down" | "stop-exec" | "reload-exec" => {
+            ("uinitconverter-runner", true)
+        }
         "timer-run" | "path-run" => ("uinitconverter-timers", true),
         "fdstore" => ("uinitconverter-fdstore", false),
         "journal-relay" => ("uinitconverter-journal-relay", false),
@@ -48,7 +52,10 @@ fn tool_for(cmd: &str) -> Option<(&'static str, bool)> {
 /// The directory of the tools: next to this program (so a build tree works
 /// as well as /usr/libexec/uinitconverter), else /usr/libexec/uinitconverter.
 fn tool_path(name: &str) -> PathBuf {
-    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
         let p = dir.join(name);
         if p.is_file() {
             return p;
@@ -58,15 +65,28 @@ fn tool_path(name: &str) -> PathBuf {
 }
 
 /// The core tools, whose builds should match this one.
-const CORE_TOOLS: [&str; 4] = ["uinitconverter-gen", "uinitconverter-runner", "uinitconverter-timers", "uinitconverterd"];
+const CORE_TOOLS: [&str; 4] = [
+    "uinitconverter-gen",
+    "uinitconverter-runner",
+    "uinitconverter-timers",
+    "uinitconverterd",
+];
 /// The standalone tools: separate projects with their own versions.
-const STANDALONE: [&str; 4] = ["uinitconverter-fdstore", "uinitconverter-journal-relay", "uinitconverter-linkwatch", "uinitconverter-notify"];
+const STANDALONE: [&str; 4] = [
+    "uinitconverter-fdstore",
+    "uinitconverter-journal-relay",
+    "uinitconverter-linkwatch",
+    "uinitconverter-notify",
+];
 
 /// The lines of `uinitconverter --version`: this build, each core tool's (from
 /// its own --version) and whether the standalone tools are installed; and
 /// whether every core tool is installed and from this build.
 fn version_report() -> (Vec<String>, bool) {
-    let mut lines = vec![format!("uinitconverter {}", uinitconverter_version::VERSION)];
+    let mut lines = vec![format!(
+        "uinitconverter {}",
+        uinitconverter_version::VERSION
+    )];
     let mut ok = true;
     for tool in CORE_TOOLS {
         let path = tool_path(tool);

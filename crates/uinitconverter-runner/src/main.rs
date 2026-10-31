@@ -4,9 +4,13 @@
 use std::path::PathBuf;
 use std::process::exit;
 
-pub(crate) use uinitconverter_base::{config, envfile, fdstore, index, loader, mountunit, state, tools, unit, util};
+pub(crate) use uinitconverter_base::{
+    config, envfile, fdstore, index, loader, mountunit, state, tools, unit, util,
+};
 pub(crate) use uinitconverter_client as client;
-pub(crate) use uinitconverter_exec::{bpf, cgroup, conditions, execcmd, pam, sandbox, seccomp, selinux, socket};
+pub(crate) use uinitconverter_exec::{
+    bpf, cgroup, conditions, execcmd, pam, sandbox, seccomp, selinux, socket,
+};
 pub(crate) use uinitconverter_install as install;
 
 mod runner;
@@ -160,7 +164,11 @@ fn main() {
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
     let a = parse_internal(&args[1..]);
-    let mut r = match runner::Runner::new(cfg.clone(), &a.unit, matches!(cmd.as_str(), "run" | "up" | "confine")) {
+    let mut r = match runner::Runner::new(
+        cfg.clone(),
+        &a.unit,
+        matches!(cmd.as_str(), "run" | "up" | "confine"),
+    ) {
         Ok(r) => r,
         Err(e) => exit(setup_failed(&cfg, &cmd, &a.unit, &e)),
     };
@@ -178,7 +186,9 @@ fn main() {
         "stop-atom" => r.cmd_stop_atom(),
         "reload-exec" => r.cmd_reload(a.main_pid),
         "confine" => r.cmd_confine(&a.rest),
-        other => die(&format!("unknown command {other} (see uinitconverter-runner help)")),
+        other => die(&format!(
+            "unknown command {other} (see uinitconverter-runner help)"
+        )),
     };
     exit(code);
 }

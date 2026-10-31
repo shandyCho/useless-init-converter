@@ -56,8 +56,12 @@ fn parse_stat(s: &str) -> Option<(u32, u64)> {
 
 /// Whether every uid of the process (real, effective, saved, fs) is `uid`.
 fn runs_as(proc_dir: &Path, pid: u32, uid: u32) -> bool {
-    let Ok(s) = fs::read_to_string(proc_dir.join(pid.to_string()).join("status")) else { return false };
-    let Some(line) = s.lines().find_map(|l| l.strip_prefix("Uid:")) else { return false };
+    let Ok(s) = fs::read_to_string(proc_dir.join(pid.to_string()).join("status")) else {
+        return false;
+    };
+    let Some(line) = s.lines().find_map(|l| l.strip_prefix("Uid:")) else {
+        return false;
+    };
     let ids: Vec<&str> = line.split_whitespace().collect();
     ids.len() == 4 && ids.iter().all(|i| i.parse() == Ok(uid))
 }
@@ -67,24 +71,34 @@ fn runs_as(proc_dir: &Path, pid: u32, uid: u32) -> bool {
 /// as `fifo`, the path it was selected by.
 fn send_event(fd_link: &Path, fifo: &Path, uid: u32) -> std::io::Result<()> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
-    let mut f = fs::OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(fd_link)?;
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(fd_link)?;
     let got = f.metadata()?;
     let named = fs::metadata(fifo)?;
-    if !got.file_type().is_fifo() || got.uid() != uid || (got.dev(), got.ino()) != (named.dev(), named.ino()) {
+    if !got.file_type().is_fifo()
+        || got.uid() != uid
+        || (got.dev(), got.ino()) != (named.dev(), named.ino())
+    {
         return Err(std::io::Error::other("not the waiter's fifo, left alone"));
     }
     f.write_all(b"s")
 }
 
 fn comm(proc_dir: &Path, pid: u32) -> Option<String> {
-    fs::read_to_string(proc_dir.join(pid.to_string()).join("comm")).ok().map(|s| s.trim_end().to_string())
+    fs::read_to_string(proc_dir.join(pid.to_string()).join("comm"))
+        .ok()
+        .map(|s| s.trim_end().to_string())
 }
 
 /// Whether another process holds a lock on `path`, as skalibs'
 /// fd_islocked() asks (s6-supervise's supervise/lock, fcntl locks).
 fn lock_held(path: &Path) -> bool {
     use std::os::fd::AsRawFd;
-    let Ok(f) = fs::File::open(path) else { return false };
+    let Ok(f) = fs::File::open(path) else {
+        return false;
+    };
     let mut fl: libc::flock = unsafe { std::mem::zeroed() };
     fl.l_type = libc::F_RDLCK as libc::c_short;
     fl.l_whence = libc::SEEK_SET as libc::c_short;
@@ -121,18 +135,25 @@ impl Watch {
             return done;
         };
         let mut alive = HashSet::new();
-        let Ok(dir) = fs::read_dir(&self.proc_dir) else { return done };
+        let Ok(dir) = fs::read_dir(&self.proc_dir) else {
+            return done;
+        };
         for e in dir.flatten() {
-            let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+            let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
+                continue;
+            };
             if comm(&self.proc_dir, pid).as_deref() != Some("s6-ftrigrd") {
                 continue;
             }
-            let Some((ppid, start)) =
-                fs::read_to_string(e.path().join("stat")).ok().as_deref().and_then(parse_stat)
+            let Some((ppid, start)) = fs::read_to_string(e.path().join("stat"))
+                .ok()
+                .as_deref()
+                .and_then(parse_stat)
             else {
                 continue;
             };
-            let Some(parent) = comm(&self.proc_dir, ppid).filter(|c| WAITERS.contains(&c.as_str())) else {
+            let Some(parent) = comm(&self.proc_dir, ppid).filter(|c| WAITERS.contains(&c.as_str()))
+            else {
                 continue;
             };
             if !runs_as(&self.proc_dir, pid, self.uid) || !runs_as(&self.proc_dir, ppid, self.uid) {
@@ -150,14 +171,18 @@ impl Watch {
                 .flatten()
                 .flatten()
                 .filter_map(|fd| Some((fs::read_link(fd.path()).ok()?, fd.path())))
-                .filter(|(p, _)| !p.to_string_lossy().ends_with(" (deleted)") && servicedir_of(p).is_some())
+                .filter(|(p, _)| {
+                    !p.to_string_lossy().ends_with(" (deleted)") && servicedir_of(p).is_some()
+                })
                 .filter(|(p, _)| self.under.as_ref().is_none_or(|u| p.starts_with(u)))
                 .collect();
             fifos.sort();
             fifos.dedup_by(|a, b| a.0 == b.0);
             for (fifo, fd_link) in fifos {
                 let svc = servicedir_of(&fifo).unwrap();
-                if self.sent.contains(&(pid, fifo.clone())) || !lock_held(&svc.join("supervise/lock")) {
+                if self.sent.contains(&(pid, fifo.clone()))
+                    || !lock_held(&svc.join("supervise/lock"))
+                {
                     continue;
                 }
                 self.sent.insert((pid, fifo.clone()));
@@ -195,7 +220,9 @@ fn main() {
             "--after" => after = secs(),
             "--interval" => interval = secs(),
             "--under" => {
-                let d = it.next().unwrap_or_else(|| die("--under needs a directory"));
+                let d = it
+                    .next()
+                    .unwrap_or_else(|| die("--under needs a directory"));
                 under = Some(fs::canonicalize(&d).unwrap_or_else(|e| die(&format!("{d}: {e}"))));
             }
             "--once" => once = true,
@@ -208,7 +235,14 @@ fn main() {
     }
     let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
     let uid = unsafe { libc::geteuid() };
-    let mut w = Watch { proc_dir: PathBuf::from("/proc"), after, hz, under, uid, sent: HashSet::new() };
+    let mut w = Watch {
+        proc_dir: PathBuf::from("/proc"),
+        after,
+        hz,
+        under,
+        uid,
+        sent: HashSet::new(),
+    };
     loop {
         w.scan();
         if once {
@@ -233,16 +267,26 @@ mod tests {
 
     #[test]
     fn fifo_paths() {
-        assert_eq!(servicedir_of(Path::new("/l/sd/a.service/event/ftrig1:@4000:xY")), Some(Path::new("/l/sd/a.service")));
-        assert_eq!(servicedir_of(Path::new("/l/sd/a.service/event/.ftrig1:@4000:xY")), None);
-        assert_eq!(servicedir_of(Path::new("/l/sd/a.service/other/ftrig1:@4000:xY")), None);
+        assert_eq!(
+            servicedir_of(Path::new("/l/sd/a.service/event/ftrig1:@4000:xY")),
+            Some(Path::new("/l/sd/a.service"))
+        );
+        assert_eq!(
+            servicedir_of(Path::new("/l/sd/a.service/event/.ftrig1:@4000:xY")),
+            None
+        );
+        assert_eq!(
+            servicedir_of(Path::new("/l/sd/a.service/other/ftrig1:@4000:xY")),
+            None
+        );
     }
 
     /// A fake /proc: an s6-ftrigrd of an s6-rc-update, waiting long enough,
     /// with fifos in a supervised and an unsupervised service directory.
     #[test]
     fn sends_once_to_supervised_only() {
-        let tmp = std::env::temp_dir().join(format!("uinitconverter-linkwatch-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-linkwatch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let proc_dir = tmp.join("proc");
         let fifo = |svc: &str| {
@@ -261,11 +305,20 @@ mod tests {
             let d = proc_dir.join(pid.to_string());
             fs::create_dir_all(d.join("fd")).unwrap();
             fs::write(d.join("comm"), format!("{comm}\n")).unwrap();
-            fs::write(d.join("status"), format!("Name:\t{comm}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")).unwrap();
-            fs::write(d.join("stat"), format!("{pid} ({comm}) S {ppid} 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 {start} 0 0")).unwrap();
+            fs::write(
+                d.join("status"),
+                format!("Name:\t{comm}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n"),
+            )
+            .unwrap();
+            fs::write(
+                d.join("stat"),
+                format!("{pid} ({comm}) S {ppid} 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 {start} 0 0"),
+            )
+            .unwrap();
             d
         };
-        let proc_entry = |pid: u32, comm: &str, ppid: u32, start: u64| proc_as(pid, comm, ppid, start, me);
+        let proc_entry =
+            |pid: u32, comm: &str, ppid: u32, start: u64| proc_as(pid, comm, ppid, start, me);
         proc_entry(50, "s6-rc-update", 1, 0);
         let d = proc_entry(100, "s6-ftrigrd", 50, 100);
         for (i, f) in [&up, &up, &down].iter().enumerate() {
@@ -294,13 +347,26 @@ mod tests {
             .spawn()
             .unwrap();
         let mut line = String::new();
-        std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
         assert_eq!(line.trim(), "locked");
         // The waiter's read end.
-        let mut reader = fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(&up).unwrap();
+        let mut reader = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&up)
+            .unwrap();
 
         // Started at 100 ticks = 1 s, so waited 19.5 s: not yet with --after 30.
-        let mut w = Watch { proc_dir: proc_dir.clone(), after: 30.0, hz: 100.0, under: None, uid: me, sent: HashSet::new() };
+        let mut w = Watch {
+            proc_dir: proc_dir.clone(),
+            after: 30.0,
+            hz: 100.0,
+            under: None,
+            uid: me,
+            sent: HashSet::new(),
+        };
         assert!(w.scan().is_empty());
         w.after = 10.0;
         w.under = Some(tmp.join("elsewhere"));
@@ -311,7 +377,11 @@ mod tests {
         let _ = reader.read_to_end(&mut got);
         assert_eq!(got, b"s");
         assert!(w.scan().is_empty(), "sent once only");
-        assert_eq!(fs::read(&reg).unwrap(), b"", "a regular file is never written");
+        assert_eq!(
+            fs::read(&reg).unwrap(),
+            b"",
+            "a regular file is never written"
+        );
 
         drop(child.stdin.take());
         let _ = child.wait();

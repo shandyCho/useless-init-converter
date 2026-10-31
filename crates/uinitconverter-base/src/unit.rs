@@ -319,7 +319,10 @@ mod tests {
         assert_eq!(parse_timespan_usec("1min 30s", 1_000_000), Some(90_000_000));
         assert_eq!(parse_timespan_usec("500ms", 1_000_000), Some(500_000));
         assert_eq!(parse_timespan_usec("20µs", 1_000_000), Some(20));
-        assert_eq!(parse_timespan_usec("1y 1M", 1_000_000), Some(31_557_600_000_000 + 2_629_800_000_000));
+        assert_eq!(
+            parse_timespan_usec("1y 1M", 1_000_000),
+            Some(31_557_600_000_000 + 2_629_800_000_000)
+        );
         assert_eq!(parse_timeout_usec("0"), Some(u64::MAX));
         assert_eq!(parse_timeout_usec("infinity"), Some(u64::MAX));
         assert_eq!(parse_timeout_usec("90"), Some(90_000_000));

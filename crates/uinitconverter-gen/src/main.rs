@@ -43,7 +43,10 @@ fn print_changes(changes: &[install::Change]) {
 /// `reload` on a running s6 boot: Manager.Reload on uinitconverterd. Refuses a
 /// manager that isn't uinitconverterd (systemd's own private socket).
 fn reload_via_daemon(cfg: &Config) -> i32 {
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let res: Result<(), String> = rt.block_on(async {
         let conn = uinitconverter_client::connect(cfg).await?;
         let version: String = zbus::fdo::PropertiesProxy::builder(&conn)
@@ -53,21 +56,36 @@ fn reload_via_daemon(cfg: &Config) -> i32 {
             .build()
             .await
             .map_err(|e| e.to_string())?
-            .get(zbus::names::InterfaceName::from_static_str_unchecked("org.freedesktop.systemd1.Manager"), "Version")
+            .get(
+                zbus::names::InterfaceName::from_static_str_unchecked(
+                    "org.freedesktop.systemd1.Manager",
+                ),
+                "Version",
+            )
             .await
             .map_err(|e| e.to_string())
             .and_then(|v| String::try_from(v).map_err(|e| e.to_string()))?;
         if !version.contains("uinitconverter") {
-            return Err(format!("the service manager is not uinitconverterd ({version})"));
+            return Err(format!(
+                "the service manager is not uinitconverterd ({version})"
+            ));
         }
-        uinitconverter_client::manager_call(&conn, "Reload", &()).await.map(|_| ())
+        uinitconverter_client::manager_call(&conn, "Reload", &())
+            .await
+            .map(|_| ())
     });
     match res {
         Ok(()) => {
             let db = fs::read_link(cfg.state_dir.join("current")).unwrap_or_default();
             println!("reloaded by uinitconverterd");
-            println!("database: {} (live state updated)", cfg.state_dir.join(&db).display());
-            println!("report:   {}", cfg.state_dir.join(&db).join("report.txt").display());
+            println!(
+                "database: {} (live state updated)",
+                cfg.state_dir.join(&db).display()
+            );
+            println!(
+                "report:   {}",
+                cfg.state_dir.join(&db).join("report.txt").display()
+            );
             0
         }
         Err(e) => {
@@ -133,7 +151,11 @@ fn main() {
                     println!(
                         "database: {}{}",
                         r.db_dir.display(),
-                        if r.updated_live { " (live state updated)" } else { "" }
+                        if r.updated_live {
+                            " (live state updated)"
+                        } else {
+                            ""
+                        }
                     );
                     println!("report:   {}", r.db_dir.join("report.txt").display());
                     for c in &r.set_changes {
@@ -145,7 +167,11 @@ fn main() {
             }
         }
         "enable" | "disable" | "mask" | "unmask" | "preset" => {
-            let names: Vec<String> = rest.iter().filter(|a| !a.starts_with("--")).cloned().collect();
+            let names: Vec<String> = rest
+                .iter()
+                .filter(|a| !a.starts_with("--"))
+                .cloned()
+                .collect();
             let runtime = rest.iter().any(|a| a == "--runtime");
             let force = rest.iter().any(|a| a == "--force");
             let res = match cmd.as_str() {
@@ -166,7 +192,8 @@ fn main() {
         "is-enabled" => {
             let mut code = 1;
             for n in rest {
-                match install::unit_file_state(&cfg, n).map(|s| install::set_file_state(&cfg, n, s)) {
+                match install::unit_file_state(&cfg, n).map(|s| install::set_file_state(&cfg, n, s))
+                {
                     Ok(s) => {
                         if s.starts_with("enabled") || s == "static" || s == "alias" {
                             code = 0;
@@ -178,7 +205,9 @@ fn main() {
             }
             code
         }
-        other => die(&format!("unknown command {other} (see uinitconverter-gen help)")),
+        other => die(&format!(
+            "unknown command {other} (see uinitconverter-gen help)"
+        )),
     };
     exit(code);
 }

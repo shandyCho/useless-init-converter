@@ -85,7 +85,11 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                 o.pid = Some(match &s[6..] {
                     "" | "auto" | "parent" => parent_pid(),
                     "self" => std::process::id() as i32,
-                    p => p.parse().ok().filter(|&p: &i32| p > 0).ok_or_else(|| format!("bad PID {p}"))?,
+                    p => p
+                        .parse()
+                        .ok()
+                        .filter(|&p: &i32| p > 0)
+                        .ok_or_else(|| format!("bad PID {p}"))?,
                 })
             }
             s if s.starts_with("--status=") => o.lines.push(format!("STATUS={}", &s[9..])),
@@ -126,7 +130,10 @@ fn parent_pid() -> i32 {
 }
 
 fn monotonic_usec() -> u64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
     ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1000
 }
@@ -167,7 +174,11 @@ fn run(args: &[String]) -> i32 {
         }
     }
     if !o.exec.is_empty() {
-        let c: Vec<CString> = o.exec.iter().map(|a| CString::new(a.as_str()).unwrap_or_default()).collect();
+        let c: Vec<CString> = o
+            .exec
+            .iter()
+            .map(|a| CString::new(a.as_str()).unwrap_or_default())
+            .collect();
         let mut p: Vec<*const libc::c_char> = c.iter().map(|a| a.as_ptr()).collect();
         p.push(std::ptr::null());
         unsafe { libc::execvp(p[0], p.as_ptr()) };
@@ -228,10 +239,19 @@ fn sendmsg(fd: i32, sock: &str, data: &[u8], pid: Option<i32>, fds: &[i32]) -> s
         }
         let abstract_ns = sock.starts_with('@');
         for (i, b) in sock.bytes().enumerate() {
-            addr.sun_path[i] = if abstract_ns && i == 0 { 0 } else { b as libc::c_char };
+            addr.sun_path[i] = if abstract_ns && i == 0 {
+                0
+            } else {
+                b as libc::c_char
+            };
         }
-        let len = (std::mem::size_of::<libc::sa_family_t>() + sock.len() + usize::from(!abstract_ns)) as u32;
-        let mut iov = libc::iovec { iov_base: data.as_ptr() as *mut libc::c_void, iov_len: data.len() };
+        let len = (std::mem::size_of::<libc::sa_family_t>()
+            + sock.len()
+            + usize::from(!abstract_ns)) as u32;
+        let mut iov = libc::iovec {
+            iov_base: data.as_ptr() as *mut libc::c_void,
+            iov_len: data.len(),
+        };
         // u64s: aligned for cmsghdr, as a byte array is not.
         let mut cbuf = [0u64; 64];
         let mut msg: libc::msghdr = std::mem::zeroed();
@@ -259,7 +279,11 @@ fn sendmsg(fd: i32, sock: &str, data: &[u8], pid: Option<i32>, fds: &[i32]) -> s
                 (*c).cmsg_level = libc::SOL_SOCKET;
                 (*c).cmsg_type = libc::SCM_CREDENTIALS;
                 (*c).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<libc::ucred>() as u32) as _;
-                let cred = libc::ucred { pid: p, uid: libc::geteuid(), gid: libc::getegid() };
+                let cred = libc::ucred {
+                    pid: p,
+                    uid: libc::geteuid(),
+                    gid: libc::getegid(),
+                };
                 std::ptr::write_unaligned(libc::CMSG_DATA(c) as *mut libc::ucred, cred);
                 c = libc::CMSG_NXTHDR(&msg, c);
             }
@@ -290,7 +314,11 @@ fn barrier(sock: &str, pid: Option<i32>) -> Result<(), String> {
     let r = send(sock, b"BARRIER=1", pid, &[p[1]]);
     unsafe { libc::close(p[1]) };
     let out = r.map_err(|e| e.to_string()).and_then(|()| {
-        let mut pfd = libc::pollfd { fd: p[0], events: 0, revents: 0 };
+        let mut pfd = libc::pollfd {
+            fd: p[0],
+            events: 0,
+            revents: 0,
+        };
         match unsafe { libc::poll(&mut pfd, 1, BARRIER_TIMEOUT_MS) } {
             n if n > 0 => Ok(()),
             0 => Err("timed out".into()),
@@ -312,7 +340,15 @@ mod tests {
     #[test]
     fn options() {
         let o = parse(&args(&["--ready", "--status=up", "--pid=self", "X=1"])).unwrap();
-        assert_eq!(o.lines, ["READY=1", "STATUS=up", "X=1", &format!("MAINPID={}", std::process::id())]);
+        assert_eq!(
+            o.lines,
+            [
+                "READY=1",
+                "STATUS=up",
+                "X=1",
+                &format!("MAINPID={}", std::process::id())
+            ]
+        );
         let o = parse(&args(&["--exec", "--ready", ";", "sleep", "1"])).unwrap();
         assert_eq!(o.exec, ["sleep", "1"]);
         assert!(parse(&args(&["--exec", "--ready"])).is_err());
@@ -323,7 +359,8 @@ mod tests {
     #[test]
     fn sends_and_waits_for_the_barrier() {
         use std::os::unix::net::UnixDatagram;
-        let path = std::env::temp_dir().join(format!("uinitconverter-notify-test-{}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("uinitconverter-notify-test-{}", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let rx = UnixDatagram::bind(&path).unwrap();
         let sock = path.display().to_string();

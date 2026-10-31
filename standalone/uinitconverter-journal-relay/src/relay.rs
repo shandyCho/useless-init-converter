@@ -63,10 +63,15 @@ pub struct Entry {
 pub fn parse_native(mut data: &[u8]) -> Vec<(String, Vec<u8>)> {
     let mut out = Vec::new();
     while !data.is_empty() {
-        let Some(nl) = data.iter().position(|&b| b == b'\n') else { break };
+        let Some(nl) = data.iter().position(|&b| b == b'\n') else {
+            break;
+        };
         let line = &data[..nl];
         if let Some(eq) = line.iter().position(|&b| b == b'=') {
-            out.push((String::from_utf8_lossy(&line[..eq]).into_owned(), line[eq + 1..].to_vec()));
+            out.push((
+                String::from_utf8_lossy(&line[..eq]).into_owned(),
+                line[eq + 1..].to_vec(),
+            ));
             data = &data[nl + 1..];
         } else {
             // Binary field: name, newline, little-endian 64-bit size, data, newline.
@@ -75,10 +80,17 @@ pub fn parse_native(mut data: &[u8]) -> Vec<(String, Vec<u8>)> {
                 break;
             }
             let size = u64::from_le_bytes(rest[..8].try_into().unwrap());
-            let Some(end) = usize::try_from(size).ok().and_then(|s| s.checked_add(8)).filter(|&e| e < rest.len()) else {
+            let Some(end) = usize::try_from(size)
+                .ok()
+                .and_then(|s| s.checked_add(8))
+                .filter(|&e| e < rest.len())
+            else {
                 break;
             };
-            out.push((String::from_utf8_lossy(line).into_owned(), rest[8..end].to_vec()));
+            out.push((
+                String::from_utf8_lossy(line).into_owned(),
+                rest[8..end].to_vec(),
+            ));
             data = &rest[end + 1..];
         }
     }
@@ -87,11 +99,26 @@ pub fn parse_native(mut data: &[u8]) -> Vec<(String, Vec<u8>)> {
 
 /// The entry to forward from native fields, or None without a MESSAGE.
 pub fn native_entry(fields: &[(String, Vec<u8>)]) -> Option<Entry> {
-    let get = |k: &str| fields.iter().rev().find(|(n, _)| n == k).map(|(_, v)| v.as_slice());
-    let num = |k: &str| get(k).and_then(|v| std::str::from_utf8(v).ok()).and_then(|v| v.trim().parse::<u32>().ok());
+    let get = |k: &str| {
+        fields
+            .iter()
+            .rev()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.as_slice())
+    };
+    let num = |k: &str| {
+        get(k)
+            .and_then(|v| std::str::from_utf8(v).ok())
+            .and_then(|v| v.trim().parse::<u32>().ok())
+    };
     let msg = get("MESSAGE")?.to_vec();
-    let level = num("PRIORITY").filter(|&p| p <= 7).unwrap_or(LOG_INFO as u32) as u8;
-    let facility = num("SYSLOG_FACILITY").filter(|&f| f > 0 && f <= 23).map(|f| (f as u8) << 3).unwrap_or(LOG_USER);
+    let level = num("PRIORITY")
+        .filter(|&p| p <= 7)
+        .unwrap_or(LOG_INFO as u32) as u8;
+    let facility = num("SYSLOG_FACILITY")
+        .filter(|&f| f > 0 && f <= 23)
+        .map(|f| (f as u8) << 3)
+        .unwrap_or(LOG_USER);
     Some(Entry {
         pri: facility | level,
         ident: get("SYSLOG_IDENTIFIER").map(|v| String::from_utf8_lossy(v).into_owned()),
@@ -111,7 +138,12 @@ pub struct StreamHeader {
 
 impl StreamHeader {
     pub fn from_lines(lines: &[String]) -> StreamHeader {
-        let line = |i: usize| lines.get(i).map(|s| s.trim_end_matches('\n').to_string()).unwrap_or_default();
+        let line = |i: usize| {
+            lines
+                .get(i)
+                .map(|s| s.trim_end_matches('\n').to_string())
+                .unwrap_or_default()
+        };
         StreamHeader {
             ident: line(0),
             unit: line(1),
@@ -132,8 +164,16 @@ impl StreamHeader {
         if line.is_empty() {
             return None;
         }
-        let ident = [&self.ident, &self.unit].into_iter().find(|s| !s.is_empty()).cloned();
-        Some(Entry { pri, ident, pid, msg: line.to_vec() })
+        let ident = [&self.ident, &self.unit]
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .cloned();
+        Some(Entry {
+            pri,
+            ident,
+            pid,
+            msg: line.to_vec(),
+        })
     }
 }
 
@@ -142,20 +182,34 @@ impl StreamHeader {
 /// the like stay part of the message, and the facility is LOG_USER.
 fn level_prefix(line: &[u8]) -> Option<(u8, &[u8])> {
     let rest = line.strip_prefix(b"<")?;
-    let end = rest.iter().position(|&b| b == b'>').filter(|&e| (1..=3).contains(&e))?;
+    let end = rest
+        .iter()
+        .position(|&b| b == b'>')
+        .filter(|&e| (1..=3).contains(&e))?;
     let digits = &rest[..end];
     if !digits.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    let p: u8 = std::str::from_utf8(digits).ok()?.parse().ok().filter(|&p| p <= 7)?;
+    let p: u8 = std::str::from_utf8(digits)
+        .ok()?
+        .parse()
+        .ok()
+        .filter(|&p| p <= 7)?;
     Some((p, &rest[end + 1..]))
 }
 
 /// The datagram for /dev/log: `<PRI>IDENT[PID]: MESSAGE`. syslog adds the
 /// time when it receives it.
 pub fn format_syslog(e: &Entry) -> Vec<u8> {
-    let ident = e.ident.clone().or_else(|| e.pid.and_then(comm)).unwrap_or_else(|| "unknown".into());
-    let ident: String = ident.chars().filter(|c| !c.is_whitespace() && !c.is_control() && *c != ':').collect();
+    let ident = e
+        .ident
+        .clone()
+        .or_else(|| e.pid.and_then(comm))
+        .unwrap_or_else(|| "unknown".into());
+    let ident: String = ident
+        .chars()
+        .filter(|c| !c.is_whitespace() && !c.is_control() && *c != ':')
+        .collect();
     let mut out = format!("<{}>{ident}", e.pri).into_bytes();
     if let Some(pid) = e.pid {
         out.extend_from_slice(format!("[{pid}]").as_bytes());
@@ -167,7 +221,10 @@ pub fn format_syslog(e: &Entry) -> Vec<u8> {
 }
 
 fn comm(pid: u32) -> Option<String> {
-    std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim_end().to_string()).filter(|s| !s.is_empty())
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .ok()
+        .map(|s| s.trim_end().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn set_opt(fd: RawFd, opt: libc::c_int, val: libc::c_int) {
@@ -186,7 +243,13 @@ fn peer_pid(s: &UnixStream) -> Option<u32> {
     let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     let r = unsafe {
-        libc::getsockopt(s.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut _ as *mut libc::c_void, &mut len)
+        libc::getsockopt(
+            s.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
     };
     (r == 0 && cred.pid > 0).then_some(cred.pid as u32)
 }
@@ -213,7 +276,11 @@ impl Relay {
     pub fn new(dir: &Path, syslog: &Path) -> Result<Relay, String> {
         let out = UnixDatagram::unbound().map_err(|e| e.to_string())?;
         out.set_nonblocking(true).map_err(|e| e.to_string())?;
-        Ok(Relay { dir: dir.to_path_buf(), syslog: syslog.to_path_buf(), out })
+        Ok(Relay {
+            dir: dir.to_path_buf(),
+            syslog: syslog.to_path_buf(),
+            out,
+        })
     }
 
     fn send(&self, e: &Entry) {
@@ -229,10 +296,13 @@ impl Relay {
         let stdout_path = self.dir.join("stdout");
         unlink_socket(&sock_path)?;
         unlink_socket(&stdout_path)?;
-        let dgram = UnixDatagram::bind(&sock_path).map_err(|e| format!("{}: {e}", sock_path.display()))?;
-        let listener = UnixListener::bind(&stdout_path).map_err(|e| format!("{}: {e}", stdout_path.display()))?;
+        let dgram =
+            UnixDatagram::bind(&sock_path).map_err(|e| format!("{}: {e}", sock_path.display()))?;
+        let listener = UnixListener::bind(&stdout_path)
+            .map_err(|e| format!("{}: {e}", stdout_path.display()))?;
         for p in [&sock_path, &stdout_path] {
-            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o666)).map_err(|e| format!("{}: {e}", p.display()))?;
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o666))
+                .map_err(|e| format!("{}: {e}", p.display()))?;
         }
         // The sender's pid for SYSLOG_PID-less entries.
         set_opt(dgram.as_raw_fd(), libc::SO_PASSCRED, 1);
@@ -241,7 +311,9 @@ impl Relay {
         let relay = Arc::new(self);
         let r = relay.clone();
         std::thread::spawn(move || loop {
-            let Ok((data, fds, cred)) = crate::scm::recv_max(dgram.as_raw_fd(), DGRAM_MAX) else { continue };
+            let Ok((data, fds, cred)) = crate::scm::recv_max(dgram.as_raw_fd(), DGRAM_MAX) else {
+                continue;
+            };
             let data = match fds.into_iter().next() {
                 Some(fd) if data.is_empty() => read_from_start(std::fs::File::from(fd)),
                 _ => data,
@@ -258,15 +330,20 @@ impl Relay {
                 // As journald's STDOUT_STREAMS_MAX: one thread per stream,
                 // but not without bound (the socket is world-writable).
                 if active.load(Ordering::SeqCst) >= STREAMS_MAX {
-                    eprintln!("uinitconverter-journal-relay: too many stdout streams, refusing one");
+                    eprintln!(
+                        "uinitconverter-journal-relay: too many stdout streams, refusing one"
+                    );
                     continue;
                 }
                 active.fetch_add(1, Ordering::SeqCst);
                 let (r, a) = (relay.clone(), active.clone());
-                let spawned = std::thread::Builder::new().stack_size(STREAM_STACK).spawn(move || {
-                    r.serve_stream(conn);
-                    a.fetch_sub(1, Ordering::SeqCst);
-                });
+                let spawned =
+                    std::thread::Builder::new()
+                        .stack_size(STREAM_STACK)
+                        .spawn(move || {
+                            r.serve_stream(conn);
+                            a.fetch_sub(1, Ordering::SeqCst);
+                        });
                 if spawned.is_err() {
                     active.fetch_sub(1, Ordering::SeqCst);
                 }
@@ -328,7 +405,11 @@ pub fn serve_forever(dir: &Path, syslog: &Path, ready_fd: Option<RawFd>) -> i32 
 /// this socket's only thread, and every sender once the socket's queue is
 /// full (the socket is world-writable).
 fn read_from_start(mut f: std::fs::File) -> Vec<u8> {
-    if !f.metadata().map(|m| m.file_type().is_file()).unwrap_or(false) {
+    if !f
+        .metadata()
+        .map(|m| m.file_type().is_file())
+        .unwrap_or(false)
+    {
         return Vec::new();
     }
     let mut buf = Vec::new();
@@ -354,8 +435,15 @@ mod tests {
     }
 
     fn tempfile_in_tmp() -> std::fs::File {
-        let p = std::env::temp_dir().join(format!("uinitconverter-relay-memfd-{}", std::process::id()));
-        let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&p).unwrap();
+        let p =
+            std::env::temp_dir().join(format!("uinitconverter-relay-memfd-{}", std::process::id()));
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&p)
+            .unwrap();
         let _ = std::fs::remove_file(&p);
         f
     }
@@ -372,7 +460,10 @@ mod tests {
         let e = native_entry(&f).unwrap();
         assert_eq!(e.pri, LOG_USER | 3);
         assert_eq!(e.ident.as_deref(), Some("dbus-broker-launch"));
-        assert_eq!(format_syslog(&Entry { pid: Some(7), ..e }), b"<11>dbus-broker-launch[7]: a\nb c");
+        assert_eq!(
+            format_syslog(&Entry { pid: Some(7), ..e }),
+            b"<11>dbus-broker-launch[7]: a\nb c"
+        );
         // A size running past the end stops the parse.
         let mut bad = b"MESSAGE\n".to_vec();
         bad.extend_from_slice(&u64::MAX.to_le_bytes());
@@ -384,13 +475,26 @@ mod tests {
 
     #[test]
     fn stream_lines() {
-        let lines: Vec<String> = ["gnome-shell\n", "\n", "6\n", "1\n", "0\n", "0\n", "0\n"].map(String::from).to_vec();
+        let lines: Vec<String> = ["gnome-shell\n", "\n", "6\n", "1\n", "0\n", "0\n", "0\n"]
+            .map(String::from)
+            .to_vec();
         let h = StreamHeader::from_lines(&lines);
-        assert_eq!(h, StreamHeader { ident: "gnome-shell".into(), unit: "".into(), level: 6, level_prefix: true });
+        assert_eq!(
+            h,
+            StreamHeader {
+                ident: "gnome-shell".into(),
+                unit: "".into(),
+                level: 6,
+                level_prefix: true
+            }
+        );
         assert_eq!(h.entry(b"<3>oops", Some(9)).unwrap().pri, LOG_USER | 3);
         // A facility is not taken from a stream: the prefix stays.
         let e = h.entry(b"<30>daemon", None).unwrap();
-        assert_eq!((e.pri, e.msg.as_slice()), (LOG_USER | 6, b"<30>daemon".as_slice()));
+        assert_eq!(
+            (e.pri, e.msg.as_slice()),
+            (LOG_USER | 6, b"<30>daemon".as_slice())
+        );
         assert_eq!(h.entry(b"<x>plain", None).unwrap().msg, b"<x>plain");
         assert_eq!(h.entry(b"", None), None);
         let e = h.entry(b"hello", Some(9)).unwrap();

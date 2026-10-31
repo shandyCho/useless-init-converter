@@ -11,7 +11,8 @@ pub(super) const S6_CONF: &str = "/etc/s6.conf";
 /// In the s6.conf we write: one with it is ours to replace.
 pub(super) const S6_CONF_MARK: &str = "written by uinitconverter's";
 
-pub(super) const SYSINIT_CONTENTS: &str = "/etc/uinitconverter/s6/uinitconverter-sysinit/contents.d";
+pub(super) const SYSINIT_CONTENTS: &str =
+    "/etc/uinitconverter/s6/uinitconverter-sysinit/contents.d";
 
 /// Take the s6 service NAME out of, or put it into, the uinitconverter-sysinit bundle.
 pub(super) fn sysinit_member(ctx: &Ctx, name: &str, member: bool) {
@@ -58,8 +59,14 @@ pub(super) fn setup_s6_linux_init(ctx: &Ctx) {
 
 /// The installed programs that dist/selinux/uinitconverter.cil labels init_exec_t.
 pub(super) fn skarnet_files() -> Vec<String> {
-    let mut v = list_dir("/usr/bin", |n| n.starts_with("s6-") || n == "ucspilogd" || n == "execline");
-    for d in ["/usr/libexec/execline", "/usr/libexec/s6", "/usr/libexec/s6-rc"] {
+    let mut v = list_dir("/usr/bin", |n| {
+        n.starts_with("s6-") || n == "ucspilogd" || n == "execline"
+    });
+    for d in [
+        "/usr/libexec/execline",
+        "/usr/libexec/s6",
+        "/usr/libexec/s6-rc",
+    ] {
         if Path::new(d).is_dir() {
             v.push(d.to_string());
         }
@@ -77,7 +84,14 @@ pub(super) fn svok(ctx: &Ctx, dir: &str) -> bool {
 /// restarting them would drop held fds and log sockets. uinitconverter-linkwatch
 /// keeps no state: it is restarted too.
 pub(super) fn restart_daemon(ctx: &Ctx) {
-    let servicedir = |name: &str| ctx.cfg.live_dir.join("servicedirs").join(name).display().to_string();
+    let servicedir = |name: &str| {
+        ctx.cfg
+            .live_dir
+            .join("servicedirs")
+            .join(name)
+            .display()
+            .to_string()
+    };
     let lw = servicedir("uinitconverter-linkwatch");
     let lw = lw.as_str();
     if svok(ctx, lw) {
@@ -90,7 +104,9 @@ pub(super) fn restart_daemon(ctx: &Ctx) {
     }
     say("Restarting uinitconverterd (running on the s6 boot)");
     if !ctx.try_run(&["s6-svc", "-wR", "-T", "30000", "-r", svc]) {
-        warn(&format!("uinitconverterd was not ready within 30 s; check s6-svstat {svc}"));
+        warn(&format!(
+            "uinitconverterd was not ready within 30 s; check s6-svstat {svc}"
+        ));
     }
 }
 
@@ -103,7 +119,11 @@ pub(super) fn configure(ctx: &Ctx, s: &Settings) {
     match read(S6_CONF) {
         Some(cur) if !cur.contains(S6_CONF_MARK) => {
             println!("  keeping your {S6_CONF}; it needs these lines (see {SHARE}/s6.conf):");
-            for l in ours.lines().filter(|l| ["repodir ", "bootdb ", "storelist "].iter().any(|k| l.starts_with(k))) {
+            for l in ours.lines().filter(|l| {
+                ["repodir ", "bootdb ", "storelist "]
+                    .iter()
+                    .any(|k| l.starts_with(k))
+            }) {
                 println!("    {l}");
             }
         }
@@ -134,8 +154,18 @@ pub(super) fn configure(ctx: &Ctx, s: &Settings) {
 pub(super) fn relabel_runtime(ctx: &Ctx) {
     // The s6-rc repository, which uinitconverterd (init_t) syncs and commits; on a
     // running s6 boot the runtime state too.
-    let repo_parent = ctx.cfg.repo_dir.parent().unwrap_or(&ctx.cfg.repo_dir).display().to_string();
-    for d in [ctx.cfg.run_dir.display().to_string(), repo_parent, "/run/uncaught-logs".into()] {
+    let repo_parent = ctx
+        .cfg
+        .repo_dir
+        .parent()
+        .unwrap_or(&ctx.cfg.repo_dir)
+        .display()
+        .to_string();
+    for d in [
+        ctx.cfg.run_dir.display().to_string(),
+        repo_parent,
+        "/run/uncaught-logs".into(),
+    ] {
         if Path::new(&d).is_dir() {
             ctx.run(&["restorecon", "-R", &d]);
         }
@@ -161,8 +191,14 @@ pub(super) fn relabel_runtime(ctx: &Ctx) {
     // ... and lets s6-rc-update (daemon-reload) rename in the live directory.
     // LIVE_DIR is a symlink s6-rc-update points at LIVE_DIR:XXXX.
     let live_dir = &ctx.cfg.live_dir;
-    let live_name = live_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let live_parent = live_dir.parent().map(|p| p.display().to_string()).unwrap_or_else(|| "/".into());
+    let live_name = live_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let live_parent = live_dir
+        .parent()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "/".into());
     let mut live = list_dir(&live_parent, |n| n.starts_with(&format!("{live_name}:")));
     if live_dir.is_symlink() {
         live.push(live_dir.display().to_string());

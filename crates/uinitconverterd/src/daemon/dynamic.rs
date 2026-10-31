@@ -50,10 +50,13 @@ impl Daemon {
         if crate::install::set_rx(&self.cfg, id) == Some("masked")
             && uinitconverter_base::automask::is_masked(&self.cfg, id)
         {
-            return matches!(unit.utype(), "service" | "timer" | "path") && !self.cfg.is_excluded(id);
+            return matches!(unit.utype(), "service" | "timer" | "path")
+                && !self.cfg.is_excluded(id);
         }
         unit.utype() == "service"
-            && loader::parse_name(id).map(|n| n.instance.is_some()).unwrap_or(false)
+            && loader::parse_name(id)
+                .map(|n| n.instance.is_some())
+                .unwrap_or(false)
             && !self.cfg.is_excluded(id)
     }
 
@@ -72,7 +75,10 @@ impl Daemon {
     fn set_oneshot_active(&self, id: &str, active: bool) {
         let path = self.oneshot_marker(id);
         let r = if active {
-            path.parent().map(fs::create_dir_all).unwrap_or(Ok(())).and_then(|_| fs::write(&path, ""))
+            path.parent()
+                .map(fs::create_dir_all)
+                .unwrap_or(Ok(()))
+                .and_then(|_| fs::write(&path, ""))
         } else {
             match fs::remove_file(&path) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -94,7 +100,13 @@ impl Daemon {
         if let Ok(rd) = fs::read_dir(self.cfg.run_dir.join("dyn-oneshot")) {
             for e in rd.flatten() {
                 let id = e.file_name().to_string_lossy().into_owned();
-                dynamic.insert(id, Dynamic { kind: Kind::Oneshot, active: true });
+                dynamic.insert(
+                    id,
+                    Dynamic {
+                        kind: Kind::Oneshot,
+                        active: true,
+                    },
+                );
             }
         }
         if let Ok(rd) = fs::read_dir(self.cfg.run_dir.join("dyn")) {
@@ -102,7 +114,10 @@ impl Daemon {
                 let id = e.file_name().to_string_lossy().into_owned();
                 // Not linked: a start that failed half-way; dyn_start redoes it.
                 if fs::symlink_metadata(self.scandir(&id)).is_ok() {
-                    dynamic.entry(id).or_insert(Dynamic { kind: Kind::Longrun, active: false });
+                    dynamic.entry(id).or_insert(Dynamic {
+                        kind: Kind::Longrun,
+                        active: false,
+                    });
                 }
             }
         }
@@ -119,7 +134,9 @@ impl Daemon {
         let e = |e: std::io::Error| e.to_string();
         // The same scripts and timings as the database's longruns (gen);
         // `down`: s6-svlink -d links it down, dyn_start brings it up.
-        for (name, text, exec) in crate::gen::longrun_files(&self.cfg, id, &crate::gen::Timings::of(unit), false) {
+        for (name, text, exec) in
+            crate::gen::longrun_files(&self.cfg, id, &crate::gen::Timings::of(unit), false)
+        {
             write(dir.join(name), &text, exec).map_err(e)?;
         }
         write(dir.join("down"), "", false).map_err(e)?;
@@ -203,7 +220,14 @@ impl Daemon {
             && (unit.get("Service", "Type").as_deref() == Some("oneshot")
                 || unit.file.get("Service", "ExecStart").is_none());
         if oneshot {
-            if self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false) {
+            if self
+                .dynamic
+                .lock()
+                .unwrap()
+                .get(id)
+                .map(|d| d.active)
+                .unwrap_or(false)
+            {
                 return "done";
             }
             let started_at = crate::util::now_realtime_usec();
@@ -211,10 +235,13 @@ impl Daemon {
                 && self.job_outcome(id, started_at, "done") == "done";
             let remain = unit.get_bool("Service", "RemainAfterExit", false);
             self.set_oneshot_active(id, ok && remain);
-            self.dynamic
-                .lock()
-                .unwrap()
-                .insert(id.to_string(), Dynamic { kind: Kind::Oneshot, active: ok && remain });
+            self.dynamic.lock().unwrap().insert(
+                id.to_string(),
+                Dynamic {
+                    kind: Kind::Oneshot,
+                    active: ok && remain,
+                },
+            );
             return if ok { "done" } else { "failed" };
         }
 
@@ -242,10 +269,13 @@ impl Daemon {
                 eprintln!("uinitconverterd: {id}: s6-svlink failed");
                 return "failed";
             }
-            self.dynamic
-                .lock()
-                .unwrap()
-                .insert(id.to_string(), Dynamic { kind: Kind::Longrun, active: false });
+            self.dynamic.lock().unwrap().insert(
+                id.to_string(),
+                Dynamic {
+                    kind: Kind::Longrun,
+                    active: false,
+                },
+            );
         }
         if already {
             // As do_start for the database's longruns: skipped or failed
@@ -268,10 +298,18 @@ impl Daemon {
         // nobody reads.
         let log = self.scandir(id).join("log");
         if log.is_dir() {
-            let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(&log).status().await;
+            let _ = Command::new(tools::path("s6-svc"))
+                .arg("-u")
+                .arg(&log)
+                .status()
+                .await;
         }
         let started_at = crate::util::now_realtime_usec();
-        let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(self.scandir(id)).status().await;
+        let _ = Command::new(tools::path("s6-svc"))
+            .arg("-u")
+            .arg(self.scandir(id))
+            .status()
+            .await;
         let r = self.wait_ready(id, unit, None).await;
         self.job_outcome(id, started_at, r)
     }
@@ -301,9 +339,17 @@ impl Daemon {
 
     /// dyn_stop() of `id` alone: its dependents stay.
     async fn dyn_remove(&self, id: &str, unit: &Unit) -> &'static str {
-        let Some(kind) = self.dynamic_kind(id) else { return "done" };
+        let Some(kind) = self.dynamic_kind(id) else {
+            return "done";
+        };
         if kind == Kind::Oneshot {
-            let active = self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false);
+            let active = self
+                .dynamic
+                .lock()
+                .unwrap()
+                .get(id)
+                .map(|d| d.active)
+                .unwrap_or(false);
             if active {
                 self.run_runner("down", id, None).await;
             }
@@ -315,26 +361,45 @@ impl Daemon {
         if sv.up && !unit.get_all("Service", "ExecStop").is_empty() {
             self.run_runner("stop-exec", id, Some(sv.pid)).await;
         }
-        let _ = Command::new(tools::path("s6-svc")).args(["-wD", "-d", "-T", "120000"]).arg(self.scandir(id)).status().await;
+        let _ = Command::new(tools::path("s6-svc"))
+            .args(["-wD", "-d", "-T", "120000"])
+            .arg(self.scandir(id))
+            .status()
+            .await;
         if let Ok(scan) = fs::canonicalize(self.cfg.live_dir.join("scandir")) {
             // s6-svunlink waits for s6-svscan to end the supervisors, which
             // it doesn't while any entry in the scan directory can't be
             // stat'ed (it aborts the scan). Without a limit this stop, and
             // every job behind it, hung: logind's user@0 stop, then sudo.
             // It exits 0 when the limit passes, too.
-            let st = Command::new(tools::path("s6-svunlink")).args(["-t", "5000"]).arg(&scan).arg(id).status().await;
+            let st = Command::new(tools::path("s6-svunlink"))
+                .args(["-t", "5000"])
+                .arg(&scan)
+                .arg(id)
+                .status()
+                .await;
             let link = scan.join(id);
             if !st.map(|s| s.success()).unwrap_or(false) && fs::symlink_metadata(&link).is_ok() {
                 // It failed before removing the link (it couldn't check the
                 // supervisors). Removing the directory under it would leave
                 // a dangling entry, on which s6-svscan aborts every scan.
-                eprintln!("uinitconverterd: {id}: s6-svunlink failed, removing {}", link.display());
+                eprintln!(
+                    "uinitconverterd: {id}: s6-svunlink failed, removing {}",
+                    link.display()
+                );
                 if let Err(e) = fs::remove_file(&link) {
-                    eprintln!("uinitconverterd: {id}: {}: {e}; keeping its service directory", link.display());
+                    eprintln!(
+                        "uinitconverterd: {id}: {}: {e}; keeping its service directory",
+                        link.display()
+                    );
                     self.drop_stored_fds(id);
                     return "done";
                 }
-                let _ = Command::new(tools::path("s6-svscanctl")).arg("-an").arg(&scan).status().await;
+                let _ = Command::new(tools::path("s6-svscanctl"))
+                    .arg("-an")
+                    .arg(&scan)
+                    .status()
+                    .await;
             }
         }
         self.drop_stored_fds(id);
@@ -359,8 +424,12 @@ impl Daemon {
     /// next start creates it again. Skipped while a job holds the unit.
     pub(super) async fn collect_exited(&self, id: &str, unit: &Unit, after: u64) -> bool {
         let down_since = |sv: &super::s6::SvStat| {
-            let since = crate::state::for_unit(&self.cfg.run_dir, id).get_u64(crate::state::keys::INACTIVE_ENTER);
-            !sv.up && !sv.wanted_up && since > 0 && crate::util::now_realtime_usec().saturating_sub(since) > after
+            let since = crate::state::for_unit(&self.cfg.run_dir, id)
+                .get_u64(crate::state::keys::INACTIVE_ENTER);
+            !sv.up
+                && !sv.wanted_up
+                && since > 0
+                && crate::util::now_realtime_usec().saturating_sub(since) > after
         };
         if unit.utype() != "service" || self.dynamic_kind(id) != Some(Kind::Longrun) {
             return false;
@@ -368,7 +437,9 @@ impl Daemon {
         if !self.svstat(id).await.is_some_and(|sv| down_since(&sv)) {
             return false;
         }
-        let Ok(_guard) = self.unit_lock(id).try_lock_owned() else { return false };
+        let Ok(_guard) = self.unit_lock(id).try_lock_owned() else {
+            return false;
+        };
         // Again under the lock: a start may have run in between.
         if !self.svstat(id).await.is_some_and(|sv| down_since(&sv)) {
             return false;
@@ -408,7 +479,10 @@ impl Daemon {
             // Says where a slow power-off waited (dependents like user@ included).
             let took = t.elapsed();
             if took >= Duration::from_secs(2) {
-                eprintln!("uinitconverterd: stopping {id} took {:.1} s", took.as_secs_f64());
+                eprintln!(
+                    "uinitconverterd: stopping {id} took {:.1} s",
+                    took.as_secs_f64()
+                );
             }
         }
     }

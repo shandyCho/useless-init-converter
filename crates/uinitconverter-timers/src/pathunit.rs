@@ -17,7 +17,9 @@ use crate::util;
 pub use uinitconverter_base::pathspec::*;
 
 fn glob_any(pattern: &str) -> bool {
-    let Ok(c) = CString::new(pattern) else { return false };
+    let Ok(c) = CString::new(pattern) else {
+        return false;
+    };
     unsafe {
         let mut g: libc::glob_t = std::mem::zeroed();
         let r = libc::glob(c.as_ptr(), 0, None, &mut g);
@@ -31,7 +33,9 @@ fn level_holds(kind: &str, p: &str) -> bool {
     match kind {
         "PathExists" => Path::new(p).exists(),
         "PathExistsGlob" => glob_any(p),
-        "DirectoryNotEmpty" => fs::read_dir(p).map(|mut d| d.next().is_some()).unwrap_or(false),
+        "DirectoryNotEmpty" => fs::read_dir(p)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -40,7 +44,10 @@ fn level_holds(kind: &str, p: &str) -> bool {
 fn watch_target(p: &str) -> PathBuf {
     let mut cur = PathBuf::from(p);
     if p.contains(['*', '?', '[']) {
-        cur = cur.parent().map(Path::to_path_buf).unwrap_or_else(|| "/".into());
+        cur = cur
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| "/".into());
     }
     while !cur.exists() {
         match cur.parent() {
@@ -62,9 +69,17 @@ impl Inotify {
     }
 
     fn watch(&self, p: &Path) -> i32 {
-        let Ok(c) = CString::new(p.as_os_str().as_encoded_bytes()) else { return -1 };
-        let mask = libc::IN_CREATE | libc::IN_DELETE | libc::IN_MOVED_TO | libc::IN_MOVED_FROM
-            | libc::IN_CLOSE_WRITE | libc::IN_MODIFY | libc::IN_ATTRIB | libc::IN_DELETE_SELF
+        let Ok(c) = CString::new(p.as_os_str().as_encoded_bytes()) else {
+            return -1;
+        };
+        let mask = libc::IN_CREATE
+            | libc::IN_DELETE
+            | libc::IN_MOVED_TO
+            | libc::IN_MOVED_FROM
+            | libc::IN_CLOSE_WRITE
+            | libc::IN_MODIFY
+            | libc::IN_ATTRIB
+            | libc::IN_DELETE_SELF
             | libc::IN_MOVE_SELF;
         unsafe { libc::inotify_add_watch(self.fd, c.as_ptr(), mask) }
     }
@@ -75,26 +90,39 @@ impl Inotify {
 
     /// Wait up to `ms` for events; returns (any event, any write-type event, any modify event).
     fn wait(&self, ms: i32) -> (bool, bool, bool) {
-        let mut p = libc::pollfd { fd: self.fd, events: libc::POLLIN, revents: 0 };
+        let mut p = libc::pollfd {
+            fd: self.fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         if unsafe { libc::poll(&mut p, 1, ms) } <= 0 {
             return (false, false, false);
         }
         let mut buf = [0u8; 8192];
         let (mut any, mut changed, mut modified) = (false, false, false);
         loop {
-            let n = unsafe { libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            let n =
+                unsafe { libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
             if n <= 0 {
                 break;
             }
             let mut off = 0usize;
             while off + std::mem::size_of::<libc::inotify_event>() <= n as usize {
                 // The byte buffer is not aligned for inotify_event.
-                let ev: libc::inotify_event =
-                    unsafe { std::ptr::read_unaligned(buf.as_ptr().add(off) as *const libc::inotify_event) };
+                let ev: libc::inotify_event = unsafe {
+                    std::ptr::read_unaligned(buf.as_ptr().add(off) as *const libc::inotify_event)
+                };
                 any = true;
                 let m = ev.mask;
-                if m & (libc::IN_CLOSE_WRITE | libc::IN_CREATE | libc::IN_DELETE | libc::IN_MOVED_TO
-                    | libc::IN_MOVED_FROM | libc::IN_ATTRIB | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF) != 0
+                if m & (libc::IN_CLOSE_WRITE
+                    | libc::IN_CREATE
+                    | libc::IN_DELETE
+                    | libc::IN_MOVED_TO
+                    | libc::IN_MOVED_FROM
+                    | libc::IN_ATTRIB
+                    | libc::IN_DELETE_SELF
+                    | libc::IN_MOVE_SELF)
+                    != 0
                 {
                     changed = true;
                 }
@@ -115,8 +143,15 @@ impl Drop for Inotify {
 }
 
 async fn unit_active(conn: &zbus::Connection, unit: &str) -> bool {
-    let Ok(reply) = crate::client::manager_call(conn, "LoadUnit", &(unit,)).await else { return false };
-    let Ok((path,)) = reply.body().deserialize::<(zbus::zvariant::OwnedObjectPath,)>() else { return false };
+    let Ok(reply) = crate::client::manager_call(conn, "LoadUnit", &(unit,)).await else {
+        return false;
+    };
+    let Ok((path,)) = reply
+        .body()
+        .deserialize::<(zbus::zvariant::OwnedObjectPath,)>()
+    else {
+        return false;
+    };
     let r = conn
         .call_method(
             Some("org.freedesktop.systemd1"),
@@ -127,15 +162,25 @@ async fn unit_active(conn: &zbus::Connection, unit: &str) -> bool {
         )
         .await;
     let Ok(r) = r else { return false };
-    let Ok((v,)) = r.body().deserialize::<(zbus::zvariant::OwnedValue,)>() else { return false };
-    let s: String = <&str>::try_from(&*v).map(|s| s.to_string()).unwrap_or_default();
-    matches!(s.as_str(), "active" | "activating" | "reloading" | "deactivating")
+    let Ok((v,)) = r.body().deserialize::<(zbus::zvariant::OwnedValue,)>() else {
+        return false;
+    };
+    let s: String = <&str>::try_from(&*v)
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    matches!(
+        s.as_str(),
+        "active" | "activating" | "reloading" | "deactivating"
+    )
 }
 
 pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
     let unit = Loader::new(&cfg).load(name);
     if !unit.is_loaded() {
-        eprintln!("uinitconverter: path unit {name}: {}", unit.load_state.as_str());
+        eprintln!(
+            "uinitconverter: path unit {name}: {}",
+            unit.load_state.as_str()
+        );
         return 1;
     }
     let target = trigger_unit(&unit);
@@ -163,7 +208,10 @@ pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
         }
     }
 
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("uinitconverter: {e}");
@@ -173,7 +221,10 @@ pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
     rt.block_on(async move {
         let mut conn: Option<zbus::Connection> = None;
         // TriggerLimitBurst within TriggerLimitIntervalSec (defaults 200 / 2 s).
-        let burst: usize = unit.get("Path", "TriggerLimitBurst").and_then(|v| v.parse().ok()).unwrap_or(200);
+        let burst: usize = unit
+            .get("Path", "TriggerLimitBurst")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(200);
         let mut recent: Vec<u64> = Vec::new();
         // One inotify instance for the whole run: a new one each round would
         // lose the events between closing the old and watching with the new.
@@ -212,11 +263,14 @@ pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
                 // the daemon sends (its signals) meanwhile; unread, they fill
                 // the socket and the daemon drops us.
                 let ino = ino.clone();
-                let Ok((_, changed, modified)) = tokio::task::spawn_blocking(move || ino.wait(2000)).await else {
+                let Ok((_, changed, modified)) =
+                    tokio::task::spawn_blocking(move || ino.wait(2000)).await
+                else {
                     return 1;
                 };
                 let edge = specs.iter().any(|(k, _)| {
-                    (k == "PathChanged" && changed) || (k == "PathModified" && (changed || modified))
+                    (k == "PathChanged" && changed)
+                        || (k == "PathModified" && (changed || modified))
                 });
                 fire = edge;
             }
@@ -229,9 +283,14 @@ pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     continue;
                 }
-                match crate::client::manager_call(&c, "StartUnit", &(target.as_str(), "replace")).await {
+                match crate::client::manager_call(&c, "StartUnit", &(target.as_str(), "replace"))
+                    .await
+                {
                     Ok(_) => {
-                        st.set(crate::timer::LAST_TRIGGER, &util::now_realtime_usec().to_string());
+                        st.set(
+                            crate::timer::LAST_TRIGGER,
+                            &util::now_realtime_usec().to_string(),
+                        );
                         // Let the unit become active before re-checking levels.
                         tokio::time::sleep(Duration::from_millis(300)).await;
                     }

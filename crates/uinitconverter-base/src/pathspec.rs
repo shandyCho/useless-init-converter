@@ -2,7 +2,13 @@
 
 use crate::loader::Unit;
 
-pub const KEYS: &[&str] = &["PathExists", "PathExistsGlob", "PathChanged", "PathModified", "DirectoryNotEmpty"];
+pub const KEYS: &[&str] = &[
+    "PathExists",
+    "PathExistsGlob",
+    "PathChanged",
+    "PathModified",
+    "DirectoryNotEmpty",
+];
 
 pub fn trigger_unit(unit: &Unit) -> String {
     unit.get("Path", "Unit")

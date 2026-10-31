@@ -15,7 +15,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{op, job_path, Daemon, MANAGER_IFACE, MANAGER_PATH};
+use super::{job_path, op, Daemon, MANAGER_IFACE, MANAGER_PATH};
 
 /// Netlink multicast group udevd sends processed events to.
 const UDEV_GROUP: u32 = 2;
@@ -44,7 +44,9 @@ type Plugged = BTreeMap<String, Vec<String>>;
 
 impl Daemon {
     pub(super) async fn watch_devices(self: Arc<Self>) {
-        let Some(udev_dir) = self.cfg.udev_dir.clone() else { return };
+        let Some(udev_dir) = self.cfg.udev_dir.clone() else {
+            return;
+        };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         // Listen before scanning, so nothing between the two is missed.
         if self.cfg.udev_monitor {
@@ -84,7 +86,12 @@ impl Daemon {
             return;
         }
         let old = plugged.get(&e.id);
-        let new: Vec<String> = e.wants.iter().filter(|w| !old.is_some_and(|o| o.contains(w))).cloned().collect();
+        let new: Vec<String> = e
+            .wants
+            .iter()
+            .filter(|w| !old.is_some_and(|o| o.contains(w)))
+            .cloned()
+            .collect();
         for name in new {
             let d = self.clone();
             let dev = e.id.clone();
@@ -101,7 +108,13 @@ impl Daemon {
         match self.check_job(&name, "start", false, false).await {
             Ok((id, unit)) => {
                 let job = self.new_job(&id, "start");
-                self.emit(MANAGER_PATH, MANAGER_IFACE, "JobNew", &(job, op(job_path(job)), id.clone())).await;
+                self.emit(
+                    MANAGER_PATH,
+                    MANAGER_IFACE,
+                    "JobNew",
+                    &(job, op(job_path(job)), id.clone()),
+                )
+                .await;
                 let r = self.execute_job(job, &id, &unit, "start", "replace").await;
                 eprintln!("uinitconverterd: {id} wanted by device {dev}: {r}");
             }
@@ -143,13 +156,33 @@ fn save_plugged(path: &Path, plugged: &Plugged) {
 /// the path it is left out.
 pub fn parse_wants(v: &str, syspath: Option<&str>) -> Vec<String> {
     const SUFFIXES: &[&str] = &[
-        ".service", ".socket", ".target", ".device", ".mount", ".automount", ".swap", ".timer", ".path", ".slice",
+        ".service",
+        ".socket",
+        ".target",
+        ".device",
+        ".mount",
+        ".automount",
+        ".swap",
+        ".timer",
+        ".path",
+        ".slice",
         ".scope",
     ];
     v.split_whitespace()
-        .map(|w| if SUFFIXES.iter().any(|s| w.ends_with(s)) { w.to_string() } else { format!("{w}.service") })
+        .map(|w| {
+            if SUFFIXES.iter().any(|s| w.ends_with(s)) {
+                w.to_string()
+            } else {
+                format!("{w}.service")
+            }
+        })
         .filter_map(|w| match w.split_once("@.") {
-            Some((prefix, suffix)) => syspath.map(|p| format!("{prefix}@{}.{suffix}", crate::util::unit_name_path_escape(p))),
+            Some((prefix, suffix)) => syspath.map(|p| {
+                format!(
+                    "{prefix}@{}.{suffix}",
+                    crate::util::unit_name_path_escape(p)
+                )
+            }),
             None => Some(w),
         })
         .collect()
@@ -170,11 +203,16 @@ fn syspath_of_id(id: &str) -> Option<String> {
             .to_string()
     } else {
         let (subsystem, name) = id.strip_prefix('+')?.split_once(':')?;
-        [format!("/sys/bus/{subsystem}/devices/{name}"), format!("/sys/class/{subsystem}/{name}")]
-            .into_iter()
-            .find(|p| std::path::Path::new(p).exists())?
+        [
+            format!("/sys/bus/{subsystem}/devices/{name}"),
+            format!("/sys/class/{subsystem}/{name}"),
+        ]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())?
     };
-    std::fs::canonicalize(link).ok().map(|p| p.display().to_string())
+    std::fs::canonicalize(link)
+        .ok()
+        .map(|p| p.display().to_string())
 }
 
 fn has_tag(tags: &str, tag: &str) -> bool {
@@ -202,7 +240,13 @@ pub fn event_from_props(p: &BTreeMap<String, String>) -> Option<Event> {
         && has_tag(tags, "systemd")
         && get("SYSTEMD_READY").and_then(crate::unit::parse_bool) != Some(false);
     let syspath = format!("/sys{devpath}");
-    Some(Event { id, present, wants: get("SYSTEMD_WANTS").map(|v| parse_wants(v, Some(&syspath))).unwrap_or_default() })
+    Some(Event {
+        id,
+        present,
+        wants: get("SYSTEMD_WANTS")
+            .map(|v| parse_wants(v, Some(&syspath)))
+            .unwrap_or_default(),
+    })
 }
 
 /// Event from a udev database file (data/<id>: "E:KEY=value", "G:tag",
@@ -224,12 +268,18 @@ pub fn event_from_db(id: &str, text: &str, syspath: Option<&str>) -> Event {
         }
     }
     let tags = if current.is_empty() { tags } else { current };
-    Event { id: id.to_string(), present: ready && tags.contains(&"systemd"), wants }
+    Event {
+        id: id.to_string(),
+        present: ready && tags.contains(&"systemd"),
+        wants,
+    }
 }
 
 /// Every device tagged "systemd" in udev's database.
 fn scan_db(udev_dir: &Path) -> Vec<Event> {
-    let Ok(dir) = std::fs::read_dir(udev_dir.join("tags/systemd")) else { return Vec::new() };
+    let Ok(dir) = std::fs::read_dir(udev_dir.join("tags/systemd")) else {
+        return Vec::new();
+    };
     dir.flatten()
         .filter_map(|e| {
             let id = e.file_name().into_string().ok()?;
@@ -281,7 +331,13 @@ fn setsockopt(fd: &OwnedFd, opt: libc::c_int, val: libc::c_int) -> io::Result<()
 }
 
 pub fn open_monitor() -> io::Result<OwnedFd> {
-    let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, libc::NETLINK_KOBJECT_UEVENT) };
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_RAW | libc::SOCK_CLOEXEC,
+            libc::NETLINK_KOBJECT_UEVENT,
+        )
+    };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -313,7 +369,10 @@ pub fn recv_message(fd: &OwnedFd) -> io::Result<Option<BTreeMap<String, String>>
     let mut buf = vec![0u8; 16384];
     let mut sa: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
     let mut cbuf = [0u64; 8];
-    let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut libc::c_void, iov_len: buf.len() };
+    let mut iov = libc::iovec {
+        iov_base: buf.as_mut_ptr() as *mut libc::c_void,
+        iov_len: buf.len(),
+    };
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
     msg.msg_name = &mut sa as *mut libc::sockaddr_nl as *mut libc::c_void;
     msg.msg_namelen = std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t;
@@ -371,7 +430,9 @@ mod tests {
     use super::*;
 
     fn props(kv: &[(&str, &str)]) -> BTreeMap<String, String> {
-        kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        kv.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     /// A message as udevd sends it.
@@ -383,7 +444,15 @@ mod tests {
         }
         let mut m = b"libudev\0".to_vec();
         m.extend_from_slice(&UDEV_MAGIC.to_be_bytes());
-        for v in [HEADER_LEN as u32, HEADER_LEN as u32, body.len() as u32, 0, 0, 0, 0] {
+        for v in [
+            HEADER_LEN as u32,
+            HEADER_LEN as u32,
+            body.len() as u32,
+            0,
+            0,
+            0,
+            0,
+        ] {
             m.extend_from_slice(&v.to_ne_bytes());
         }
         m.extend_from_slice(&body);
@@ -392,7 +461,10 @@ mod tests {
 
     const HCI: &[(&str, &str)] = &[
         ("ACTION", "add"),
-        ("DEVPATH", "/devices/pci0000:00/0000:00:08.1/0000:65:00.4/usb3/3-1/3-1:1.0/bluetooth/hci0"),
+        (
+            "DEVPATH",
+            "/devices/pci0000:00/0000:00:08.1/0000:65:00.4/usb3/3-1/3-1:1.0/bluetooth/hci0",
+        ),
         ("SUBSYSTEM", "bluetooth"),
         ("TAGS", ":systemd:"),
         ("CURRENT_TAGS", ":systemd:"),
@@ -402,9 +474,18 @@ mod tests {
 
     #[test]
     fn wants() {
-        assert_eq!(parse_wants(" a  b.target c@x:y.service ", None), ["a.service", "b.target", "c@x:y.service"]);
+        assert_eq!(
+            parse_wants(" a  b.target c@x:y.service ", None),
+            ["a.service", "b.target", "c@x:y.service"]
+        );
         // Templates take the escaped sysfs path; without it they are left out.
-        assert_eq!(parse_wants("t@.service u@", Some("/sys/devices/a-b")), ["t@sys-devices-a\\x2db.service", "u@sys-devices-a\\x2db.service"]);
+        assert_eq!(
+            parse_wants("t@.service u@", Some("/sys/devices/a-b")),
+            [
+                "t@sys-devices-a\\x2db.service",
+                "u@sys-devices-a\\x2db.service"
+            ]
+        );
         assert!(parse_wants("t@.service", None).is_empty());
     }
 
@@ -414,7 +495,11 @@ mod tests {
         assert_eq!(p.get("SYSTEMD_WANTS").unwrap(), "bluetooth.target");
         assert_eq!(
             event_from_props(&p),
-            Some(Event { id: "+bluetooth:hci0".into(), present: true, wants: vec!["bluetooth.target".into()] })
+            Some(Event {
+                id: "+bluetooth:hci0".into(),
+                present: true,
+                wants: vec!["bluetooth.target".into()]
+            })
         );
         // Kernel uevents ("add@/devices/...") and garbage are ignored.
         assert_eq!(parse_message(b"add@/devices/x\0ACTION=add\0"), None);
@@ -456,8 +541,19 @@ mod tests {
 
     #[test]
     fn database() {
-        let e = event_from_db("+bluetooth:hci0", "I:123\nE:SYSTEMD_WANTS=bluetooth.target\nG:systemd\nQ:systemd\nV:1\n", None);
-        assert_eq!(e, Event { id: "+bluetooth:hci0".into(), present: true, wants: vec!["bluetooth.target".into()] });
+        let e = event_from_db(
+            "+bluetooth:hci0",
+            "I:123\nE:SYSTEMD_WANTS=bluetooth.target\nG:systemd\nQ:systemd\nV:1\n",
+            None,
+        );
+        assert_eq!(
+            e,
+            Event {
+                id: "+bluetooth:hci0".into(),
+                present: true,
+                wants: vec!["bluetooth.target".into()]
+            }
+        );
         assert!(!event_from_db("x", "G:systemd\nQ:seat\n", None).present);
         assert!(!event_from_db("x", "G:systemd\nE:SYSTEMD_READY=0\n", None).present);
         assert!(event_from_db("x", "G:systemd\n", None).present);
@@ -465,7 +561,8 @@ mod tests {
 
     #[test]
     fn plugged_round_trip() {
-        let dir = std::env::temp_dir().join(format!("uinitconverter-devices-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("uinitconverter-devices-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices");
         let mut p = Plugged::new();
@@ -483,7 +580,13 @@ mod tests {
     #[ignore]
     fn netlink_monitor() {
         let rx = open_monitor().unwrap();
-        let tx = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, libc::NETLINK_KOBJECT_UEVENT) };
+        let tx = unsafe {
+            libc::socket(
+                libc::AF_NETLINK,
+                libc::SOCK_RAW | libc::SOCK_CLOEXEC,
+                libc::NETLINK_KOBJECT_UEVENT,
+            )
+        };
         assert!(tx >= 0);
         let tx = unsafe { OwnedFd::from_raw_fd(tx) };
         let send = |m: &[u8]| {

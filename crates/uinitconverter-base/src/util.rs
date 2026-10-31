@@ -21,7 +21,10 @@ pub fn now_realtime_usec() -> u64 {
 }
 
 pub fn now_monotonic_usec() -> u64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
     ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1000
 }
@@ -44,7 +47,9 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
 /// with fcntl(); F_GETLK only looks.
 pub fn lock_held(path: &Path) -> bool {
     use std::os::fd::AsRawFd;
-    let Ok(f) = fs::File::open(path) else { return false };
+    let Ok(f) = fs::File::open(path) else {
+        return false;
+    };
     let mut fl: libc::flock = unsafe { std::mem::zeroed() };
     fl.l_type = libc::F_RDLCK as libc::c_short;
     fl.l_whence = libc::SEEK_SET as libc::c_short;
@@ -175,7 +180,10 @@ pub fn bus_label_unescape(s: &str) -> String {
 /// surrounding slashes dropped, "/" as "-", anything but [A-Za-z0-9:_.]
 /// (and a leading ".") as \xNN.
 pub fn unit_name_path_escape(path: &str) -> String {
-    let parts: Vec<&str> = path.split('/').filter(|c| !c.is_empty() && *c != ".").collect();
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
     if parts.is_empty() {
         return "-".into();
     }
@@ -293,8 +301,7 @@ pub fn signal_name(sig: i32) -> String {
 /// Shell-quote a word for generated scripts.
 pub fn sh_quote(s: &str) -> String {
     if !s.is_empty()
-        && s
-            .bytes()
+        && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"@%+=:,./-_".contains(&b))
     {
         return s.to_string();
@@ -344,10 +351,16 @@ mod tests {
 
     #[test]
     fn path_escape() {
-        assert_eq!(unit_name_path_escape("/sys/devices/pci0000:00/a-b c"), "sys-devices-pci0000:00-a\\x2db\\x20c");
+        assert_eq!(
+            unit_name_path_escape("/sys/devices/pci0000:00/a-b c"),
+            "sys-devices-pci0000:00-a\\x2db\\x20c"
+        );
         assert_eq!(unit_name_path_escape("/"), "-");
         assert_eq!(unit_name_path_escape("/.hidden//x/"), "\\x2ehidden-x");
-        assert_eq!(unit_name_unescape(&unit_name_path_escape("/dev/sda1")), "dev/sda1");
+        assert_eq!(
+            unit_name_unescape(&unit_name_path_escape("/dev/sda1")),
+            "dev/sda1"
+        );
     }
 
     #[test]
@@ -366,7 +379,10 @@ mod tests {
         assert_eq!(path_component("...service"), "...service");
         for bad in ["../../etc/x.service", "/etc", "a/b.service", "..", ".", ""] {
             let c = path_component(bad);
-            assert!(!c.contains('/') && c != ".." && c != "." && !c.is_empty(), "{bad} -> {c}");
+            assert!(
+                !c.contains('/') && c != ".." && c != "." && !c.is_empty(),
+                "{bad} -> {c}"
+            );
         }
         let st = crate::state::for_unit(Path::new("/run/x"), "../../../etc/y.service");
         assert_eq!(st.dir.parent(), Some(Path::new("/run/x/units")));

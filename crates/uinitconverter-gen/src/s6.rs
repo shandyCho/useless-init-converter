@@ -16,22 +16,43 @@ use uinitconverter_base::automask;
 /// plain s6 service directory share: (name, contents, executable).
 /// `on_demand`: the runner binds the sockets and waits for activity before
 /// the first start (see Planned::on_demand).
-pub fn longrun_files(cfg: &Config, id: &str, t: &Timings, on_demand: bool) -> Vec<(&'static str, String, bool)> {
+pub fn longrun_files(
+    cfg: &Config,
+    id: &str,
+    t: &Timings,
+    on_demand: bool,
+) -> Vec<(&'static str, String, bool)> {
     let args = cfg.runner_args();
     let arg = unit_arg(id);
     if id.ends_with(".timer") || id.ends_with(".path") {
-        let sub = if id.ends_with(".timer") { "timer-run" } else { "path-run" };
+        let sub = if id.ends_with(".timer") {
+            "timer-run"
+        } else {
+            "path-run"
+        };
         let timer_runner = cfg.timer_runner.display();
         return vec![
-            ("run", format!("#!/bin/sh\nexec {timer_runner} {sub}{args} {arg}\n"), true),
+            (
+                "run",
+                format!("#!/bin/sh\nexec {timer_runner} {sub}{args} {arg}\n"),
+                true,
+            ),
             ("notification-fd", "3\n".into(), false),
         ];
     }
     let runner = cfg.runner.display();
     let lazy = if on_demand { " --on-demand" } else { "" };
     let mut out = vec![
-        ("run", format!("#!/bin/sh\nexec {runner} run{args}{lazy} {arg}\n"), true),
-        ("finish", format!("#!/bin/sh\nexec {runner} finish{args} {arg} \"$@\"\n"), true),
+        (
+            "run",
+            format!("#!/bin/sh\nexec {runner} run{args}{lazy} {arg}\n"),
+            true,
+        ),
+        (
+            "finish",
+            format!("#!/bin/sh\nexec {runner} finish{args} {arg} \"$@\"\n"),
+            true,
+        ),
         ("notification-fd", "3\n".into(), false),
         ("timeout-up", format!("{}\n", t.up_ms), false),
         ("timeout-down", format!("{}\n", t.down_ms), false),
@@ -61,7 +82,11 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
         let sdir = dir.join(&p.id);
         fs::create_dir_all(&sdir)?;
         write_file(&sdir.join("type"), &format!("{}\n", p.kind.as_str()), false)?;
-        let list_dir = if p.kind == Kind::Bundle { "contents.d" } else { "dependencies.d" };
+        let list_dir = if p.kind == Kind::Bundle {
+            "contents.d"
+        } else {
+            "dependencies.d"
+        };
         fs::create_dir_all(sdir.join(list_dir))?;
         for d in &p.deps {
             fs::write(sdir.join(list_dir).join(d), "")?;
@@ -83,10 +108,26 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
             Kind::Bundle => {}
             Kind::Oneshot => {
                 let arg = unit_arg(&p.id);
-                write_file(&sdir.join("up"), &format!("{runner} up{args} {arg}\n"), false)?;
-                write_file(&sdir.join("down"), &format!("{runner} down{args} {arg}\n"), false)?;
-                write_file(&sdir.join("timeout-up"), &format!("{}\n", p.timings.up_ms), false)?;
-                write_file(&sdir.join("timeout-down"), &format!("{}\n", p.timings.down_ms), false)?;
+                write_file(
+                    &sdir.join("up"),
+                    &format!("{runner} up{args} {arg}\n"),
+                    false,
+                )?;
+                write_file(
+                    &sdir.join("down"),
+                    &format!("{runner} down{args} {arg}\n"),
+                    false,
+                )?;
+                write_file(
+                    &sdir.join("timeout-up"),
+                    &format!("{}\n", p.timings.up_ms),
+                    false,
+                )?;
+                write_file(
+                    &sdir.join("timeout-down"),
+                    &format!("{}\n", p.timings.down_ms),
+                    false,
+                )?;
             }
             Kind::Longrun => {
                 for (name, text, exec) in longrun_files(cfg, &p.id, &p.timings, p.on_demand) {
@@ -172,10 +213,21 @@ fn write_stop_atom(cfg: &Config, plan: &Plan, p: &Planned, sdir: &Path) -> std::
     fs::write(sdir.join("dependencies.d").join(&p.id), "")?;
     // Empty: nothing to do when it comes up.
     write_file(&sdir.join("up"), "", false)?;
-    write_file(&sdir.join("down"), &format!("{runner} stop-atom{args} {}\n", unit_arg(&p.id)), false)?;
+    write_file(
+        &sdir.join("down"),
+        &format!("{runner} stop-atom{args} {}\n", unit_arg(&p.id)),
+        false,
+    )?;
     // The runner ends ExecStop= at TimeoutStopSec= and always succeeds; a
     // failed down would keep s6-rc from stopping the service.
-    let down = if p.timings.down_ms == 0 { 0 } else { p.timings.down_ms.saturating_add(10_000).min(u32::MAX as u64) };
+    let down = if p.timings.down_ms == 0 {
+        0
+    } else {
+        p.timings
+            .down_ms
+            .saturating_add(10_000)
+            .min(u32::MAX as u64)
+    };
     write_file(&sdir.join("timeout-down"), &format!("{down}\n"), false)?;
     if plan.boot.contains(&p.id) {
         fs::write(sdir.join("flag-recommended"), "")?;
@@ -186,7 +238,8 @@ fn write_stop_atom(cfg: &Config, plan: &Plan, p: &Planned, sdir: &Path) -> std::
 fn run(cmd: &mut Command) -> Result<String, String> {
     let out = cmd.output().map_err(|e| format!("{cmd:?}: {e}"))?;
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr))
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr))
     } else {
         Err(format!(
             "{:?} failed: {}{}",
@@ -199,7 +252,10 @@ fn run(cmd: &mut Command) -> Result<String, String> {
 
 /// Replace the symlink `link` with one to `target`, atomically.
 fn swap_symlink(target: &Path, link: &Path) -> Result<(), String> {
-    let name = link.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = link
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let tmp = link.with_file_name(format!(".{name}.tmp"));
     let _ = fs::remove_file(&tmp);
     std::os::unix::fs::symlink(target, &tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -219,9 +275,18 @@ pub fn stores(cfg: &Config) -> Vec<PathBuf> {
 /// when there is no repository.
 fn repo_stores(cfg: &Config) -> Option<Vec<PathBuf>> {
     let dir = cfg.repo_dir.join("stores");
-    let mut names: Vec<String> = fs::read_dir(&dir).ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
     names.sort();
-    Some(names.iter().filter_map(|n| fs::read_link(dir.join(n)).ok()).collect())
+    Some(
+        names
+            .iter()
+            .filter_map(|n| fs::read_link(dir.join(n)).ok())
+            .collect(),
+    )
 }
 
 /// Create the repository, change its stores, or sync it with them.
@@ -229,7 +294,11 @@ fn repo_sync(cfg: &Config) -> Result<(), String> {
     let want = stores(cfg);
     // s6-rc-set-commit makes this bundle itself and refuses a store that
     // defines one (uinitconverter shipped /etc/uinitconverter/s6/default before).
-    if let Some(d) = want.iter().map(|s| s.join(&cfg.default_bundle)).find(|d| d.exists()) {
+    if let Some(d) = want
+        .iter()
+        .map(|s| s.join(&cfg.default_bundle))
+        .find(|d| d.exists())
+    {
         return Err(format!(
             "{}: s6-rc-set-commit makes the {} bundle from the set; remove this one",
             d.display(),
@@ -242,21 +311,32 @@ fn repo_sync(cfg: &Config) -> Result<(), String> {
             if let Some(parent) = cfg.repo_dir.parent() {
                 fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
             }
-            run(Command::new(tools::path("s6-rc-repo-init")).arg("-r").arg(repo).args(&want))?;
+            run(Command::new(tools::path("s6-rc-repo-init"))
+                .arg("-r")
+                .arg(repo)
+                .args(&want))?;
         }
         Some(have) if have != want => {
-            run(Command::new(tools::path("s6-rc-repo-init")).arg("-r").arg(repo).arg("-U").args(&want))?;
+            run(Command::new(tools::path("s6-rc-repo-init"))
+                .arg("-r")
+                .arg(repo)
+                .arg("-U")
+                .args(&want))?;
         }
         Some(_) => {
-            run(Command::new(tools::path("s6-rc-repo-sync")).arg("-r").arg(repo))?;
+            run(Command::new(tools::path("s6-rc-repo-sync"))
+                .arg("-r")
+                .arg(repo))?;
         }
     }
     if !cfg.repo_dir.join("sources").join(&cfg.set_name).is_dir() {
-        run(Command::new(tools::path("s6-rc-set-new")).arg("-r").arg(repo).arg(&cfg.set_name))?;
+        run(Command::new(tools::path("s6-rc-set-new"))
+            .arg("-r")
+            .arg(repo)
+            .arg(&cfg.set_name))?;
     }
     Ok(())
 }
-
 
 /// The early services are `always`: those with flag-essential, and the
 /// members of SYSINIT_BUNDLE (uinitconverter init adds or removes syslog,
@@ -267,10 +347,21 @@ fn repo_sync(cfg: &Config) -> Result<(), String> {
 fn sync_essentials(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
     let sources = cfg.repo_dir.join("sources");
     let atomics = sources.join(".atomics");
-    let Ok(rd) = fs::read_dir(&atomics) else { return Ok(()) };
-    let members: BTreeSet<String> = fs::read_dir(sources.join(".bundles").join(&cfg.sysinit_bundle).join("contents.d"))
-        .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
-        .unwrap_or_default();
+    let Ok(rd) = fs::read_dir(&atomics) else {
+        return Ok(());
+    };
+    let members: BTreeSet<String> = fs::read_dir(
+        sources
+            .join(".bundles")
+            .join(&cfg.sysinit_bundle)
+            .join("contents.d"),
+    )
+    .map(|rd| {
+        rd.flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect()
+    })
+    .unwrap_or_default();
     let mut up = Vec::new();
     let mut down = Vec::new();
     for e in rd.flatten() {
@@ -278,7 +369,8 @@ fn sync_essentials(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String
         if name.starts_with('.') {
             continue;
         }
-        let flagged = atomics.join(&name).join("flag-essential").exists() || members.contains(&name);
+        let flagged =
+            atomics.join(&name).join("flag-essential").exists() || members.contains(&name);
         match (flagged, install::set_rx(cfg, &name)) {
             (true, Some(rx)) if rx != "always" => up.push(name),
             (false, Some("always")) => down.push(name),
@@ -309,7 +401,9 @@ fn sync_essentials(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String
 /// dependency), and set-fix -u makes it active again with the service.
 fn sync_loggers(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
     let atomics = cfg.repo_dir.join("sources").join(".atomics");
-    let Ok(rd) = fs::read_dir(&atomics) else { return Ok(()) };
+    let Ok(rd) = fs::read_dir(&atomics) else {
+        return Ok(());
+    };
     let mut idle = Vec::new();
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
@@ -317,7 +411,9 @@ fn sync_loggers(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
         if name.starts_with('.') || dir.join("producer-for").exists() {
             continue;
         }
-        let Ok(producers) = fs::read_to_string(dir.join("consumer-for")) else { continue };
+        let Ok(producers) = fs::read_to_string(dir.join("consumer-for")) else {
+            continue;
+        };
         if install::set_rx(cfg, &name) == Some("active")
             && !producers
                 .lines()
@@ -337,7 +433,10 @@ fn sync_loggers(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
         .arg(&cfg.set_name)
         .arg("usable")
         .args(&idle))?;
-    changes.push(format!("{} -> usable (logger of a service that is not active)", idle.join(" ")));
+    changes.push(format!(
+        "{} -> usable (logger of a service that is not active)",
+        idle.join(" ")
+    ));
     Ok(())
 }
 
@@ -346,7 +445,13 @@ fn sync_loggers(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
 fn with_companions(cfg: &Config, plan: &Plan, id: &str) -> Vec<String> {
     let mut v = vec![id.to_string()];
     if let Some(p) = plan.units.get(id) {
-        v.extend(p.log_atom.iter().chain(p.stop_atom.iter()).filter(|n| install::set_rx(cfg, n).is_some()).cloned());
+        v.extend(
+            p.log_atom
+                .iter()
+                .chain(p.stop_atom.iter())
+                .filter(|n| install::set_rx(cfg, n).is_some())
+                .cloned(),
+        );
     }
     v
 }
@@ -378,7 +483,11 @@ fn set_change_groups(cfg: &Config, rx: &str, groups: &[(String, Vec<String>)]) -
     for (id, g) in groups {
         match change(g) {
             Ok(_) => moved.push(id.clone()),
-            Err(e) => eprintln!("uinitconverter-gen: {id} stays {}: {}", install::set_rx(cfg, id).unwrap_or("?"), e.trim()),
+            Err(e) => eprintln!(
+                "uinitconverter-gen: {id} stays {}: {}",
+                install::set_rx(cfg, id).unwrap_or("?"),
+                e.trim()
+            ),
         }
     }
     moved
@@ -389,7 +498,10 @@ fn set_change_groups(cfg: &Config, rx: &str, groups: &[(String, Vec<String>)]) -
 /// their jobs during the reload, and stops those running as dynamic
 /// instances first (see undo_auto_mask).
 pub fn auto_masked(cfg: &Config) -> BTreeSet<String> {
-    automask::masked(cfg).into_iter().filter(|n| install::set_rx(cfg, n) == Some("masked")).collect()
+    automask::masked(cfg)
+        .into_iter()
+        .filter(|n| install::set_rx(cfg, n) == Some("masked"))
+        .collect()
 }
 
 /// AUTO_MASK= used to mask unused services in the set and run them as
@@ -412,7 +524,10 @@ fn undo_auto_mask(cfg: &Config, plan: &Plan, changes: &mut Vec<String>) -> Resul
         ours.remove(n);
     }
     if !unmasked.is_empty() {
-        changes.push(format!("{} -> usable (AUTO_MASK= is gone)", unmasked.join(" ")));
+        changes.push(format!(
+            "{} -> usable (AUTO_MASK= is gone)",
+            unmasked.join(" ")
+        ));
     }
     automask::save(cfg, &ours)
 }
@@ -425,11 +540,15 @@ fn undo_auto_mask(cfg: &Config, plan: &Plan, changes: &mut Vec<String>) -> Resul
 /// ExecStop= while X stays up.
 fn sync_stop_atoms(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
     let atomics = cfg.repo_dir.join("sources").join(".atomics");
-    let Ok(rd) = fs::read_dir(&atomics) else { return Ok(()) };
+    let Ok(rd) = fs::read_dir(&atomics) else {
+        return Ok(());
+    };
     let mut moves: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let Some(base) = name.strip_suffix(".stop") else { continue };
+        let Some(base) = name.strip_suffix(".stop") else {
+            continue;
+        };
         if stop_atom(base) != name || !atomics.join(base).exists() {
             continue;
         }
@@ -459,9 +578,18 @@ fn sync_stop_atoms(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String
 /// state) as the live one. s6-rc-set-fix -u first enables what active
 /// services depend on: a new package's service may need one the set has
 /// as usable, and the commit refuses an inconsistent set.
-fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>) -> Result<bool, String> {
+fn commit_and_install(
+    cfg: &Config,
+    update_live: bool,
+    changes: &mut Vec<String>,
+) -> Result<bool, String> {
     let repo = cfg.repo_dir.as_os_str();
-    let out = run(Command::new(tools::path("s6-rc-set-fix")).arg("-r").arg(repo).arg("-v2").arg("-u").arg(&cfg.set_name))?;
+    let out = run(Command::new(tools::path("s6-rc-set-fix"))
+        .arg("-r")
+        .arg(repo)
+        .arg("-v2")
+        .arg("-u")
+        .arg(&cfg.set_name))?;
     changes.extend(
         out.lines()
             .filter_map(|l| l.split_once("moving service ").map(|(_, r)| r.to_string())),
@@ -533,7 +661,10 @@ fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>
             });
         }
         attempt += 1;
-        eprintln!("uinitconverter: installing the set failed, retrying: {}", e.trim());
+        eprintln!(
+            "uinitconverter: installing the set failed, retrying: {}",
+            e.trim()
+        );
         let linking = e.contains("manage new service directories");
         first.get_or_insert(e);
         if linking {
@@ -541,14 +672,21 @@ fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>
             // failed update removed (see relink_supervised).
             relink_supervised(&cfg.live_dir);
         } else if let Ok(scan) = fs::canonicalize(cfg.live_dir.join("scandir")) {
-            let _ = Command::new(tools::path("s6-svscanctl")).arg("-an").arg(scan).status();
+            let _ = Command::new(tools::path("s6-svscanctl"))
+                .arg("-an")
+                .arg(scan)
+                .status();
         }
         std::thread::sleep(std::time::Duration::from_millis(500 * attempt));
         let live_db = fs::canonicalize(cfg.live_dir.join("compiled")).ok();
         res = match &copy {
             Some((name, path)) if live_db.is_some() && live_db == fs::canonicalize(path).ok() => {
-                run(Command::new(tools::path("s6-rc-update")).arg("-e").arg("-l").arg(&cfg.live_dir).arg(path))
-                    .and_then(|_| swap_symlink(name, &cfg.boot_db()))
+                run(Command::new(tools::path("s6-rc-update"))
+                    .arg("-e")
+                    .arg("-l")
+                    .arg(&cfg.live_dir)
+                    .arg(path))
+                .and_then(|_| swap_symlink(name, &cfg.boot_db()))
             }
             Some((_, path)) => {
                 if fs::canonicalize(cfg.boot_db()).ok() != fs::canonicalize(path).ok() {
@@ -572,7 +710,9 @@ fn commit_and_install(cfg: &Config, update_live: bool, changes: &mut Vec<String>
 /// s6-rc-update links them and refuses a link that exists.
 fn relink_supervised(live: &Path) {
     let prefix = fs::read_to_string(live.join("prefix")).unwrap_or_default();
-    let Ok(dir) = fs::read_dir(live.join("servicedirs")) else { return };
+    let Ok(dir) = fs::read_dir(live.join("servicedirs")) else {
+        return;
+    };
     for e in dir.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') {
@@ -586,7 +726,10 @@ fn relink_supervised(live: &Path) {
         }
         // The target s6-rc gives it: LIVE/servicedirs/NAME as -l names LIVE.
         match std::os::unix::fs::symlink(live.join("servicedirs").join(&name), &link) {
-            Ok(()) => eprintln!("uinitconverter: relinked {} (its supervisor still runs)", link.display()),
+            Ok(()) => eprintln!(
+                "uinitconverter: relinked {} (its supervisor still runs)",
+                link.display()
+            ),
             Err(err) => eprintln!("uinitconverter: relinking {}: {err}", link.display()),
         }
     }
@@ -665,7 +808,10 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
             swap_symlink(&cur, &cfg.state_dir.join("previous"))?;
         }
     }
-    swap_symlink(&PathBuf::from("db").join(&stamp), &cfg.state_dir.join("current"))?;
+    swap_symlink(
+        &PathBuf::from("db").join(&stamp),
+        &cfg.state_dir.join("current"),
+    )?;
 
     // Garbage-collect generated sources that are neither current nor
     // previous, keeping any that still hold a database in use (databases
@@ -688,13 +834,20 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
     let copy_prefix = format!(".{}:", cfg.set_name);
     if let Ok(rd) = fs::read_dir(&state_abs) {
         for e in rd.flatten() {
-            if e.file_name().to_string_lossy().starts_with(&copy_prefix) && !keep.contains(&e.path()) {
+            if e.file_name().to_string_lossy().starts_with(&copy_prefix)
+                && !keep.contains(&e.path())
+            {
                 let _ = fs::remove_dir_all(e.path());
             }
         }
     }
 
-    Ok(GenResult { db_dir, plan, updated_live, set_changes })
+    Ok(GenResult {
+        db_dir,
+        plan,
+        updated_live,
+        set_changes,
+    })
 }
 
 #[cfg(test)]
@@ -706,7 +859,8 @@ mod tests {
     #[test]
     fn relink_supervised_only_locked() {
         use std::io::{BufRead, Write};
-        let tmp = std::env::temp_dir().join(format!("uinitconverter-gen-relink-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-gen-relink-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let live = tmp.join("live");
         for n in ["run.service", "new.service", "kept.service"] {
@@ -725,7 +879,9 @@ mod tests {
             .spawn()
             .unwrap();
         let mut line = String::new();
-        std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
         assert_eq!(line.trim(), "locked");
 
         relink_supervised(&live);
@@ -734,7 +890,10 @@ mod tests {
             live.join("servicedirs/run.service")
         );
         assert!(fs::symlink_metadata(live.join("scandir/new.service")).is_err());
-        assert_eq!(fs::read_link(live.join("scandir/kept.service")).unwrap(), Path::new("elsewhere"));
+        assert_eq!(
+            fs::read_link(live.join("scandir/kept.service")).unwrap(),
+            Path::new("elsewhere")
+        );
         let _ = child.stdin.take().unwrap().write_all(b"");
         let _ = child.wait();
         let _ = fs::remove_dir_all(&tmp);

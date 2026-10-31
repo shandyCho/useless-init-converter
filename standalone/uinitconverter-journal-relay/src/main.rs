@@ -27,11 +27,20 @@ fn main() {
     let mut ready_fd = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
-        let mut val = || it.next().unwrap_or_else(|| die(&format!("{a} needs a value")));
+        let mut val = || {
+            it.next()
+                .unwrap_or_else(|| die(&format!("{a} needs a value")))
+        };
         match a.as_str() {
             "--dir" => dir = PathBuf::from(val()),
             "--syslog" => syslog = PathBuf::from(val()),
-            "--ready-fd" => ready_fd = Some(val().parse().unwrap_or_else(|_| die("--ready-fd needs a number"))),
+            "--ready-fd" => {
+                ready_fd = Some(
+                    val()
+                        .parse()
+                        .unwrap_or_else(|_| die("--ready-fd needs a number")),
+                )
+            }
             "-h" | "--help" => {
                 print!("{USAGE}");
                 exit(0);

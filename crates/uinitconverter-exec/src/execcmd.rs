@@ -86,7 +86,14 @@ pub fn resolve_path(path: &str) -> String {
     if path.starts_with('/') {
         return path.to_string();
     }
-    for dir in ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"] {
+    for dir in [
+        "/usr/local/sbin",
+        "/usr/local/bin",
+        "/usr/sbin",
+        "/usr/bin",
+        "/sbin",
+        "/bin",
+    ] {
         let p = format!("{dir}/{path}");
         if std::path::Path::new(&p).exists() {
             return p;

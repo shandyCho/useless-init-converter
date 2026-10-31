@@ -60,10 +60,16 @@ impl Field {
         let mut comps = Vec::new();
         for part in s.split(',') {
             let (range, step) = match part.split_once('/') {
-                Some((r, st)) => (r, st.parse::<u32>().map_err(|_| format!("bad step in {s}"))?),
+                Some((r, st)) => (
+                    r,
+                    st.parse::<u32>().map_err(|_| format!("bad step in {s}"))?,
+                ),
                 None => (part, 0),
             };
-            let num = |x: &str| x.parse::<u32>().map_err(|_| format!("bad number '{x}' in {s}"));
+            let num = |x: &str| {
+                x.parse::<u32>()
+                    .map_err(|_| format!("bad number '{x}' in {s}"))
+            };
             // "a/step" and "*/step" are open-ended (rendered without an end).
             let (start, end) = if range == "*" {
                 (0, if step > 0 { u32::MAX } else { max })
@@ -126,7 +132,10 @@ const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 fn weekday_index(s: &str) -> Option<u8> {
     let l = s.to_ascii_lowercase();
-    WEEKDAYS.iter().position(|w| l.starts_with(w)).map(|p| p as u8)
+    WEEKDAYS
+        .iter()
+        .position(|w| l.starts_with(w))
+        .map(|p| p as u8)
 }
 
 fn parse_weekdays(s: &str) -> Result<u8, String> {
@@ -153,7 +162,11 @@ fn parse_weekdays(s: &str) -> Result<u8, String> {
 }
 
 fn is_timezone(s: &str) -> bool {
-    s == "UTC" || s.contains('/') && std::path::Path::new("/usr/share/zoneinfo").join(s).is_file()
+    s == "UTC"
+        || s.contains('/')
+            && std::path::Path::new("/usr/share/zoneinfo")
+                .join(s)
+                .is_file()
 }
 
 impl CalendarSpec {
@@ -171,7 +184,11 @@ impl CalendarSpec {
             "semiannually" => "*-01,07-01 00:00:00".to_string(),
             _ => String::new(),
         };
-        let expanded = if short.is_empty() { s.to_string() } else { format!("{short} {tail}") };
+        let expanded = if short.is_empty() {
+            s.to_string()
+        } else {
+            format!("{short} {tail}")
+        };
         let mut tokens: Vec<&str> = expanded.split_whitespace().collect();
         if tokens.is_empty() {
             return Err("empty calendar specification".into());
@@ -182,9 +199,21 @@ impl CalendarSpec {
             month: Field::any(),
             day: Field::any(),
             end_of_month: false,
-            hour: Field(Some(vec![Comp { start: 0, end: 0, step: 0 }])),
-            minute: Field(Some(vec![Comp { start: 0, end: 0, step: 0 }])),
-            second: Field(Some(vec![Comp { start: 0, end: 0, step: 0 }])),
+            hour: Field(Some(vec![Comp {
+                start: 0,
+                end: 0,
+                step: 0,
+            }])),
+            minute: Field(Some(vec![Comp {
+                start: 0,
+                end: 0,
+                step: 0,
+            }])),
+            second: Field(Some(vec![Comp {
+                start: 0,
+                end: 0,
+                step: 0,
+            }])),
             tz: None,
         };
         if let Some(last) = tokens.last() {
@@ -194,7 +223,12 @@ impl CalendarSpec {
             }
         }
         let first = tokens[0];
-        if first.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+        if first
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphabetic())
+            .unwrap_or(false)
+        {
             spec.weekdays = Some(parse_weekdays(first)?);
             tokens.remove(0);
         }
@@ -257,7 +291,10 @@ impl CalendarSpec {
         let mut s = String::new();
         if let Some(mask) = self.weekdays {
             let names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-            let days: Vec<&str> = (0..7).filter(|i| mask & (1 << i) != 0).map(|i| names[i]).collect();
+            let days: Vec<&str> = (0..7)
+                .filter(|i| mask & (1 << i) != 0)
+                .map(|i| names[i])
+                .collect();
             s.push_str(&days.join(","));
             s.push(' ');
         }
@@ -298,7 +335,11 @@ impl CalendarSpec {
         if hours.is_empty() || minutes.is_empty() || seconds.is_empty() {
             return None;
         }
-        let (mut y, mut m, mut d) = ((now.tm_year + 1900) as u32, (now.tm_mon + 1) as u32, now.tm_mday as u32);
+        let (mut y, mut m, mut d) = (
+            (now.tm_year + 1900) as u32,
+            (now.tm_mon + 1) as u32,
+            now.tm_mday as u32,
+        );
 
         // Skip whole years and months that cannot match, so far-future dates are cheap.
         for _ in 0..200_000 {
@@ -320,7 +361,11 @@ impl CalendarSpec {
                 continue;
             }
             let dim = days_in_month(y, m);
-            let day_ok = if self.end_of_month { self.day.matches_from_end(dim - d + 1) } else { self.day.matches(d) };
+            let day_ok = if self.end_of_month {
+                self.day.matches_from_end(dim - d + 1)
+            } else {
+                self.day.matches(d)
+            };
             let wd_ok = self
                 .weekdays
                 .map(|mask| mask & (1 << weekday(y, m, d)) != 0)
@@ -460,34 +505,88 @@ mod tests {
 
     #[test]
     fn shorthands() {
-        assert_eq!(fmt(utc("daily").next_after(NOW).unwrap()), "2026-10-19 00:00:00");
-        assert_eq!(fmt(utc("hourly").next_after(NOW).unwrap()), "2026-10-18 13:00:00");
-        assert_eq!(fmt(utc("weekly").next_after(NOW).unwrap()), "2026-10-19 00:00:00");
-        assert_eq!(fmt(utc("monthly").next_after(NOW).unwrap()), "2026-11-01 00:00:00");
-        assert_eq!(fmt(utc("yearly").next_after(NOW).unwrap()), "2027-01-01 00:00:00");
-        assert_eq!(fmt(utc("minutely").next_after(NOW).unwrap()), "2026-10-18 12:35:00");
+        assert_eq!(
+            fmt(utc("daily").next_after(NOW).unwrap()),
+            "2026-10-19 00:00:00"
+        );
+        assert_eq!(
+            fmt(utc("hourly").next_after(NOW).unwrap()),
+            "2026-10-18 13:00:00"
+        );
+        assert_eq!(
+            fmt(utc("weekly").next_after(NOW).unwrap()),
+            "2026-10-19 00:00:00"
+        );
+        assert_eq!(
+            fmt(utc("monthly").next_after(NOW).unwrap()),
+            "2026-11-01 00:00:00"
+        );
+        assert_eq!(
+            fmt(utc("yearly").next_after(NOW).unwrap()),
+            "2027-01-01 00:00:00"
+        );
+        assert_eq!(
+            fmt(utc("minutely").next_after(NOW).unwrap()),
+            "2026-10-18 12:35:00"
+        );
     }
 
     #[test]
     fn expressions() {
-        assert_eq!(fmt(utc("*:0/15").next_after(NOW).unwrap()), "2026-10-18 12:45:00");
-        assert_eq!(fmt(utc("Mon..Fri 09:00").next_after(NOW).unwrap()), "2026-10-19 09:00:00");
-        assert_eq!(fmt(utc("Sat,Sun 20:00").next_after(NOW).unwrap()), "2026-10-18 20:00:00");
-        assert_eq!(fmt(utc("*-*-01,15 03:30:00").next_after(NOW).unwrap()), "2026-11-01 03:30:00");
-        assert_eq!(fmt(utc("*-02~01").next_after(NOW).unwrap()), "2027-02-28 00:00:00");
+        assert_eq!(
+            fmt(utc("*:0/15").next_after(NOW).unwrap()),
+            "2026-10-18 12:45:00"
+        );
+        assert_eq!(
+            fmt(utc("Mon..Fri 09:00").next_after(NOW).unwrap()),
+            "2026-10-19 09:00:00"
+        );
+        assert_eq!(
+            fmt(utc("Sat,Sun 20:00").next_after(NOW).unwrap()),
+            "2026-10-18 20:00:00"
+        );
+        assert_eq!(
+            fmt(utc("*-*-01,15 03:30:00").next_after(NOW).unwrap()),
+            "2026-11-01 03:30:00"
+        );
+        assert_eq!(
+            fmt(utc("*-02~01").next_after(NOW).unwrap()),
+            "2027-02-28 00:00:00"
+        );
         // The last Monday in May (systemd.time(7)).
-        assert_eq!(fmt(utc("Mon *-05~07/1").next_after(NOW).unwrap()), "2027-05-31 00:00:00");
-        assert_eq!(fmt(utc("2027-03-04 05:06:07").next_after(NOW).unwrap()), "2027-03-04 05:06:07");
-        assert_eq!(fmt(utc("*-*-* 12:34:56").next_after(NOW).unwrap()), "2026-10-19 12:34:56");
+        assert_eq!(
+            fmt(utc("Mon *-05~07/1").next_after(NOW).unwrap()),
+            "2027-05-31 00:00:00"
+        );
+        assert_eq!(
+            fmt(utc("2027-03-04 05:06:07").next_after(NOW).unwrap()),
+            "2027-03-04 05:06:07"
+        );
+        assert_eq!(
+            fmt(utc("*-*-* 12:34:56").next_after(NOW).unwrap()),
+            "2026-10-19 12:34:56"
+        );
         assert!(utc("2020-01-01").next_after(NOW).is_none());
-        assert_eq!(fmt(utc("2099-01-01 00:00:00").next_after(NOW).unwrap()), "2099-01-01 00:00:00");
-        assert_eq!(fmt(utc("Fri *-*-13").next_after(NOW).unwrap()), "2026-11-13 00:00:00");
+        assert_eq!(
+            fmt(utc("2099-01-01 00:00:00").next_after(NOW).unwrap()),
+            "2099-01-01 00:00:00"
+        );
+        assert_eq!(
+            fmt(utc("Fri *-*-13").next_after(NOW).unwrap()),
+            "2026-11-13 00:00:00"
+        );
     }
 
     #[test]
     fn render() {
-        assert_eq!(CalendarSpec::parse("daily").unwrap().render(), "*-*-* 00:00:00");
-        assert_eq!(CalendarSpec::parse("Mon..Fri *:0/15").unwrap().render(), "Mon,Tue,Wed,Thu,Fri *-*-* *:00/15:00");
+        assert_eq!(
+            CalendarSpec::parse("daily").unwrap().render(),
+            "*-*-* 00:00:00"
+        );
+        assert_eq!(
+            CalendarSpec::parse("Mon..Fri *:0/15").unwrap().render(),
+            "Mon,Tue,Wed,Thu,Fri *-*-* *:00/15:00"
+        );
     }
 
     #[test]

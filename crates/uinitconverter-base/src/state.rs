@@ -56,7 +56,10 @@ impl UnitState {
     /// Record "<key>" as realtime and "<key>-mono" as monotonic usec.
     pub fn stamp(&self, key: &str) {
         self.set(key, &util::now_realtime_usec().to_string());
-        self.set(&format!("{key}-mono"), &util::now_monotonic_usec().to_string());
+        self.set(
+            &format!("{key}-mono"),
+            &util::now_monotonic_usec().to_string(),
+        );
     }
 }
 

@@ -21,7 +21,13 @@ fn errno() -> String {
     std::io::Error::last_os_error().to_string()
 }
 
-fn mount(src: &str, dst: &str, fstype: Option<&str>, flags: libc::c_ulong, data: Option<&str>) -> Result<(), String> {
+fn mount(
+    src: &str,
+    dst: &str,
+    fstype: Option<&str>,
+    flags: libc::c_ulong,
+    data: Option<&str>,
+) -> Result<(), String> {
     let s = cstr(src);
     let d = cstr(dst);
     let t = fstype.map(cstr);
@@ -32,7 +38,9 @@ fn mount(src: &str, dst: &str, fstype: Option<&str>, flags: libc::c_ulong, data:
             d.as_ptr(),
             t.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null()),
             flags,
-            o.as_ref().map(|c| c.as_ptr() as *const libc::c_void).unwrap_or(std::ptr::null()),
+            o.as_ref()
+                .map(|c| c.as_ptr() as *const libc::c_void)
+                .unwrap_or(std::ptr::null()),
         )
     };
     if r < 0 {
@@ -59,7 +67,12 @@ fn set_readonly(path: &str, ro: bool) -> Result<(), String> {
 
 /// `at_flags`: for mount_setattr. `keep`: the flags the remount of the
 /// fallback must repeat, as it replaces them.
-fn set_mount_attr(path: &str, ro: bool, at_flags: libc::c_uint, keep: libc::c_ulong) -> Result<(), String> {
+fn set_mount_attr(
+    path: &str,
+    ro: bool,
+    at_flags: libc::c_uint,
+    keep: libc::c_ulong,
+) -> Result<(), String> {
     let attr = MountAttr {
         attr_set: if ro { MOUNT_ATTR_RDONLY } else { 0 },
         attr_clr: if ro { 0 } else { MOUNT_ATTR_RDONLY },
@@ -167,7 +180,9 @@ impl Sandbox {
         let hostname = unit.get("Service", "ProtectHostname").unwrap_or_default();
         // "private"/"strict" also want a cgroup namespace; read-only is the
         // part both share with "yes".
-        let cgroups = unit.get("Service", "ProtectControlGroups").unwrap_or_default();
+        let cgroups = unit
+            .get("Service", "ProtectControlGroups")
+            .unwrap_or_default();
         let protect_proc = match unit.get("Service", "ProtectProc").as_deref() {
             Some(v @ ("noaccess" | "invisible" | "ptraceable")) => v.to_string(),
             _ => String::new(),
@@ -182,7 +197,8 @@ impl Sandbox {
             protect_kernel_tunables: on("ProtectKernelTunables"),
             protect_kernel_modules: on("ProtectKernelModules"),
             protect_kernel_logs: on("ProtectKernelLogs"),
-            protect_control_groups: crate::unit::parse_bool(&cgroups).unwrap_or(matches!(cgroups.as_str(), "private" | "strict")),
+            protect_control_groups: crate::unit::parse_bool(&cgroups)
+                .unwrap_or(matches!(cgroups.as_str(), "private" | "strict")),
             protect_proc,
             proc_subset_pid: unit.get("Service", "ProcSubset").as_deref() == Some("pid"),
             protect_system: norm(ps),
@@ -218,7 +234,13 @@ impl Sandbox {
     /// an empty file and take writes).
     fn make_inaccessible(&self, p: &str) -> Result<(), String> {
         if Path::new(p).is_dir() {
-            return mount("tmpfs", p, Some("tmpfs"), libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC, Some("mode=0000"));
+            return mount(
+                "tmpfs",
+                p,
+                Some("tmpfs"),
+                libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                Some("mode=0000"),
+            );
         }
         bind(&self.inaccessible_file.display().to_string(), p)?;
         set_readonly(p, true)
@@ -251,7 +273,8 @@ impl Sandbox {
             let f = &self.inaccessible_file;
             fs::write(f, b"").map_err(|e| format!("{}: {e}", f.display()))?;
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(f, fs::Permissions::from_mode(0)).map_err(|e| format!("{}: {e}", f.display()))?;
+            fs::set_permissions(f, fs::Permissions::from_mode(0))
+                .map_err(|e| format!("{}: {e}", f.display()))?;
         }
         Ok(())
     }
@@ -270,7 +293,10 @@ impl Sandbox {
         }
         // Each process of the unit gets its own: systemd shares one per unit.
         if flags != 0 && unsafe { libc::unshare(flags) } < 0 {
-            return Err(format!("unshare(PrivateNetwork/PrivateIPC/ProtectHostname): {}", errno()));
+            return Err(format!(
+                "unshare(PrivateNetwork/PrivateIPC/ProtectHostname): {}",
+                errno()
+            ));
         }
         if self.private_network {
             loopback_up()?;
@@ -326,8 +352,18 @@ impl Sandbox {
                     if mode == "read-only" {
                         bind_ro(d)?;
                     } else {
-                        let opts = if mode == "yes" { "mode=0000" } else { "mode=0755" };
-                        mount("tmpfs", d, Some("tmpfs"), libc::MS_NOSUID | libc::MS_NODEV, Some(opts))?;
+                        let opts = if mode == "yes" {
+                            "mode=0000"
+                        } else {
+                            "mode=0755"
+                        };
+                        mount(
+                            "tmpfs",
+                            d,
+                            Some("tmpfs"),
+                            libc::MS_NOSUID | libc::MS_NODEV,
+                            Some(opts),
+                        )?;
                         // As systemd's mount_tmpfs: the label of the path it covers
                         // (admin_home_t for /root), not tmpfs_t.
                         crate::selinux::label_as(&[(d.to_string(), d.to_string())]);
@@ -391,14 +427,30 @@ impl Sandbox {
         }
         if self.private_ipc && Path::new("/dev/mqueue").is_dir() {
             // The mqueue mount shows the namespace it was mounted in.
-            let _ = mount("mqueue", "/dev/mqueue", Some("mqueue"), libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC, None);
+            let _ = mount(
+                "mqueue",
+                "/dev/mqueue",
+                Some("mqueue"),
+                libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                None,
+            );
         }
         if self.protect_kernel_tunables {
             for (p, inaccessible) in [
-                ("/proc/acpi", false), ("/proc/apm", false), ("/proc/asound", false), ("/proc/bus", false),
-                ("/proc/fs", false), ("/proc/irq", false), ("/proc/kallsyms", true), ("/proc/kcore", true),
-                ("/proc/latency_stats", false), ("/proc/mtrr", false), ("/proc/scsi", false),
-                ("/proc/sys", false), ("/proc/sysrq-trigger", false), ("/proc/timer_list", false),
+                ("/proc/acpi", false),
+                ("/proc/apm", false),
+                ("/proc/asound", false),
+                ("/proc/bus", false),
+                ("/proc/fs", false),
+                ("/proc/irq", false),
+                ("/proc/kallsyms", true),
+                ("/proc/kcore", true),
+                ("/proc/latency_stats", false),
+                ("/proc/mtrr", false),
+                ("/proc/scsi", false),
+                ("/proc/sys", false),
+                ("/proc/sysrq-trigger", false),
+                ("/proc/timer_list", false),
                 ("/sys", false),
             ] {
                 if !Path::new(p).exists() {
@@ -412,7 +464,8 @@ impl Sandbox {
             }
             // /sys went read-only with all its submounts: these stay as they were.
             for p in ["/sys/fs/cgroup", "/sys/fs/selinux"] {
-                if Path::new(p).is_dir() && !(p == "/sys/fs/cgroup" && self.protect_control_groups) {
+                if Path::new(p).is_dir() && !(p == "/sys/fs/cgroup" && self.protect_control_groups)
+                {
                     bind_rw(p)?;
                 }
             }
@@ -452,7 +505,11 @@ impl Sandbox {
         }
         // systemd applies the mounts shortest path first: a writable path
         // below a ReadOnlyPaths= entry stays writable.
-        let below_ro = |p: &str| self.read_only.iter().any(|(q, _)| p != q && Path::new(p).starts_with(q));
+        let below_ro = |p: &str| {
+            self.read_only
+                .iter()
+                .any(|(q, _)| p != q && Path::new(p).starts_with(q))
+        };
         for p in rw.iter().filter(|p| below_ro(p)) {
             bind_rw(p)?;
         }
@@ -467,11 +524,16 @@ impl Sandbox {
     }
 }
 
-
 /// PrivateDevices=: a /dev with only the pseudo devices, like systemd's. The
 /// nodes are bind mounts of the real ones (keeps their SELinux labels).
 fn private_dev(staging: &str) -> Result<(), String> {
-    mount("tmpfs", staging, Some("tmpfs"), libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_STRICTATIME, Some("mode=0755"))?;
+    mount(
+        "tmpfs",
+        staging,
+        Some("tmpfs"),
+        libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_STRICTATIME,
+        Some("mode=0755"),
+    )?;
     let at = |n: &str| format!("{staging}/{n}");
     for n in ["null", "zero", "full", "random", "urandom", "tty"] {
         let src = format!("/dev/{n}");
@@ -486,8 +548,14 @@ fn private_dev(staging: &str) -> Result<(), String> {
     let pts_flags = libc::MS_NOSUID | libc::MS_NOEXEC;
     let opts = "newinstance,ptmxmode=0666,mode=0620";
     // gid= fails where the tty group isn't mapped (a user namespace).
-    mount("devpts", &at("pts"), Some("devpts"), pts_flags, Some(&format!("{opts},gid={tty_gid}")))
-        .or_else(|_| mount("devpts", &at("pts"), Some("devpts"), pts_flags, Some(opts)))?;
+    mount(
+        "devpts",
+        &at("pts"),
+        Some("devpts"),
+        pts_flags,
+        Some(&format!("{opts},gid={tty_gid}")),
+    )
+    .or_else(|_| mount("devpts", &at("pts"), Some("devpts"), pts_flags, Some(opts)))?;
     let _ = std::os::unix::fs::symlink("pts/ptmx", at("ptmx"));
     for d in ["shm", "mqueue", "hugepages"] {
         let src = format!("/dev/{d}");
@@ -496,7 +564,12 @@ fn private_dev(staging: &str) -> Result<(), String> {
             bind(&src, &at(d))?;
         }
     }
-    for (n, target) in [("fd", "/proc/self/fd"), ("stdin", "/proc/self/fd/0"), ("stdout", "/proc/self/fd/1"), ("stderr", "/proc/self/fd/2")] {
+    for (n, target) in [
+        ("fd", "/proc/self/fd"),
+        ("stdin", "/proc/self/fd/0"),
+        ("stdout", "/proc/self/fd/1"),
+        ("stderr", "/proc/self/fd/2"),
+    ] {
         let _ = std::os::unix::fs::symlink(target, at(n));
     }
     // /dev/log: journald's syslog socket, a symlink on Fedora.
@@ -534,7 +607,11 @@ fn loopback_up() -> Result<(), String> {
     if fd < 0 {
         return Err(format!("PrivateNetwork: socket: {}", errno()));
     }
-    let mut ifr = IfReq { name: [0; 16], flags: 0, pad: [0; 22] };
+    let mut ifr = IfReq {
+        name: [0; 16],
+        flags: 0,
+        pad: [0; 22],
+    };
     ifr.name[..2].copy_from_slice(b"lo");
     let r = unsafe {
         if libc::ioctl(fd, libc::SIOCGIFFLAGS, &mut ifr) < 0 {
@@ -555,12 +632,47 @@ fn loopback_up() -> Result<(), String> {
 // ---- capabilities ----
 
 const CAP_NAMES: &[&str] = &[
-    "CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID",
-    "SETPCAP", "LINUX_IMMUTABLE", "NET_BIND_SERVICE", "NET_BROADCAST", "NET_ADMIN", "NET_RAW",
-    "IPC_LOCK", "IPC_OWNER", "SYS_MODULE", "SYS_RAWIO", "SYS_CHROOT", "SYS_PTRACE", "SYS_PACCT",
-    "SYS_ADMIN", "SYS_BOOT", "SYS_NICE", "SYS_RESOURCE", "SYS_TIME", "SYS_TTY_CONFIG", "MKNOD",
-    "LEASE", "AUDIT_WRITE", "AUDIT_CONTROL", "SETFCAP", "MAC_OVERRIDE", "MAC_ADMIN", "SYSLOG",
-    "WAKE_ALARM", "BLOCK_SUSPEND", "AUDIT_READ", "PERFMON", "BPF", "CHECKPOINT_RESTORE",
+    "CHOWN",
+    "DAC_OVERRIDE",
+    "DAC_READ_SEARCH",
+    "FOWNER",
+    "FSETID",
+    "KILL",
+    "SETGID",
+    "SETUID",
+    "SETPCAP",
+    "LINUX_IMMUTABLE",
+    "NET_BIND_SERVICE",
+    "NET_BROADCAST",
+    "NET_ADMIN",
+    "NET_RAW",
+    "IPC_LOCK",
+    "IPC_OWNER",
+    "SYS_MODULE",
+    "SYS_RAWIO",
+    "SYS_CHROOT",
+    "SYS_PTRACE",
+    "SYS_PACCT",
+    "SYS_ADMIN",
+    "SYS_BOOT",
+    "SYS_NICE",
+    "SYS_RESOURCE",
+    "SYS_TIME",
+    "SYS_TTY_CONFIG",
+    "MKNOD",
+    "LEASE",
+    "AUDIT_WRITE",
+    "AUDIT_CONTROL",
+    "SETFCAP",
+    "MAC_OVERRIDE",
+    "MAC_ADMIN",
+    "SYSLOG",
+    "WAKE_ALARM",
+    "BLOCK_SUSPEND",
+    "AUDIT_READ",
+    "PERFMON",
+    "BPF",
+    "CHECKPOINT_RESTORE",
 ];
 
 pub fn last_cap() -> u32 {
@@ -581,7 +693,11 @@ pub fn parse_capset(unit: &Unit, key: &str) -> Option<u64> {
     if values.is_empty() {
         return None;
     }
-    let all: u64 = if last_cap() >= 63 { u64::MAX } else { (1u64 << (last_cap() + 1)) - 1 };
+    let all: u64 = if last_cap() >= 63 {
+        u64::MAX
+    } else {
+        (1u64 << (last_cap() + 1)) - 1
+    };
     let mut set: Option<u64> = None;
     for v in values {
         let (invert, list) = match v.strip_prefix('~') {
@@ -637,12 +753,19 @@ pub fn bounding_set(unit: &Unit) -> Option<u64> {
     let set = parse_capset(unit, "CapabilityBoundingSet").or_else(|| {
         // A lone `CapabilityBoundingSet=` is not "never set": systemd.exec(5)
         // resets the bounding set to the empty set (upower, systemd-localed).
-        unit.file.keys_in("Service").contains(&"CapabilityBoundingSet").then_some(0)
+        unit.file
+            .keys_in("Service")
+            .contains(&"CapabilityBoundingSet")
+            .then_some(0)
     });
     if drop == 0 {
         return set;
     }
-    let all: u64 = if last_cap() >= 63 { u64::MAX } else { (1u64 << (last_cap() + 1)) - 1 };
+    let all: u64 = if last_cap() >= 63 {
+        u64::MAX
+    } else {
+        (1u64 << (last_cap() + 1)) - 1
+    };
     Some(set.unwrap_or(all) & !drop)
 }
 
@@ -658,27 +781,43 @@ pub fn no_new_privileges(unit: &Unit, runs_as_root: bool) -> bool {
         return true;
     }
     let sys_admin = 1u64 << cap_number("SYS_ADMIN").unwrap_or(21);
-    let ambient = parse_capset(unit, "AmbientCapabilities").unwrap_or(0) & bounding_set(unit).unwrap_or(u64::MAX);
+    let ambient = parse_capset(unit, "AmbientCapabilities").unwrap_or(0)
+        & bounding_set(unit).unwrap_or(u64::MAX);
     let has_sys_admin = runs_as_root || ambient & sys_admin != 0;
     if has_sys_admin {
         return false;
     }
     let on = |key: &str| unit.get_bool("Service", key, false);
     [
-        "LockPersonality", "MemoryDenyWriteExecute", "PrivateDevices", "ProtectClock", "ProtectHostname",
-        "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs", "RestrictRealtime", "RestrictSUIDSGID",
+        "LockPersonality",
+        "MemoryDenyWriteExecute",
+        "PrivateDevices",
+        "ProtectClock",
+        "ProtectHostname",
+        "ProtectKernelTunables",
+        "ProtectKernelModules",
+        "ProtectKernelLogs",
+        "RestrictRealtime",
+        "RestrictSUIDSGID",
     ]
     .iter()
     .any(|k| on(k))
         || !unit.get_all("Service", "SystemCallFilter").is_empty()
-        || !unit.get_all("Service", "SystemCallArchitectures").is_empty()
-        || !unit.get_all("Service", "RestrictAddressFamilies").is_empty()
-        || crate::seccomp::parse_namespaces(&unit.get_all("Service", "RestrictNamespaces")).is_some()
+        || !unit
+            .get_all("Service", "SystemCallArchitectures")
+            .is_empty()
+        || !unit
+            .get_all("Service", "RestrictAddressFamilies")
+            .is_empty()
+        || crate::seccomp::parse_namespaces(&unit.get_all("Service", "RestrictNamespaces"))
+            .is_some()
 }
 
 pub fn drop_bounding_set(keep: u64) -> Result<(), String> {
     for c in 0..=last_cap() {
-        if keep & (1 << c) == 0 && unsafe { libc::prctl(libc::PR_CAPBSET_DROP, c as libc::c_ulong, 0, 0, 0) } < 0 {
+        if keep & (1 << c) == 0
+            && unsafe { libc::prctl(libc::PR_CAPBSET_DROP, c as libc::c_ulong, 0, 0, 0) } < 0
+        {
             return Err(format!("PR_CAPBSET_DROP {c}: {}", errno()));
         }
     }
@@ -687,19 +826,38 @@ pub fn drop_bounding_set(keep: u64) -> Result<(), String> {
 
 /// After setuid(): set permitted/effective/inheritable to `caps` and raise them as ambient.
 pub fn raise_ambient(caps: u64) -> Result<(), String> {
-    let hdr = CapHeader { version: 0x2008_0522, pid: 0 };
+    let hdr = CapHeader {
+        version: 0x2008_0522,
+        pid: 0,
+    };
     let lo = caps as u32;
     let hi = (caps >> 32) as u32;
     let data = [
-        CapData { effective: lo, permitted: lo, inheritable: lo },
-        CapData { effective: hi, permitted: hi, inheritable: hi },
+        CapData {
+            effective: lo,
+            permitted: lo,
+            inheritable: lo,
+        },
+        CapData {
+            effective: hi,
+            permitted: hi,
+            inheritable: hi,
+        },
     ];
     if unsafe { libc::syscall(libc::SYS_capset, &hdr as *const CapHeader, data.as_ptr()) } < 0 {
         return Err(format!("capset: {}", errno()));
     }
     for c in 0..=last_cap() {
         if caps & (1 << c) != 0
-            && unsafe { libc::prctl(libc::PR_CAP_AMBIENT, libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong, c as libc::c_ulong, 0, 0) } < 0
+            && unsafe {
+                libc::prctl(
+                    libc::PR_CAP_AMBIENT,
+                    libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,
+                    c as libc::c_ulong,
+                    0,
+                    0,
+                )
+            } < 0
         {
             return Err(format!("PR_CAP_AMBIENT_RAISE {c}: {}", errno()));
         }
@@ -735,11 +893,14 @@ mod tests {
         );
         assert!(!no_new_privileges(&chronyd, true));
         // NetworkManager: an allow list without SYS_ADMIN.
-        let nm = test_unit("[Service]\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW\nRestrictRealtime=true\n");
+        let nm = test_unit(
+            "[Service]\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW\nRestrictRealtime=true\n",
+        );
         assert!(!no_new_privileges(&nm, true));
         // Not root: implied, unless SYS_ADMIN stays as an ambient capability.
         assert!(no_new_privileges(&nm, false));
-        let amb = test_unit("[Service]\nAmbientCapabilities=CAP_SYS_ADMIN\nRestrictRealtime=true\n");
+        let amb =
+            test_unit("[Service]\nAmbientCapabilities=CAP_SYS_ADMIN\nRestrictRealtime=true\n");
         assert!(!no_new_privileges(&amb, false));
         let amb_dropped = test_unit(
             "[Service]\nAmbientCapabilities=CAP_SYS_ADMIN\nCapabilityBoundingSet=CAP_NET_RAW\nRestrictRealtime=true\n",
@@ -747,7 +908,10 @@ mod tests {
         assert!(no_new_privileges(&amb_dropped, false));
         // No sandboxing setting: never implied; explicit =yes always wins.
         assert!(!no_new_privileges(&test_unit("[Service]\nUser=x\n"), false));
-        assert!(no_new_privileges(&test_unit("[Service]\nNoNewPrivileges=yes\n"), true));
+        assert!(no_new_privileges(
+            &test_unit("[Service]\nNoNewPrivileges=yes\n"),
+            true
+        ));
     }
 
     /// PrivateTmp=: the 1777 directories are reachable only through a 0700
@@ -771,8 +935,16 @@ mod tests {
     #[test]
     fn empty_bounding_set() {
         // `CapabilityBoundingSet=` alone empties the set (upower, localed).
-        assert_eq!(bounding_set(&test_unit("[Service]\nCapabilityBoundingSet=\n")), Some(0));
-        assert_eq!(bounding_set(&test_unit("[Service]\nCapabilityBoundingSet=\nProtectKernelModules=yes\n")), Some(0));
+        assert_eq!(
+            bounding_set(&test_unit("[Service]\nCapabilityBoundingSet=\n")),
+            Some(0)
+        );
+        assert_eq!(
+            bounding_set(&test_unit(
+                "[Service]\nCapabilityBoundingSet=\nProtectKernelModules=yes\n"
+            )),
+            Some(0)
+        );
         // Later assignments add to the reset set; never set leaves it alone.
         let net = 1u64 << cap_number("NET_ADMIN").unwrap();
         let reset = "[Service]\nCapabilityBoundingSet=CAP_SYS_ADMIN\nCapabilityBoundingSet=\nCapabilityBoundingSet=CAP_NET_ADMIN\n";
@@ -783,9 +955,13 @@ mod tests {
     /// In a user namespace, where this process counts as root for mounts.
     #[test]
     fn read_only_mounts_as_systemd() {
-        let dir = std::env::temp_dir().join(format!("uinitconverter-sandbox-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "uinitconverter-sandbox-test-{}",
+            std::process::id()
+        ));
         fs::create_dir_all(&dir).unwrap();
-        let unit = test_unit("[Service]\nProtectSystem=strict\nProtectHome=yes\nPrivateDevices=yes\n");
+        let unit =
+            test_unit("[Service]\nProtectSystem=strict\nProtectHome=yes\nPrivateDevices=yes\n");
         let sandbox = Sandbox::from_unit(&unit, &dir, Vec::new());
         sandbox.prepare().unwrap();
         let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
@@ -806,17 +982,31 @@ mod tests {
                 let info = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
                 // The last mount at a path is the one on top.
                 let ro = |p: &str| {
-                    info.lines().rev().map(|l| l.split(' ').collect::<Vec<_>>()).find(|f| f[4] == p)
+                    info.lines()
+                        .rev()
+                        .map(|l| l.split(' ').collect::<Vec<_>>())
+                        .find(|f| f[4] == p)
                         .map(|f| f[5].split(',').any(|o| o == "ro"))
                 };
-                let want = [("/dev", true), ("/dev/shm", false), ("/home", true), ("/run/user", true), ("/run", false), ("/usr", true)];
+                let want = [
+                    ("/dev", true),
+                    ("/dev/shm", false),
+                    ("/home", true),
+                    ("/run/user", true),
+                    ("/run", false),
+                    ("/usr", true),
+                ];
                 for (i, (p, expected)) in want.iter().enumerate() {
                     if ro(p).is_some_and(|r| r != *expected) {
                         eprintln!("{p}: read-only {:?}, expected {expected}", ro(p));
                         return 10 + i as i32;
                     }
                 }
-                if fs::OpenOptions::new().write(true).open("/dev/null").is_err() {
+                if fs::OpenOptions::new()
+                    .write(true)
+                    .open("/dev/null")
+                    .is_err()
+                {
                     return 3;
                 }
                 0

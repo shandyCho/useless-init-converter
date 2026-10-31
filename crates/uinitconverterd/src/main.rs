@@ -6,7 +6,9 @@ use std::process::exit;
 
 pub(crate) use uinitconverter_base::pathspec as pathunit;
 pub(crate) use uinitconverter_base::timerspec as timer;
-pub(crate) use uinitconverter_base::{config, envfile, fdstore, loader, mountunit, state, tools, unit, util};
+pub(crate) use uinitconverter_base::{
+    config, envfile, fdstore, loader, mountunit, state, tools, unit, util,
+};
 pub(crate) use uinitconverter_exec::{cgroup, conditions, execcmd, socket};
 pub(crate) use uinitconverter_gen as gen;
 pub(crate) use uinitconverter_install as install;
@@ -46,9 +48,19 @@ fn serve(cfg: Config, rest: &[String]) -> i32 {
         match a.as_str() {
             "--system" => bus = daemon::Bus::System,
             "--session" => bus = daemon::Bus::Session,
-            "--address" => bus = daemon::Bus::Address(it.next().cloned().unwrap_or_else(|| die("--address needs a value"))),
+            "--address" => {
+                bus = daemon::Bus::Address(
+                    it.next()
+                        .cloned()
+                        .unwrap_or_else(|| die("--address needs a value")),
+                )
+            }
             "--ready-fd" => {
-                ready_fd = Some(it.next().and_then(|f| f.parse().ok()).unwrap_or_else(|| die("--ready-fd needs a number")))
+                ready_fd = Some(
+                    it.next()
+                        .and_then(|f| f.parse().ok())
+                        .unwrap_or_else(|| die("--ready-fd needs a number")),
+                )
             }
             o => die(&format!("unknown daemon option {o}")),
         }
@@ -70,12 +82,19 @@ fn client(cfg: &Config, cmd: &str, units: &[String]) -> i32 {
         "stop" => "StopUnit",
         _ => "RestartUnit",
     };
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     rt.block_on(async {
-        let conn = uinitconverter_client::connect(cfg).await.unwrap_or_else(|e| die(&e));
+        let conn = uinitconverter_client::connect(cfg)
+            .await
+            .unwrap_or_else(|e| die(&e));
         let mut code = 0;
         for u in units {
-            if let Err(e) = uinitconverter_client::manager_call(&conn, method, &(u.as_str(), "replace")).await {
+            if let Err(e) =
+                uinitconverter_client::manager_call(&conn, method, &(u.as_str(), "replace")).await
+            {
                 eprintln!("uinitconverterd: {u}: {e}");
                 code = 1;
             }
@@ -87,9 +106,14 @@ fn client(cfg: &Config, cmd: &str, units: &[String]) -> i32 {
 /// rc.shutdown: stop the on-demand instances while the s6-rc services they
 /// are ordered after still run. Waits for them (no D-Bus call timeout).
 fn stop_instances(cfg: &Config) -> i32 {
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     rt.block_on(async {
-        let conn = uinitconverter_client::connect(cfg).await.unwrap_or_else(|e| die(&e));
+        let conn = uinitconverter_client::connect(cfg)
+            .await
+            .unwrap_or_else(|e| die(&e));
         let r = conn
             .call_method(
                 Some("org.freedesktop.systemd1"),
@@ -111,7 +135,9 @@ fn stop_instances(cfg: &Config) -> i32 {
 
 fn log(cfg: &Config, rest: &[String]) -> ! {
     let follow = rest.iter().any(|a| a == "-f" || a == "--follow");
-    let Some(unit) = rest.iter().find(|a| !a.starts_with('-')) else { die("usage: uinitconverterd log UNIT [-f]") };
+    let Some(unit) = rest.iter().find(|a| !a.starts_with('-')) else {
+        die("usage: uinitconverterd log UNIT [-f]")
+    };
     if cfg.journal {
         let mut j = std::process::Command::new(tools::path("journalctl"));
         j.args(["-u", unit, "--no-pager"]);
@@ -119,7 +145,9 @@ fn log(cfg: &Config, rest: &[String]) -> ! {
         let err = std::os::unix::process::CommandExt::exec(&mut j);
         die(&format!("journalctl: {err}"))
     }
-    let Some(dir) = &cfg.log_dir else { die("LOG_DIR is not configured") };
+    let Some(dir) = &cfg.log_dir else {
+        die("LOG_DIR is not configured")
+    };
     let file = dir.join(unit).join("current");
     let mut tail = std::process::Command::new("tail");
     tail.arg(if follow { "-F" } else { "-n" });
@@ -148,7 +176,9 @@ fn main() {
         }
     }
     let cmd = args.first().cloned().unwrap_or_else(|| "daemon".into());
-    if matches!(cmd.as_str(), "help" | "--help" | "-h") || args.iter().any(|a| a == "--help" || a == "-h") {
+    if matches!(cmd.as_str(), "help" | "--help" | "-h")
+        || args.iter().any(|a| a == "--help" || a == "-h")
+    {
         print!("{USAGE}");
         exit(0);
     }
@@ -164,7 +194,9 @@ fn main() {
         "start" | "stop" | "restart" => client(&cfg, &cmd, rest),
         "stop-instances" => stop_instances(&cfg),
         "log" => log(&cfg, rest),
-        other => die(&format!("unknown command {other} (see uinitconverterd help)")),
+        other => die(&format!(
+            "unknown command {other} (see uinitconverterd help)"
+        )),
     };
     exit(code);
 }

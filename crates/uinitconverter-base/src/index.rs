@@ -42,7 +42,10 @@ pub fn stop_atom(id: &str) -> String {
 
 /// Argument form of a unit name that is safe for both sh and execline.
 pub fn unit_arg(name: &str) -> String {
-    if name.bytes().all(|b| b.is_ascii_alphanumeric() || b"@:._-".contains(&b)) {
+    if name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"@:._-".contains(&b))
+    {
         format!("-- {name}")
     } else {
         let hex: String = name.bytes().map(|b| format!("{b:02x}")).collect();
@@ -88,7 +91,12 @@ impl Index {
         }
         // Masked in the s6 set (by the admin, or left by AUTO_MASK=): not in the
         // compiled database, whatever the generated store has.
-        if let Ok(rd) = fs::read_dir(cfg.repo_dir.join("sources").join(&cfg.set_name).join("masked")) {
+        if let Ok(rd) = fs::read_dir(
+            cfg.repo_dir
+                .join("sources")
+                .join(&cfg.set_name)
+                .join("masked"),
+        ) {
             for e in rd.flatten() {
                 idx.units.remove(e.file_name().to_string_lossy().as_ref());
             }

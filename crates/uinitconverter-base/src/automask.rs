@@ -38,7 +38,8 @@ fn write(path: PathBuf, names: &BTreeSet<String>) -> Result<(), String> {
         text.push_str(n);
         text.push('\n');
     }
-    crate::util::write_atomic(&path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+    crate::util::write_atomic(&path, text.as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// The services masked by the generator.
@@ -56,7 +57,9 @@ pub fn is_masked(cfg: &Config, name: &str) -> bool {
     type Cached = (PathBuf, Option<(SystemTime, u64, u64)>, BTreeSet<String>);
     static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
     let path = list_path(cfg);
-    let key = fs::metadata(&path).ok().and_then(|m| Some((m.modified().ok()?, m.ino(), m.len())));
+    let key = fs::metadata(&path)
+        .ok()
+        .and_then(|m| Some((m.modified().ok()?, m.ino(), m.len())));
     let mut c = CACHE.lock().unwrap();
     if !matches!(&*c, Some((p, k, _)) if *p == path && *k == key && key.is_some()) {
         *c = Some((path.clone(), key, read(path)));
@@ -68,7 +71,9 @@ pub fn is_masked(cfg: &Config, name: &str) -> bool {
 /// service directory (RUN_DIR/dyn/NAME) or an active oneshot's marker
 /// (RUN_DIR/dyn-oneshot/NAME).
 pub fn running_dynamic(cfg: &Config, name: &str) -> bool {
-    ["dyn", "dyn-oneshot"].iter().any(|d| cfg.run_dir.join(d).join(name).exists())
+    ["dyn", "dyn-oneshot"]
+        .iter()
+        .any(|d| cfg.run_dir.join(d).join(name).exists())
 }
 
 /// Writes what is still masked; with nothing left, removes the list and
@@ -93,12 +98,16 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let dir = std::env::temp_dir().join(format!("uinitconverter-automask-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("uinitconverter-automask-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let mut cfg = Config::defaults();
         cfg.state_dir = dir.clone();
         assert!(masked(&cfg).is_empty());
-        let m: BTreeSet<String> = ["a.service", "b.timer"].iter().map(|s| s.to_string()).collect();
+        let m: BTreeSet<String> = ["a.service", "b.timer"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         save(&cfg, &m).unwrap();
         fs::write(keep_path(&cfg), "c.service\n").unwrap();
         assert_eq!(masked(&cfg), m);

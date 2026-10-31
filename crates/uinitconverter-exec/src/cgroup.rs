@@ -53,13 +53,17 @@ pub fn unit_cgroup_rel(unit_id: &str, slice: &str) -> String {
 }
 
 pub fn unit_cgroup_dir(unit_id: &str, slice: &str) -> PathBuf {
-    Path::new(CGROUP_ROOT).join(slice_path(slice)).join(&*crate::util::path_component(unit_id))
+    Path::new(CGROUP_ROOT)
+        .join(slice_path(slice))
+        .join(&*crate::util::path_component(unit_id))
 }
 
 /// Enable the controllers we may need along the path from the root.
 fn enable_controllers(dir: &Path) {
     let root = Path::new(CGROUP_ROOT);
-    let Ok(rel) = dir.strip_prefix(root) else { return };
+    let Ok(rel) = dir.strip_prefix(root) else {
+        return;
+    };
     let mut cur = root.to_path_buf();
     for comp in rel.components() {
         let avail = fs::read_to_string(cur.join("cgroup.controllers")).unwrap_or_default();
@@ -100,7 +104,12 @@ fn parse_bytes(v: &str) -> Option<String> {
 
 fn chown_delegated(dir: &Path, uid: u32, gid: u32) {
     // cgroup v2 delegation: the directory and these three files.
-    for p in [dir.to_path_buf(), dir.join("cgroup.procs"), dir.join("cgroup.threads"), dir.join("cgroup.subtree_control")] {
+    for p in [
+        dir.to_path_buf(),
+        dir.join("cgroup.procs"),
+        dir.join("cgroup.threads"),
+        dir.join("cgroup.subtree_control"),
+    ] {
         if let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) {
             unsafe { libc::chown(c.as_ptr(), uid, gid) };
         }
@@ -124,7 +133,10 @@ pub fn enter(unit: &Unit, pid: u32, owner: Option<(u32, u32)>) -> Result<PathBuf
             eprintln!("uinitconverter: {}: cannot set {file}={val}: {e}", unit.id);
         }
     };
-    if let Some(v) = unit.get(&sec, "MemoryMax").or_else(|| unit.get(&sec, "MemoryLimit")) {
+    if let Some(v) = unit
+        .get(&sec, "MemoryMax")
+        .or_else(|| unit.get(&sec, "MemoryLimit"))
+    {
         if let Some(b) = parse_bytes(&v) {
             set("memory.max", b);
         }
@@ -197,7 +209,11 @@ pub fn memory_pressure_env(unit: &Unit, dir: Option<&Path>) -> Vec<(String, Stri
     )
 }
 
-fn pressure_env(watch: Option<&str>, threshold: Option<&str>, file: Option<&Path>) -> Vec<(String, String)> {
+fn pressure_env(
+    watch: Option<&str>,
+    threshold: Option<&str>,
+    file: Option<&Path>,
+) -> Vec<(String, String)> {
     let watch = watch.unwrap_or("auto");
     if watch == "skip" {
         return Vec::new();
@@ -226,7 +242,9 @@ fn base64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for c in data.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
         for i in 0..4 {
             if i <= c.len() {
                 out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
@@ -300,14 +318,20 @@ mod tests {
         assert!(pressure_env(None, None, Some(&file)).is_empty());
         assert!(pressure_env(None, None, None).is_empty());
         assert_eq!(pressure_env(Some("no"), None, None)[0].1, "/dev/null");
-        assert_eq!(pressure_env(Some("off"), None, Some(&file)), vec![("MEMORY_PRESSURE_WATCH".into(), "/dev/null".into())]);
+        assert_eq!(
+            pressure_env(Some("off"), None, Some(&file)),
+            vec![("MEMORY_PRESSURE_WATCH".into(), "/dev/null".into())]
+        );
         fs::write(&file, "").unwrap();
         assert!(pressure_env(Some("skip"), None, Some(&file)).is_empty());
         let env = pressure_env(None, None, Some(&file));
         assert_eq!(env[0].1, file.display().to_string());
         // base64("some 200000 2000000\0"), the value systemd writes.
         assert_eq!(env[1].1, "c29tZSAyMDAwMDAgMjAwMDAwMAA=");
-        assert_eq!(pressure_env(Some("on"), Some("10s"), Some(&file))[1].1, base64(b"some 2000000 2000000\0"));
+        assert_eq!(
+            pressure_env(Some("on"), Some("10s"), Some(&file))[1].1,
+            base64(b"some 2000000 2000000\0")
+        );
         assert_eq!(base64(b"ab"), "YWI=");
         fs::remove_dir_all(&dir).unwrap();
     }

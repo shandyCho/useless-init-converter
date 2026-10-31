@@ -19,11 +19,17 @@ struct PamConv {
 }
 
 /// No interactive conversation is possible for a service.
-extern "C" fn no_conv(_n: c_int, _msg: *mut *const c_void, _resp: *mut *mut c_void, _data: *mut c_void) -> c_int {
+extern "C" fn no_conv(
+    _n: c_int,
+    _msg: *mut *const c_void,
+    _resp: *mut *mut c_void,
+    _data: *mut c_void,
+) -> c_int {
     PAM_CONV_ERR
 }
 
-type StartFn = unsafe extern "C" fn(*const c_char, *const c_char, *const PamConv, *mut *mut c_void) -> c_int;
+type StartFn =
+    unsafe extern "C" fn(*const c_char, *const c_char, *const PamConv, *mut *mut c_void) -> c_int;
 type FlagsFn = unsafe extern "C" fn(*mut c_void, c_int) -> c_int;
 type SetItemFn = unsafe extern "C" fn(*mut c_void, c_int, *const c_void) -> c_int;
 type EnvFn = unsafe extern "C" fn(*mut c_void) -> *mut *mut c_char;
@@ -83,9 +89,16 @@ impl Session {
 
     /// pam_start + acct_mgmt + setcred + open_session. Returns the session and
     /// the environment PAM modules exported.
-    pub fn open(service: &str, user: &str, tty: Option<&str>) -> Result<(Session, Vec<(String, String)>), String> {
+    pub fn open(
+        service: &str,
+        user: &str,
+        tty: Option<&str>,
+    ) -> Result<(Session, Vec<(String, String)>), String> {
         let lib = load()?;
-        let conv = Box::new(PamConv { conv: no_conv, appdata: std::ptr::null_mut() });
+        let conv = Box::new(PamConv {
+            conv: no_conv,
+            appdata: std::ptr::null_mut(),
+        });
         let svc = CString::new(service).map_err(|e| e.to_string())?;
         let usr = CString::new(user).map_err(|e| e.to_string())?;
         let mut handle: *mut c_void = std::ptr::null_mut();

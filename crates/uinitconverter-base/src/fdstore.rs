@@ -25,7 +25,10 @@ fn errno() -> String {
 
 pub fn send(sock: RawFd, data: &[u8], fd: Option<RawFd>) -> std::io::Result<()> {
     unsafe {
-        let mut iov = libc::iovec { iov_base: data.as_ptr() as *mut libc::c_void, iov_len: data.len() };
+        let mut iov = libc::iovec {
+            iov_base: data.as_ptr() as *mut libc::c_void,
+            iov_len: data.len(),
+        };
         // u64s: aligned for cmsghdr, as a byte array is not.
         let mut cbuf = [0u64; 8];
         let mut msg: libc::msghdr = std::mem::zeroed();
@@ -54,10 +57,16 @@ pub fn recv(sock: RawFd) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>, Option<libc:
 }
 
 /// `recv` with a receive buffer of `cap` bytes; a longer datagram is cut.
-pub fn recv_max(sock: RawFd, cap: usize) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>, Option<libc::ucred>)> {
+pub fn recv_max(
+    sock: RawFd,
+    cap: usize,
+) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>, Option<libc::ucred>)> {
     unsafe {
         let mut buf = vec![0u8; cap];
-        let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut libc::c_void, iov_len: buf.len() };
+        let mut iov = libc::iovec {
+            iov_base: buf.as_mut_ptr() as *mut libc::c_void,
+            iov_len: buf.len(),
+        };
         // u64s: aligned for cmsghdr, as a byte array is not.
         let mut cbuf = [0u64; 128];
         let mut msg: libc::msghdr = std::mem::zeroed();
@@ -76,12 +85,16 @@ pub fn recv_max(sock: RawFd, cap: usize) -> std::io::Result<(Vec<u8>, Vec<OwnedF
         while !c.is_null() {
             if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_RIGHTS {
                 let data = libc::CMSG_DATA(c) as *const RawFd;
-                let count = ((*c).cmsg_len as usize - libc::CMSG_LEN(0) as usize) / std::mem::size_of::<RawFd>();
+                let count = ((*c).cmsg_len as usize - libc::CMSG_LEN(0) as usize)
+                    / std::mem::size_of::<RawFd>();
                 for i in 0..count {
                     fds.push(OwnedFd::from_raw_fd(std::ptr::read_unaligned(data.add(i))));
                 }
-            } else if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_CREDENTIALS {
-                cred = Some(std::ptr::read_unaligned(libc::CMSG_DATA(c) as *const libc::ucred));
+            } else if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_CREDENTIALS
+            {
+                cred = Some(std::ptr::read_unaligned(
+                    libc::CMSG_DATA(c) as *const libc::ucred
+                ));
             }
             c = libc::CMSG_NXTHDR(&msg, c);
         }
@@ -141,13 +154,17 @@ fn put_msg(path: &Path, msg: &str, fd: RawFd) -> Result<(), String> {
 
 /// Client: fetch every fd stored under `key` (the store keeps its copies).
 pub fn get(path: &Path, key: &str) -> Vec<(String, OwnedFd)> {
-    let Some(s) = connect(path) else { return Vec::new() };
+    let Some(s) = connect(path) else {
+        return Vec::new();
+    };
     if send(s.as_raw_fd(), format!("GET\0{key}").as_bytes(), None).is_err() {
         return Vec::new();
     }
     let mut out = Vec::new();
     loop {
-        let Ok((data, mut fds, _)) = recv(s.as_raw_fd()) else { break };
+        let Ok((data, mut fds, _)) = recv(s.as_raw_fd()) else {
+            break;
+        };
         if data == b"END" || data.is_empty() {
             break;
         }
@@ -212,7 +229,11 @@ fn prune_hung_up(key: &str, list: &mut Vec<(String, OwnedFd)>) {
         return;
     }
     list.retain(|(_, fd)| {
-        let mut p = libc::pollfd { fd: fd.as_raw_fd(), events: 0, revents: 0 };
+        let mut p = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            events: 0,
+            revents: 0,
+        };
         let r = unsafe { libc::poll(&mut p, 1, 0) };
         !(r > 0 && p.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0)
     });
@@ -260,10 +281,21 @@ fn own_label() -> Option<String> {
 fn peer_label(fd: RawFd) -> Option<String> {
     let mut buf = [0u8; 4096];
     let mut len = buf.len() as libc::socklen_t;
-    if unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERSEC, buf.as_mut_ptr().cast(), &mut len) } < 0 {
+    if unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERSEC,
+            buf.as_mut_ptr().cast(),
+            &mut len,
+        )
+    } < 0
+    {
         return None;
     }
-    let s = String::from_utf8_lossy(&buf[..len as usize]).trim_end_matches('\0').to_string();
+    let s = String::from_utf8_lossy(&buf[..len as usize])
+        .trim_end_matches('\0')
+        .to_string();
     (!s.is_empty()).then_some(s)
 }
 
@@ -276,7 +308,11 @@ pub struct Store {
 impl Store {
     /// Serve requests in a dedicated thread. `limit(key)` returns the maximum
     /// number of fds for a key (FileDescriptorStoreMax=); 0 rejects.
-    pub fn serve(&self, path: &Path, limit: impl Fn(&str) -> usize + Send + 'static) -> Result<(), String> {
+    pub fn serve(
+        &self,
+        path: &Path,
+        limit: impl Fn(&str) -> usize + Send + 'static,
+    ) -> Result<(), String> {
         let p = path.display().to_string();
         if p.len() >= 100 {
             return Err(format!("{p}: path too long"));
@@ -296,7 +332,9 @@ impl Store {
                 addr.sun_path[i] = b as libc::c_char;
             }
             let len = (std::mem::size_of::<libc::sa_family_t>() + p.len() + 1) as u32;
-            if libc::bind(fd, &addr as *const _ as *const libc::sockaddr, len) < 0 || libc::listen(fd, 64) < 0 {
+            if libc::bind(fd, &addr as *const _ as *const libc::sockaddr, len) < 0
+                || libc::listen(fd, 64) < 0
+            {
                 return Err(format!("{p}: {}", errno()));
             }
             libc::chmod(std::ffi::CString::new(p.clone()).unwrap().as_ptr(), 0o600);
@@ -306,7 +344,14 @@ impl Store {
         let own = own_label();
         let store = self.clone();
         std::thread::spawn(move || loop {
-            let c = unsafe { libc::accept4(lfd.as_raw_fd(), std::ptr::null_mut(), std::ptr::null_mut(), libc::SOCK_CLOEXEC) };
+            let c = unsafe {
+                libc::accept4(
+                    lfd.as_raw_fd(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    libc::SOCK_CLOEXEC,
+                )
+            };
             if c < 0 {
                 // EMFILE and the like stay until something is freed: don't spin.
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -318,7 +363,13 @@ impl Store {
             let mut len = std::mem::size_of::<libc::ucred>() as u32;
             // A failed lookup leaves the zeroed ucred, which would read as root.
             let r = unsafe {
-                libc::getsockopt(c, libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut _ as *mut libc::c_void, &mut len)
+                libc::getsockopt(
+                    c,
+                    libc::SOL_SOCKET,
+                    libc::SO_PEERCRED,
+                    &mut cred as *mut _ as *mut libc::c_void,
+                    &mut len,
+                )
             };
             if r < 0 || (cred.uid != 0 && cred.uid != me) {
                 continue;
@@ -328,10 +379,19 @@ impl Store {
             }
             // One thread serves everyone: a client that connects and then
             // neither sends nor reads must not stop the store.
-            let tv = libc::timeval { tv_sec: 2, tv_usec: 0 };
+            let tv = libc::timeval {
+                tv_sec: 2,
+                tv_usec: 0,
+            };
             for opt in [libc::SO_RCVTIMEO, libc::SO_SNDTIMEO] {
                 unsafe {
-                    libc::setsockopt(c, libc::SOL_SOCKET, opt, &tv as *const _ as *const libc::c_void, std::mem::size_of::<libc::timeval>() as u32);
+                    libc::setsockopt(
+                        c,
+                        libc::SOL_SOCKET,
+                        opt,
+                        &tv as *const _ as *const libc::c_void,
+                        std::mem::size_of::<libc::timeval>() as u32,
+                    );
                 }
             }
             store.handle(&conn, &limit);
@@ -340,14 +400,21 @@ impl Store {
     }
 
     fn handle(&self, conn: &OwnedFd, limit: &dyn Fn(&str) -> usize) {
-        let Ok((data, mut fds, _)) = recv(conn.as_raw_fd()) else { return };
-        let parts: Vec<String> = data.split(|&b| b == 0).map(|p| String::from_utf8_lossy(p).into_owned()).collect();
+        let Ok((data, mut fds, _)) = recv(conn.as_raw_fd()) else {
+            return;
+        };
+        let parts: Vec<String> = data
+            .split(|&b| b == 0)
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .collect();
         let reply = |m: &[u8]| {
             let _ = send(conn.as_raw_fd(), m, None);
         };
         match parts.first().map(String::as_str) {
             Some("PUT") if parts.len() == 3 || parts.len() == 4 => {
-                let Some(fd) = fds.pop() else { return reply(b"ERR no fd") };
+                let Some(fd) = fds.pop() else {
+                    return reply(b"ERR no fd");
+                };
                 let max = match parts.get(3).and_then(|m| m.parse().ok()) {
                     Some(m) => m,
                     None => limit(&parts[1]),
@@ -360,7 +427,11 @@ impl Store {
                 // be both stdin and stdout (sd-bus unixexec: systemd-run --pipe),
                 // and each name must get its fd. Keep in step with
                 // standalone/uinitconverter-fdstore/src/store.rs (no shared code).
-                if !parts[1].ends_with("#stdio") && list.iter().any(|(_, f)| same_file(f.as_raw_fd(), fd.as_raw_fd())) {
+                if !parts[1].ends_with("#stdio")
+                    && list
+                        .iter()
+                        .any(|(_, f)| same_file(f.as_raw_fd(), fd.as_raw_fd()))
+                {
                     return reply(b"OK");
                 }
                 if list.len() >= max {
@@ -409,26 +480,46 @@ mod tests {
 
     #[test]
     fn put_get_del() {
-        let dir = std::env::temp_dir().join(format!("uinitconverter-fdstore-base-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "uinitconverter-fdstore-base-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let sock = dir.join("s");
         // The server's own limit: 1 for "old.service", as a store that reads
         // unit files would; nothing for other keys.
-        Store::default().serve(&sock, |k| if k == "old.service" { 1 } else { 0 }).unwrap();
-        let files: Vec<std::fs::File> = (0..3).map(|_| std::fs::File::open("/dev/null").unwrap()).collect();
-        let (fd, fd2, fd3) = (files[0].as_raw_fd(), files[1].as_raw_fd(), files[2].as_raw_fd());
+        Store::default()
+            .serve(&sock, |k| if k == "old.service" { 1 } else { 0 })
+            .unwrap();
+        let files: Vec<std::fs::File> = (0..3)
+            .map(|_| std::fs::File::open("/dev/null").unwrap())
+            .collect();
+        let (fd, fd2, fd3) = (
+            files[0].as_raw_fd(),
+            files[1].as_raw_fd(),
+            files[2].as_raw_fd(),
+        );
 
         // The client's <max> wins over the server's limit.
         put(&sock, "a.service", "x", fd, 2).unwrap();
         put(&sock, "a.service", "y", fd2, 2).unwrap();
         // The same open file again is stored once (systemd's same_fd()).
         put(&sock, "a.service", "x", fd, 2).unwrap();
-        assert_eq!(put(&sock, "a.service", "z", fd3, 2).unwrap_err(), "ERR fd store full");
+        assert_eq!(
+            put(&sock, "a.service", "z", fd3, 2).unwrap_err(),
+            "ERR fd store full"
+        );
         // Without <max> the server's limit applies.
         assert_eq!(put_msg(&sock, "PUT\0old.service\0x", fd), Ok(()));
-        assert_eq!(put_msg(&sock, "PUT\0old.service\0y", fd2).unwrap_err(), "ERR fd store full");
+        assert_eq!(
+            put_msg(&sock, "PUT\0old.service\0y", fd2).unwrap_err(),
+            "ERR fd store full"
+        );
 
-        let names: Vec<String> = get(&sock, "a.service").into_iter().map(|(n, _)| n).collect();
+        let names: Vec<String> = get(&sock, "a.service")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
         assert_eq!(names, ["x", "y"]);
         del(&sock, "a.service", Some("x"));
         assert_eq!(get(&sock, "a.service").len(), 1);
@@ -441,7 +532,8 @@ mod tests {
 
     #[test]
     fn hung_up_fds_go() {
-        let dir = std::env::temp_dir().join(format!("uinitconverter-fdstore-hup-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("uinitconverter-fdstore-hup-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let sock = dir.join("s");
         Store::default().serve(&sock, |_| 0).unwrap();
@@ -471,7 +563,10 @@ mod tests {
         let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
         // Without SELinux everyone passes (root-only is checked before).
         assert!(same_domain(a.as_raw_fd(), None));
-        assert!(!same_domain(a.as_raw_fd(), Some("system_u:system_r:other_t:s0")));
+        assert!(!same_domain(
+            a.as_raw_fd(),
+            Some("system_u:system_r:other_t:s0")
+        ));
         if let Some(own) = own_label() {
             assert!(same_domain(a.as_raw_fd(), Some(&own)));
         }

@@ -31,7 +31,9 @@ pub(super) fn save_scope(run_dir: &std::path::Path, name: &str, t: &Transient) {
 
 /// The recorded scopes and slices whose cgroup still exists.
 pub(super) fn load_scopes(run_dir: &std::path::Path) -> Vec<(String, Transient)> {
-    let Ok(rd) = fs::read_dir(run_dir.join("units")) else { return Vec::new() };
+    let Ok(rd) = fs::read_dir(run_dir.join("units")) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
@@ -41,7 +43,9 @@ pub(super) fn load_scopes(run_dir: &std::path::Path) -> Vec<(String, Transient)>
             Some("slice") => "slice",
             _ => continue,
         };
-        let Some(cgroup) = st.get(T_CGROUP).map(std::path::PathBuf::from) else { continue };
+        let Some(cgroup) = st.get(T_CGROUP).map(std::path::PathBuf::from) else {
+            continue;
+        };
         if !cgroup.is_dir() {
             continue;
         }
@@ -60,16 +64,36 @@ pub(super) fn load_scopes(run_dir: &std::path::Path) -> Vec<(String, Transient)>
 }
 
 const UNIT_KEYS: &[&str] = &[
-    "Description", "Documentation", "Requires", "Requisite", "Wants", "BindsTo", "PartOf",
-    "Upholds", "Conflicts", "Before", "After", "OnFailure", "OnSuccess", "DefaultDependencies",
-    "RefuseManualStart", "RefuseManualStop", "StopWhenUnneeded", "SourcePath",
-    "RequiresMountsFor", "JoinsNamespaceOf",
+    "Description",
+    "Documentation",
+    "Requires",
+    "Requisite",
+    "Wants",
+    "BindsTo",
+    "PartOf",
+    "Upholds",
+    "Conflicts",
+    "Before",
+    "After",
+    "OnFailure",
+    "OnSuccess",
+    "DefaultDependencies",
+    "RefuseManualStart",
+    "RefuseManualStop",
+    "StopWhenUnneeded",
+    "SourcePath",
+    "RequiresMountsFor",
+    "JoinsNamespaceOf",
 ];
 const IGNORED: &[&str] = &["AddRef", "CollectMode", "PIDs", "PIDFDs", "JobTimeoutUSec"];
 
 /// Quote one word for a unit file (no specifier expansion of literal '%').
 fn quote(w: &str) -> String {
-    let e = w.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%").replace('\n', "\\n");
+    let e = w
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%")
+        .replace('\n', "\\n");
     format!("\"{e}\"")
 }
 
@@ -116,9 +140,19 @@ fn usec(v: u64) -> String {
 }
 
 /// Render one property as unit-file lines ([section], key, value).
-fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str, String, String)>, String> {
+fn render(
+    name: &str,
+    v: &Value<'_>,
+    is_timer: bool,
+) -> Result<Vec<(&'static str, String, String)>, String> {
     let main_sec: &'static str = if is_timer { "Timer" } else { "Service" };
-    let sec_for = |k: &str| -> &'static str { if UNIT_KEYS.contains(&k) || k.starts_with("Condition") || k.starts_with("Assert") { "Unit" } else { main_sec } };
+    let sec_for = |k: &str| -> &'static str {
+        if UNIT_KEYS.contains(&k) || k.starts_with("Condition") || k.starts_with("Assert") {
+            "Unit"
+        } else {
+            main_sec
+        }
+    };
     let mut out = Vec::new();
 
     // Exec* lines: a(sasb) or the newer a(sasas) (ExecStartEx and friends).
@@ -131,17 +165,31 @@ fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str
                 if f.len() < 2 {
                     return Err(format!("{name}: malformed value"));
                 }
-                let path = <&str>::try_from(&f[0]).map_err(|e| e.to_string())?.to_string();
+                let path = <&str>::try_from(&f[0])
+                    .map_err(|e| e.to_string())?
+                    .to_string();
                 let argv: Vec<String> = match &f[1] {
-                    Value::Array(av) => av.iter().filter_map(|x| <&str>::try_from(x).ok().map(String::from)).collect(),
+                    Value::Array(av) => av
+                        .iter()
+                        .filter_map(|x| <&str>::try_from(x).ok().map(String::from))
+                        .collect(),
                     _ => Vec::new(),
                 };
                 let (ignore, flags) = match f.get(2) {
                     Some(Value::Bool(b)) => (*b, Vec::new()),
-                    Some(Value::Array(fl)) => (false, fl.iter().filter_map(|x| <&str>::try_from(x).ok().map(String::from)).collect()),
+                    Some(Value::Array(fl)) => (
+                        false,
+                        fl.iter()
+                            .filter_map(|x| <&str>::try_from(x).ok().map(String::from))
+                            .collect(),
+                    ),
                     _ => (false, Vec::new()),
                 };
-                out.push(("Service", key.clone(), exec_line(&path, &argv, ignore, &flags)));
+                out.push((
+                    "Service",
+                    key.clone(),
+                    exec_line(&path, &argv, ignore, &flags),
+                ));
             }
         }
         return Ok(out);
@@ -151,11 +199,18 @@ fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str
         // the fd store as "<unit>#stdio"; the runner takes them from there.
         n if n.starts_with("Standard") && n.ends_with("FileDescriptor") => {
             let key = n.trim_end_matches("FileDescriptor");
-            out.push(("Service", key.to_string(), format!("fd:{}", stdio_name(key))));
+            out.push((
+                "Service",
+                key.to_string(),
+                format!("fd:{}", stdio_name(key)),
+            ));
         }
         "Environment" => {
             if let Value::Array(a) = v {
-                let words: Vec<String> = a.iter().filter_map(|x| <&str>::try_from(x).ok().map(quote)).collect();
+                let words: Vec<String> = a
+                    .iter()
+                    .filter_map(|x| <&str>::try_from(x).ok().map(quote))
+                    .collect();
                 if !words.is_empty() {
                     out.push(("Service", "Environment".into(), words.join(" ")));
                 }
@@ -171,7 +226,11 @@ fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str
                         }
                         let p = <&str>::try_from(&f[0]).unwrap_or("");
                         let opt = matches!(f.get(1), Some(Value::Bool(true)));
-                        out.push(("Service", "EnvironmentFile".into(), format!("{}{p}", if opt { "-" } else { "" })));
+                        out.push((
+                            "Service",
+                            "EnvironmentFile".into(),
+                            format!("{}{p}", if opt { "-" } else { "" }),
+                        ));
                     }
                 }
             }
@@ -220,10 +279,22 @@ fn render(name: &str, v: &Value<'_>, is_timer: bool) -> Result<Vec<(&'static str
             };
             let sec = sec_for(&key);
             let val = match v {
-                Value::Bool(b) => if *b { "yes".into() } else { "no".into() },
+                Value::Bool(b) => {
+                    if *b {
+                        "yes".into()
+                    } else {
+                        "no".into()
+                    }
+                }
                 Value::Str(s) => s.to_string(),
                 Value::U64(n) if name.ends_with("USec") => usec(*n),
-                Value::U64(n) => if *n == u64::MAX { "infinity".into() } else { n.to_string() },
+                Value::U64(n) => {
+                    if *n == u64::MAX {
+                        "infinity".into()
+                    } else {
+                        n.to_string()
+                    }
+                }
                 Value::I64(n) => n.to_string(),
                 Value::U32(n) => n.to_string(),
                 Value::I32(n) => n.to_string(),
@@ -261,7 +332,10 @@ fn check_line(key: &str, val: &str) -> Result<(), String> {
 
 pub fn unit_file(name: &str, props: &[(String, OwnedValue)]) -> Result<String, String> {
     let is_timer = name.ends_with(".timer");
-    let mut sections: Vec<(&'static str, Vec<String>)> = vec![("Unit", Vec::new()), (if is_timer { "Timer" } else { "Service" }, Vec::new())];
+    let mut sections: Vec<(&'static str, Vec<String>)> = vec![
+        ("Unit", Vec::new()),
+        (if is_timer { "Timer" } else { "Service" }, Vec::new()),
+    ];
     for (k, v) in props {
         if IGNORED.contains(&k.as_str()) {
             continue;
@@ -325,20 +399,41 @@ impl Daemon {
     }
 
     /// Put the fds of Standard*FileDescriptor properties into the fd store.
-    pub(super) fn store_stdio(&self, name: &str, props: &[(String, OwnedValue)]) -> Result<(), String> {
+    pub(super) fn store_stdio(
+        &self,
+        name: &str,
+        props: &[(String, OwnedValue)],
+    ) -> Result<(), String> {
         use std::os::fd::AsRawFd;
         let store = self.cfg.run_dir.join("fdstore");
         for (k, v) in props {
-            let Some(key) = k.strip_suffix("FileDescriptor").filter(|k| k.starts_with("Standard")) else { continue };
-            let Value::Fd(fd) = &**v else { return Err(format!("{k}: not a file descriptor")) };
-            crate::fdstore::put(&store, &format!("{name}#stdio"), stdio_name(key), fd.as_raw_fd(), 3)
-                .map_err(|e| format!("{k}: {e}"))?;
+            let Some(key) = k
+                .strip_suffix("FileDescriptor")
+                .filter(|k| k.starts_with("Standard"))
+            else {
+                continue;
+            };
+            let Value::Fd(fd) = &**v else {
+                return Err(format!("{k}: not a file descriptor"));
+            };
+            crate::fdstore::put(
+                &store,
+                &format!("{name}#stdio"),
+                stdio_name(key),
+                fd.as_raw_fd(),
+                3,
+            )
+            .map_err(|e| format!("{k}: {e}"))?;
         }
         Ok(())
     }
 
     pub(super) fn remove_transient_file(&self, id: &str) {
-        crate::fdstore::del(&self.cfg.run_dir.join("fdstore"), &format!("{id}#stdio"), None);
+        crate::fdstore::del(
+            &self.cfg.run_dir.join("fdstore"),
+            &format!("{id}#stdio"),
+            None,
+        );
         let _ = fs::remove_file(self.cfg.transient_dir.join(id));
         self.unit_cache.lock().unwrap().remove(id);
         let _ = fs::remove_dir_all(self.cfg.unit_run_dir(id));
@@ -377,13 +472,31 @@ impl Daemon {
                 let mut changed: HashMap<String, Value<'static>> = HashMap::new();
                 changed.insert("ActiveState".into(), Value::from(cur.0.clone()));
                 changed.insert("SubState".into(), Value::from(cur.1.clone()));
-                self.emit(&super::unit_path(&id), "org.freedesktop.DBus.Properties", "PropertiesChanged",
-                    &("org.freedesktop.systemd1.Unit", changed, Vec::<String>::new())).await;
+                self.emit(
+                    &super::unit_path(&id),
+                    "org.freedesktop.DBus.Properties",
+                    "PropertiesChanged",
+                    &(
+                        "org.freedesktop.systemd1.Unit",
+                        changed,
+                        Vec::<String>::new(),
+                    ),
+                )
+                .await;
                 let mut svc: HashMap<String, Value<'static>> = HashMap::new();
                 svc.insert("Result".into(), Value::from(st.result.clone()));
                 svc.insert("MainPID".into(), Value::from(st.main_pid));
-                self.emit(&super::unit_path(&id), "org.freedesktop.DBus.Properties", "PropertiesChanged",
-                    &("org.freedesktop.systemd1.Service", svc, Vec::<String>::new())).await;
+                self.emit(
+                    &super::unit_path(&id),
+                    "org.freedesktop.DBus.Properties",
+                    "PropertiesChanged",
+                    &(
+                        "org.freedesktop.systemd1.Service",
+                        svc,
+                        Vec::<String>::new(),
+                    ),
+                )
+                .await;
             }
             if !self.is_transient_file(&unit) {
                 if self.collect_exited(&id, &unit, 10_000_000).await {
@@ -406,8 +519,13 @@ impl Daemon {
                 self.dyn_stop(&id, &unit).await;
                 self.remove_transient_file(&id);
                 last.remove(&id);
-                self.emit(super::MANAGER_PATH, super::props::MANAGER_IFACE, "UnitRemoved",
-                    &(id.clone(), super::op(super::unit_path(&id)))).await;
+                self.emit(
+                    super::MANAGER_PATH,
+                    super::props::MANAGER_IFACE,
+                    "UnitRemoved",
+                    &(id.clone(), super::op(super::unit_path(&id))),
+                )
+                .await;
             }
         }
     }
@@ -431,18 +549,36 @@ mod tests {
             prop("WorkingDirectory", Value::from(vec!["/a", "b\nc"])),
         ];
         for p in bad {
-            assert!(unit_file("a.service", std::slice::from_ref(&p)).is_err(), "{p:?}");
+            assert!(
+                unit_file("a.service", std::slice::from_ref(&p)).is_err(),
+                "{p:?}"
+            );
         }
         // Exec lines and Environment= quote their words: newlines stay inside.
-        let exec = Value::from(vec![("/bin/echo".to_string(), vec!["echo".to_string(), "a\nb".to_string()], false)]);
-        let text = unit_file("a.service", &[prop("ExecStart", exec), prop("Description", Value::from("ok"))]).unwrap();
-        assert!(text.contains("ExecStart=@\"/bin/echo\" \"echo\" \"a\\nb\"\n"), "{text}");
+        let exec = Value::from(vec![(
+            "/bin/echo".to_string(),
+            vec!["echo".to_string(), "a\nb".to_string()],
+            false,
+        )]);
+        let text = unit_file(
+            "a.service",
+            &[
+                prop("ExecStart", exec),
+                prop("Description", Value::from("ok")),
+            ],
+        )
+        .unwrap();
+        assert!(
+            text.contains("ExecStart=@\"/bin/echo\" \"echo\" \"a\\nb\"\n"),
+            "{text}"
+        );
         assert!(text.contains("Description=ok\n"), "{text}");
     }
 
     #[test]
     fn scope_round_trip() {
-        let run = std::env::temp_dir().join(format!("uinitconverter-scopes-{}", std::process::id()));
+        let run =
+            std::env::temp_dir().join(format!("uinitconverter-scopes-{}", std::process::id()));
         let cg = run.join("cg");
         std::fs::create_dir_all(cg.join("run-u1.scope")).unwrap();
         let scope = Transient {
@@ -454,7 +590,11 @@ mod tests {
         };
         save_scope(&run, "run-u1.scope", &scope);
         // Its cgroup is gone: not taken over.
-        let gone = Transient { cgroup: cg.join("gone.slice"), kind: "slice", ..scope.clone() };
+        let gone = Transient {
+            cgroup: cg.join("gone.slice"),
+            kind: "slice",
+            ..scope.clone()
+        };
         save_scope(&run, "gone.slice", &gone);
         // Ordinary unit state is not a scope record.
         state::for_unit(&run, "x.service").set(keys::RESULT, "success");
@@ -462,8 +602,14 @@ mod tests {
         assert_eq!(got.len(), 1);
         let (n, t) = &got[0];
         assert_eq!(n, "run-u1.scope");
-        assert_eq!((t.kind, &t.cgroup, t.send_sighup), ("scope", &scope.cgroup, true));
-        assert_eq!((t.slice.as_str(), t.description.as_str()), ("system.slice", "a b"));
+        assert_eq!(
+            (t.kind, &t.cgroup, t.send_sighup),
+            ("scope", &scope.cgroup, true)
+        );
+        assert_eq!(
+            (t.slice.as_str(), t.description.as_str()),
+            ("system.slice", "a b")
+        );
         std::fs::remove_dir_all(&run).unwrap();
     }
 }

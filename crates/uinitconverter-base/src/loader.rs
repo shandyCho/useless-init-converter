@@ -9,8 +9,17 @@ use crate::unit::UnitFile;
 use crate::util;
 
 pub const UNIT_SUFFIXES: &[&str] = &[
-    "service", "socket", "target", "timer", "path", "mount", "automount", "swap", "slice",
-    "scope", "device",
+    "service",
+    "socket",
+    "target",
+    "timer",
+    "path",
+    "mount",
+    "automount",
+    "swap",
+    "slice",
+    "scope",
+    "device",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +76,12 @@ pub fn parse_name(name: &str) -> Option<UnitName<'_>> {
             is_template: inst.is_empty(),
         }),
         Some(_) => None,
-        None => Some(UnitName { prefix: stem, instance: None, suffix, is_template: false }),
+        None => Some(UnitName {
+            prefix: stem,
+            instance: None,
+            suffix,
+            is_template: false,
+        }),
     }
 }
 
@@ -82,7 +96,9 @@ pub fn template_of(name: &str) -> Option<String> {
 }
 
 fn is_dev_null(p: &Path) -> bool {
-    fs::read_link(p).map(|t| t == Path::new("/dev/null")).unwrap_or(false)
+    fs::read_link(p)
+        .map(|t| t == Path::new("/dev/null"))
+        .unwrap_or(false)
 }
 
 /// Find the file for `name` in the search path; returns (path, masked).
@@ -195,7 +211,9 @@ impl<'a> Loader<'a> {
         let mut by_name: BTreeMap<String, PathBuf> = BTreeMap::new();
         for d in &dirs {
             for base in self.cfg.unit_path.iter().rev() {
-                let Ok(rd) = fs::read_dir(base.join(d)) else { continue };
+                let Ok(rd) = fs::read_dir(base.join(d)) else {
+                    continue;
+                };
                 for e in rd.flatten() {
                     let fname = e.file_name().to_string_lossy().into_owned();
                     if fname.ends_with(".conf") {
@@ -204,10 +222,7 @@ impl<'a> Loader<'a> {
                 }
             }
         }
-        by_name
-            .into_values()
-            .filter(|p| !is_dev_null(p))
-            .collect()
+        by_name.into_values().filter(|p| !is_dev_null(p)).collect()
     }
 
     /// Every unit file name in the search path (templates included, aliases resolved later).
@@ -234,7 +249,9 @@ impl<'a> Loader<'a> {
         }
         for n in &names {
             for dir in &self.cfg.unit_path {
-                let Ok(rd) = fs::read_dir(dir.join(format!("{n}.{kind}"))) else { continue };
+                let Ok(rd) = fs::read_dir(dir.join(format!("{n}.{kind}"))) else {
+                    continue;
+                };
                 for e in rd.flatten() {
                     let dep = e.file_name().to_string_lossy().into_owned();
                     if parse_name(&dep).is_some() && !is_dev_null(&e.path()) {
@@ -287,7 +304,11 @@ pub fn expand_specifiers(s: &str, unit: &Unit) -> String {
                 prefix.rsplit('-').next().unwrap_or(prefix),
             )),
             'f' => {
-                let src = if instance.is_empty() { prefix } else { instance };
+                let src = if instance.is_empty() {
+                    prefix
+                } else {
+                    instance
+                };
                 let un = util::unit_name_unescape(src);
                 if !un.starts_with('/') {
                     out.push('/');
@@ -360,7 +381,9 @@ pub fn systemd_arch() -> &'static str {
 
 impl Unit {
     pub fn get(&self, section: &str, key: &str) -> Option<String> {
-        self.file.get(section, key).map(|v| expand_specifiers(v, self))
+        self.file
+            .get(section, key)
+            .map(|v| expand_specifiers(v, self))
     }
 
     pub fn get_all(&self, section: &str, key: &str) -> Vec<String> {
@@ -383,7 +406,8 @@ impl Unit {
     }
 
     pub fn description(&self) -> String {
-        self.get("Unit", "Description").unwrap_or_else(|| self.id.clone())
+        self.get("Unit", "Description")
+            .unwrap_or_else(|| self.id.clone())
     }
 
     pub fn utype(&self) -> &str {
@@ -406,7 +430,9 @@ impl Unit {
     /// systemd: 0 means none, and a Type=oneshot service has none unless it
     /// sets one; otherwise DefaultTimeoutStartSec= (90 s).
     pub fn start_timeout_usec(&self) -> u64 {
-        let set = self.get("Service", "TimeoutStartSec").or_else(|| self.get("Service", "TimeoutSec"));
+        let set = self
+            .get("Service", "TimeoutStartSec")
+            .or_else(|| self.get("Service", "TimeoutSec"));
         if let Some(u) = set.and_then(|v| crate::unit::parse_timeout_usec(&v)) {
             return u;
         }
@@ -451,18 +477,33 @@ mod tests {
                 file,
             }
         };
-        assert_eq!(unit("[Service]\nExecStart=/bin/true\n").start_timeout_usec(), 90_000_000);
+        assert_eq!(
+            unit("[Service]\nExecStart=/bin/true\n").start_timeout_usec(),
+            90_000_000
+        );
         // Type=oneshot: no start timeout unless set (fstrim, man-db-cache-update).
-        assert_eq!(unit("[Service]\nType=oneshot\nExecStart=/bin/true\n").start_timeout_usec(), u64::MAX);
-        assert_eq!(unit("[Service]\nType=oneshot\nTimeoutSec=5\n").start_timeout_usec(), 5_000_000);
+        assert_eq!(
+            unit("[Service]\nType=oneshot\nExecStart=/bin/true\n").start_timeout_usec(),
+            u64::MAX
+        );
+        assert_eq!(
+            unit("[Service]\nType=oneshot\nTimeoutSec=5\n").start_timeout_usec(),
+            5_000_000
+        );
         // 0 is "no timeout" (docker.service).
-        assert_eq!(unit("[Service]\nType=notify\nTimeoutStartSec=0\n").start_timeout_usec(), u64::MAX);
+        assert_eq!(
+            unit("[Service]\nType=notify\nTimeoutStartSec=0\n").start_timeout_usec(),
+            u64::MAX
+        );
     }
 
     #[test]
     fn names() {
         let n = parse_name("getty@tty1.service").unwrap();
-        assert_eq!((n.prefix, n.instance, n.suffix), ("getty", Some("tty1"), "service"));
+        assert_eq!(
+            (n.prefix, n.instance, n.suffix),
+            ("getty", Some("tty1"), "service")
+        );
         assert!(parse_name("getty@.service").unwrap().is_template);
         assert!(parse_name("foo.bar").is_none());
         assert_eq!(template_of("a@b.service").as_deref(), Some("a@.service"));

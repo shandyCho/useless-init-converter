@@ -20,7 +20,9 @@ use uinitconverter_exec::selinux;
 /// ReloadOrTryRestart are restart jobs that may reload, so "start".
 pub(super) fn job_access(jtype: &str) -> &'static str {
     match jtype {
-        "start" | "restart" | "try-restart" | "reload-or-restart" | "reload-or-try-restart" => "start",
+        "start" | "restart" | "try-restart" | "reload-or-restart" | "reload-or-try-restart" => {
+            "start"
+        }
         "stop" => "stop",
         _ => "reload",
     }
@@ -28,7 +30,8 @@ pub(super) fn job_access(jtype: &str) -> &'static str {
 
 /// sd-bus's object_path_startswith(): PATH is PREFIX or below it.
 pub(super) fn path_below(path: &str, prefix: &str) -> bool {
-    path.strip_prefix(prefix).is_some_and(|r| r.is_empty() || r.starts_with('/'))
+    path.strip_prefix(prefix)
+        .is_some_and(|r| r.is_empty() || r.starts_with('/'))
 }
 
 /// The unit file's label, as systemd's unit->access_selinux_context.
@@ -44,17 +47,29 @@ pub(super) fn peer_label(fd: std::os::fd::RawFd) -> Option<String> {
     let mut buf = vec![0u8; 256];
     loop {
         let mut len = buf.len() as libc::socklen_t;
-        let r = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERSEC, buf.as_mut_ptr().cast(), &mut len) };
+        let r = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERSEC,
+                buf.as_mut_ptr().cast(),
+                &mut len,
+            )
+        };
         if r == 0 {
             buf.truncate(len as usize);
             break;
         }
-        if std::io::Error::last_os_error().raw_os_error() != Some(libc::ERANGE) || buf.len() >= 65536 {
+        if std::io::Error::last_os_error().raw_os_error() != Some(libc::ERANGE)
+            || buf.len() >= 65536
+        {
             return None;
         }
         buf.resize(len.max(buf.len() as libc::socklen_t * 2) as usize, 0);
     }
-    let s = String::from_utf8_lossy(&buf).trim_end_matches('\0').to_string();
+    let s = String::from_utf8_lossy(&buf)
+        .trim_end_matches('\0')
+        .to_string();
     (!s.is_empty()).then_some(s)
 }
 
@@ -76,7 +91,9 @@ impl Daemon {
         let name = zbus::names::BusName::try_from(sender.clone()).ok()?;
         let creds = proxy.get_connection_credentials(name).await.ok()?;
         let label = creds.linux_security_label()?;
-        let label = String::from_utf8_lossy(label).trim_end_matches('\0').to_string();
+        let label = String::from_utf8_lossy(label)
+            .trim_end_matches('\0')
+            .to_string();
         if label.is_empty() {
             return None;
         }
@@ -91,7 +108,13 @@ impl Daemon {
 
     /// mac_selinux_unit_access_check() for UNIT, or mac_selinux_access_check()
     /// (the manager) without one.
-    pub(super) async fn mac_check(&self, c: &Peer, msg: &Message, unit: Option<&Unit>, perm: &str) -> R<()> {
+    pub(super) async fn mac_check(
+        &self,
+        c: &Peer,
+        msg: &Message,
+        unit: Option<&Unit>,
+        perm: &str,
+    ) -> R<()> {
         if !selinux::access_checks() {
             return Ok(());
         }
@@ -100,7 +123,9 @@ impl Daemon {
             Some(l) => (l, "service"),
             None => match selinux::own_context() {
                 Some(o) => (o, "system"),
-                None if enforce => return Err(err(E_ACCESS, "We appear not to have any SELinux context")),
+                None if enforce => {
+                    return Err(err(E_ACCESS, "We appear not to have any SELinux context"))
+                }
                 None => return Ok(()),
             },
         };
@@ -114,8 +139,13 @@ impl Daemon {
             Ok(()) => Ok(()),
             Err(e) => {
                 let hdr = msg.header();
-                let member = hdr.member().map(|m| m.as_str().to_string()).unwrap_or_default();
-                let path = unit.and_then(|u| u.fragment.as_ref()).map(|p| p.display().to_string());
+                let member = hdr
+                    .member()
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+                let path = unit
+                    .and_then(|u| u.fragment.as_ref())
+                    .map(|p| p.display().to_string());
                 eprintln!(
                     "uinitconverterd: SELinux access check scon={scon} tcon={tcon} tclass={tclass} perm={perm} state={} function={member} path={}: {e}",
                     if enforce { "enforcing" } else { "permissive" },
@@ -141,7 +171,12 @@ impl Daemon {
 
     /// ListUnits*: as systemd, units the caller may not see ("status") are
     /// left out silently.
-    pub(super) async fn visible_units(&self, c: &Peer, msg: &Message, v: Vec<super::UnitEntry>) -> Vec<super::UnitEntry> {
+    pub(super) async fn visible_units(
+        &self,
+        c: &Peer,
+        msg: &Message,
+        v: Vec<super::UnitEntry>,
+    ) -> Vec<super::UnitEntry> {
         if !selinux::access_checks() {
             return v;
         }
@@ -157,7 +192,9 @@ impl Daemon {
     /// mac_unit(NAME, "status") without the denial line per unit.
     async fn mac_unit_quiet(&self, c: &Peer, msg: &Message, name: &str) -> bool {
         let (_, unit) = self.load_unit(name);
-        let target = unit_context(&unit).map(|l| (l, "service")).or_else(|| selinux::own_context().map(|o| (o, "system")));
+        let target = unit_context(&unit)
+            .map(|l| (l, "service"))
+            .or_else(|| selinux::own_context().map(|o| (o, "system")));
         let (Some((tcon, tclass)), Some(scon)) = (target, self.caller_label(c, msg).await) else {
             return !selinux::enforcing();
         };
@@ -191,16 +228,28 @@ mod tests {
 
     #[test]
     fn object_path_prefix() {
-        assert!(path_below("/org/freedesktop/systemd1", "/org/freedesktop/systemd1"));
-        assert!(path_below("/org/freedesktop/systemd1/unit/a_2eservice", "/org/freedesktop/systemd1"));
-        assert!(!path_below("/org/freedesktop/systemd10", "/org/freedesktop/systemd1"));
+        assert!(path_below(
+            "/org/freedesktop/systemd1",
+            "/org/freedesktop/systemd1"
+        ));
+        assert!(path_below(
+            "/org/freedesktop/systemd1/unit/a_2eservice",
+            "/org/freedesktop/systemd1"
+        ));
+        assert!(!path_below(
+            "/org/freedesktop/systemd10",
+            "/org/freedesktop/systemd1"
+        ));
         assert!(!path_below("/org/freedesktop", "/org/freedesktop/systemd1"));
     }
 
     #[test]
     fn peer_label_of_a_socketpair() {
         let mut fds = [0; 2];
-        assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) }, 0);
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) },
+            0
+        );
         let label = peer_label(fds[0]);
         let own = std::fs::read_to_string("/proc/self/attr/current").ok();
         unsafe {
@@ -209,7 +258,10 @@ mod tests {
         }
         // Without SELinux SO_PEERSEC fails (ENOPROTOOPT).
         if std::path::Path::new("/sys/fs/selinux/enforce").exists() {
-            assert_eq!(label.as_deref(), own.as_deref().map(|s| s.trim_end_matches(['\0', '\n'])));
+            assert_eq!(
+                label.as_deref(),
+                own.as_deref().map(|s| s.trim_end_matches(['\0', '\n']))
+            );
         }
     }
 }

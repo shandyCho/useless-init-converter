@@ -65,9 +65,14 @@ pub fn bind_unix(path: &str, ty: i32, unit: &Unit) -> Result<i32, String> {
         return Err(format!("{path}: socket path too long"));
     }
     for (i, b) in bytes.iter().enumerate() {
-        addr.sun_path[i] = if abstract_ns && i == 0 { 0 } else { *b as libc::c_char };
+        addr.sun_path[i] = if abstract_ns && i == 0 {
+            0
+        } else {
+            *b as libc::c_char
+        };
     }
-    let len = (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + usize::from(!abstract_ns)) as u32;
+    let len =
+        (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + usize::from(!abstract_ns)) as u32;
     if unsafe { libc::bind(fd, &addr as *const _ as *const libc::sockaddr, len) } < 0 {
         return Err(format!("bind {path}: {}", errno()));
     }
@@ -82,7 +87,9 @@ pub fn bind_unix(path: &str, ty: i32, unit: &Unit) -> Result<i32, String> {
             .get("Socket", "SocketUser")
             .and_then(|u| util::lookup_user(&u))
             .map(|u| u.uid);
-        let gid = unit.get("Socket", "SocketGroup").and_then(|g| util::lookup_group(&g));
+        let gid = unit
+            .get("Socket", "SocketGroup")
+            .and_then(|g| util::lookup_group(&g));
         if uid.is_some() || gid.is_some() {
             let c = CString::new(path).unwrap();
             unsafe {
@@ -104,11 +111,21 @@ fn bind_inet(spec: &str, ty: i32, unit: &Unit) -> Result<Option<i32>, String> {
     let (host, port) = if let Ok(p) = spec.parse::<u16>() {
         (None, p)
     } else if let Some(rest) = spec.strip_prefix('[') {
-        let (h, p) = rest.split_once("]:").ok_or_else(|| format!("bad address {spec}"))?;
-        (Some(h.to_string()), p.parse().map_err(|_| format!("bad port in {spec}"))?)
+        let (h, p) = rest
+            .split_once("]:")
+            .ok_or_else(|| format!("bad address {spec}"))?;
+        (
+            Some(h.to_string()),
+            p.parse().map_err(|_| format!("bad port in {spec}"))?,
+        )
     } else {
-        let (h, p) = spec.rsplit_once(':').ok_or_else(|| format!("bad address {spec}"))?;
-        (Some(h.to_string()), p.parse().map_err(|_| format!("bad port in {spec}"))?)
+        let (h, p) = spec
+            .rsplit_once(':')
+            .ok_or_else(|| format!("bad address {spec}"))?;
+        (
+            Some(h.to_string()),
+            p.parse().map_err(|_| format!("bad port in {spec}"))?,
+        )
     };
 
     let mut v4: Option<std::net::Ipv4Addr> = host.as_deref().and_then(|h| h.parse().ok());
@@ -116,12 +133,19 @@ fn bind_inet(spec: &str, ty: i32, unit: &Unit) -> Result<Option<i32>, String> {
         // As systemd's socket_address_parse(): a bare port is IPv4's any
         // address then; an IPv6 address is left out with a warning.
         if host.is_some() {
-            eprintln!("uinitconverter: {}: {spec}: IPv6 is not available, ignoring", unit.id);
+            eprintln!(
+                "uinitconverter: {}: {spec}: IPv6 is not available, ignoring",
+                unit.id
+            );
             return Ok(None);
         }
         v4 = Some(std::net::Ipv4Addr::UNSPECIFIED);
     }
-    let family = if v4.is_some() { libc::AF_INET } else { libc::AF_INET6 };
+    let family = if v4.is_some() {
+        libc::AF_INET
+    } else {
+        libc::AF_INET6
+    };
     let fd = unsafe { libc::socket(family, ty | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return Err(format!("socket: {}", errno()));
@@ -144,7 +168,9 @@ fn bind_inet(spec: &str, ty: i32, unit: &Unit) -> Result<Option<i32>, String> {
         let addr = libc::sockaddr_in {
             sin_family: libc::AF_INET as u16,
             sin_port: port.to_be(),
-            sin_addr: libc::in_addr { s_addr: u32::from(ip).to_be() },
+            sin_addr: libc::in_addr {
+                s_addr: u32::from(ip).to_be(),
+            },
             sin_zero: [0; 8],
         };
         unsafe {
@@ -200,7 +226,9 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
             'G' => (&v[..v.len() - 1], 1 << 30),
             _ => (v.as_str(), 1),
         };
-        n.parse::<i64>().ok().map(|n| (n * m).min(i32::MAX as i64) as i32)
+        n.parse::<i64>()
+            .ok()
+            .map(|n| (n * m).min(i32::MAX as i64) as i32)
     };
     let (rcvbuf, sndbuf) = (size("ReceiveBuffer"), size("SendBuffer"));
     let mut out = Vec::new();
@@ -252,22 +280,39 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
             .and_then(|m| u32::from_str_radix(&m, 8).ok())
             .unwrap_or(0o666);
         unsafe { libc::mkfifo(c.as_ptr(), mode) };
-        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+        let fd = unsafe {
+            libc::open(
+                c.as_ptr(),
+                libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
         if fd < 0 {
             return Err(format!("open fifo {spec}: {}", errno()));
         }
-        out.push(BoundSocket { fd, name: name.clone(), path: Some(spec.clone()) });
+        out.push(BoundSocket {
+            fd,
+            name: name.clone(),
+            path: Some(spec.clone()),
+        });
     }
     // Character devices and files, e.g. /dev/rfkill for systemd-rfkill.
     for spec in sock.get_all("Socket", "ListenSpecial") {
         let c = CString::new(spec.as_str()).map_err(|e| e.to_string())?;
-        let rw = if sock.get_bool("Socket", "Writable", false) { libc::O_RDWR } else { libc::O_RDONLY };
+        let rw = if sock.get_bool("Socket", "Writable", false) {
+            libc::O_RDWR
+        } else {
+            libc::O_RDONLY
+        };
         let flags = rw | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW;
         let fd = unsafe { libc::open(c.as_ptr(), flags) };
         if fd < 0 {
             return Err(format!("open {spec}: {}", errno()));
         }
-        out.push(BoundSocket { fd, name: name.clone(), path: None });
+        out.push(BoundSocket {
+            fd,
+            name: name.clone(),
+            path: None,
+        });
     }
     // Symlinks= (e.g. /dev/log -> /run/systemd/journal/dev-log)
     let first_path = out.iter().find_map(|b| b.path.clone());
@@ -286,7 +331,10 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
     }
     for key in ["ListenNetlink", "ListenMessageQueue", "ListenUSBFunction"] {
         if sock.get("Socket", key).is_some() {
-            eprintln!("uinitconverter: {}: {key}= is not supported, skipped", sock.id);
+            eprintln!(
+                "uinitconverter: {}: {key}= is not supported, skipped",
+                sock.id
+            );
         }
     }
     Ok(out)
@@ -315,7 +363,12 @@ pub fn remove_paths(sock: &Unit) {
     if !sock.get_bool("Socket", "RemoveOnStop", false) {
         return;
     }
-    for key in ["ListenStream", "ListenDatagram", "ListenSequentialPacket", "ListenFIFO"] {
+    for key in [
+        "ListenStream",
+        "ListenDatagram",
+        "ListenSequentialPacket",
+        "ListenFIFO",
+    ] {
         for spec in sock.get_all("Socket", key) {
             if spec.starts_with('/') {
                 let _ = fs::remove_file(&spec);

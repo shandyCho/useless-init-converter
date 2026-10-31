@@ -1,7 +1,6 @@
 //! [Install] handling: enable, disable, mask, presets, unit file state.
 //! Produces the same (type, path, source) change records as systemd.
 
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -19,7 +18,11 @@ pub struct Change {
 }
 
 fn change(kind: &str, path: &Path, source: &str) -> Change {
-    Change { kind: kind.into(), path: path.display().to_string(), source: source.into() }
+    Change {
+        kind: kind.into(),
+        path: path.display().to_string(),
+        source: source.into(),
+    }
 }
 
 fn config_dirs(cfg: &Config) -> Vec<PathBuf> {
@@ -36,7 +39,12 @@ fn install_info(unit: &Unit) -> bool {
         .any(|k| !unit.get_words("Install", k).is_empty())
 }
 
-fn make_link(link: &Path, target: &Path, force: bool, changes: &mut Vec<Change>) -> Result<(), String> {
+fn make_link(
+    link: &Path,
+    target: &Path,
+    force: bool,
+    changes: &mut Vec<Change>,
+) -> Result<(), String> {
     if let Ok(existing) = fs::read_link(link) {
         if existing == target {
             return Ok(());
@@ -78,7 +86,11 @@ pub fn enable(
     force: bool,
 ) -> Result<(bool, Vec<Change>), String> {
     let ld = Loader::new(cfg);
-    let dir = if runtime { cfg.runtime_unit_dir.clone() } else { cfg.config_unit_dir().to_path_buf() };
+    let dir = if runtime {
+        cfg.runtime_unit_dir.clone()
+    } else {
+        cfg.config_unit_dir().to_path_buf()
+    };
     let mut changes = Vec::new();
     let mut carries_info = false;
     let mut todo: Vec<String> = names.iter().map(|n| basename(n)).collect();
@@ -105,7 +117,11 @@ pub fn enable(
             todo.extend(unit.get_words("Install", "Also"));
             continue;
         };
-        for (key, kind) in [("WantedBy", "wants"), ("RequiredBy", "requires"), ("UpheldBy", "upholds")] {
+        for (key, kind) in [
+            ("WantedBy", "wants"),
+            ("RequiredBy", "requires"),
+            ("UpheldBy", "upholds"),
+        ] {
             for t in unit.get_words("Install", key) {
                 let link = dir.join(format!("{t}.{kind}")).join(&inst_name);
                 make_link(&link, &fragment, force, &mut changes)?;
@@ -146,7 +162,11 @@ pub fn disable(cfg: &Config, names: &[String], runtime: bool) -> Result<Vec<Chan
         }
     }
 
-    let dirs = if runtime { vec![cfg.runtime_unit_dir.clone()] } else { config_dirs(cfg) };
+    let dirs = if runtime {
+        vec![cfg.runtime_unit_dir.clone()]
+    } else {
+        config_dirs(cfg)
+    };
     let mut changes = Vec::new();
     for dir in dirs {
         remove_links(&dir, &targets, &mut changes, 0);
@@ -156,7 +176,9 @@ pub fn disable(cfg: &Config, names: &[String], runtime: bool) -> Result<Vec<Chan
 
 fn link_matches(link: &Path, targets: &BTreeSet<String>) -> bool {
     let name = basename(&link.display().to_string());
-    let Ok(dest) = fs::read_link(link) else { return false };
+    let Ok(dest) = fs::read_link(link) else {
+        return false;
+    };
     if dest == Path::new("/dev/null") {
         return false;
     }
@@ -171,7 +193,9 @@ fn remove_links(dir: &Path, targets: &BTreeSet<String>, changes: &mut Vec<Change
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
-        let Ok(meta) = fs::symlink_metadata(&p) else { continue };
+        let Ok(meta) = fs::symlink_metadata(&p) else {
+            continue;
+        };
         if meta.file_type().is_symlink() {
             if link_matches(&p, targets) && fs::remove_file(&p).is_ok() {
                 changes.push(change("unlink", &p, ""));
@@ -186,8 +210,17 @@ fn remove_links(dir: &Path, targets: &BTreeSet<String>, changes: &mut Vec<Change
     }
 }
 
-pub fn mask(cfg: &Config, names: &[String], runtime: bool, force: bool) -> Result<Vec<Change>, String> {
-    let dir = if runtime { cfg.runtime_unit_dir.clone() } else { cfg.config_unit_dir().to_path_buf() };
+pub fn mask(
+    cfg: &Config,
+    names: &[String],
+    runtime: bool,
+    force: bool,
+) -> Result<Vec<Change>, String> {
+    let dir = if runtime {
+        cfg.runtime_unit_dir.clone()
+    } else {
+        cfg.config_unit_dir().to_path_buf()
+    };
     let mut changes = Vec::new();
     for n in names {
         let n = basename(n);
@@ -195,7 +228,11 @@ pub fn mask(cfg: &Config, names: &[String], runtime: bool, force: bool) -> Resul
             return Err(format!("Invalid unit name {n}"));
         }
         let link = dir.join(&n);
-        if fs::symlink_metadata(&link).map(|m| m.is_file()).unwrap_or(false) && !force {
+        if fs::symlink_metadata(&link)
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+            && !force
+        {
             return Err(format!("File {} already exists.", link.display()));
         }
         make_link(&link, Path::new("/dev/null"), true, &mut changes)?;
@@ -204,13 +241,19 @@ pub fn mask(cfg: &Config, names: &[String], runtime: bool, force: bool) -> Resul
 }
 
 pub fn unmask(cfg: &Config, names: &[String], runtime: bool) -> Result<Vec<Change>, String> {
-    let dirs = if runtime { vec![cfg.runtime_unit_dir.clone()] } else { config_dirs(cfg) };
+    let dirs = if runtime {
+        vec![cfg.runtime_unit_dir.clone()]
+    } else {
+        config_dirs(cfg)
+    };
     let mut changes = Vec::new();
     for n in names {
         let n = basename(n);
         for d in &dirs {
             let link = d.join(&n);
-            if fs::read_link(&link).map(|t| t == Path::new("/dev/null")).unwrap_or(false)
+            if fs::read_link(&link)
+                .map(|t| t == Path::new("/dev/null"))
+                .unwrap_or(false)
                 && fs::remove_file(&link).is_ok()
             {
                 changes.push(change("unlink", &link, ""));
@@ -224,14 +267,20 @@ pub fn unmask(cfg: &Config, names: &[String], runtime: bool) -> Result<Vec<Chang
 /// display-manager.service -> gdm.service is all that enabling it creates).
 /// Not in vendor directories, where such links are the package's own names.
 fn any_link_to(dir: &Path, targets: &BTreeSet<String>, depth: u32, aliases: bool) -> bool {
-    let Ok(rd) = fs::read_dir(dir) else { return false };
+    let Ok(rd) = fs::read_dir(dir) else {
+        return false;
+    };
     for e in rd.flatten() {
         let p = e.path();
-        let Ok(meta) = fs::symlink_metadata(&p) else { continue };
+        let Ok(meta) = fs::symlink_metadata(&p) else {
+            continue;
+        };
         if meta.file_type().is_symlink() {
             // At the top, a link under the unit's own name is "linked", not
             // an enablement.
-            let alias = aliases && depth == 0 && !targets.contains(&e.file_name().to_string_lossy().into_owned());
+            let alias = aliases
+                && depth == 0
+                && !targets.contains(&e.file_name().to_string_lossy().into_owned());
             if (depth > 0 || alias) && link_matches(&p, targets) {
                 return true;
             }
@@ -250,18 +299,28 @@ fn any_link_to(dir: &Path, targets: &BTreeSet<String>, depth: u32, aliases: bool
 /// systemd's UnitFileState: enabled, enabled-runtime, disabled, static,
 /// masked, alias, indirect, linked, bad.
 pub fn unit_file_state(cfg: &Config, name: &str) -> Result<String, String> {
-    state_with(cfg, name, |dir, targets, aliases| any_link_to(dir, targets, 0, aliases))
+    state_with(cfg, name, |dir, targets, aliases| {
+        any_link_to(dir, targets, 0, aliases)
+    })
 }
 
 /// unit_file_state() with `has_link(dir, names, aliases)` in place of
 /// any_link_to(), so list_unit_files() can answer from one reading.
-fn state_with(cfg: &Config, name: &str, has_link: impl Fn(&Path, &BTreeSet<String>, bool) -> bool) -> Result<String, String> {
+fn state_with(
+    cfg: &Config,
+    name: &str,
+    has_link: impl Fn(&Path, &BTreeSet<String>, bool) -> bool,
+) -> Result<String, String> {
     let any_link_to = |d: &Path, t: &BTreeSet<String>, _depth: u32, a: bool| has_link(d, t, a);
     let ld = Loader::new(cfg);
     let unit = ld.load(name);
     match unit.load_state {
         LoadState::Masked => {
-            let rt = unit.fragment.as_ref().map(|f| f.starts_with(&cfg.runtime_unit_dir)).unwrap_or(false);
+            let rt = unit
+                .fragment
+                .as_ref()
+                .map(|f| f.starts_with(&cfg.runtime_unit_dir))
+                .unwrap_or(false);
             return Ok(if rt { "masked-runtime" } else { "masked" }.into());
         }
         LoadState::NotFound => return Err(format!("No such file or directory: {name}")),
@@ -291,8 +350,11 @@ fn state_with(cfg: &Config, name: &str, has_link: impl Fn(&Path, &BTreeSet<Strin
     let has_wanted = ["WantedBy", "RequiredBy", "UpheldBy", "Alias"]
         .iter()
         .any(|k| !unit.get_words("Install", k).is_empty());
-    if !has_wanted || (loader::parse_name(name).map(|p| p.is_template).unwrap_or(false)
-        && unit.get("Install", "DefaultInstance").is_none())
+    if !has_wanted
+        || (loader::parse_name(name)
+            .map(|p| p.is_template)
+            .unwrap_or(false)
+            && unit.get("Install", "DefaultInstance").is_none())
     {
         return Ok("indirect".into());
     }
@@ -330,7 +392,10 @@ pub fn set_file_state(cfg: &Config, name: &str, state: String) -> String {
 }
 
 pub fn is_enabled(cfg: &Config, name: &str) -> bool {
-    matches!(unit_file_state(cfg, name).as_deref(), Ok("enabled") | Ok("enabled-runtime") | Ok("static"))
+    matches!(
+        unit_file_state(cfg, name).as_deref(),
+        Ok("enabled") | Ok("enabled-runtime") | Ok("static")
+    )
 }
 
 // ---- presets ----
@@ -355,14 +420,18 @@ pub fn preset_for(cfg: &Config, name: &str) -> PresetAction {
         }
     }
     for path in files.values() {
-        let Ok(text) = fs::read_to_string(path) else { continue };
+        let Ok(text) = fs::read_to_string(path) else {
+            continue;
+        };
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
                 continue;
             }
             let mut words = line.split_whitespace();
-            let (Some(verb), Some(pattern)) = (words.next(), words.next()) else { continue };
+            let (Some(verb), Some(pattern)) = (words.next(), words.next()) else {
+                continue;
+            };
             if uinitconverter_base::util::fnmatch(pattern, name) {
                 return match verb {
                     "enable" => PresetAction::Enable,
@@ -430,7 +499,8 @@ pub fn list_unit_files(cfg: &Config) -> Vec<(String, String)> {
             if loader::parse_name(&n).is_none() || e.path().is_dir() || !seen.insert(n.clone()) {
                 continue;
             }
-            let state = state_with(cfg, &n, |d, t, a| links.any(d, t, a)).unwrap_or_else(|_| "bad".into());
+            let state =
+                state_with(cfg, &n, |d, t, a| links.any(d, t, a)).unwrap_or_else(|_| "bad".into());
             out.push((e.path().display().to_string(), state));
         }
     }
@@ -447,7 +517,9 @@ struct Links {
 
 impl Links {
     fn read(cfg: &Config) -> Links {
-        let mut l = Links { by_name: Default::default() };
+        let mut l = Links {
+            by_name: Default::default(),
+        };
         let mut dirs = cfg.unit_path.clone();
         if !dirs.contains(&cfg.runtime_unit_dir) {
             dirs.push(cfg.runtime_unit_dir.clone());
@@ -462,10 +534,14 @@ impl Links {
         let Ok(rd) = fs::read_dir(dir) else { return };
         for e in rd.flatten() {
             let p = e.path();
-            let Ok(meta) = fs::symlink_metadata(&p) else { continue };
+            let Ok(meta) = fs::symlink_metadata(&p) else {
+                continue;
+            };
             let n = e.file_name().to_string_lossy().into_owned();
             if meta.file_type().is_symlink() {
-                let Ok(dest) = fs::read_link(&p) else { continue };
+                let Ok(dest) = fs::read_link(&p) else {
+                    continue;
+                };
                 if dest == Path::new("/dev/null") {
                     continue;
                 }
@@ -473,9 +549,16 @@ impl Links {
                 keys.extend(loader::template_of(&n));
                 keys.dedup();
                 for k in keys {
-                    self.by_name.entry(k).or_default().push((base.to_path_buf(), depth == 0, n.clone()));
+                    self.by_name.entry(k).or_default().push((
+                        base.to_path_buf(),
+                        depth == 0,
+                        n.clone(),
+                    ));
                 }
-            } else if meta.is_dir() && depth == 0 && (n.ends_with(".wants") || n.ends_with(".requires") || n.ends_with(".upholds")) {
+            } else if meta.is_dir()
+                && depth == 0
+                && (n.ends_with(".wants") || n.ends_with(".requires") || n.ends_with(".upholds"))
+            {
                 self.scan(base, &p, 1);
             }
         }
@@ -483,9 +566,11 @@ impl Links {
 
     /// any_link_to(dir, targets, 0, aliases) from the index.
     fn any(&self, dir: &Path, targets: &BTreeSet<String>, aliases: bool) -> bool {
-        targets.iter().filter_map(|t| self.by_name.get(t)).flatten().any(|(d, top, name)| {
-            d == dir && (!*top || (aliases && !targets.contains(name)))
-        })
+        targets
+            .iter()
+            .filter_map(|t| self.by_name.get(t))
+            .flatten()
+            .any(|(d, top, name)| d == dir && (!*top || (aliases && !targets.contains(name))))
     }
 }
 
@@ -515,7 +600,8 @@ mod tests {
 
     #[test]
     fn preset_disable_before_enable() {
-        let tmp = std::env::temp_dir().join(format!("uinitconverter-preset-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-preset-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let (etc, lib, presets) = (tmp.join("etc"), tmp.join("lib"), tmp.join("preset"));
         for d in [&etc, &lib, &presets] {
@@ -523,30 +609,52 @@ mod tests {
         }
         let write = |p: PathBuf, s: &str| fs::write(p, s).unwrap();
         write(lib.join("cups.service"), "[Service]\nExecStart=/bin/true\n[Install]\nAlso=cups.socket cups.path\nWantedBy=multi-user.target\n");
-        write(lib.join("cups.socket"), "[Socket]\nListenStream=/run/cups.sock\n[Install]\nWantedBy=sockets.target\n");
-        write(lib.join("cups.path"), "[Path]\nPathExists=/tmp\n[Install]\nWantedBy=multi-user.target\n");
-        write(presets.join("90-default.preset"), "enable cups.socket\nenable cups.path\ndisable *\n");
+        write(
+            lib.join("cups.socket"),
+            "[Socket]\nListenStream=/run/cups.sock\n[Install]\nWantedBy=sockets.target\n",
+        );
+        write(
+            lib.join("cups.path"),
+            "[Path]\nPathExists=/tmp\n[Install]\nWantedBy=multi-user.target\n",
+        );
+        write(
+            presets.join("90-default.preset"),
+            "enable cups.socket\nenable cups.path\ndisable *\n",
+        );
         let mut cfg = Config::defaults();
         cfg.unit_path = vec![etc.clone(), lib];
         cfg.runtime_unit_dir = tmp.join("run");
         cfg.preset_path = vec![presets];
 
-        let names: Vec<String> = ["cups.path", "cups.socket", "cups.service"].iter().map(|s| s.to_string()).collect();
+        let names: Vec<String> = ["cups.path", "cups.socket", "cups.service"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         preset(&cfg, &names, "full", false, false).unwrap();
         assert!(etc.join("sockets.target.wants/cups.socket").is_symlink());
         assert!(etc.join("multi-user.target.wants/cups.path").is_symlink());
         assert!(!etc.join("multi-user.target.wants/cups.service").exists());
-        assert_eq!(unit_file_state(&cfg, "cups.service").as_deref(), Ok("disabled"));
+        assert_eq!(
+            unit_file_state(&cfg, "cups.service").as_deref(),
+            Ok("disabled")
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn file_state_follows_the_set() {
-        let tmp = std::env::temp_dir().join(format!("uinitconverter-setstate-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-setstate-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let (etc, lib) = (tmp.join("etc"), tmp.join("lib"));
         let set = tmp.join("repo/sources/current");
-        for d in [&etc, &lib, &set.join("active"), &set.join("usable"), &set.join("masked")] {
+        for d in [
+            &etc,
+            &lib,
+            &set.join("active"),
+            &set.join("usable"),
+            &set.join("masked"),
+        ] {
             fs::create_dir_all(d).unwrap();
         }
         let mut cfg = Config::defaults();
@@ -576,20 +684,40 @@ mod tests {
         for d in [&etc, &lib] {
             fs::create_dir_all(d).unwrap();
         }
-        fs::write(lib.join("gdm.service"), "[Service]\nExecStart=/bin/true\n[Install]\nAlias=display-manager.service\n").unwrap();
-        fs::write(lib.join("mc.service"), "[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n").unwrap();
+        fs::write(
+            lib.join("gdm.service"),
+            "[Service]\nExecStart=/bin/true\n[Install]\nAlias=display-manager.service\n",
+        )
+        .unwrap();
+        fs::write(
+            lib.join("mc.service"),
+            "[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n",
+        )
+        .unwrap();
         // A vendor alias (dnf5-makecache.service) does not enable anything.
         symlink("mc.service", lib.join("mc5.service")).unwrap();
         let mut cfg = Config::defaults();
         cfg.unit_path = vec![etc.clone(), lib.clone()];
         cfg.runtime_unit_dir = tmp.join("run");
-        assert_eq!(unit_file_state(&cfg, "gdm.service").as_deref(), Ok("disabled"));
-        assert_eq!(unit_file_state(&cfg, "mc.service").as_deref(), Ok("disabled"));
+        assert_eq!(
+            unit_file_state(&cfg, "gdm.service").as_deref(),
+            Ok("disabled")
+        );
+        assert_eq!(
+            unit_file_state(&cfg, "mc.service").as_deref(),
+            Ok("disabled")
+        );
         // `systemctl enable gdm.service` creates only the alias link.
         enable(&cfg, &["gdm.service".to_string()], false, false).unwrap();
         assert!(etc.join("display-manager.service").is_symlink());
-        assert_eq!(unit_file_state(&cfg, "gdm.service").as_deref(), Ok("enabled"));
-        assert_eq!(unit_file_state(&cfg, "display-manager.service").as_deref(), Ok("alias"));
+        assert_eq!(
+            unit_file_state(&cfg, "gdm.service").as_deref(),
+            Ok("enabled")
+        );
+        assert_eq!(
+            unit_file_state(&cfg, "display-manager.service").as_deref(),
+            Ok("alias")
+        );
         // list-unit-files answers from one reading of the links, the same.
         enable(&cfg, &["mc.service".to_string()], false, false).unwrap();
         let listed = list_unit_files(&cfg);

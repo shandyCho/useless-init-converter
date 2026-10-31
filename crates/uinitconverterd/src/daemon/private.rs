@@ -107,8 +107,7 @@ async fn serve(d: Arc<Daemon>, mut stream: UnixStream) {
         eprintln!("uinitconverterd: private socket handshake: {e}");
         return;
     }
-    let conn = match zbus::connection::Builder::authenticated_socket(stream, guid)
-        .map(|b| b.p2p())
+    let conn = match zbus::connection::Builder::authenticated_socket(stream, guid).map(|b| b.p2p())
     {
         Ok(b) => match b.build().await {
             Ok(c) => c,
@@ -129,7 +128,12 @@ async fn serve(d: Arc<Daemon>, mut stream: UnixStream) {
     while let Some(m) = msgs.next().await {
         let Ok(msg) = m else { break };
         if msg.message_type() == MsgType::MethodCall {
-            let peer = Peer { conn: conn.clone(), uid: Some(uid), pid, label: label.clone() };
+            let peer = Peer {
+                conn: conn.clone(),
+                uid: Some(uid),
+                pid,
+                label: label.clone(),
+            };
             tokio::spawn(d.clone().handle_call(peer, msg));
         }
     }

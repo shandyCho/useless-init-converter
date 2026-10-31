@@ -1,7 +1,6 @@
 //! Minimal client for the uinitconverter daemon (used by timers and the CLI).
 //! Prefers the private socket, like systemctl does as root.
 
-
 use zbus::Connection;
 
 use uinitconverter_base::config::Config;
@@ -11,7 +10,11 @@ pub async fn connect(cfg: &Config) -> Result<Connection, String> {
         if sock.exists() {
             match tokio::net::UnixStream::connect(sock).await {
                 Ok(stream) => {
-                    match zbus::connection::Builder::unix_stream(stream).p2p().build().await {
+                    match zbus::connection::Builder::unix_stream(stream)
+                        .p2p()
+                        .build()
+                        .await
+                    {
                         Ok(c) => return Ok(c),
                         Err(e) => eprintln!("uinitconverter: {}: {e}", sock.display()),
                     }
@@ -25,13 +28,19 @@ pub async fn connect(cfg: &Config) -> Result<Connection, String> {
         None => zbus::connection::Builder::system(),
     }
     .map_err(|e| e.to_string())?;
-    b.build().await.map_err(|e| format!("connecting to D-Bus: {e}"))
+    b.build()
+        .await
+        .map_err(|e| format!("connecting to D-Bus: {e}"))
 }
 
 /// uinitconverter's own methods, on the manager's object path (not systemd's).
 pub const UINITCONVERTER_IFACE: &str = "org.uinitconverter.Manager";
 
-pub async fn manager_call<B>(conn: &Connection, method: &str, body: &B) -> Result<zbus::Message, String>
+pub async fn manager_call<B>(
+    conn: &Connection,
+    method: &str,
+    body: &B,
+) -> Result<zbus::Message, String>
 where
     B: serde::Serialize + zbus::zvariant::DynamicType,
 {

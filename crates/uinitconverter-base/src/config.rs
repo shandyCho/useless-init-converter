@@ -16,7 +16,10 @@ pub const DEFAULT_LOG_DIR: &str = "/var/log/uinitconverter";
 /// Where an uinitconverter tool is: next to the running program when it is there
 /// (a build tree, or /usr/libexec/uinitconverter itself), else /usr/libexec/uinitconverter.
 pub fn tool_path(name: &str) -> PathBuf {
-    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)) {
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+    {
         let p = dir.join(name);
         if p.is_file() {
             return p;
@@ -158,7 +161,10 @@ impl Config {
             .iter()
             .map(PathBuf::from)
             .collect(),
-            extra_source: vec![PathBuf::from("/etc/uinitconverter/s6"), PathBuf::from("/etc/s6/sources")],
+            extra_source: vec![
+                PathBuf::from("/etc/uinitconverter/s6"),
+                PathBuf::from("/etc/s6/sources"),
+            ],
             state_dir: PathBuf::from("/var/lib/uinitconverter"),
             repo_dir: PathBuf::from("/var/lib/s6-rc/repository"),
             store_dir: None,
@@ -261,17 +267,24 @@ impl Config {
 
         let vars = match envfile::load(&path) {
             Ok(v) => v,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => return Ok(cfg.finish()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => {
+                return Ok(cfg.finish())
+            }
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
         for (k, v) in vars {
             let paths = |v: &str| -> Vec<PathBuf> {
-                v.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect()
+                v.split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from)
+                    .collect()
             };
             let opt = |v: &str| (!v.is_empty()).then(|| PathBuf::from(v));
             match k.as_str() {
                 "INIT" => cfg.init = v,
-                "TOOLS" => crate::tools::configure(&v).map_err(|e| format!("{}: {e}", path.display()))?,
+                "TOOLS" => {
+                    crate::tools::configure(&v).map_err(|e| format!("{}: {e}", path.display()))?
+                }
                 "UNIT_PATH" => cfg.unit_path = paths(&v),
                 "RUNTIME_UNIT_DIR" => cfg.runtime_unit_dir = PathBuf::from(&v),
                 "PRESET_PATH" => cfg.preset_path = paths(&v),
@@ -320,16 +333,29 @@ impl Config {
                 "UDEV_DIR" => cfg.udev_dir = opt(&v),
                 "UDEV_MONITOR" => cfg.udev_monitor = crate::unit::parse_bool(&v).unwrap_or(true),
                 "ALLOW_UIDS" => {
-                    cfg.allow_uids = v.split_whitespace().filter_map(|s| s.parse().ok()).collect()
+                    cfg.allow_uids = v
+                        .split_whitespace()
+                        .filter_map(|s| s.parse().ok())
+                        .collect()
                 }
                 other => eprintln!("uinitconverter: {}: unknown key {other}", path.display()),
             }
         }
         if !INITS.contains(&cfg.init.as_str()) {
-            return Err(format!("{}: INIT={}: supported: {}", path.display(), cfg.init, INITS.join(" ")));
+            return Err(format!(
+                "{}: INIT={}: supported: {}",
+                path.display(),
+                cfg.init,
+                INITS.join(" ")
+            ));
         }
         if !SYSLOGS.contains(&cfg.syslog.as_str()) {
-            return Err(format!("{}: SYSLOG={}: supported: {}", path.display(), cfg.syslog, SYSLOGS.join(" ")));
+            return Err(format!(
+                "{}: SYSLOG={}: supported: {}",
+                path.display(),
+                cfg.syslog,
+                SYSLOGS.join(" ")
+            ));
         }
         Ok(cfg.finish())
     }
@@ -356,7 +382,9 @@ impl Config {
             // INCLUDEd (any name: syslog.service is their Alias=):
             // the owner runs the distribution's unit, so dependencies on it
             // go to it, not to the s6 service.
-            let included = SYSLOG_UNITS.iter().any(|u| self.include.iter().any(|g| crate::util::fnmatch(g, u)));
+            let included = SYSLOG_UNITS
+                .iter()
+                .any(|u| self.include.iter().any(|g| crate::util::fnmatch(g, u)));
             for u in SYSLOG_UNITS.iter().filter(|_| !included) {
                 if !self.exclude.iter().any(|e| e == u) {
                     self.exclude.push(u.to_string());
@@ -367,10 +395,12 @@ impl Config {
             }
         }
         if !self.resolved {
-            self.include.retain(|u| !RESOLVED_UNITS.contains(&u.as_str()));
+            self.include
+                .retain(|u| !RESOLVED_UNITS.contains(&u.as_str()));
         }
         if !self.unit_path.contains(&self.transient_dir) {
-            self.unit_path.insert(1.min(self.unit_path.len()), self.transient_dir.clone());
+            self.unit_path
+                .insert(1.min(self.unit_path.len()), self.transient_dir.clone());
         }
         self
     }
@@ -381,7 +411,9 @@ impl Config {
     }
 
     pub fn store_dir(&self) -> PathBuf {
-        self.store_dir.clone().unwrap_or_else(|| self.state_dir.join("store"))
+        self.store_dir
+            .clone()
+            .unwrap_or_else(|| self.state_dir.join("store"))
     }
 
     /// The boot database: a symlink s6-rc-set-install replaces, which
@@ -393,7 +425,9 @@ impl Config {
     /// RUN_DIR/units/<unit>, as state::for_unit names it: a name that is
     /// not a single path component is escaped, so "../x.scope" stays inside.
     pub fn unit_run_dir(&self, unit: &str) -> PathBuf {
-        self.run_dir.join("units").join(&*crate::util::path_component(unit))
+        self.run_dir
+            .join("units")
+            .join(&*crate::util::path_component(unit))
     }
 
     /// Arguments generated scripts pass to the runner so it loads this config.
@@ -411,7 +445,10 @@ impl Config {
     }
 
     pub fn mapped_dep(&self, unit: &str) -> Option<&str> {
-        self.dep_map.iter().find(|(a, _)| a == unit).map(|(_, b)| b.as_str())
+        self.dep_map
+            .iter()
+            .find(|(a, _)| a == unit)
+            .map(|(_, b)| b.as_str())
     }
 }
 
@@ -437,7 +474,9 @@ mod tests {
         std::fs::write(&f, "SYSLOG=syslog-ng\n").unwrap();
         assert_eq!(Config::load(Some(&f)).unwrap().syslog, "syslog-ng");
         std::fs::write(&f, "SYSLOG=metalog\n").unwrap();
-        assert!(Config::load(Some(&f)).unwrap_err().contains("SYSLOG=metalog"));
+        assert!(Config::load(Some(&f))
+            .unwrap_err()
+            .contains("SYSLOG=metalog"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -477,7 +516,9 @@ mod tests {
 
     #[test]
     fn resolved_no_excludes_its_units() {
-        assert!(!Config::defaults().finish().is_excluded("systemd-resolved.service"));
+        assert!(!Config::defaults()
+            .finish()
+            .is_excluded("systemd-resolved.service"));
         let mut cfg = Config::defaults();
         cfg.resolved = false;
         let cfg = cfg.finish();

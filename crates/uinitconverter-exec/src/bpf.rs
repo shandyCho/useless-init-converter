@@ -49,7 +49,11 @@ pub struct Insn {
 impl Insn {
     fn encode(&self) -> [u8; 8] {
         // struct bpf_insn's dst_reg:4/src_reg:4 bitfield follows byte order.
-        let regs = if cfg!(target_endian = "little") { self.dst | (self.src << 4) } else { (self.dst << 4) | self.src };
+        let regs = if cfg!(target_endian = "little") {
+            self.dst | (self.src << 4)
+        } else {
+            (self.dst << 4) | self.src
+        };
         let mut b = [0u8; 8];
         b[0] = self.code;
         b[1] = regs;
@@ -69,7 +73,13 @@ struct Asm {
 
 impl Asm {
     fn op(&mut self, code: u8, dst: u8, src: u8, off: i16, imm: i32) {
-        self.insns.push(Insn { code, dst, src, off, imm });
+        self.insns.push(Insn {
+            code,
+            dst,
+            src,
+            off,
+            imm,
+        });
     }
 
     fn label(&mut self) -> usize {
@@ -121,8 +131,15 @@ pub struct DevRule {
 /// What DevicePolicy=closed (and auto with a DeviceAllow= list) adds, as
 /// systemd's cgroup_apply_devices().
 const AUTO_DEVICES: &[&str] = &[
-    "/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty", "/dev/ptmx",
-    "/run/systemd/inaccessible/chr", "/run/systemd/inaccessible/blk",
+    "/dev/null",
+    "/dev/zero",
+    "/dev/full",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/tty",
+    "/dev/ptmx",
+    "/run/systemd/inaccessible/chr",
+    "/run/systemd/inaccessible/blk",
 ];
 
 fn parse_access(s: &str) -> Option<u32> {
@@ -148,17 +165,33 @@ fn node_rule(path: &str, access: u32) -> io::Result<DevRule> {
         return Err(io::Error::other("not a device node"));
     };
     let rdev = md.rdev();
-    Ok(DevRule { ty, major: Some(libc::major(rdev)), minor: Some(libc::minor(rdev)), access })
+    Ok(DevRule {
+        ty,
+        major: Some(libc::major(rdev)),
+        minor: Some(libc::minor(rdev)),
+        access,
+    })
 }
 
 /// "char-NAME"/"block-NAME": every major whose /proc/devices name matches the
 /// glob NAME; "*" is the whole type.
 pub fn class_rules(ty: u32, name: &str, access: u32, proc_devices: &str) -> Vec<DevRule> {
     if name == "*" {
-        return vec![DevRule { ty, major: None, minor: None, access }];
+        return vec![DevRule {
+            ty,
+            major: None,
+            minor: None,
+            access,
+        }];
     }
-    let header = if ty == DEV_CHAR { "Character devices:" } else { "Block devices:" };
-    let Ok(pattern) = CString::new(name) else { return Vec::new() };
+    let header = if ty == DEV_CHAR {
+        "Character devices:"
+    } else {
+        "Block devices:"
+    };
+    let Ok(pattern) = CString::new(name) else {
+        return Vec::new();
+    };
     let mut out: Vec<DevRule> = Vec::new();
     let mut in_section = false;
     for line in proc_devices.lines() {
@@ -167,10 +200,19 @@ pub fn class_rules(ty: u32, name: &str, access: u32, proc_devices: &str) -> Vec<
             in_section = line == header;
             continue;
         }
-        let Some((major, dev)) = line.split_once(char::is_whitespace) else { continue };
-        let (Ok(major), Ok(dev)) = (major.parse::<u32>(), CString::new(dev.trim())) else { continue };
+        let Some((major, dev)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let (Ok(major), Ok(dev)) = (major.parse::<u32>(), CString::new(dev.trim())) else {
+            continue;
+        };
         if in_section && unsafe { libc::fnmatch(pattern.as_ptr(), dev.as_ptr(), 0) } == 0 {
-            let r = DevRule { ty, major: Some(major), minor: None, access };
+            let r = DevRule {
+                ty,
+                major: Some(major),
+                minor: None,
+                access,
+            };
             if !out.contains(&r) {
                 out.push(r);
             }
@@ -184,7 +226,9 @@ pub fn class_rules(ty: u32, name: &str, access: u32, proc_devices: &str) -> Vec<
 /// PrivateDevices= turns auto into closed, as in systemd.
 pub fn device_rules(unit: &Unit, sec: &str, msgs: &mut Vec<String>) -> Option<Vec<DevRule>> {
     let allow = unit.get_all(sec, "DeviceAllow");
-    let mut policy = unit.get(sec, "DevicePolicy").unwrap_or_else(|| "auto".into());
+    let mut policy = unit
+        .get(sec, "DevicePolicy")
+        .unwrap_or_else(|| "auto".into());
     if policy == "auto" && sec == "Service" && unit.get_bool("Service", "PrivateDevices", false) {
         policy = "closed".into();
     }
@@ -199,8 +243,17 @@ pub fn device_rules(unit: &Unit, sec: &str, msgs: &mut Vec<String>) -> Option<Ve
     let proc_devices = fs::read_to_string("/proc/devices").unwrap_or_default();
     let mut rules = Vec::new();
     if policy != "strict" {
-        rules.extend(AUTO_DEVICES.iter().filter_map(|p| node_rule(p, ACC_ALL).ok()));
-        rules.extend(class_rules(DEV_CHAR, "pts", ACC_READ | ACC_WRITE, &proc_devices));
+        rules.extend(
+            AUTO_DEVICES
+                .iter()
+                .filter_map(|p| node_rule(p, ACC_ALL).ok()),
+        );
+        rules.extend(class_rules(
+            DEV_CHAR,
+            "pts",
+            ACC_READ | ACC_WRITE,
+            &proc_devices,
+        ));
     }
     for entry in allow {
         let mut words = entry.split_whitespace();
@@ -227,7 +280,9 @@ pub fn device_rules(unit: &Unit, sec: &str, msgs: &mut Vec<String>) -> Option<Ve
         } else if let Some(name) = spec.strip_prefix("block-") {
             rules.extend(class_rules(DEV_BLOCK, name, access, &proc_devices));
         } else {
-            msgs.push(format!("DeviceAllow={spec}: not a /dev path or char-/block- class, ignored"));
+            msgs.push(format!(
+                "DeviceAllow={spec}: not a /dev path or char-/block- class, ignored"
+            ));
         }
     }
     Some(rules)
@@ -325,9 +380,13 @@ pub fn parse_prefixes(words: &[String], key: &str, msgs: &mut Vec<String>) -> Ve
             None => (w.as_str(), None),
         };
         let p = if let Ok(v4) = addr.parse::<Ipv4Addr>() {
-            len.unwrap_or(32).le(&32).then(|| Prefix::new_v4(v4, len.unwrap_or(32)))
+            len.unwrap_or(32)
+                .le(&32)
+                .then(|| Prefix::new_v4(v4, len.unwrap_or(32)))
         } else if let Ok(v6) = addr.parse::<Ipv6Addr>() {
-            len.unwrap_or(128).le(&128).then(|| Prefix::new_v6(v6, len.unwrap_or(128)))
+            len.unwrap_or(128)
+                .le(&128)
+                .then(|| Prefix::new_v6(v6, len.unwrap_or(128)))
         } else {
             None
         };
@@ -376,8 +435,8 @@ pub fn firewall_program(allow: &[Prefix], deny: &[Prefix], ingress: bool) -> Vec
         a.op(ALU64_MOV_K, 4, 0, 0, len);
         a.op(JMP_CALL, 0, 0, 0, FUNC_SKB_LOAD_BYTES);
         a.jump(JMP_JNE_K, 0, 0, accept); // short packet
-        // A /0 prefix matches every address, so it ends the family: the
-        // verifier refuses unreachable instructions after it.
+                                         // A /0 prefix matches every address, so it ends the family: the
+                                         // verifier refuses unreachable instructions after it.
         for (list, target) in [(allow, accept), (deny, drop)] {
             for p in list {
                 let (addr, plen): (&[u8], u8) = match p {
@@ -389,7 +448,11 @@ pub fn firewall_program(allow: &[Prefix], deny: &[Prefix], ingress: bool) -> Vec
                     a.jump(JMP_JA, 0, 0, target);
                     return;
                 }
-                let mask: Vec<u8> = if want_v4 { mask_bytes::<4>(plen).to_vec() } else { mask_bytes::<16>(plen).to_vec() };
+                let mask: Vec<u8> = if want_v4 {
+                    mask_bytes::<4>(plen).to_vec()
+                } else {
+                    mask_bytes::<16>(plen).to_vec()
+                };
                 let next = a.label();
                 for w in 0..addr.len() / 4 {
                     let m = u32::from_ne_bytes(mask[w * 4..w * 4 + 4].try_into().unwrap());
@@ -477,7 +540,12 @@ fn sys_bpf(cmd: i32, attr: &mut Attr) -> io::Result<i32> {
 }
 
 /// BPF_PROG_LOAD. On failure, the verifier's last words go into the error.
-pub fn load(prog_type: u32, attach_type: u32, name: &str, insns: &[Insn]) -> Result<OwnedFd, String> {
+pub fn load(
+    prog_type: u32,
+    attach_type: u32,
+    name: &str,
+    insns: &[Insn],
+) -> Result<OwnedFd, String> {
     let code: Vec<u8> = insns.iter().flat_map(|i| i.encode()).collect();
     let attempt = |log: &mut [u8]| {
         let mut a = Attr::new();
@@ -500,10 +568,16 @@ pub fn load(prog_type: u32, attach_type: u32, name: &str, insns: &[Insn]) -> Res
         Err(e) => {
             let mut log = vec![0u8; 1 << 16];
             let _ = attempt(&mut log);
-            let text = String::from_utf8_lossy(&log[..log.iter().position(|&b| b == 0).unwrap_or(0)]).into_owned();
+            let text =
+                String::from_utf8_lossy(&log[..log.iter().position(|&b| b == 0).unwrap_or(0)])
+                    .into_owned();
             let tail: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
             let tail = tail[tail.len().saturating_sub(3)..].join(" | ");
-            return Err(if tail.is_empty() { format!("load {name}: {e}") } else { format!("load {name}: {e}: {tail}") });
+            return Err(if tail.is_empty() {
+                format!("load {name}: {e}")
+            } else {
+                format!("load {name}: {e}: {tail}")
+            });
         }
     };
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
@@ -519,7 +593,10 @@ fn prog_name(prog: &OwnedFd) -> Option<String> {
     sys_bpf(BPF_OBJ_GET_INFO_BY_FD, &mut a).ok()?;
     let bytes: Vec<u8> = info.iter().flat_map(|w| w.to_ne_bytes()).collect();
     let name = &bytes[64..80];
-    Some(String::from_utf8_lossy(&name[..name.iter().position(|&b| b == 0).unwrap_or(16)]).into_owned())
+    Some(
+        String::from_utf8_lossy(&name[..name.iter().position(|&b| b == 0).unwrap_or(16)])
+            .into_owned(),
+    )
 }
 
 /// Detach the programs called `name` attached directly to the cgroup.
@@ -535,7 +612,9 @@ pub fn detach_named(cgroup: &OwnedFd, attach_type: u32, name: &str) -> io::Resul
     for &id in &ids[..count] {
         let mut g = Attr::new();
         g.set_u32(0, id);
-        let Ok(fd) = sys_bpf(BPF_PROG_GET_FD_BY_ID, &mut g) else { continue };
+        let Ok(fd) = sys_bpf(BPF_PROG_GET_FD_BY_ID, &mut g) else {
+            continue;
+        };
         let prog = unsafe { OwnedFd::from_raw_fd(fd) };
         if prog_name(&prog).as_deref() == Some(name) {
             let mut d = Attr::new();
@@ -559,7 +638,12 @@ pub fn attach(cgroup: &OwnedFd, prog: &OwnedFd, attach_type: u32) -> io::Result<
 
 pub fn open_cgroup(dir: &Path) -> io::Result<OwnedFd> {
     let c = CString::new(dir.as_os_str().as_encoded_bytes()).map_err(io::Error::other)?;
-    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
+    let fd = unsafe {
+        libc::open(
+            c.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -573,14 +657,40 @@ pub fn apply(unit: &Unit, cgroup: &Path) -> Vec<String> {
     let sec = unit.type_section();
     let mut msgs = Vec::new();
     let devices = device_rules(unit, &sec, &mut msgs).map(|r| device_program(&r));
-    let allow = parse_prefixes(&unit.get_words(&sec, "IPAddressAllow"), "IPAddressAllow", &mut msgs);
-    let deny = parse_prefixes(&unit.get_words(&sec, "IPAddressDeny"), "IPAddressDeny", &mut msgs);
+    let allow = parse_prefixes(
+        &unit.get_words(&sec, "IPAddressAllow"),
+        "IPAddressAllow",
+        &mut msgs,
+    );
+    let deny = parse_prefixes(
+        &unit.get_words(&sec, "IPAddressDeny"),
+        "IPAddressDeny",
+        &mut msgs,
+    );
     // Without a deny list nothing is dropped.
     let firewall = !deny.is_empty();
     let progs = [
-        ("DevicePolicy=", PROG_TYPE_CGROUP_DEVICE, ATTACH_DEVICE, "sd_devices", devices),
-        ("IPAddressDeny=", PROG_TYPE_CGROUP_SKB, ATTACH_INET_INGRESS, "sd_fw_ingress", firewall.then(|| firewall_program(&allow, &deny, true))),
-        ("IPAddressDeny=", PROG_TYPE_CGROUP_SKB, ATTACH_INET_EGRESS, "sd_fw_egress", firewall.then(|| firewall_program(&allow, &deny, false))),
+        (
+            "DevicePolicy=",
+            PROG_TYPE_CGROUP_DEVICE,
+            ATTACH_DEVICE,
+            "sd_devices",
+            devices,
+        ),
+        (
+            "IPAddressDeny=",
+            PROG_TYPE_CGROUP_SKB,
+            ATTACH_INET_INGRESS,
+            "sd_fw_ingress",
+            firewall.then(|| firewall_program(&allow, &deny, true)),
+        ),
+        (
+            "IPAddressDeny=",
+            PROG_TYPE_CGROUP_SKB,
+            ATTACH_INET_EGRESS,
+            "sd_fw_egress",
+            firewall.then(|| firewall_program(&allow, &deny, false)),
+        ),
     ];
     let cg = match open_cgroup(cgroup) {
         Ok(fd) => fd,
@@ -597,7 +707,9 @@ pub fn apply(unit: &Unit, cgroup: &Path) -> Vec<String> {
         let res = res
             .map_err(|e| format!("query {name}: {e}"))
             .and_then(|_| load(prog_type, attach_type, name, &insns))
-            .and_then(|prog| attach(&cg, &prog, attach_type).map_err(|e| format!("attach {name}: {e}")));
+            .and_then(|prog| {
+                attach(&cg, &prog, attach_type).map_err(|e| format!("attach {name}: {e}"))
+            });
         if let Err(e) = res {
             msgs.push(format!("{setting} not enforced: {e}"));
         }
@@ -634,7 +746,13 @@ mod tests {
             let i = insns[pc];
             let (d, s) = (i.dst as usize, i.src as usize);
             let imm = i.imm as i64 as u64;
-            let jump = |cond: bool| if cond { pc + 1 + i.off as usize } else { pc + 1 };
+            let jump = |cond: bool| {
+                if cond {
+                    pc + 1 + i.off as usize
+                } else {
+                    pc + 1
+                }
+            };
             pc = match i.code {
                 LDX_MEM_W => {
                     r[d] = read32(&stack, r[s].wrapping_add(i.off as i64 as u64)) as u64;
@@ -716,7 +834,14 @@ mod tests {
     #[test]
     fn programs_have_no_dead_code() {
         let mut msgs = Vec::new();
-        let lists = ["", "any", "localhost", "192.0.2.0/24 2001:db8::/32", "10.0.0.0/8 ::/0", "0.0.0.0/0"];
+        let lists = [
+            "",
+            "any",
+            "localhost",
+            "192.0.2.0/24 2001:db8::/32",
+            "10.0.0.0/8 ::/0",
+            "0.0.0.0/0",
+        ];
         for allow in lists {
             for deny in lists.iter().filter(|d| !d.is_empty()) {
                 let allow = parse_prefixes(&words(allow), "IPAddressAllow", &mut msgs);
@@ -727,20 +852,45 @@ mod tests {
             }
         }
         assert!(msgs.is_empty(), "{msgs:?}");
-        let rule = DevRule { ty: DEV_CHAR, major: Some(1), minor: None, access: ACC_READ };
+        let rule = DevRule {
+            ty: DEV_CHAR,
+            major: Some(1),
+            minor: None,
+            access: ACC_READ,
+        };
         assert_reachable(&device_program(&[]));
-        assert_reachable(&device_program(&[rule, DevRule { minor: Some(3), access: ACC_ALL, ..rule }]));
+        assert_reachable(&device_program(&[
+            rule,
+            DevRule {
+                minor: Some(3),
+                access: ACC_ALL,
+                ..rule
+            },
+        ]));
     }
 
     fn dev_ctx(ty: u32, access: u32, major: u32, minor: u32) -> Vec<u8> {
-        [(access << 16) | ty, major, minor].iter().flat_map(|v| v.to_ne_bytes()).collect()
+        [(access << 16) | ty, major, minor]
+            .iter()
+            .flat_map(|v| v.to_ne_bytes())
+            .collect()
     }
 
     #[test]
     fn device_program_allows_listed() {
         let rules = [
-            DevRule { ty: DEV_CHAR, major: Some(1), minor: Some(3), access: ACC_READ | ACC_WRITE },
-            DevRule { ty: DEV_CHAR, major: Some(136), minor: None, access: ACC_ALL },
+            DevRule {
+                ty: DEV_CHAR,
+                major: Some(1),
+                minor: Some(3),
+                access: ACC_READ | ACC_WRITE,
+            },
+            DevRule {
+                ty: DEV_CHAR,
+                major: Some(136),
+                minor: None,
+                access: ACC_ALL,
+            },
         ];
         let p = device_program(&rules);
         let check = |ty, acc, maj, min| run(&p, &dev_ctx(ty, acc, maj, min), &[]);
@@ -752,7 +902,14 @@ mod tests {
         assert_eq!(check(DEV_CHAR, ACC_ALL, 136, 7), 1);
         assert_eq!(check(DEV_CHAR, ACC_READ, 137, 7), 0);
         // Empty list (DevicePolicy=strict alone): deny everything.
-        assert_eq!(run(&device_program(&[]), &dev_ctx(DEV_CHAR, ACC_READ, 1, 3), &[]), 0);
+        assert_eq!(
+            run(
+                &device_program(&[]),
+                &dev_ctx(DEV_CHAR, ACC_READ, 1, 3),
+                &[]
+            ),
+            0
+        );
     }
 
     fn skb(proto: u16) -> Vec<u8> {
@@ -784,7 +941,11 @@ mod tests {
     #[test]
     fn firewall_deny_any_allow_localhost() {
         let mut msgs = Vec::new();
-        let allow = parse_prefixes(&words("localhost 10.0.0.0/8 fe80::/64"), "IPAddressAllow", &mut msgs);
+        let allow = parse_prefixes(
+            &words("localhost 10.0.0.0/8 fe80::/64"),
+            "IPAddressAllow",
+            &mut msgs,
+        );
         let deny = parse_prefixes(&words("any"), "IPAddressDeny", &mut msgs);
         assert!(msgs.is_empty(), "{msgs:?}");
         let egress = firewall_program(&allow, &deny, false);
@@ -814,15 +975,25 @@ mod tests {
         let mut msgs = Vec::new();
         let deny = parse_prefixes(&words("192.0.2.0/24"), "IPAddressDeny", &mut msgs);
         let p = firewall_program(&[], &deny, false);
-        assert_eq!(run(&p, &skb(0x0800), &ipv4([1, 1, 1, 1], [192, 0, 2, 77])), 0);
-        assert_eq!(run(&p, &skb(0x0800), &ipv4([1, 1, 1, 1], [192, 0, 3, 77])), 1);
+        assert_eq!(
+            run(&p, &skb(0x0800), &ipv4([1, 1, 1, 1], [192, 0, 2, 77])),
+            0
+        );
+        assert_eq!(
+            run(&p, &skb(0x0800), &ipv4([1, 1, 1, 1], [192, 0, 3, 77])),
+            1
+        );
         assert_eq!(run(&p, &skb(0x86dd), &ipv6("::1", "2001:db8::1")), 1);
     }
 
     #[test]
     fn prefixes() {
         let mut msgs = Vec::new();
-        let p = parse_prefixes(&words("10.1.2.3/8 ::1 any bogus 1.2.3.4/33 1.2.3.4/"), "IPAddressDeny", &mut msgs);
+        let p = parse_prefixes(
+            &words("10.1.2.3/8 ::1 any bogus 1.2.3.4/33 1.2.3.4/"),
+            "IPAddressDeny",
+            &mut msgs,
+        );
         assert_eq!(
             p,
             [
@@ -841,12 +1012,21 @@ mod tests {
     #[test]
     fn device_classes() {
         let r = class_rules(DEV_CHAR, "usb*", ACC_READ, PROC_DEVICES);
-        assert_eq!(r.iter().map(|r| r.major.unwrap()).collect::<Vec<_>>(), [180, 189]);
+        assert_eq!(
+            r.iter().map(|r| r.major.unwrap()).collect::<Vec<_>>(),
+            [180, 189]
+        );
         let r = class_rules(DEV_CHAR, "tty*", ACC_READ, PROC_DEVICES);
         assert_eq!(r.len(), 1);
         assert!(class_rules(DEV_CHAR, "loop", ACC_READ, PROC_DEVICES).is_empty());
-        assert_eq!(class_rules(DEV_BLOCK, "loop", ACC_READ, PROC_DEVICES)[0].major, Some(7));
-        assert_eq!(class_rules(DEV_BLOCK, "*", ACC_READ, PROC_DEVICES)[0].major, None);
+        assert_eq!(
+            class_rules(DEV_BLOCK, "loop", ACC_READ, PROC_DEVICES)[0].major,
+            Some(7)
+        );
+        assert_eq!(
+            class_rules(DEV_BLOCK, "*", ACC_READ, PROC_DEVICES)[0].major,
+            None
+        );
         assert_eq!(parse_access("rw"), Some(ACC_READ | ACC_WRITE));
         assert_eq!(parse_access("rx"), None);
     }
@@ -868,20 +1048,50 @@ mod tests {
     #[test]
     fn device_policies() {
         let mut msgs = Vec::new();
-        assert!(device_rules(&test_unit("[Service]\nExecStart=/bin/true\n"), "Service", &mut msgs).is_none());
+        assert!(device_rules(
+            &test_unit("[Service]\nExecStart=/bin/true\n"),
+            "Service",
+            &mut msgs
+        )
+        .is_none());
         // polkit.service: strict, /dev/null only.
-        let u = test_unit("[Service]\nDeviceAllow=/dev/null rw\nDevicePolicy=strict\nPrivateDevices=yes\n");
+        let u = test_unit(
+            "[Service]\nDeviceAllow=/dev/null rw\nDevicePolicy=strict\nPrivateDevices=yes\n",
+        );
         let r = device_rules(&u, "Service", &mut msgs).unwrap();
-        assert_eq!(r, [DevRule { ty: DEV_CHAR, major: Some(1), minor: Some(3), access: ACC_READ | ACC_WRITE }]);
+        assert_eq!(
+            r,
+            [DevRule {
+                ty: DEV_CHAR,
+                major: Some(1),
+                minor: Some(3),
+                access: ACC_READ | ACC_WRITE
+            }]
+        );
         // PrivateDevices= alone: closed, so the pseudo devices.
         let u = test_unit("[Service]\nPrivateDevices=yes\n");
         let r = device_rules(&u, "Service", &mut msgs).unwrap();
-        assert!(r.contains(&DevRule { ty: DEV_CHAR, major: Some(1), minor: Some(9), access: ACC_ALL }));
+        assert!(r.contains(&DevRule {
+            ty: DEV_CHAR,
+            major: Some(1),
+            minor: Some(9),
+            access: ACC_ALL
+        }));
         // auto with a list: closed plus the list; an empty assignment resets.
         let u = test_unit("[Service]\nDeviceAllow=/dev/zero r\nDeviceAllow=\nDeviceAllow=/dev/does-not-exist rw\n");
         let r = device_rules(&u, "Service", &mut msgs).unwrap();
-        assert!(!r.contains(&DevRule { ty: DEV_CHAR, major: Some(1), minor: Some(5), access: ACC_READ }));
-        assert!(r.contains(&DevRule { ty: DEV_CHAR, major: Some(1), minor: Some(5), access: ACC_ALL }));
+        assert!(!r.contains(&DevRule {
+            ty: DEV_CHAR,
+            major: Some(1),
+            minor: Some(5),
+            access: ACC_READ
+        }));
+        assert!(r.contains(&DevRule {
+            ty: DEV_CHAR,
+            major: Some(1),
+            minor: Some(5),
+            access: ACC_ALL
+        }));
         assert!(msgs.is_empty(), "{msgs:?}");
         let u = test_unit("[Service]\nDeviceAllow=/dev/null rx\nDeviceAllow=sda rw\n");
         device_rules(&u, "Service", &mut msgs);
@@ -894,7 +1104,8 @@ mod tests {
     #[test]
     #[ignore]
     fn kernel_enforces() {
-        let dir = Path::new(crate::cgroup::CGROUP_ROOT).join(format!("uinitconverter-bpf-test-{}", std::process::id()));
+        let dir = Path::new(crate::cgroup::CGROUP_ROOT)
+            .join(format!("uinitconverter-bpf-test-{}", std::process::id()));
         fs::create_dir(&dir).unwrap();
         // Removed even when an assert fails (a cgroup with programs attached
         // can be removed once empty; the child is reaped before this runs).
@@ -926,7 +1137,13 @@ mod tests {
             let _ = fs::write(dir.join("cgroup.procs"), "0");
             // 0 on success, else the errno.
             let errno = || io::Error::last_os_error().raw_os_error().unwrap_or(-1);
-            let open = |p: &CStr| if unsafe { libc::open(p.as_ptr(), libc::O_RDONLY) } >= 0 { 0 } else { errno() };
+            let open = |p: &CStr| {
+                if unsafe { libc::open(p.as_ptr(), libc::O_RDONLY) } >= 0 {
+                    0
+                } else {
+                    errno()
+                }
+            };
             let send = |addr: [u8; 4]| unsafe {
                 let s = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
                 let mut sa: libc::sockaddr_in = std::mem::zeroed();
@@ -934,8 +1151,19 @@ mod tests {
                 sa.sin_port = 9u16.to_be();
                 sa.sin_addr.s_addr = u32::from_ne_bytes(addr);
                 let sp = &sa as *const libc::sockaddr_in as *const libc::sockaddr;
-                let r = libc::sendto(s, b"x".as_ptr() as *const libc::c_void, 1, 0, sp, std::mem::size_of_val(&sa) as u32);
-                if r == 1 { 0 } else { errno() }
+                let r = libc::sendto(
+                    s,
+                    b"x".as_ptr() as *const libc::c_void,
+                    1,
+                    0,
+                    sp,
+                    std::mem::size_of_val(&sa) as u32,
+                );
+                if r == 1 {
+                    0
+                } else {
+                    errno()
+                }
             };
             let bits = [
                 open(c"/dev/null") == 0,
@@ -943,13 +1171,19 @@ mod tests {
                 send([127, 0, 0, 1]) == 0,
                 send([192, 0, 2, 1]) == libc::EPERM,
             ];
-            let code = bits.iter().enumerate().fold(0, |c, (i, ok)| if *ok { c } else { c | 1 << i });
+            let code = bits
+                .iter()
+                .enumerate()
+                .fold(0, |c, (i, ok)| if *ok { c } else { c | 1 << i });
             unsafe { libc::_exit(code) };
         }
         let mut status = 0;
         unsafe { libc::waitpid(pid, &mut status, 0) };
         assert!(libc::WIFEXITED(status));
-        assert_eq!(libc::WEXITSTATUS(status), 0, "failed checks (bits: null, zero, localhost, far)");
+        assert_eq!(
+            libc::WEXITSTATUS(status),
+            0,
+            "failed checks (bits: null, zero, localhost, far)"
+        );
     }
-
 }

@@ -9,8 +9,16 @@ use std::process::Command;
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
     // --no-optional-locks: `git status` must not rewrite the index, which
     // would make this script run again on every build.
-    let out = Command::new("git").arg("--no-optional-locks").arg("-C").arg(dir).args(args).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let out = Command::new("git")
+        .arg("--no-optional-locks")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn main() {
@@ -27,7 +35,11 @@ fn main() {
                     // Run again when the commit or the index changes.
                     if let Some(gitdir) = git(dir, &["rev-parse", "--absolute-git-dir"]) {
                         let gitdir = Path::new(&gitdir);
-                        let mut watch = vec![gitdir.join("HEAD"), gitdir.join("index"), gitdir.join("packed-refs")];
+                        let mut watch = vec![
+                            gitdir.join("HEAD"),
+                            gitdir.join("index"),
+                            gitdir.join("packed-refs"),
+                        ];
                         if let Some(r) = git(dir, &["symbolic-ref", "-q", "HEAD"]) {
                             watch.push(gitdir.join(r));
                         }
@@ -36,10 +48,25 @@ fn main() {
                         }
                     }
                     let root = root.to_string_lossy();
-                    let dirty = git(dir, &["-C", &root, "status", "--porcelain", "--", "Cargo.toml", "Cargo.lock", "crates"])
-                        .map(|s| !s.is_empty())
-                        .unwrap_or(false);
-                    format!("{version} (git {commit}{})", if dirty { "-dirty" } else { "" })
+                    let dirty = git(
+                        dir,
+                        &[
+                            "-C",
+                            &root,
+                            "status",
+                            "--porcelain",
+                            "--",
+                            "Cargo.toml",
+                            "Cargo.lock",
+                            "crates",
+                        ],
+                    )
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                    format!(
+                        "{version} (git {commit}{})",
+                        if dirty { "-dirty" } else { "" }
+                    )
                 }
                 None => version.to_string(),
             }

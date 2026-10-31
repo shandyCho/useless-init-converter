@@ -1,8 +1,8 @@
 //! s6 / s6-rc backend: unit state queries and job execution.
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::Mutex;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tokio::process::Command;
@@ -107,7 +107,8 @@ impl Daemon {
                 return order.clone();
             }
         }
-        let mut atomic: BTreeSet<String> = self.s6rc_db_list("longruns").await.into_iter().collect();
+        let mut atomic: BTreeSet<String> =
+            self.s6rc_db_list("longruns").await.into_iter().collect();
         atomic.extend(self.s6rc_db_list("oneshots").await);
         // s6-rc-db lists services in descending index order.
         let mut order: Vec<String> = self
@@ -157,7 +158,9 @@ impl Daemon {
             }
             Some(false) => {}
             None => {
-                let due = last.map(|t| t.elapsed() > Duration::from_secs(5)).unwrap_or(true);
+                let due = last
+                    .map(|t| t.elapsed() > Duration::from_secs(5))
+                    .unwrap_or(true);
                 if due {
                     self.s6.state_reader.lock().unwrap().1 = Some(Instant::now());
                     if let (Some(f), Some(r)) = (&from_file, self.active_atoms_s6rc().await) {
@@ -220,7 +223,11 @@ impl Daemon {
             return v.clone();
         }
         let v = self.bundle_atoms_uncached(bundle).await;
-        self.s6.bundle_cache.lock().unwrap().insert(bundle.to_string(), v.clone());
+        self.s6
+            .bundle_cache
+            .lock()
+            .unwrap()
+            .insert(bundle.to_string(), v.clone());
         v
     }
 
@@ -250,7 +257,9 @@ impl Daemon {
     pub(super) async fn svstat_cached(&self, atom: &str) -> Option<SvStat> {
         let ident = {
             use std::os::unix::fs::MetadataExt;
-            std::fs::metadata(self.scandir(atom).join("supervise/status")).ok().map(|m| (m.dev(), m.ino(), m.mtime_nsec() + m.mtime() * 1_000_000_000))
+            std::fs::metadata(self.scandir(atom).join("supervise/status"))
+                .ok()
+                .map(|m| (m.dev(), m.ino(), m.mtime_nsec() + m.mtime() * 1_000_000_000))
         };
         if let Some((t, i, v)) = self.s6.svstat_cache.lock().unwrap().get(atom) {
             let same = match (ident, i) {
@@ -262,7 +271,11 @@ impl Daemon {
             }
         }
         let v = self.svstat(atom).await?;
-        self.s6.svstat_cache.lock().unwrap().insert(atom.to_string(), (Instant::now(), ident, v.clone()));
+        self.s6
+            .svstat_cache
+            .lock()
+            .unwrap()
+            .insert(atom.to_string(), (Instant::now(), ident, v.clone()));
         Some(v)
     }
 
@@ -306,7 +319,12 @@ impl Daemon {
 
     /// Runtime status of a unit, combining s6-rc state, s6-svstat and the
     /// runner's state files.
-    pub(super) async fn unit_status(&self, id: &str, active: &BTreeSet<String>, unit: &Unit) -> Status {
+    pub(super) async fn unit_status(
+        &self,
+        id: &str,
+        active: &BTreeSet<String>,
+        unit: &Unit,
+    ) -> Status {
         let st = state::for_unit(&self.cfg.run_dir, id);
         let result = st.get(keys::RESULT).unwrap_or_else(|| "success".into());
         let failed_result = !matches!(result.as_str(), "success" | "running");
@@ -314,9 +332,20 @@ impl Daemon {
         // Soft failures: reported to s6-rc as "up", but failed or never run.
         let dep_failed = st.has(keys::DEPENDENCY_FAILED) || st.has(keys::PARKED);
         let start_failed = st.has(keys::START_FAILED);
-        let failed_now = failed_result && st.get_u64(keys::INACTIVE_ENTER) >= st.get_u64(keys::INACTIVE_EXIT);
-        let result = if start_failed && !failed_result { "exit-code".to_string() } else { result };
-        let mut s = Status { active: "inactive", sub: "dead", main_pid: 0, result: result.clone(), condition_ok };
+        let failed_now =
+            failed_result && st.get_u64(keys::INACTIVE_ENTER) >= st.get_u64(keys::INACTIVE_EXIT);
+        let result = if start_failed && !failed_result {
+            "exit-code".to_string()
+        } else {
+            result
+        };
+        let mut s = Status {
+            active: "inactive",
+            sub: "dead",
+            main_pid: 0,
+            result: result.clone(),
+            condition_ok,
+        };
 
         if let Some(scope) = self.transient.lock().unwrap().get(id) {
             let populated = scope.kind == "slice" || !util::cgroup_pids(&scope.cgroup).is_empty();
@@ -338,7 +367,13 @@ impl Daemon {
 
         if let Some(kind) = self.dynamic_kind(id) {
             if kind == Kind::Oneshot {
-                let up = self.dynamic.lock().unwrap().get(id).map(|d| d.active).unwrap_or(false);
+                let up = self
+                    .dynamic
+                    .lock()
+                    .unwrap()
+                    .get(id)
+                    .map(|d| d.active)
+                    .unwrap_or(false);
                 if up {
                     (s.active, s.sub) = ("active", "exited");
                 } else if failed_result {
@@ -346,7 +381,9 @@ impl Daemon {
                 }
                 return s;
             }
-            let Some(sv) = self.svstat_cached(id).await else { return s };
+            let Some(sv) = self.svstat_cached(id).await else {
+                return s;
+            };
             // As for the database's longruns: a skipped start stays up for s6.
             if !condition_ok || dep_failed || st.has(keys::SOCKET_WAIT) {
                 return s;
@@ -357,12 +394,23 @@ impl Daemon {
             }
             if sv.up && (id.ends_with(".timer") || id.ends_with(".path")) {
                 s.active = "active";
-                s.sub = if st.has(crate::timer::ELAPSED) { "elapsed" } else { "waiting" };
+                s.sub = if st.has(crate::timer::ELAPSED) {
+                    "elapsed"
+                } else {
+                    "waiting"
+                };
                 return s;
             }
             if sv.up {
-                s.main_pid = st.get(keys::MAIN_PID).and_then(|p| p.parse().ok()).unwrap_or(sv.pid);
-                (s.active, s.sub) = if sv.ready { ("active", "running") } else { ("activating", "start") };
+                s.main_pid = st
+                    .get(keys::MAIN_PID)
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or(sv.pid);
+                (s.active, s.sub) = if sv.ready {
+                    ("active", "running")
+                } else {
+                    ("activating", "start")
+                };
             } else if sv.wanted_up {
                 (s.active, s.sub) = ("activating", "auto-restart");
             } else if failed_result {
@@ -392,10 +440,19 @@ impl Daemon {
                 let up = if unit.utype() == "mount" {
                     crate::mountunit::is_mounted(&crate::mountunit::where_of(unit))
                 } else {
-                    unit.get("Swap", "What").map(|w| crate::mountunit::swap_active(&w)).unwrap_or(false)
+                    unit.get("Swap", "What")
+                        .map(|w| crate::mountunit::swap_active(&w))
+                        .unwrap_or(false)
                 };
                 if up {
-                    (s.active, s.sub) = ("active", if unit.utype() == "mount" { "mounted" } else { "active" });
+                    (s.active, s.sub) = (
+                        "active",
+                        if unit.utype() == "mount" {
+                            "mounted"
+                        } else {
+                            "active"
+                        },
+                    );
                 } else if failed_result {
                     (s.active, s.sub) = ("failed", "failed");
                 }
@@ -411,7 +468,9 @@ impl Daemon {
                 }
             }
             Some(Kind::Longrun) if id.ends_with(".timer") || id.ends_with(".path") => {
-                if !active.contains(id) || !self.svstat_cached(id).await.map(|s| s.up).unwrap_or(false) {
+                if !active.contains(id)
+                    || !self.svstat_cached(id).await.map(|s| s.up).unwrap_or(false)
+                {
                     return s;
                 }
                 s.active = "active";
@@ -427,7 +486,11 @@ impl Daemon {
                         }
                         None => false,
                     };
-                    if running { "running" } else { "waiting" }
+                    if running {
+                        "running"
+                    } else {
+                        "waiting"
+                    }
                 };
             }
             Some(Kind::Longrun) => {
@@ -437,7 +500,9 @@ impl Daemon {
                     }
                     return s;
                 }
-                let Some(sv) = self.svstat_cached(id).await else { return s };
+                let Some(sv) = self.svstat_cached(id).await else {
+                    return s;
+                };
                 // Waiting for socket activity: the service itself is not running.
                 if !condition_ok || dep_failed || st.has(keys::SOCKET_WAIT) {
                     return s;
@@ -447,10 +512,22 @@ impl Daemon {
                     return s;
                 }
                 if sv.up {
-                    s.main_pid = st.get(keys::MAIN_PID).and_then(|p| p.parse().ok()).unwrap_or(sv.pid);
+                    s.main_pid = st
+                        .get(keys::MAIN_PID)
+                        .and_then(|p| p.parse().ok())
+                        .unwrap_or(sv.pid);
                     if sv.ready {
-                        let reloading = self.jobs.lock().unwrap().values().any(|j| j.unit == id && j.jtype == "reload");
-                        (s.active, s.sub) = if reloading { ("reloading", "reload") } else { ("active", "running") };
+                        let reloading = self
+                            .jobs
+                            .lock()
+                            .unwrap()
+                            .values()
+                            .any(|j| j.unit == id && j.jtype == "reload");
+                        (s.active, s.sub) = if reloading {
+                            ("reloading", "reload")
+                        } else {
+                            ("active", "running")
+                        };
                     } else {
                         (s.active, s.sub) = ("activating", "start");
                     }
@@ -547,17 +624,27 @@ impl Daemon {
             }
             _ => return None,
         };
-        eprintln!("uinitconverterd: start {id}: s6-rc is busy with another change, starting it beside");
+        eprintln!(
+            "uinitconverterd: start {id}: s6-rc is busy with another change, starting it beside"
+        );
         if start_logger {
             self.s6.beside.lock().unwrap().insert(logger.clone());
-            let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(self.scandir(&logger)).status().await;
+            let _ = Command::new(tools::path("s6-svc"))
+                .arg("-u")
+                .arg(self.scandir(&logger))
+                .status()
+                .await;
             if !self.wait_up(&logger, Duration::from_secs(10)).await {
                 eprintln!("uinitconverterd: start {id}: logger {logger} did not come up");
                 return Some("failed");
             }
         }
         self.s6.beside.lock().unwrap().insert(id.to_string());
-        let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(self.scandir(id)).status().await;
+        let _ = Command::new(tools::path("s6-svc"))
+            .arg("-u")
+            .arg(self.scandir(id))
+            .status()
+            .await;
         Some(self.wait_ready(id, unit, None).await)
     }
 
@@ -585,7 +672,12 @@ impl Daemon {
             return false;
         }
         let active = self.active_atoms().await;
-        let mut left: Vec<String> = self.bundle_atoms(id).await.into_iter().filter(|a| !active.contains(a)).collect();
+        let mut left: Vec<String> = self
+            .bundle_atoms(id)
+            .await
+            .into_iter()
+            .filter(|a| !active.contains(a))
+            .collect();
         // One member may need another: repeat while something starts.
         loop {
             let before = left.len();
@@ -650,12 +742,16 @@ impl Daemon {
         if !order.iter().any(|a| a.ends_with(".stop")) {
             return;
         }
-        let Ok(_guard) = self.s6.lock.try_lock() else { return };
+        let Ok(_guard) = self.s6.lock.try_lock() else {
+            return;
+        };
         let active = self.active_atoms_live().await;
         let mut names = Vec::new();
         let mut job_guards = Vec::new();
         for a in &order {
-            let Some(base) = a.strip_suffix(".stop") else { continue };
+            let Some(base) = a.strip_suffix(".stop") else {
+                continue;
+            };
             if gen::stop_atom(base) != *a || !active.contains(base) || active.contains(a) {
                 continue;
             }
@@ -678,7 +774,11 @@ impl Daemon {
             .await;
         match out {
             Ok(o) if !o.status.success() && !self.s6rc_lock_held() => {
-                eprintln!("uinitconverterd: starting {}: {}", names.join(" "), String::from_utf8_lossy(&o.stderr).trim());
+                eprintln!(
+                    "uinitconverterd: starting {}: {}",
+                    names.join(" "),
+                    String::from_utf8_lossy(&o.stderr).trim()
+                );
             }
             Err(e) => eprintln!("uinitconverterd: s6-rc: {e}"),
             _ => {}
@@ -709,10 +809,19 @@ impl Daemon {
     /// stop, SIGKILL after TimeoutStopSec=; and if the old process survives
     /// even that, the restart did not happen and RESTART_REQUESTED must not
     /// be left for a later exit.
-    pub(super) async fn restart_longrun(&self, id: &str, unit: &Unit, old_pid: u32) -> &'static str {
+    pub(super) async fn restart_longrun(
+        &self,
+        id: &str,
+        unit: &Unit,
+        old_pid: u32,
+    ) -> &'static str {
         let st = state::for_unit(&self.cfg.run_dir, id);
         st.set(keys::RESTART_REQUESTED, "1");
-        let _ = Command::new(tools::path("s6-svc")).arg("-r").arg(self.scandir(id)).status().await;
+        let _ = Command::new(tools::path("s6-svc"))
+            .arg("-r")
+            .arg(self.scandir(id))
+            .status()
+            .await;
         let usec = unit.stop_timeout_usec();
         let mut deadline = (usec != u64::MAX).then(|| Instant::now() + Duration::from_micros(usec));
         let mut killed = false;
@@ -728,7 +837,11 @@ impl Daemon {
                     return "timeout";
                 }
                 eprintln!("uinitconverterd: restart {id}: stop timed out, killing");
-                let _ = Command::new(tools::path("s6-svc")).arg("-k").arg(self.scandir(id)).status().await;
+                let _ = Command::new(tools::path("s6-svc"))
+                    .arg("-k")
+                    .arg(self.scandir(id))
+                    .status()
+                    .await;
                 killed = true;
                 deadline = Some(Instant::now() + Duration::from_secs(5));
             }
@@ -774,13 +887,21 @@ impl Daemon {
     /// sees no SOCKET_WAIT and starts the service.
     async fn wake_socket_wait(&self, id: &str) {
         for _ in 0..20 {
-            let out = Command::new(tools::path("s6-svstat")).args(["-o", "up,updownfor"]).arg(self.scandir(id)).output().await;
+            let out = Command::new(tools::path("s6-svstat"))
+                .args(["-o", "up,updownfor"])
+                .arg(self.scandir(id))
+                .output()
+                .await;
             let Ok(out) = out else { return };
             let text = String::from_utf8_lossy(&out.stdout).into_owned();
             let f: Vec<&str> = text.split_whitespace().collect();
             match f.as_slice() {
                 ["true", secs] if secs.parse::<u64>().unwrap_or(0) >= 1 => {
-                    let _ = Command::new(tools::path("s6-svc")).arg("-1").arg(self.scandir(id)).status().await;
+                    let _ = Command::new(tools::path("s6-svc"))
+                        .arg("-1")
+                        .arg(self.scandir(id))
+                        .status()
+                        .await;
                     return;
                 }
                 ["true", _] => tokio::time::sleep(Duration::from_millis(200)).await,
@@ -817,7 +938,12 @@ impl Daemon {
     }
 
     /// Wait until a longrun is up and ready (and, if `old_pid` is given, has a new PID).
-    pub(super) async fn wait_ready(&self, id: &str, unit: &Unit, old_pid: Option<u32>) -> &'static str {
+    pub(super) async fn wait_ready(
+        &self,
+        id: &str,
+        unit: &Unit,
+        old_pid: Option<u32>,
+    ) -> &'static str {
         let started_at = util::now_realtime_usec();
         let deadline = Instant::now() + Self::start_timeout(unit);
         let st = state::for_unit(&self.cfg.run_dir, id);
@@ -834,7 +960,11 @@ impl Daemon {
                     // Like systemd: a service that became active during this
                     // job and died afterwards still completed its start job.
                     let became_active = st.get_u64(keys::ACTIVE_ENTER) >= started_at;
-                    return if st.has(keys::CONDITION_FAILED) || became_active { "done" } else { "failed" };
+                    return if st.has(keys::CONDITION_FAILED) || became_active {
+                        "done"
+                    } else {
+                        "failed"
+                    };
                 }
             } else {
                 return "failed";
@@ -853,7 +983,13 @@ impl Daemon {
         self.job_outcome(id, started_at, base)
     }
 
-    async fn do_start_inner(&self, id: &str, unit: &Unit, isolate: bool, started_at: u64) -> &'static str {
+    async fn do_start_inner(
+        &self,
+        id: &str,
+        unit: &Unit,
+        isolate: bool,
+        started_at: u64,
+    ) -> &'static str {
         self.stop_conflicts(id, unit).await;
         self.repair_requirements(id, unit, 0).await;
         let kind = self.kind_of(id);
@@ -907,14 +1043,22 @@ impl Daemon {
                         if st.active == "active" {
                             return "done";
                         }
-                        return if self.run_runner("up", id, None).await { "done" } else { "failed" };
+                        return if self.run_runner("up", id, None).await {
+                            "done"
+                        } else {
+                            "failed"
+                        };
                     }
                     let st = self.unit_status(id, &active, unit).await;
                     if unit.get_bool("Service", "RemainAfterExit", false) && st.active == "active" {
                         return "done";
                     }
                     // Not active, failed, or skipped for a dependency: run it again.
-                    return if self.run_runner("up", id, None).await { "done" } else { "failed" };
+                    return if self.run_runner("up", id, None).await {
+                        "done"
+                    } else {
+                        "failed"
+                    };
                 }
                 match self.s6rc(&["-u", "change"], &[id.to_string()]).await {
                     Ok(()) => "done",
@@ -949,7 +1093,11 @@ impl Daemon {
                     if sv.up {
                         return self.wait_ready(id, unit, None).await;
                     }
-                    let _ = Command::new(tools::path("s6-svc")).arg("-u").arg(self.scandir(id)).status().await;
+                    let _ = Command::new(tools::path("s6-svc"))
+                        .arg("-u")
+                        .arg(self.scandir(id))
+                        .status()
+                        .await;
                     return self.wait_ready(id, unit, None).await;
                 }
                 if let Some(r) = self.start_beside(id, unit).await {
@@ -960,7 +1108,14 @@ impl Daemon {
                         let st = state::for_unit(&self.cfg.run_dir, id);
                         let became_active = st.get_u64(keys::ACTIVE_ENTER) >= started_at;
                         match self.svstat(id).await {
-                            Some(sv) if !sv.up && !sv.wanted_up && !st.has(keys::CONDITION_FAILED) && !became_active => "failed",
+                            Some(sv)
+                                if !sv.up
+                                    && !sv.wanted_up
+                                    && !st.has(keys::CONDITION_FAILED)
+                                    && !became_active =>
+                            {
+                                "failed"
+                            }
                             _ => "done",
                         }
                     }
@@ -975,7 +1130,12 @@ impl Daemon {
 
     /// s6-rc reports every start as successful (soft failures); the real
     /// result comes from the runner's state files.
-    pub(super) fn job_outcome(&self, id: &str, started_at: u64, base: &'static str) -> &'static str {
+    pub(super) fn job_outcome(
+        &self,
+        id: &str,
+        started_at: u64,
+        base: &'static str,
+    ) -> &'static str {
         if base != "done" {
             return base;
         }
@@ -986,12 +1146,19 @@ impl Daemon {
         if st.has(keys::START_FAILED) {
             return "failed";
         }
-        let failed = st.get(keys::RESULT).map(|r| !matches!(r.as_str(), "success" | "running")).unwrap_or(false);
+        let failed = st
+            .get(keys::RESULT)
+            .map(|r| !matches!(r.as_str(), "success" | "running"))
+            .unwrap_or(false);
         if failed
             && st.get_u64(keys::INACTIVE_EXIT) >= started_at
             && st.get_u64(keys::INACTIVE_ENTER) >= st.get_u64(keys::INACTIVE_EXIT)
         {
-            return if st.get(keys::RESULT).as_deref() == Some("timeout") { "timeout" } else { "failed" };
+            return if st.get(keys::RESULT).as_deref() == Some("timeout") {
+                "timeout"
+            } else {
+                "failed"
+            };
         }
         base
     }
@@ -1042,7 +1209,11 @@ impl Daemon {
                 if !active.contains(id) {
                     // Mounted outside s6-rc (fstab, by hand): still unmount it.
                     if matches!(unit.utype(), "mount" | "swap") {
-                        return if self.run_runner("down", id, None).await { "done" } else { "failed" };
+                        return if self.run_runner("down", id, None).await {
+                            "done"
+                        } else {
+                            "failed"
+                        };
                     }
                     return "done";
                 }
@@ -1077,7 +1248,12 @@ impl Daemon {
         }
     }
 
-    pub(super) async fn do_restart(&self, id: &str, unit: &Unit, only_if_active: bool) -> &'static str {
+    pub(super) async fn do_restart(
+        &self,
+        id: &str,
+        unit: &Unit,
+        only_if_active: bool,
+    ) -> &'static str {
         // The new run's result, as do_start() reports it: the runner tells
         // s6 "ready" (and exits 0 for a oneshot) even when the start failed.
         let started_at = util::now_realtime_usec();
@@ -1104,7 +1280,11 @@ impl Daemon {
             }
             Some(Kind::Oneshot) if active.contains(id) => {
                 self.run_runner("down", id, None).await;
-                let r = if self.run_runner("up", id, None).await { "done" } else { "failed" };
+                let r = if self.run_runner("up", id, None).await {
+                    "done"
+                } else {
+                    "failed"
+                };
                 self.job_outcome(id, started_at, r)
             }
             _ if only_if_active => "done",

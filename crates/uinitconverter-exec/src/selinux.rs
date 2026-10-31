@@ -12,19 +12,28 @@ struct Lib {
     getcon: unsafe extern "C" fn(*mut *mut c_char) -> c_int,
     getfilecon: unsafe extern "C" fn(*const c_char, *mut *mut c_char) -> c_int,
     string_to_security_class: unsafe extern "C" fn(*const c_char) -> u16,
-    compute_create: unsafe extern "C" fn(*const c_char, *const c_char, u16, *mut *mut c_char) -> c_int,
+    compute_create:
+        unsafe extern "C" fn(*const c_char, *const c_char, u16, *mut *mut c_char) -> c_int,
     setsockcreatecon: unsafe extern "C" fn(*const c_char) -> c_int,
     freecon: unsafe extern "C" fn(*mut c_char),
     selabel_open: unsafe extern "C" fn(c_uint, *const c_void, c_uint) -> *mut c_void,
-    selabel_lookup: unsafe extern "C" fn(*mut c_void, *mut *mut c_char, *const c_char, c_int) -> c_int,
+    selabel_lookup:
+        unsafe extern "C" fn(*mut c_void, *mut *mut c_char, *const c_char, c_int) -> c_int,
     selabel_close: unsafe extern "C" fn(*mut c_void),
     lsetfilecon: unsafe extern "C" fn(*const c_char, *const c_char) -> c_int,
     getcon_raw: unsafe extern "C" fn(*mut *mut c_char) -> c_int,
     getfilecon_raw: unsafe extern "C" fn(*const c_char, *mut *mut c_char) -> c_int,
-    check_access: unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *mut c_void) -> c_int,
+    check_access: unsafe extern "C" fn(
+        *const c_char,
+        *const c_char,
+        *const c_char,
+        *const c_char,
+        *mut c_void,
+    ) -> c_int,
     getenforce: unsafe extern "C" fn() -> c_int,
     string_to_av_perm: unsafe extern "C" fn(u16, *const c_char) -> u32,
-    compute_av_raw: unsafe extern "C" fn(*const c_char, *const c_char, u16, u32, *mut AvDecision) -> c_int,
+    compute_av_raw:
+        unsafe extern "C" fn(*const c_char, *const c_char, u16, u32, *mut AvDecision) -> c_int,
 }
 
 /// struct av_decision.
@@ -41,8 +50,14 @@ struct AvDecision {
 
 fn lib() -> Option<&'static Lib> {
     static LIB: OnceLock<Option<Lib>> = OnceLock::new();
-    LIB.get_or_init(|| if unsafe { libc::geteuid() } == 0 { open() } else { None })
-        .as_ref()
+    LIB.get_or_init(|| {
+        if unsafe { libc::geteuid() } == 0 {
+            open()
+        } else {
+            None
+        }
+    })
+    .as_ref()
 }
 
 fn open() -> Option<Lib> {
@@ -54,7 +69,8 @@ fn open() -> Option<Lib> {
         let p = unsafe { libc::dlsym(h, name.as_ptr()) };
         (!p.is_null()).then_some(p)
     };
-    let enabled: unsafe extern "C" fn() -> c_int = unsafe { std::mem::transmute(sym(c"is_selinux_enabled")?) };
+    let enabled: unsafe extern "C" fn() -> c_int =
+        unsafe { std::mem::transmute(sym(c"is_selinux_enabled")?) };
     if unsafe { enabled() } <= 0 {
         return None;
     }
@@ -63,7 +79,9 @@ fn open() -> Option<Lib> {
         Some(Lib {
             getcon: std::mem::transmute::<*mut c_void, _>(sym(c"getcon")?),
             getfilecon: std::mem::transmute::<*mut c_void, _>(sym(c"getfilecon")?),
-            string_to_security_class: std::mem::transmute::<*mut c_void, _>(sym(c"string_to_security_class")?),
+            string_to_security_class: std::mem::transmute::<*mut c_void, _>(sym(
+                c"string_to_security_class",
+            )?),
             compute_create: std::mem::transmute::<*mut c_void, _>(sym(c"security_compute_create")?),
             setsockcreatecon: std::mem::transmute::<*mut c_void, _>(sym(c"setsockcreatecon")?),
             freecon: std::mem::transmute::<*mut c_void, _>(sym(c"freecon")?),
@@ -76,7 +94,9 @@ fn open() -> Option<Lib> {
             check_access: std::mem::transmute::<*mut c_void, _>(sym(c"selinux_check_access")?),
             getenforce: std::mem::transmute::<*mut c_void, _>(sym(c"security_getenforce")?),
             string_to_av_perm: std::mem::transmute::<*mut c_void, _>(sym(c"string_to_av_perm")?),
-            compute_av_raw: std::mem::transmute::<*mut c_void, _>(sym(c"security_compute_av_flags_raw")?),
+            compute_av_raw: std::mem::transmute::<*mut c_void, _>(sym(
+                c"security_compute_av_flags_raw",
+            )?),
         })
     }
 }
@@ -113,13 +133,23 @@ fn label_as_with(lib: &Lib, pairs: &[(String, String)]) {
         return;
     }
     for (path, as_path) in pairs {
-        let (Ok(p), Ok(a)) = (CString::new(path.as_str()), CString::new(as_path.as_str())) else { continue };
+        let (Ok(p), Ok(a)) = (CString::new(path.as_str()), CString::new(as_path.as_str())) else {
+            continue;
+        };
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
         if unsafe { libc::lstat(p.as_ptr(), &mut st) } < 0 {
             continue;
         }
         let mut con = std::ptr::null_mut();
-        if unsafe { (lib.selabel_lookup)(h, &mut con, a.as_ptr(), (st.st_mode & libc::S_IFMT) as c_int) } < 0 {
+        if unsafe {
+            (lib.selabel_lookup)(
+                h,
+                &mut con,
+                a.as_ptr(),
+                (st.st_mode & libc::S_IFMT) as c_int,
+            )
+        } < 0
+        {
             continue;
         }
         unsafe {
@@ -142,7 +172,11 @@ pub fn exec_label(exe: &str) -> Option<String> {
 
 fn exec_label_with(lib: &Lib, exe: &str) -> Option<String> {
     let c = CString::new(exe).ok()?;
-    let (mut mine, mut file, mut new) = (std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+    let (mut mine, mut file, mut new) = (
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
     unsafe {
         if (lib.getcon)(&mut mine) < 0 {
             return None;
@@ -212,7 +246,12 @@ pub fn file_context(path: &str) -> Option<String> {
 pub fn check_access(scon: &str, tcon: &str, tclass: &str, perm: &str) -> Result<(), String> {
     static LOCK: Mutex<()> = Mutex::new(());
     let Some(lib) = lib() else { return Ok(()) };
-    let args = (CString::new(scon), CString::new(tcon), CString::new(tclass), CString::new(perm));
+    let args = (
+        CString::new(scon),
+        CString::new(tcon),
+        CString::new(tclass),
+        CString::new(perm),
+    );
     let (Ok(s), Ok(t), Ok(c), Ok(p)) = args else {
         return Err("invalid context".into());
     };
@@ -240,13 +279,30 @@ fn audited(lib: &Lib, s: &CStr, t: &CStr, c: &CStr, p: &CStr) -> bool {
         return false;
     }
     let denied = requested & !avd.allowed;
-    if denied != 0 { denied & avd.auditdeny != 0 } else { requested & avd.auditallow != 0 }
+    if denied != 0 {
+        denied & avd.auditdeny != 0
+    } else {
+        requested & avd.auditallow != 0
+    }
 }
 
 fn check_access_with(lib: &Lib, s: &CStr, t: &CStr, c: &CStr, p: &CStr) -> Result<(), String> {
-    if unsafe { (lib.check_access)(s.as_ptr(), t.as_ptr(), c.as_ptr(), p.as_ptr(), std::ptr::null_mut()) } < 0 {
+    if unsafe {
+        (lib.check_access)(
+            s.as_ptr(),
+            t.as_ptr(),
+            c.as_ptr(),
+            p.as_ptr(),
+            std::ptr::null_mut(),
+        )
+    } < 0
+    {
         let e = std::io::Error::last_os_error();
-        return Err(if e.raw_os_error().unwrap_or(0) == 0 { "Permission denied".into() } else { e.to_string() });
+        return Err(if e.raw_os_error().unwrap_or(0) == 0 {
+            "Permission denied".into()
+        } else {
+            e.to_string()
+        });
     }
     Ok(())
 }
@@ -307,7 +363,10 @@ mod tests {
         let link = dir.join("fd");
         std::os::unix::fs::symlink("/proc/self/fd", &link).unwrap();
         let (d, l) = (dir.display().to_string(), link.display().to_string());
-        label_as_with(&lib, &[(d.clone(), "/dev".into()), (l.clone(), "/dev/fd".into())]);
+        label_as_with(
+            &lib,
+            &[(d.clone(), "/dev".into()), (l.clone(), "/dev/fd".into())],
+        );
         let (dl, ll) = (xattr(&d), xattr(&l));
         std::fs::remove_dir_all(&dir).unwrap();
         if dl.contains("tmp") && ll.contains("tmp") {
@@ -322,8 +381,17 @@ mod tests {
     fn xattr(p: &str) -> String {
         let c = CString::new(p).unwrap();
         let mut buf = [0u8; 256];
-        let n = unsafe { libc::lgetxattr(c.as_ptr(), c"security.selinux".as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
+        let n = unsafe {
+            libc::lgetxattr(
+                c.as_ptr(),
+                c"security.selinux".as_ptr(),
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+            )
+        };
         assert!(n > 0, "lgetxattr {p}");
-        String::from_utf8_lossy(&buf[..n as usize]).trim_end_matches('\0').to_string()
+        String::from_utf8_lossy(&buf[..n as usize])
+            .trim_end_matches('\0')
+            .to_string()
     }
 }

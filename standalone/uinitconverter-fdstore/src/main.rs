@@ -29,10 +29,19 @@ fn main() {
     let mut ready_fd: Option<RawFd> = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
-        let mut val = || it.next().unwrap_or_else(|| die(&format!("{a} needs a value")));
+        let mut val = || {
+            it.next()
+                .unwrap_or_else(|| die(&format!("{a} needs a value")))
+        };
         match a.as_str() {
             "--socket" => socket = PathBuf::from(val()),
-            "--ready-fd" => ready_fd = Some(val().parse().unwrap_or_else(|_| die("--ready-fd needs a number"))),
+            "--ready-fd" => {
+                ready_fd = Some(
+                    val()
+                        .parse()
+                        .unwrap_or_else(|_| die("--ready-fd needs a number")),
+                )
+            }
             "-h" | "--help" => {
                 print!("{USAGE}");
                 exit(0);
@@ -72,7 +81,10 @@ mod tests {
                 addr.sun_path[i] = b as libc::c_char;
             }
             let len = (std::mem::size_of::<libc::sa_family_t>() + p.len() + 1) as u32;
-            assert_eq!(libc::connect(fd, &addr as *const _ as *const libc::sockaddr, len), 0);
+            assert_eq!(
+                libc::connect(fd, &addr as *const _ as *const libc::sockaddr, len),
+                0
+            );
             OwnedFd::from_raw_fd(fd)
         }
     }
@@ -83,7 +95,14 @@ mod tests {
         let mut out = Vec::new();
         loop {
             let mut buf = [0u8; 256];
-            let n = unsafe { libc::recv(s.as_raw_fd(), buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+            let n = unsafe {
+                libc::recv(
+                    s.as_raw_fd(),
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                    0,
+                )
+            };
             if n <= 0 {
                 break;
             }
@@ -99,21 +118,30 @@ mod tests {
 
     #[test]
     fn put_get_respects_client_max() {
-        let dir = std::env::temp_dir().join(format!("uinitconverter-fdstore-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("uinitconverter-fdstore-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let sock = dir.join("s");
-        Store::default().serve(&sock, |k| store::key_limit(k).unwrap_or(0)).unwrap();
+        Store::default()
+            .serve(&sock, |k| store::key_limit(k).unwrap_or(0))
+            .unwrap();
         let file = std::fs::File::open("/dev/null").unwrap();
         let fd = Some(file.as_raw_fd());
 
         // A unit's key without <max>: the store knows no unit files, so 0.
-        assert_eq!(request(&sock, "PUT\0a.service\0x", fd)[0], b"ERR fd store full");
+        assert_eq!(
+            request(&sock, "PUT\0a.service\0x", fd)[0],
+            b"ERR fd store full"
+        );
         // With <max> from the client.
         assert_eq!(request(&sock, "PUT\0a.service\0x\x001", fd)[0], b"OK");
         // The same open file again is stored once (systemd's same_fd()).
         assert_eq!(request(&sock, "PUT\0a.service\0x\x001", fd)[0], b"OK");
         let other = std::fs::File::open("/dev/null").unwrap();
-        assert_eq!(request(&sock, "PUT\0a.service\0y\x001", Some(other.as_raw_fd()))[0], b"ERR fd store full");
+        assert_eq!(
+            request(&sock, "PUT\0a.service\0y\x001", Some(other.as_raw_fd()))[0],
+            b"ERR fd store full"
+        );
         // Held sockets have their own limit.
         assert_eq!(request(&sock, "PUT\0a.service#sockets\0s", fd)[0], b"OK");
 
@@ -128,27 +156,45 @@ mod tests {
 
     #[test]
     fn hung_up_fds_go() {
-        let dir = std::env::temp_dir().join(format!("uinitconverter-fdstore-hup-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("uinitconverter-fdstore-hup-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let sock = dir.join("s");
-        Store::default().serve(&sock, |k| store::key_limit(k).unwrap_or(0)).unwrap();
+        Store::default()
+            .serve(&sock, |k| store::key_limit(k).unwrap_or(0))
+            .unwrap();
         // A journald stream whose other end is closed: dropped, as systemd
         // drops FDSTORE= fds on POLLHUP, so the key has room again.
         let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
-        assert_eq!(request(&sock, "PUT\0j.service\0stored\x001", Some(a.as_raw_fd()))[0], b"OK");
+        assert_eq!(
+            request(&sock, "PUT\0j.service\0stored\x001", Some(a.as_raw_fd()))[0],
+            b"OK"
+        );
         drop(b);
         let file = std::fs::File::open("/dev/null").unwrap();
-        assert_eq!(request(&sock, "PUT\0j.service\0stored\x001", Some(file.as_raw_fd()))[0], b"OK");
+        assert_eq!(
+            request(&sock, "PUT\0j.service\0stored\x001", Some(file.as_raw_fd()))[0],
+            b"OK"
+        );
         assert_eq!(request(&sock, "GET\0j.service", None).len(), 2);
         // Held sockets and stdio ("#" keys) stay.
         let (c, d) = std::os::unix::net::UnixStream::pair().unwrap();
-        assert_eq!(request(&sock, "PUT\0j.service#stdio\0stdin", Some(c.as_raw_fd()))[0], b"OK");
+        assert_eq!(
+            request(&sock, "PUT\0j.service#stdio\0stdin", Some(c.as_raw_fd()))[0],
+            b"OK"
+        );
         drop(d);
         assert_eq!(request(&sock, "GET\0j.service#stdio", None).len(), 2);
         // One socket as both stdin and stdout keeps both names.
         let (e, _f) = std::os::unix::net::UnixStream::pair().unwrap();
-        assert_eq!(request(&sock, "PUT\0k.service#stdio\0stdin", Some(e.as_raw_fd()))[0], b"OK");
-        assert_eq!(request(&sock, "PUT\0k.service#stdio\0stdout", Some(e.as_raw_fd()))[0], b"OK");
+        assert_eq!(
+            request(&sock, "PUT\0k.service#stdio\0stdin", Some(e.as_raw_fd()))[0],
+            b"OK"
+        );
+        assert_eq!(
+            request(&sock, "PUT\0k.service#stdio\0stdout", Some(e.as_raw_fd()))[0],
+            b"OK"
+        );
         assert_eq!(request(&sock, "GET\0k.service#stdio", None).len(), 3);
         let _ = std::fs::remove_dir_all(&dir);
     }

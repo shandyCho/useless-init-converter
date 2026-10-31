@@ -20,9 +20,9 @@ use crate::install;
 use crate::loader::{LoadState, Loader, Unit};
 use crate::sandbox::{self, Sandbox};
 use crate::socket;
+use crate::state::{keys, UnitState};
 use crate::supervisor;
 use crate::tools;
-use crate::state::{keys, UnitState};
 use crate::util::{self, UserInfo};
 
 // systemd's exit codes for setup failures (EXIT_CHDIR etc).
@@ -44,7 +44,14 @@ fn errno() -> String {
 }
 
 fn cstr(s: &str) -> CString {
-    CString::new(s.as_bytes().iter().copied().filter(|&b| b != 0).collect::<Vec<u8>>()).unwrap()
+    CString::new(
+        s.as_bytes()
+            .iter()
+            .copied()
+            .filter(|&b| b != 0)
+            .collect::<Vec<u8>>(),
+    )
+    .unwrap()
 }
 
 pub struct Runner {
@@ -199,7 +206,11 @@ impl Runner {
         }
         if self.uses_tty() && !self.env.iter().any(|(k, _)| k == "TERM") {
             let tty = self.tty_path();
-            let term = if tty.starts_with("/dev/ttyS") || tty.starts_with("/dev/ttyAMA") { "vt220" } else { "linux" };
+            let term = if tty.starts_with("/dev/ttyS") || tty.starts_with("/dev/ttyAMA") {
+                "vt220"
+            } else {
+                "linux"
+            };
             self.setenv("TERM", term);
         }
         // A missing EnvironmentFile= fails the start here already.
@@ -252,13 +263,21 @@ impl Runner {
     }
 
     fn uses_tty(&self) -> bool {
-        let input = self.unit.get("Service", "StandardInput").unwrap_or_default();
-        let output = self.unit.get("Service", "StandardOutput").unwrap_or_default();
+        let input = self
+            .unit
+            .get("Service", "StandardInput")
+            .unwrap_or_default();
+        let output = self
+            .unit
+            .get("Service", "StandardOutput")
+            .unwrap_or_default();
         input.starts_with("tty") || output == "tty"
     }
 
     fn tty_path(&self) -> String {
-        self.unit.get("Service", "TTYPath").unwrap_or_else(|| "/dev/console".into())
+        self.unit
+            .get("Service", "TTYPath")
+            .unwrap_or_else(|| "/dev/console".into())
     }
 
     // ---- directories ----
@@ -290,7 +309,10 @@ impl Runner {
     }
 
     fn remove_runtime_dirs(&self) {
-        let preserve = self.unit.get("Service", "RuntimeDirectoryPreserve").unwrap_or_default();
+        let preserve = self
+            .unit
+            .get("Service", "RuntimeDirectoryPreserve")
+            .unwrap_or_default();
         if preserve == "yes" || preserve == "restart" {
             return;
         }
@@ -351,13 +373,19 @@ impl Runner {
             }
         }
 
-        let wd = self.unit.get("Service", "WorkingDirectory").unwrap_or_else(|| "/".into());
+        let wd = self
+            .unit
+            .get("Service", "WorkingDirectory")
+            .unwrap_or_else(|| "/".into());
         let (wd_optional, wd) = match wd.strip_prefix('-') {
             Some(w) => (true, w.to_string()),
             None => (false, wd),
         };
         let wd = if wd == "~" {
-            self.user.as_ref().map(|u| u.home.clone()).unwrap_or_else(|| "/root".into())
+            self.user
+                .as_ref()
+                .map(|u| u.home.clone())
+                .unwrap_or_else(|| "/root".into())
         } else {
             wd
         };
@@ -367,7 +395,9 @@ impl Runner {
         }
 
         // Root once exec()ed: the user switch below does not happen.
-        let switches_user = !cmd.privileged && !cmd.no_setuid && self.user.as_ref().map(|u| u.uid != 0).unwrap_or(false);
+        let switches_user = !cmd.privileged
+            && !cmd.no_setuid
+            && self.user.as_ref().map(|u| u.uid != 0).unwrap_or(false);
         let stays_root = self.is_root && !switches_user;
         // '+' commands skip the sandbox, NoNewPrivileges= included (systemd
         // sets it only with needs_sandboxing).
@@ -376,7 +406,11 @@ impl Runner {
             unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
         }
 
-        let bset = if self.is_root && !cmd.privileged { sandbox::bounding_set(&self.unit) } else { None };
+        let bset = if self.is_root && !cmd.privileged {
+            sandbox::bounding_set(&self.unit)
+        } else {
+            None
+        };
         if let Some(bset) = bset {
             if let Err(e) = sandbox::drop_bounding_set(bset) {
                 return (EXIT_CAPABILITIES, e);
@@ -385,7 +419,8 @@ impl Runner {
 
         // As systemd, ambient capabilities outside the bounding set are left
         // out: capset() would refuse them and fail the start.
-        let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities").map(|a| bset.map_or(a, |b| a & b));
+        let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities")
+            .map(|a| bset.map_or(a, |b| a & b));
         if !cmd.privileged && !cmd.no_setuid && self.is_root {
             if let Err(e) = self.switch_ids(ambient) {
                 return e;
@@ -460,7 +495,9 @@ impl Runner {
         } else {
             // Group=/SupplementaryGroups= without User=.
             unsafe {
-                if !self.groups.is_empty() && libc::setgroups(self.groups.len(), self.groups.as_ptr()) < 0 {
+                if !self.groups.is_empty()
+                    && libc::setgroups(self.groups.len(), self.groups.as_ptr()) < 0
+                {
                     return Err((EXIT_GROUP, format!("setgroups: {}", errno())));
                 }
                 if let Some(g) = self.gid {
@@ -512,11 +549,14 @@ impl Runner {
             if let Some(bset) = bset {
                 sandbox::drop_bounding_set(bset)?;
             }
-            let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities").map(|a| bset.map_or(a, |b| a & b));
+            let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities")
+                .map(|a| bset.map_or(a, |b| a & b));
             self.switch_ids(ambient).map_err(|(_, e)| e)?;
         }
         crate::seccomp::apply_restrictions(&self.unit)?;
-        if let Some(f) = crate::seccomp::Filter::from_unit(&self.unit).map_err(|e| format!("SystemCallFilter=: {e}"))? {
+        if let Some(f) = crate::seccomp::Filter::from_unit(&self.unit)
+            .map_err(|e| format!("SystemCallFilter=: {e}"))?
+        {
             f.apply()?;
         }
         let c_argv: Vec<CString> = argv.iter().map(|a| cstr(a)).collect();
@@ -552,10 +592,13 @@ impl Runner {
             return None;
         }
         unsafe { libc::shutdown(fd, libc::SHUT_RD) };
-        let ident = self.unit.get("Service", "SyslogIdentifier").unwrap_or_else(|| {
-            let a0 = cmd.argv.first().map(String::as_str).unwrap_or(&cmd.path);
-            a0.rsplit('/').next().unwrap_or(a0).to_string()
-        });
+        let ident = self
+            .unit
+            .get("Service", "SyslogIdentifier")
+            .unwrap_or_else(|| {
+                let a0 = cmd.argv.first().map(String::as_str).unwrap_or(&cmd.path);
+                a0.rsplit('/').next().unwrap_or(a0).to_string()
+            });
         let prio = self
             .unit
             .get("Service", "SyslogLevel")
@@ -581,14 +624,30 @@ impl Runner {
     }
 
     fn setup_stdio(&self, cmd: &ExecCommand) -> Result<(), (i32, String)> {
-        let input = self.unit.get("Service", "StandardInput").unwrap_or_else(|| "null".into());
-        let default_out = if input.starts_with("tty") { "inherit" } else { "journal" };
-        let output = self.unit.get("Service", "StandardOutput").unwrap_or_else(|| default_out.into());
-        let error = self.unit.get("Service", "StandardError").unwrap_or_else(|| "inherit".into());
+        let input = self
+            .unit
+            .get("Service", "StandardInput")
+            .unwrap_or_else(|| "null".into());
+        let default_out = if input.starts_with("tty") {
+            "inherit"
+        } else {
+            "journal"
+        };
+        let output = self
+            .unit
+            .get("Service", "StandardOutput")
+            .unwrap_or_else(|| default_out.into());
+        let error = self
+            .unit
+            .get("Service", "StandardError")
+            .unwrap_or_else(|| "inherit".into());
 
         // fd:NAME from systemd-run --pipe/--stdio (see daemon::transient).
         // Taken once: the store's copies would keep the caller's pipes open.
-        let stdio = if [&input, &output, &error].iter().any(|s| s.starts_with("fd:")) {
+        let stdio = if [&input, &output, &error]
+            .iter()
+            .any(|s| s.starts_with("fd:"))
+        {
             let store = self.cfg.run_dir.join("fdstore");
             let key = format!("{}#stdio", self.unit.id);
             let fds = crate::fdstore::get(&store, &key);
@@ -600,10 +659,13 @@ impl Runner {
         let stdio_fd = |spec: &str| {
             use std::os::fd::AsRawFd;
             let name = spec.strip_prefix("fd:")?;
-            stdio.iter().find(|(n, _)| n == name).map(|(_, f)| f.as_raw_fd())
+            stdio
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, f)| f.as_raw_fd())
         };
 
-        let open =|path: &str, flags: i32| -> Result<i32, String> {
+        let open = |path: &str, flags: i32| -> Result<i32, String> {
             let c = cstr(path);
             let fd = unsafe { libc::open(c.as_ptr(), flags | libc::O_CLOEXEC, 0o644) };
             if fd < 0 {
@@ -622,30 +684,48 @@ impl Runner {
             }
         };
 
-        let wants_journal = |x: &str| x.starts_with("journal") || x.starts_with("kmsg") || x == "syslog";
-        let journal = if wants_journal(&output) || wants_journal(&error) { self.journal_stream(cmd) } else { None };
+        let wants_journal =
+            |x: &str| x.starts_with("journal") || x.starts_with("kmsg") || x == "syslog";
+        let journal = if wants_journal(&output) || wants_journal(&error) {
+            self.journal_stream(cmd)
+        } else {
+            None
+        };
         let mut tty_fd: Option<i32> = None;
         if input.starts_with("tty") || output == "tty" || error == "tty" {
-            tty_fd = Some(self.open_tty(input == "tty-force").map_err(|e| (EXIT_STDIN, e))?);
+            tty_fd = Some(
+                self.open_tty(input == "tty-force")
+                    .map_err(|e| (EXIT_STDIN, e))?,
+            );
         }
 
         match input.as_str() {
-            "null" | "" => place(open("/dev/null", libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?, 0),
+            "null" | "" => place(
+                open("/dev/null", libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?,
+                0,
+            ),
             s if s.starts_with("tty") => unsafe {
                 libc::dup2(tty_fd.unwrap(), 0);
             },
-            s if s.starts_with("file:") => {
-                place(open(&s[5..], libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?, 0)
-            }
+            s if s.starts_with("file:") => place(
+                open(&s[5..], libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?,
+                0,
+            ),
             s if stdio_fd(s).is_some() => unsafe {
                 libc::dup2(stdio_fd(s).unwrap(), 0);
             },
-            _ => place(open("/dev/null", libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?, 0),
+            _ => place(
+                open("/dev/null", libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?,
+                0,
+            ),
         }
 
         let redirect = |spec: &str, target: i32, code: i32| -> Result<(), (i32, String)> {
             match spec {
-                "null" => place(open("/dev/null", libc::O_WRONLY).map_err(|e| (code, e))?, target),
+                "null" => place(
+                    open("/dev/null", libc::O_WRONLY).map_err(|e| (code, e))?,
+                    target,
+                ),
                 "tty" => unsafe {
                     libc::dup2(tty_fd.unwrap(), target);
                 },
@@ -657,11 +737,13 @@ impl Runner {
                     target,
                 ),
                 s if s.starts_with("append:") => place(
-                    open(&s[7..], libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND).map_err(|e| (code, e))?,
+                    open(&s[7..], libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND)
+                        .map_err(|e| (code, e))?,
                     target,
                 ),
                 s if s.starts_with("truncate:") => place(
-                    open(&s[9..], libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC).map_err(|e| (code, e))?,
+                    open(&s[9..], libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC)
+                        .map_err(|e| (code, e))?,
                     target,
                 ),
                 s if stdio_fd(s).is_some() => unsafe {
@@ -669,7 +751,11 @@ impl Runner {
                 },
                 // journal, kmsg, syslog: journald's stream if available,
                 // otherwise keep the s6 log pipe.
-                s if s.starts_with("journal") || s.starts_with("kmsg") || s == "syslog" || s == "inherit" => {
+                s if s.starts_with("journal")
+                    || s.starts_with("kmsg")
+                    || s == "syslog"
+                    || s == "inherit" =>
+                {
                     if let Some(fd) = journal.filter(|_| s != "inherit") {
                         unsafe { libc::dup2(fd, target) };
                     }
@@ -723,19 +809,29 @@ impl Runner {
     }
 
     fn apply_limits(&self) -> Result<(), String> {
-        if let Some(m) = self.unit.get("Service", "UMask").and_then(|m| u32::from_str_radix(&m, 8).ok()) {
+        if let Some(m) = self
+            .unit
+            .get("Service", "UMask")
+            .and_then(|m| u32::from_str_radix(&m, 8).ok())
+        {
             unsafe { libc::umask(m) };
         } else {
             unsafe { libc::umask(0o022) };
         }
-        if let Some(n) = self.unit.get("Service", "Nice").and_then(|n| n.parse::<i32>().ok()) {
+        if let Some(n) = self
+            .unit
+            .get("Service", "Nice")
+            .and_then(|n| n.parse::<i32>().ok())
+        {
             unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, n) };
         }
         if let Some(adj) = self.unit.get("Service", "OOMScoreAdjust") {
             let _ = fs::write("/proc/self/oom_score_adj", adj);
         }
         for (key, res, bytes) in LIMITS {
-            let Some(v) = self.unit.get("Service", key) else { continue };
+            let Some(v) = self.unit.get("Service", key) else {
+                continue;
+            };
             let parse = |s: &str| -> Option<u64> {
                 let s = s.trim();
                 if s == "infinity" {
@@ -763,7 +859,10 @@ impl Runner {
             let (Some(soft), Some(hard)) = (soft, hard) else {
                 return Err(format!("bad {key}={v}"));
             };
-            let rl = libc::rlimit { rlim_cur: soft, rlim_max: hard };
+            let rl = libc::rlimit {
+                rlim_cur: soft,
+                rlim_max: hard,
+            };
             if unsafe { libc::setrlimit(*res as _, &rl) } < 0 {
                 return Err(format!("setrlimit {key}: {}", errno()));
             }
@@ -801,7 +900,10 @@ impl Runner {
             let now = std::time::Instant::now();
             match killed_at {
                 None if now >= deadline => {
-                    log(self.id(), &format!("{} timeout, terminating", self.deadline_what.get()));
+                    log(
+                        self.id(),
+                        &format!("{} timeout, terminating", self.deadline_what.get()),
+                    );
                     self.timed_out.set(true);
                     unsafe { libc::kill(pid, libc::SIGTERM) };
                     killed_at = Some(now);
@@ -838,7 +940,10 @@ impl Runner {
             if st.has(keys::START_FAILED) || st.has(keys::DEPENDENCY_FAILED) {
                 return Some(d);
             }
-            let failed = st.get(keys::RESULT).map(|r| !matches!(r.as_str(), "success" | "running")).unwrap_or(false);
+            let failed = st
+                .get(keys::RESULT)
+                .map(|r| !matches!(r.as_str(), "success" | "running"))
+                .unwrap_or(false);
             if failed && st.get_u64(keys::INACTIVE_ENTER) >= st.get_u64(keys::INACTIVE_EXIT) {
                 return Some(d);
             }
@@ -868,9 +973,13 @@ impl Runner {
                 let st = self.spawn_wait(&cmd, extra_env);
                 // A oneshot's ExecStart= processes are its main processes:
                 // SuccessExitStatus= applies to them (not to Pre/Post).
-                let success = key == "ExecStart" && status_in(&self.unit.get_words("Service", "SuccessExitStatus"), st);
+                let success = key == "ExecStart"
+                    && status_in(&self.unit.get_words("Service", "SuccessExitStatus"), st);
                 if !st.ok() && !success && !cmd.ignore_failure {
-                    log(self.id(), &format!("{key}={} failed: {}", cmd.path, describe(st)));
+                    log(
+                        self.id(),
+                        &format!("{key}={} failed: {}", cmd.path, describe(st)),
+                    );
                     return Err(st);
                 }
             }
@@ -903,7 +1012,10 @@ impl Runner {
 
     fn enter_cgroup(&self) {
         let pid = std::process::id();
-        let owner = self.user.as_ref().map(|u| (u.uid, self.gid.unwrap_or(u.gid)));
+        let owner = self
+            .user
+            .as_ref()
+            .map(|u| (u.uid, self.gid.unwrap_or(u.gid)));
         match cgroup::enter(&self.unit, pid, owner) {
             Ok(dir) => {
                 self.st.set(keys::CGROUP, &dir.display().to_string());
@@ -942,8 +1054,14 @@ impl Runner {
 
     fn prepare_start(&mut self) -> Result<(), String> {
         for k in [
-            keys::CONDITION_FAILED, keys::ASSERT_FAILED, keys::STATUS_TEXT, keys::MAIN_PID,
-            keys::START_FAILED, keys::DEPENDENCY_FAILED, keys::PARKED, keys::EXTEND_UNTIL,
+            keys::CONDITION_FAILED,
+            keys::ASSERT_FAILED,
+            keys::STATUS_TEXT,
+            keys::MAIN_PID,
+            keys::START_FAILED,
+            keys::DEPENDENCY_FAILED,
+            keys::PARKED,
+            keys::EXTEND_UNTIL,
             // A new run starts with a clean result, as systemd's
             // service_start() does; otherwise the exit handler keeps a
             // previous run's failure.
@@ -958,10 +1076,18 @@ impl Runner {
         // journald reads the invocation ID from this xattr on the unit's cgroup
         // (systemctl status uses it to pick the current run's log lines).
         if let Some(dir) = self.cgroup_dir() {
-            let bytes: Vec<u8> = (0..inv.len() / 2).filter_map(|i| u8::from_str_radix(&inv[i * 2..i * 2 + 2], 16).ok()).collect();
+            let bytes: Vec<u8> = (0..inv.len() / 2)
+                .filter_map(|i| u8::from_str_radix(&inv[i * 2..i * 2 + 2], 16).ok())
+                .collect();
             let p = cstr(&dir.display().to_string());
             unsafe {
-                libc::setxattr(p.as_ptr(), c"trusted.invocation_id".as_ptr(), bytes.as_ptr() as *const libc::c_void, bytes.len(), 0);
+                libc::setxattr(
+                    p.as_ptr(),
+                    c"trusted.invocation_id".as_ptr(),
+                    bytes.as_ptr() as *const libc::c_void,
+                    bytes.len(),
+                    0,
+                );
             }
         }
         self.setenv("INVOCATION_ID", &inv);
@@ -981,7 +1107,8 @@ impl Runner {
             return Err(format!("assertion failed: {why}"));
         }
         if !ev.conditions_ok {
-            self.st.set(keys::CONDITION_FAILED, &ev.failure.unwrap_or_default());
+            self.st
+                .set(keys::CONDITION_FAILED, &ev.failure.unwrap_or_default());
             return Ok(false);
         }
         for line in self.unit.get_all("Service", "ExecCondition") {
@@ -989,7 +1116,10 @@ impl Runner {
                 match self.spawn_wait(&cmd, &[]) {
                     Status::Exited(0) => {}
                     Status::Exited(c) if (1..255).contains(&c) => {
-                        self.st.set(keys::CONDITION_FAILED, &format!("ExecCondition={} exited {c}", cmd.path));
+                        self.st.set(
+                            keys::CONDITION_FAILED,
+                            &format!("ExecCondition={} exited {c}", cmd.path),
+                        );
                         return Ok(false);
                     }
                     other => return Err(format!("ExecCondition failed: {}", describe(other))),
@@ -1014,7 +1144,10 @@ impl Runner {
     fn main_command(&self) -> Result<ExecCommand, String> {
         let lines = self.unit.get_all("Service", "ExecStart");
         if lines.len() != 1 {
-            return Err(format!("expected exactly one ExecStart= for a long-running service, found {}", lines.len()));
+            return Err(format!(
+                "expected exactly one ExecStart= for a long-running service, found {}",
+                lines.len()
+            ));
         }
         execcmd::parse(&lines[0])?
             .into_iter()
@@ -1031,7 +1164,10 @@ impl Runner {
             let default = format!("{stem}.socket");
             let wanted = self.unit.get_words("Unit", "Requires").contains(&default)
                 || self.unit.get_words("Unit", "Wants").contains(&default);
-            if wanted || install::is_enabled(&self.cfg, &default) || socket::is_requested(&self.cfg.run_dir, &default) {
+            if wanted
+                || install::is_enabled(&self.cfg, &default)
+                || socket::is_requested(&self.cfg.run_dir, &default)
+            {
                 names.push(default);
             }
             // Sockets that name this service with Service= (e.g. systemd-logind-varlink.socket).
@@ -1042,13 +1178,18 @@ impl Runner {
                     if !n.ends_with(".socket") || names.contains(&n) {
                         continue;
                     }
-                    let Ok(text) = fs::read_to_string(e.path()) else { continue };
+                    let Ok(text) = fs::read_to_string(e.path()) else {
+                        continue;
+                    };
                     if !text.contains("Service=") {
                         continue;
                     }
                     let s = ld.load(&n);
-                    if s.get("Socket", "Service").map(|v| self.unit.names.contains(&v)).unwrap_or(false)
-                        && (install::is_enabled(&self.cfg, &n) || socket::is_requested(&self.cfg.run_dir, &n))
+                    if s.get("Socket", "Service")
+                        .map(|v| self.unit.names.contains(&v))
+                        .unwrap_or(false)
+                        && (install::is_enabled(&self.cfg, &n)
+                            || socket::is_requested(&self.cfg.run_dir, &n))
                     {
                         names.push(n);
                     }
@@ -1079,7 +1220,13 @@ impl Runner {
         for b in bound?.into_iter().flatten() {
             let owned = unsafe { OwnedFd::from_raw_fd(b.fd) };
             // Best effort: without the daemon we just rebind next time.
-            let _ = crate::fdstore::put(&store, &key, &b.name, owned.as_raw_fd(), crate::fdstore::SOCKETS_MAX);
+            let _ = crate::fdstore::put(
+                &store,
+                &key,
+                &b.name,
+                owned.as_raw_fd(),
+                crate::fdstore::SOCKETS_MAX,
+            );
             fds.push((b.name, owned));
         }
         Ok(fds)
@@ -1119,7 +1266,11 @@ impl Runner {
         let socks = self.socket_units();
         if !socks.is_empty() {
             let held = crate::fdstore::get(&store, &format!("{}#sockets", self.unit.id));
-            fds = if held.is_empty() { self.bind_sockets(&socks)? } else { held };
+            fds = if held.is_empty() {
+                self.bind_sockets(&socks)?
+            } else {
+                held
+            };
         }
         let max: usize = self
             .unit
@@ -1169,7 +1320,10 @@ impl Runner {
             libc::sigemptyset(&mut usr1);
             libc::sigaddset(&mut usr1, libc::SIGUSR1);
             libc::sigprocmask(libc::SIG_BLOCK, &usr1, &mut old);
-            libc::signal(libc::SIGUSR1, wake_signal as *const () as libc::sighandler_t);
+            libc::signal(
+                libc::SIGUSR1,
+                wake_signal as *const () as libc::sighandler_t,
+            );
             let mut during = old;
             libc::sigdelset(&mut during, libc::SIGUSR1);
 
@@ -1177,19 +1331,35 @@ impl Runner {
             let held = crate::fdstore::get(&store, &format!("{}#sockets", self.unit.id));
             let mut fds: Vec<libc::pollfd> = held
                 .iter()
-                .map(|(_, f)| libc::pollfd { fd: f.as_raw_fd(), events: libc::POLLIN, revents: 0 })
+                .map(|(_, f)| libc::pollfd {
+                    fd: f.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                })
                 .collect();
             // Nothing held (the daemon is not reachable): start it now.
             while !fds.is_empty() && self.st.has(keys::SOCKET_WAIT) {
-                let r = libc::ppoll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, std::ptr::null(), &during);
-                if r > 0 || (r < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR)) {
+                let r = libc::ppoll(
+                    fds.as_mut_ptr(),
+                    fds.len() as libc::nfds_t,
+                    std::ptr::null(),
+                    &during,
+                );
+                if r > 0
+                    || (r < 0
+                        && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR))
+                {
                     break;
                 }
             }
             // The daemon removed the key first: its SIGUSR1 may still be on
             // the way, and must not reach the service after exec.
-            if !self.st.take(keys::SOCKET_WAIT) && !WOKEN.load(std::sync::atomic::Ordering::SeqCst) {
-                let ts = libc::timespec { tv_sec: 2, tv_nsec: 0 };
+            if !self.st.take(keys::SOCKET_WAIT) && !WOKEN.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                let ts = libc::timespec {
+                    tv_sec: 2,
+                    tv_nsec: 0,
+                };
                 libc::sigtimedwait(&usr1, std::ptr::null_mut(), &ts);
             }
             libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
@@ -1223,7 +1393,10 @@ impl Runner {
         }
         if let Some(dep) = self.failed_requirement() {
             // Like systemd's "dependency" job result: not started, not failed.
-            log(self.id(), &format!("not starting: required unit {dep} failed"));
+            log(
+                self.id(),
+                &format!("not starting: required unit {dep} failed"),
+            );
             self.st.set(keys::DEPENDENCY_FAILED, &dep);
             self.signal_ready();
             loop {
@@ -1246,9 +1419,17 @@ impl Runner {
                 return 1;
             }
         }
-        self.deadline.set(self.start_timeout().map(|t| std::time::Instant::now() + t));
+        self.deadline
+            .set(self.start_timeout().map(|t| std::time::Instant::now() + t));
         if let Err(st) = self.run_list("ExecStartPre", &[]) {
-            self.st.set(keys::RESULT, if self.timed_out.get() { "timeout" } else { result_for(st) });
+            self.st.set(
+                keys::RESULT,
+                if self.timed_out.get() {
+                    "timeout"
+                } else {
+                    result_for(st)
+                },
+            );
             self.soft_fail("ExecStartPre= failed");
             return exit_code_for(st);
         }
@@ -1311,7 +1492,11 @@ impl Runner {
     /// stay around (forwarding signals) to close the session afterwards.
     fn exec_with_pam(&self, service: &str, main: &ExecCommand) -> i32 {
         const EXIT_PAM: i32 = 224;
-        let user = self.user.as_ref().map(|u| u.name.clone()).unwrap_or_else(|| "root".into());
+        let user = self
+            .user
+            .as_ref()
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "root".into());
         let tty = self.uses_tty().then(|| self.tty_path());
         let (session, env) = match crate::pam::Session::open(service, &user, tty.as_deref()) {
             Ok(x) => x,
@@ -1334,8 +1519,16 @@ impl Runner {
             libc::sigfillset(&mut all);
             libc::sigprocmask(libc::SIG_BLOCK, &all, &mut old);
             for sig in 1..=libc::SIGRTMAX() {
-                if ![libc::SIGKILL, libc::SIGSTOP, libc::SIGCHLD, libc::SIGSEGV, libc::SIGBUS, libc::SIGFPE, libc::SIGILL]
-                    .contains(&sig)
+                if ![
+                    libc::SIGKILL,
+                    libc::SIGSTOP,
+                    libc::SIGCHLD,
+                    libc::SIGSEGV,
+                    libc::SIGBUS,
+                    libc::SIGFPE,
+                    libc::SIGILL,
+                ]
+                .contains(&sig)
                 {
                     libc::signal(sig, forward_signal as *const () as libc::sighandler_t);
                 }
@@ -1369,7 +1562,13 @@ impl Runner {
         let t = std::time::Instant::now();
         session.close();
         if t.elapsed() >= std::time::Duration::from_secs(2) {
-            log(self.id(), &format!("closing the PAM session took {:.1} s", t.elapsed().as_secs_f64()));
+            log(
+                self.id(),
+                &format!(
+                    "closing the PAM session took {:.1} s",
+                    t.elapsed().as_secs_f64()
+                ),
+            );
         }
         match status {
             Status::Exited(c) => c,
@@ -1393,11 +1592,17 @@ impl Runner {
         let cfg = self.cfg.clone();
         let id = self.unit.id.clone();
         let run = || -> Result<(), String> {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?;
             rt.block_on(async {
                 let conn = crate::client::connect(&cfg).await?;
                 for u in &units {
-                    if let Err(e) = crate::client::manager_call(&conn, "StartUnit", &(u.as_str(), "replace")).await {
+                    if let Err(e) =
+                        crate::client::manager_call(&conn, "StartUnit", &(u.as_str(), "replace"))
+                            .await
+                    {
                         eprintln!("uinitconverter[{id}]: {why}={u}: {e}");
                     }
                 }
@@ -1437,7 +1642,11 @@ impl Runner {
     }
 
     fn on_result(&self, success: bool) {
-        let (units_key, action_key) = if success { ("OnSuccess", "SuccessAction") } else { ("OnFailure", "FailureAction") };
+        let (units_key, action_key) = if success {
+            ("OnSuccess", "SuccessAction")
+        } else {
+            ("OnFailure", "FailureAction")
+        };
         let units: Vec<String> = self
             .unit
             .get_words("Unit", units_key)
@@ -1448,8 +1657,12 @@ impl Runner {
         if let Some(action) = self.unit.get("Unit", action_key) {
             let cmd = match action.as_str() {
                 "none" => None,
-                a if a.starts_with("reboot") || a == "soft-reboot" || a == "kexec" => Some(self.cfg.reboot_cmd.clone()),
-                a if a.starts_with("poweroff") || a.starts_with("exit") => Some(self.cfg.poweroff_cmd.clone()),
+                a if a.starts_with("reboot") || a == "soft-reboot" || a == "kexec" => {
+                    Some(self.cfg.reboot_cmd.clone())
+                }
+                a if a.starts_with("poweroff") || a.starts_with("exit") => {
+                    Some(self.cfg.poweroff_cmd.clone())
+                }
                 a if a.starts_with("halt") => Some(self.cfg.halt_cmd.clone()),
                 other => {
                     log(self.id(), &format!("{action_key}={other} is not supported"));
@@ -1458,14 +1671,18 @@ impl Runner {
             };
             if let Some(cmd) = cmd {
                 log(self.id(), &format!("{action_key}={action}: running {cmd}"));
-                let _ = std::process::Command::new("/bin/sh").arg("-c").arg(cmd).spawn();
+                let _ = std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(cmd)
+                    .spawn();
             }
         }
     }
 
     fn after_ready(&self, main_pid: u32) {
         self.st.stamp(keys::ACTIVE_ENTER);
-        if let Err(st) = self.run_list("ExecStartPost", &[("MAINPID".into(), main_pid.to_string())]) {
+        if let Err(st) = self.run_list("ExecStartPost", &[("MAINPID".into(), main_pid.to_string())])
+        {
             self.st.set(keys::RESULT, result_for(st));
             unsafe { libc::kill(main_pid as i32, libc::SIGTERM) };
         }
@@ -1505,13 +1722,20 @@ impl Runner {
         let dir = self.cfg.run_dir.join("notify");
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         crate::selinux::restorecon(&dir.display().to_string());
-        let inv = self.st.get(keys::INVOCATION).unwrap_or_else(|| main_pid.to_string());
+        let inv = self
+            .st
+            .get(keys::INVOCATION)
+            .unwrap_or_else(|| main_pid.to_string());
         let path = dir.join(&inv[..inv.len().min(32)]);
         let _ = fs::remove_file(&path);
         let path_s = path.display().to_string();
 
         // sun_path is 108 bytes; fall back to an abstract socket for long paths.
-        let path_s = if path_s.len() >= 100 { format!("@uinitconverter/notify/{inv}") } else { path_s };
+        let path_s = if path_s.len() >= 100 {
+            format!("@uinitconverter/notify/{inv}")
+        } else {
+            path_s
+        };
         let fd = socket::bind_unix(&path_s, libc::SOCK_DGRAM, &self.unit)?;
         // World-writable, as systemd's notify socket: daemons such as chronyd
         // start as root, drop to their own user, and only then send READY=1.
@@ -1533,7 +1757,12 @@ impl Runner {
         self.st.set(keys::NOTIFY_SOCKET, &path_s);
         // Without User= the service runs as we do. Matching the uid also
         // covers a notifying child that exits before its cgroup is read.
-        let unit_uid = Some(self.user.as_ref().map(|u| u.uid).unwrap_or_else(|| unsafe { libc::geteuid() }));
+        let unit_uid = Some(
+            self.user
+                .as_ref()
+                .map(|u| u.uid)
+                .unwrap_or_else(|| unsafe { libc::geteuid() }),
+        );
 
         let h = NotifyHelper {
             fd,
@@ -1541,11 +1770,17 @@ impl Runner {
             main_pid,
             unit_uid,
             // None: no start timeout (TimeoutStartSec=infinity or 0).
-            timeout_us: self.start_timeout().map(|t| t.as_micros().min(u64::MAX as u128) as u64),
+            timeout_us: self
+                .start_timeout()
+                .map(|t| t.as_micros().min(u64::MAX as u128) as u64),
             st_dir: self.st.dir.clone(),
             store: self.cfg.run_dir.join("fdstore"),
             unit_id: self.unit.id.clone(),
-            fdstore_max: self.unit.get("Service", "FileDescriptorStoreMax").and_then(|v| v.parse().ok()).unwrap_or(0),
+            fdstore_max: self
+                .unit
+                .get("Service", "FileDescriptorStoreMax")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
             notify_reload: self.service_type() == "notify-reload",
             path: path_s.clone(),
             post: !self.unit.get_all("Service", "ExecStartPost").is_empty(),
@@ -1565,21 +1800,33 @@ impl Runner {
     /// Type=dbus: ready once BusName= appears on the system bus.
     fn start_dbus_helper(&mut self, main_pid: u32) {
         let notify = self.notify_fd;
-        let tries = self.start_timeout().map(|t| (t.as_millis() / 100) as u32).unwrap_or(u32::MAX);
+        let tries = self
+            .start_timeout()
+            .map(|t| (t.as_millis() / 100) as u32)
+            .unwrap_or(u32::MAX);
         let Some(bus_name) = self.unit.get("Service", "BusName") else {
             let _ = self.start_exec_helper();
             return;
         };
         let _ = double_fork(|| {
-            let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
                 Ok(rt) => rt,
                 Err(_) => return,
             };
             // Ok(true) ready, Ok(false) died, Err timeout/bus error.
             let outcome: Result<bool, &str> = rt.block_on(async {
-                let Ok(conn) = zbus::Connection::system().await else { return Err("no system bus") };
-                let Ok(proxy) = zbus::fdo::DBusProxy::new(&conn).await else { return Err("no system bus") };
-                let Ok(name) = zbus::names::BusName::try_from(bus_name.as_str()) else { return Err("bad BusName=") };
+                let Ok(conn) = zbus::Connection::system().await else {
+                    return Err("no system bus");
+                };
+                let Ok(proxy) = zbus::fdo::DBusProxy::new(&conn).await else {
+                    return Err("no system bus");
+                };
+                let Ok(name) = zbus::names::BusName::try_from(bus_name.as_str()) else {
+                    return Err("bad BusName=");
+                };
                 for _ in 0..tries {
                     if unsafe { libc::kill(main_pid as i32, 0) } < 0 {
                         return Ok(false);
@@ -1593,7 +1840,9 @@ impl Runner {
             });
             match outcome {
                 Ok(true) => {}
-                Ok(false) => self.st.set(keys::START_FAILED, "exited before acquiring its bus name"),
+                Ok(false) => self
+                    .st
+                    .set(keys::START_FAILED, "exited before acquiring its bus name"),
                 Err(why) => {
                     self.st.set(keys::START_FAILED, why);
                     if why == "start timeout" {
@@ -1622,7 +1871,14 @@ impl Runner {
         let st = self.spawn_wait(main, &[]);
         let deadline = self.deadline.take();
         if !st.ok() {
-            self.st.set(keys::RESULT, if self.timed_out.get() { "timeout" } else { result_for(st) });
+            self.st.set(
+                keys::RESULT,
+                if self.timed_out.get() {
+                    "timeout"
+                } else {
+                    result_for(st)
+                },
+            );
             self.soft_fail(&format!("start command failed: {}", describe(st)));
             return exit_code_for(st);
         }
@@ -1647,7 +1903,14 @@ impl Runner {
         self.st.set(keys::MAIN_PID, &main_pid.to_string());
         FORWARD_PID.store(main_pid, std::sync::atomic::Ordering::SeqCst);
         unsafe {
-            for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP, libc::SIGQUIT, libc::SIGUSR1, libc::SIGUSR2] {
+            for sig in [
+                libc::SIGTERM,
+                libc::SIGINT,
+                libc::SIGHUP,
+                libc::SIGQUIT,
+                libc::SIGUSR1,
+                libc::SIGUSR2,
+            ] {
                 libc::signal(sig, forward_signal as *const () as libc::sighandler_t);
             }
         }
@@ -1671,7 +1934,11 @@ impl Runner {
                 break;
             }
             if pidfd >= 0 {
-                let mut p = libc::pollfd { fd: pidfd, events: libc::POLLIN, revents: 0 };
+                let mut p = libc::pollfd {
+                    fd: pidfd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
                 unsafe { libc::poll(&mut p, 1, 1000) };
                 if p.revents != 0 {
                     // Reap it if it is our (reparented) child.
@@ -1703,17 +1970,25 @@ impl Runner {
 
     /// As systemd: wait for the PID file up to TimeoutStartSec= ("timeout"),
     /// or until no process is left that could write it ("protocol").
-    fn wait_pid_file(&self, pidfile: &str, me: i32, deadline: Option<std::time::Instant>) -> Result<i32, &'static str> {
+    fn wait_pid_file(
+        &self,
+        pidfile: &str,
+        me: i32,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<i32, &'static str> {
         let mut refused = false;
         loop {
-            if let Some(p) = util::read_trimmed(Path::new(pidfile)).and_then(|s| s.parse::<i32>().ok()) {
+            if let Some(p) =
+                util::read_trimmed(Path::new(pidfile)).and_then(|s| s.parse::<i32>().ok())
+            {
                 // As systemd's service_load_pid_file(): a PID file someone
                 // other than root could have written names a process of the
                 // unit only, or the runner would signal any process as root.
                 let cgroup = self.st.get(keys::CGROUP);
                 let ok = p > 1
                     && p != me
-                    && (!pid_file_questionable(Path::new(pidfile)) || main_pid_ok(p as u32, u32::MAX, me as u32, cgroup.as_deref()));
+                    && (!pid_file_questionable(Path::new(pidfile))
+                        || main_pid_ok(p as u32, u32::MAX, me as u32, cgroup.as_deref()));
                 if ok {
                     return Ok(p);
                 }
@@ -1739,7 +2014,9 @@ impl Runner {
     fn guess_main_pid(&self, me: i32) -> Option<i32> {
         let mut kids = Vec::new();
         for e in fs::read_dir("/proc").ok()?.flatten() {
-            let Ok(pid) = e.file_name().to_string_lossy().parse::<i32>() else { continue };
+            let Ok(pid) = e.file_name().to_string_lossy().parse::<i32>() else {
+                continue;
+            };
             let stat = fs::read_to_string(e.path().join("stat")).unwrap_or_default();
             let ppid = stat
                 .rsplit_once(')')
@@ -1796,7 +2073,8 @@ impl Runner {
             .get("Service", "KillSignal")
             .and_then(|s| util::signal_number(&s))
             .unwrap_or(libc::SIGTERM);
-        let clean_exit = self.is_clean(status) || (stopping && status == Status::Killed(kill_signal));
+        let clean_exit =
+            self.is_clean(status) || (stopping && status == Status::Killed(kill_signal));
         let mut result = if clean_exit {
             "success"
         } else {
@@ -1829,19 +2107,30 @@ impl Runner {
             return 125;
         }
 
-        let restart_mode = self.unit.get("Service", "Restart").unwrap_or_else(|| "no".into());
+        let restart_mode = self
+            .unit
+            .get("Service", "Restart")
+            .unwrap_or_else(|| "no".into());
         let mut restart = match restart_mode.as_str() {
             "always" => true,
             "on-success" => clean,
             "on-failure" => !clean,
-            "on-abnormal" | "on-watchdog" => result == "timeout" || matches!(status, Status::Killed(_)) && !clean_exit,
+            "on-abnormal" | "on-watchdog" => {
+                result == "timeout" || matches!(status, Status::Killed(_)) && !clean_exit
+            }
             "on-abort" => matches!(status, Status::Killed(_)) && !clean_exit,
             _ => false,
         };
-        if status_in(&self.unit.get_words("Service", "RestartPreventExitStatus"), status) {
+        if status_in(
+            &self.unit.get_words("Service", "RestartPreventExitStatus"),
+            status,
+        ) {
             restart = false;
         }
-        if status_in(&self.unit.get_words("Service", "RestartForceExitStatus"), status) {
+        if status_in(
+            &self.unit.get_words("Service", "RestartForceExitStatus"),
+            status,
+        ) {
             restart = true;
         }
 
@@ -1872,7 +2161,11 @@ impl Runner {
             }
             self.st.set(
                 keys::RESTART_TIMES,
-                &times.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" "),
+                &times
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
             );
             if limited && times.len() > burst {
                 log(self.id(), "start request repeated too quickly, giving up");
@@ -1920,7 +2213,9 @@ impl Runner {
         }
         match status {
             Status::Exited(0) => true,
-            Status::Killed(s) => [libc::SIGHUP, libc::SIGINT, libc::SIGTERM, libc::SIGPIPE].contains(&s),
+            Status::Killed(s) => {
+                [libc::SIGHUP, libc::SIGINT, libc::SIGTERM, libc::SIGPIPE].contains(&s)
+            }
             _ => false,
         }
     }
@@ -1938,7 +2233,10 @@ impl Runner {
         // KillMode=control-group / mixed: leftover processes go too, before
         // ExecStopPost= and again after it (systemd's stop-sigterm,
         // stop-post and final-sigterm states).
-        let mode = self.unit.get("Service", "KillMode").unwrap_or_else(|| "control-group".into());
+        let mode = self
+            .unit
+            .get("Service", "KillMode")
+            .unwrap_or_else(|| "control-group".into());
         let kill_leftovers = || {
             if mode != "control-group" && mode != "mixed" {
                 return;
@@ -1986,7 +2284,10 @@ impl Runner {
         };
         if up {
             self.st.stamp(keys::INACTIVE_EXIT);
-            self.st.set(keys::RESULT, if code == 0 { "success" } else { "exit-code" });
+            self.st.set(
+                keys::RESULT,
+                if code == 0 { "success" } else { "exit-code" },
+            );
             self.st.set(keys::EXEC_MAIN_STATUS, &code.to_string());
             if code == 0 {
                 self.st.stamp(keys::ACTIVE_ENTER);
@@ -2006,14 +2307,18 @@ impl Runner {
         // must not block units that only want it. The result is recorded and
         // dependents with Requires= check it (see failed_requirement()).
         if let Some(dep) = self.failed_requirement() {
-            log(self.id(), &format!("not starting: required unit {dep} failed"));
+            log(
+                self.id(),
+                &format!("not starting: required unit {dep} failed"),
+            );
             self.st.set(keys::DEPENDENCY_FAILED, &dep);
             return 0;
         }
         if matches!(self.unit.utype(), "mount" | "swap") {
             match conditions::evaluate(&self.unit) {
                 ev if !ev.conditions_ok => {
-                    self.st.set(keys::CONDITION_FAILED, &ev.failure.unwrap_or_default());
+                    self.st
+                        .set(keys::CONDITION_FAILED, &ev.failure.unwrap_or_default());
                     return 0;
                 }
                 _ => self.st.clear(keys::CONDITION_FAILED),
@@ -2048,7 +2353,8 @@ impl Runner {
         }
         self.st.set(keys::RESULT, "running");
         self.st.stamp(keys::EXEC_MAIN_START);
-        self.deadline.set(self.start_timeout().map(|t| std::time::Instant::now() + t));
+        self.deadline
+            .set(self.start_timeout().map(|t| std::time::Instant::now() + t));
         let mut failed: Option<Status> = None;
         for key in ["ExecStartPre", "ExecStart", "ExecStartPost"] {
             if let Err(st) = self.run_list(key, &[]) {
@@ -2063,7 +2369,11 @@ impl Runner {
                 Status::Exited(c) => (1, c),
                 Status::Killed(s) => (2, s),
             };
-            let result = if self.timed_out.get() { "timeout" } else { result_for(st) };
+            let result = if self.timed_out.get() {
+                "timeout"
+            } else {
+                result_for(st)
+            };
             self.st.set(keys::EXEC_MAIN_CODE, &code.to_string());
             self.st.set(keys::EXEC_MAIN_STATUS, &val.to_string());
             self.st.set(keys::RESULT, result);
@@ -2085,7 +2395,6 @@ impl Runner {
         self.on_result(true);
         0
     }
-
 
     /// oneshot `down` script.
     pub fn cmd_down(self) -> i32 {
@@ -2131,7 +2440,9 @@ impl Runner {
         if skipped {
             return 0;
         }
-        let Some(sv_pid) = supervisor::up_pid(&self.cfg, self.id()) else { return 0 };
+        let Some(sv_pid) = supervisor::up_pid(&self.cfg, self.id()) else {
+            return 0;
+        };
         // The service's own PID: under PAMName= or Type=forking the
         // supervised process is the runner around it.
         let main_pid = self
@@ -2145,7 +2456,9 @@ impl Runner {
             .unwrap_or_default();
         let t = self.unit.stop_timeout_usec();
         if t != u64::MAX {
-            self.deadline.set(Some(std::time::Instant::now() + std::time::Duration::from_micros(t)));
+            self.deadline.set(Some(
+                std::time::Instant::now() + std::time::Duration::from_micros(t),
+            ));
             self.deadline_what.set("stop");
         }
         let _ = self.run_list("ExecStop", &env);
@@ -2162,7 +2475,10 @@ impl Runner {
                         .get("Service", "ReloadSignal")
                         .and_then(|s| util::signal_number(&s))
                         .unwrap_or(libc::SIGHUP);
-                    let before = self.st.get(keys::RELOADS_DONE).map(|_| self.st.get_u64(keys::RELOADS_DONE));
+                    let before = self
+                        .st
+                        .get(keys::RELOADS_DONE)
+                        .map(|_| self.st.get_u64(keys::RELOADS_DONE));
                     if unsafe { libc::kill(p as i32, sig) } < 0 {
                         return 1;
                     }
@@ -2374,7 +2690,12 @@ impl NotifyHelper {
             }
             libc::execv(path.as_ptr(), ptrs.as_ptr());
         }
-        eprintln!("uinitconverter[{}]: notify helper: exec {}: {}", self.unit_id, exe.display(), errno());
+        eprintln!(
+            "uinitconverter[{}]: notify helper: exec {}: {}",
+            self.unit_id,
+            exe.display(),
+            errno()
+        );
     }
 
     /// The receive loop; `after_ready` runs once READY=1 came (ExecStartPost=).
@@ -2385,7 +2706,10 @@ impl NotifyHelper {
         // Present only with a helper that counts reloads, so cmd_reload
         // doesn't wait on a service started by an older binary.
         if self.notify_reload {
-            st.set(keys::RELOADS_DONE, &st.get_u64(keys::RELOADS_DONE).to_string());
+            st.set(
+                keys::RELOADS_DONE,
+                &st.get_u64(keys::RELOADS_DONE).to_string(),
+            );
         }
         let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, main_pid as i32, 0) } as i32;
         let (mut ready, mut reloading) = (false, false);
@@ -2400,16 +2724,27 @@ impl NotifyHelper {
                 }
             }
         };
-        let mut deadline = self.timeout_us.map(|t| util::now_monotonic_usec().saturating_add(t));
+        let mut deadline = self
+            .timeout_us
+            .map(|t| util::now_monotonic_usec().saturating_add(t));
         loop {
             let mut pfds = [
-                libc::pollfd { fd, events: libc::POLLIN, revents: 0 },
-                libc::pollfd { fd: pidfd, events: libc::POLLIN, revents: 0 },
+                libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: pidfd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
             ];
             let nfds = if pidfd >= 0 { 2 } else { 1 };
             let wait = match (ready, deadline) {
                 _ if pidfd < 0 => 1000,
-                (false, Some(d)) => (d.saturating_sub(util::now_monotonic_usec()) / 1000).min(i32::MAX as u64) as i32,
+                (false, Some(d)) => (d.saturating_sub(util::now_monotonic_usec()) / 1000)
+                    .min(i32::MAX as u64) as i32,
                 // -1 blocks until a message arrives or the service exits.
                 _ => -1,
             };
@@ -2420,7 +2755,9 @@ impl NotifyHelper {
                 (unsafe { libc::kill(main_pid as i32, 0) }) < 0
             };
             if pfds[0].revents & libc::POLLIN != 0 {
-                let Ok((data, fds, cred)) = crate::fdstore::recv(fd) else { continue };
+                let Ok((data, fds, cred)) = crate::fdstore::recv(fd) else {
+                    continue;
+                };
                 if !notify_sender_ok(cred, main_pid, unit_uid) {
                     continue;
                 }
@@ -2436,10 +2773,15 @@ impl NotifyHelper {
                         reloading = true;
                     } else if line == "READY=1" && reloading {
                         reloading = false;
-                        st.set(keys::RELOADS_DONE, &(st.get_u64(keys::RELOADS_DONE) + 1).to_string());
+                        st.set(
+                            keys::RELOADS_DONE,
+                            &(st.get_u64(keys::RELOADS_DONE) + 1).to_string(),
+                        );
                     } else if let Some(s) = line.strip_prefix("STATUS=") {
                         st.set(keys::STATUS_TEXT, s);
-                    } else if let (Some(n), false) = (line.strip_prefix("EXTEND_TIMEOUT_USEC="), ready) {
+                    } else if let (Some(n), false) =
+                        (line.strip_prefix("EXTEND_TIMEOUT_USEC="), ready)
+                    {
                         // As systemd: the start timeout ends no earlier
                         // than N usec from now (MariaDB's crash recovery
                         // sends it); the daemon's wait reads it too.
@@ -2461,7 +2803,9 @@ impl NotifyHelper {
                     } else if let Some(n) = line.strip_prefix("FDNAME=") {
                         // systemd's fdname_is_valid(): printable ASCII
                         // without ':', at most 255 bytes; else "stored".
-                        if n.len() <= 255 && n.bytes().all(|b| (b' '..=b'~').contains(&b) && b != b':') {
+                        if n.len() <= 255
+                            && n.bytes().all(|b| (b' '..=b'~').contains(&b) && b != b':')
+                        {
                             fdname = n.to_string();
                         } else {
                             eprintln!("uinitconverter[{unit_id}]: invalid FDNAME=, ignored");
@@ -2475,7 +2819,9 @@ impl NotifyHelper {
                 if store_fds {
                     for f in &fds {
                         use std::os::fd::AsRawFd;
-                        if let Err(e) = crate::fdstore::put(store, unit_id, &fdname, f.as_raw_fd(), fdstore_max) {
+                        if let Err(e) =
+                            crate::fdstore::put(store, unit_id, &fdname, f.as_raw_fd(), fdstore_max)
+                        {
                             eprintln!("uinitconverter[{unit_id}]: FDSTORE: {e}");
                         }
                     }
@@ -2491,7 +2837,11 @@ impl NotifyHelper {
                 }
                 break;
             }
-            if !ready && deadline.map(|d| util::now_monotonic_usec() >= d).unwrap_or(false) {
+            if !ready
+                && deadline
+                    .map(|d| util::now_monotonic_usec() >= d)
+                    .unwrap_or(false)
+            {
                 // TimeoutStartSec=: fail the start and terminate the service.
                 st.set(keys::RESULT, "timeout");
                 release(Some("start timeout"));
@@ -2516,7 +2866,11 @@ pub fn notify_helper_main(args: &[String]) -> i32 {
     };
     let keep = [Some(h.fd), h.notify];
     let open: Vec<i32> = fs::read_dir("/proc/self/fd")
-        .map(|rd| rd.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect())
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.file_name().to_str()?.parse().ok())
+                .collect()
+        })
         .unwrap_or_default();
     for fd in open {
         if fd > 2 && !keep.contains(&Some(fd)) {
@@ -2536,7 +2890,9 @@ pub fn notify_helper_main(args: &[String]) -> i32 {
         // process stays small.
         let child = unsafe { libc::fork() };
         if child == 0 {
-            let code = match Config::load(Some(&h.config)).and_then(|cfg| Runner::new(cfg, &h.unit_id, true)) {
+            let code = match Config::load(Some(&h.config))
+                .and_then(|cfg| Runner::new(cfg, &h.unit_id, true))
+            {
                 Ok(r) => {
                     r.after_ready(pid);
                     0
@@ -2606,7 +2962,9 @@ fn pid_file_questionable(path: &Path) -> bool {
             Err(_) => return true,
         }
     }
-    let Ok(real) = fs::canonicalize(path) else { return true };
+    let Ok(real) = fs::canonicalize(path) else {
+        return true;
+    };
     let mut dir = real.parent();
     while let Some(d) = dir {
         match fs::metadata(d) {
@@ -2631,10 +2989,16 @@ fn main_pid_ok(pid: u32, sender_uid: u32, main_pid: u32, cgroup: Option<&str>) -
     let cg = |pid: u32| fs::read_to_string(format!("/proc/{pid}/cgroup")).ok();
     match cgroup {
         // Subgroups too (Delegate=yes).
-        Some(dir) => cg(pid).and_then(|c| c.lines().find_map(|l| l.strip_prefix("0::")).map(str::to_string)).is_some_and(|rel| {
-            let full = format!("{}{rel}", cgroup::CGROUP_ROOT);
-            full == dir || full.starts_with(&format!("{dir}/"))
-        }),
+        Some(dir) => cg(pid)
+            .and_then(|c| {
+                c.lines()
+                    .find_map(|l| l.strip_prefix("0::"))
+                    .map(str::to_string)
+            })
+            .is_some_and(|rel| {
+                let full = format!("{}{rel}", cgroup::CGROUP_ROOT);
+                full == dir || full.starts_with(&format!("{dir}/"))
+            }),
         None => matches!((cg(pid), cg(main_pid)), (Some(a), Some(b)) if a == b),
     }
 }
@@ -2653,30 +3017,81 @@ fn status_in(list: &[String], status: Status) -> bool {
     list.iter().any(|w| match status {
         Status::Exited(c) => w.parse::<i32>().ok().or_else(|| exit_status_number(w)) == Some(c),
         Status::Killed(s) => {
-            w.parse::<i32>().is_err() && exit_status_number(w).is_none() && util::signal_number(w) == Some(s)
+            w.parse::<i32>().is_err()
+                && exit_status_number(w).is_none()
+                && util::signal_number(w) == Some(s)
         }
     })
 }
 
 fn exit_status_number(name: &str) -> Option<i32> {
     const NAMES: &[(&str, i32)] = &[
-        ("SUCCESS", 0), ("FAILURE", 1), ("INVALIDARGUMENT", 2), ("NOTIMPLEMENTED", 3),
-        ("NOPERMISSION", 4), ("NOTINSTALLED", 5), ("NOTCONFIGURED", 6), ("NOTRUNNING", 7),
-        ("USAGE", 64), ("DATAERR", 65), ("NOINPUT", 66), ("NOUSER", 67), ("NOHOST", 68),
-        ("UNAVAILABLE", 69), ("SOFTWARE", 70), ("OSERR", 71), ("OSFILE", 72), ("CANTCREAT", 73),
-        ("IOERR", 74), ("TEMPFAIL", 75), ("PROTOCOL", 76), ("NOPERM", 77), ("CONFIG", 78),
-        ("CHDIR", 200), ("NICE", 201), ("FDS", 202), ("EXEC", 203), ("MEMORY", 204),
-        ("LIMITS", 205), ("OOM_ADJUST", 206), ("SIGNAL_MASK", 207), ("STDIN", 208),
-        ("STDOUT", 209), ("CHROOT", 210), ("IOPRIO", 211), ("TIMERSLACK", 212),
-        ("SECUREBITS", 213), ("SETSCHEDULER", 214), ("CPUAFFINITY", 215), ("GROUP", 216),
-        ("USER", 217), ("CAPABILITIES", 218), ("CGROUP", 219), ("SETSID", 220),
-        ("CONFIRM", 221), ("STDERR", 222), ("PAM", 224), ("NETWORK", 225), ("NAMESPACE", 226),
-        ("NO_NEW_PRIVILEGES", 227), ("SECCOMP", 228), ("SELINUX_CONTEXT", 229),
-        ("PERSONALITY", 230), ("APPARMOR_PROFILE", 231), ("ADDRESS_FAMILIES", 232),
-        ("RUNTIME_DIRECTORY", 233), ("CHOWN", 235), ("SMACK_PROCESS_LABEL", 236),
-        ("KEYRING", 237), ("STATE_DIRECTORY", 238), ("CACHE_DIRECTORY", 239),
-        ("LOGS_DIRECTORY", 240), ("CONFIGURATION_DIRECTORY", 241), ("NUMA_POLICY", 242),
-        ("CREDENTIALS", 243), ("BPF", 245),
+        ("SUCCESS", 0),
+        ("FAILURE", 1),
+        ("INVALIDARGUMENT", 2),
+        ("NOTIMPLEMENTED", 3),
+        ("NOPERMISSION", 4),
+        ("NOTINSTALLED", 5),
+        ("NOTCONFIGURED", 6),
+        ("NOTRUNNING", 7),
+        ("USAGE", 64),
+        ("DATAERR", 65),
+        ("NOINPUT", 66),
+        ("NOUSER", 67),
+        ("NOHOST", 68),
+        ("UNAVAILABLE", 69),
+        ("SOFTWARE", 70),
+        ("OSERR", 71),
+        ("OSFILE", 72),
+        ("CANTCREAT", 73),
+        ("IOERR", 74),
+        ("TEMPFAIL", 75),
+        ("PROTOCOL", 76),
+        ("NOPERM", 77),
+        ("CONFIG", 78),
+        ("CHDIR", 200),
+        ("NICE", 201),
+        ("FDS", 202),
+        ("EXEC", 203),
+        ("MEMORY", 204),
+        ("LIMITS", 205),
+        ("OOM_ADJUST", 206),
+        ("SIGNAL_MASK", 207),
+        ("STDIN", 208),
+        ("STDOUT", 209),
+        ("CHROOT", 210),
+        ("IOPRIO", 211),
+        ("TIMERSLACK", 212),
+        ("SECUREBITS", 213),
+        ("SETSCHEDULER", 214),
+        ("CPUAFFINITY", 215),
+        ("GROUP", 216),
+        ("USER", 217),
+        ("CAPABILITIES", 218),
+        ("CGROUP", 219),
+        ("SETSID", 220),
+        ("CONFIRM", 221),
+        ("STDERR", 222),
+        ("PAM", 224),
+        ("NETWORK", 225),
+        ("NAMESPACE", 226),
+        ("NO_NEW_PRIVILEGES", 227),
+        ("SECCOMP", 228),
+        ("SELINUX_CONTEXT", 229),
+        ("PERSONALITY", 230),
+        ("APPARMOR_PROFILE", 231),
+        ("ADDRESS_FAMILIES", 232),
+        ("RUNTIME_DIRECTORY", 233),
+        ("CHOWN", 235),
+        ("SMACK_PROCESS_LABEL", 236),
+        ("KEYRING", 237),
+        ("STATE_DIRECTORY", 238),
+        ("CACHE_DIRECTORY", 239),
+        ("LOGS_DIRECTORY", 240),
+        ("CONFIGURATION_DIRECTORY", 241),
+        ("NUMA_POLICY", 242),
+        ("CREDENTIALS", 243),
+        ("BPF", 245),
     ];
     NAMES.iter().find(|(n, _)| *n == name).map(|(_, c)| *c)
 }
@@ -2718,18 +3133,25 @@ fn group_list(user: &str, gid: u32) -> Vec<u32> {
 
 /// User= (DynamicUser= creates it), Group= and SupplementaryGroups=; the
 /// error carries systemd's exit code for it.
-fn resolve_credentials(unit: &Unit) -> Result<(Option<UserInfo>, Option<u32>, Vec<u32>), (i32, String)> {
+fn resolve_credentials(
+    unit: &Unit,
+) -> Result<(Option<UserInfo>, Option<u32>, Vec<u32>), (i32, String)> {
     let user_err = |e| (EXIT_USER, e);
     let group_err = |g: &str| (EXIT_GROUP, format!("group {g} does not exist"));
     let mut user = None;
     if let Some(u) = unit.get("Service", "User") {
         user = Some(match util::lookup_user(&u) {
             Some(info) => info,
-            None if unit.get_bool("Service", "DynamicUser", false) => ensure_system_user(&u).map_err(user_err)?,
+            None if unit.get_bool("Service", "DynamicUser", false) => {
+                ensure_system_user(&u).map_err(user_err)?
+            }
             None => return Err(user_err(format!("user {u} does not exist"))),
         });
     } else if unit.get_bool("Service", "DynamicUser", false) {
-        let name = unit.id.trim_end_matches(".service").replace(['@', '.'], "-");
+        let name = unit
+            .id
+            .trim_end_matches(".service")
+            .replace(['@', '.'], "-");
         user = Some(ensure_system_user(&name).map_err(user_err)?);
     }
     let gid = match unit.get("Service", "Group") {
@@ -2752,7 +3174,15 @@ fn ensure_system_user(name: &str) -> Result<UserInfo, String> {
         return Ok(u);
     }
     let status = std::process::Command::new(tools::path("useradd"))
-        .args(["--system", "--no-create-home", "--home-dir", "/", "--shell", "/usr/sbin/nologin", name])
+        .args([
+            "--system",
+            "--no-create-home",
+            "--home-dir",
+            "/",
+            "--shell",
+            "/usr/sbin/nologin",
+            name,
+        ])
         .status()
         .map_err(|e| format!("useradd: {e}"))?;
     if !status.success() {
@@ -2760,7 +3190,6 @@ fn ensure_system_user(name: &str) -> Result<UserInfo, String> {
     }
     util::lookup_user(name).ok_or_else(|| format!("user {name} still missing after useradd"))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -2789,16 +3218,38 @@ mod tests {
         assert_eq!(&args[args.len() - 2..], ["--unit", "a b.service"]);
         let g = NotifyHelper::from_args(&args[1..]).unwrap();
         assert_eq!(
-            (g.fd, g.notify, g.main_pid, g.unit_uid, g.timeout_us, g.fdstore_max),
+            (
+                g.fd,
+                g.notify,
+                g.main_pid,
+                g.unit_uid,
+                g.timeout_us,
+                g.fdstore_max
+            ),
             (7, None, 1234, Some(0), None, 3)
         );
-        assert_eq!((g.st_dir, g.store, g.config), (h.st_dir.clone(), h.store.clone(), h.config.clone()));
-        assert_eq!((g.unit_id.as_str(), g.path.as_str(), g.notify_reload, g.post), ("a b.service", h.path.as_str(), true, false));
+        assert_eq!(
+            (g.st_dir, g.store, g.config),
+            (h.st_dir.clone(), h.store.clone(), h.config.clone())
+        );
+        assert_eq!(
+            (g.unit_id.as_str(), g.path.as_str(), g.notify_reload, g.post),
+            ("a b.service", h.path.as_str(), true, false)
+        );
         let mut a = args[1..].to_vec();
         a.retain(|x| x != "--reload");
-        a.extend(["--post".to_string(), "--notify-fd".into(), "9".into(), "--timeout-us".into(), "90000000".into()]);
+        a.extend([
+            "--post".to_string(),
+            "--notify-fd".into(),
+            "9".into(),
+            "--timeout-us".into(),
+            "90000000".into(),
+        ]);
         let g = NotifyHelper::from_args(&a).unwrap();
-        assert_eq!((g.notify, g.timeout_us, g.notify_reload, g.post), (Some(9), Some(90_000_000), false, true));
+        assert_eq!(
+            (g.notify, g.timeout_us, g.notify_reload, g.post),
+            (Some(9), Some(90_000_000), false, true)
+        );
         assert!(NotifyHelper::from_args(&["--fd".into(), "x".into()]).is_err());
         assert!(NotifyHelper::from_args(&["--bogus".into(), "1".into()]).is_err());
         assert!(NotifyHelper::from_args(&[]).is_err());
@@ -2809,7 +3260,8 @@ mod tests {
         // Root's file in root's directories: trusted as written.
         assert!(!pid_file_questionable(Path::new("/etc/passwd")));
         // A file this (unprivileged) test owns, or one that doesn't exist.
-        let dir = std::env::temp_dir().join(format!("uinitconverter-pidfile-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("uinitconverter-pidfile-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         let f = dir.join("x.pid");
         fs::write(&f, "1\n").unwrap();

@@ -11,16 +11,15 @@
 //!   dependencies             -> Requires/Requisite/BindsTo, plus Wants that are also ordered After
 //!   long-running ExecStop=   -> also a oneshot UNIT.stop that depends on it; its `down` runs ExecStop=
 
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
 use uinitconverter_base::config::Config;
-use uinitconverter_base::tools;
 pub use uinitconverter_base::index::{stop_atom, unit_arg, Index, Kind};
 use uinitconverter_base::loader::{self, LoadState, Loader, Unit};
+use uinitconverter_base::tools;
 use uinitconverter_base::util;
 use uinitconverter_install as install;
 
@@ -82,9 +81,16 @@ impl Timings {
         // any fixed backstop (s6-rc would then bring the service down), and
         // the notify helper enforces the timeout, extended or not, and
         // releases s6-rc either way.
-        let notify = matches!(unit.get("Service", "Type").as_deref(), Some("notify" | "notify-reload"));
+        let notify = matches!(
+            unit.get("Service", "Type").as_deref(),
+            Some("notify" | "notify-reload")
+        );
         Timings {
-            up_ms: if start == u64::MAX || notify { 0 } else { (ms(start) + 15_000).min(u32::MAX as u64) },
+            up_ms: if start == u64::MAX || notify {
+                0
+            } else {
+                (ms(start) + 15_000).min(u32::MAX as u64)
+            },
             down_ms: ms(unit.stop_timeout_usec()).min(u32::MAX as u64),
             finish_ms: ms(restart_sec).saturating_add(5000),
             down_signal,
@@ -115,55 +121,211 @@ pub struct Plan {
 const FDSTORE_SERVICE: &str = "uinitconverter-fdstore";
 
 const UNIT_KEYS: &[&str] = &[
-    "Description", "Documentation", "Requires", "Requisite", "Wants", "BindsTo", "PartOf",
-    "Upholds", "Before", "After", "DefaultDependencies", "RefuseManualStart",
-    "RefuseManualStop", "AllowIsolate", "IgnoreOnIsolate", "StopWhenUnneeded",
-    "StartLimitIntervalSec", "StartLimitBurst", "SourcePath", "Conflicts", "OnFailure", "OnSuccess",
-    "SuccessAction", "FailureAction", "RequiresMountsFor", "OnFailureJobMode",
+    "Description",
+    "Documentation",
+    "Requires",
+    "Requisite",
+    "Wants",
+    "BindsTo",
+    "PartOf",
+    "Upholds",
+    "Before",
+    "After",
+    "DefaultDependencies",
+    "RefuseManualStart",
+    "RefuseManualStop",
+    "AllowIsolate",
+    "IgnoreOnIsolate",
+    "StopWhenUnneeded",
+    "StartLimitIntervalSec",
+    "StartLimitBurst",
+    "SourcePath",
+    "Conflicts",
+    "OnFailure",
+    "OnSuccess",
+    "SuccessAction",
+    "FailureAction",
+    "RequiresMountsFor",
+    "OnFailureJobMode",
 ];
 
 const TIMER_KEYS: &[&str] = &[
-    "OnCalendar", "OnActiveSec", "OnBootSec", "OnStartupSec", "OnUnitActiveSec",
-    "OnUnitInactiveSec", "Unit", "Persistent", "RandomizedDelaySec", "FixedRandomDelay",
-    "AccuracySec", "RemainAfterElapse", "WakeSystem", "OnClockChange", "OnTimezoneChange",
+    "OnCalendar",
+    "OnActiveSec",
+    "OnBootSec",
+    "OnStartupSec",
+    "OnUnitActiveSec",
+    "OnUnitInactiveSec",
+    "Unit",
+    "Persistent",
+    "RandomizedDelaySec",
+    "FixedRandomDelay",
+    "AccuracySec",
+    "RemainAfterElapse",
+    "WakeSystem",
+    "OnClockChange",
+    "OnTimezoneChange",
 ];
 
 const PATH_KEYS: &[&str] = &[
-    "PathExists", "PathExistsGlob", "PathChanged", "PathModified", "DirectoryNotEmpty", "Unit",
-    "MakeDirectory", "DirectoryMode", "TriggerLimitBurst", "TriggerLimitIntervalSec",
+    "PathExists",
+    "PathExistsGlob",
+    "PathChanged",
+    "PathModified",
+    "DirectoryNotEmpty",
+    "Unit",
+    "MakeDirectory",
+    "DirectoryMode",
+    "TriggerLimitBurst",
+    "TriggerLimitIntervalSec",
 ];
 const MOUNT_KEYS: &[&str] = &[
-    "What", "Where", "Type", "Options", "SloppyOptions", "LazyUnmount", "ForceUnmount",
-    "DirectoryMode", "TimeoutSec", "ReadWriteOnly",
+    "What",
+    "Where",
+    "Type",
+    "Options",
+    "SloppyOptions",
+    "LazyUnmount",
+    "ForceUnmount",
+    "DirectoryMode",
+    "TimeoutSec",
+    "ReadWriteOnly",
 ];
 const SWAP_KEYS: &[&str] = &["What", "Priority", "Options", "TimeoutSec"];
 
 const SERVICE_KEYS: &[&str] = &[
-    "Type", "RemainAfterExit", "GuessMainPID", "PIDFile", "BusName", "ExecStart",
-    "ExecStartPre", "ExecStartPost", "ExecCondition", "ExecReload", "ExecStop", "ExecStopPost",
-    "RestartSec", "TimeoutStartSec", "TimeoutStopSec", "TimeoutSec", "Restart",
-    "SuccessExitStatus", "RestartPreventExitStatus", "RestartForceExitStatus", "NotifyAccess",
-    "Sockets", "KillMode", "KillSignal", "ReloadSignal", "SendSIGKILL", "User", "Group",
-    "SupplementaryGroups", "DynamicUser", "WorkingDirectory", "RootDirectory", "UMask", "Nice",
-    "OOMScoreAdjust", "Environment", "EnvironmentFile", "PassEnvironment", "UnsetEnvironment",
-    "StandardInput", "StandardOutput", "StandardError", "TTYPath", "TTYReset", "TTYVHangup",
-    "TTYVTDisallocate", "SyslogIdentifier", "SyslogFacility", "SyslogLevel", "RuntimeDirectory",
-    "StateDirectory", "CacheDirectory", "LogsDirectory", "ConfigurationDirectory",
-    "RuntimeDirectoryMode", "StateDirectoryMode", "CacheDirectoryMode", "LogsDirectoryMode",
-    "ConfigurationDirectoryMode", "RuntimeDirectoryPreserve", "PrivateTmp", "ProtectSystem",
-    "ProtectHome", "ReadWritePaths", "ReadOnlyPaths", "InaccessiblePaths", "NoNewPrivileges",
-    "CapabilityBoundingSet", "AmbientCapabilities", "Slice", "MemoryMax", "MemoryHigh",
-    "MemoryLimit", "CPUQuota", "CPUWeight", "TasksMax", "IOWeight", "IgnoreSIGPIPE",
-    "StartLimitIntervalSec", "StartLimitBurst", "UtmpIdentifier", "UtmpMode", "Delegate",
-    "RestartMode", "PAMName", "DelegateSubgroup", "LimitCPU", "LimitFSIZE", "LimitDATA", "LimitSTACK", "LimitCORE", "LimitRSS",
-    "LimitNOFILE", "LimitAS", "LimitNPROC", "LimitMEMLOCK", "LimitLOCKS", "LimitSIGPENDING",
-    "LimitMSGQUEUE", "LimitNICE", "LimitRTPRIO", "LimitRTTIME", "SendSIGHUP", "TimeoutAbortSec",
-    "FileDescriptorStoreMax", "SystemCallFilter", "SystemCallErrorNumber", "SystemCallArchitectures",
-    "RestrictAddressFamilies", "RestrictNamespaces", "MemoryDenyWriteExecute", "LockPersonality",
-    "RestrictRealtime", "RestrictSUIDSGID", "ProtectClock", "ProtectKernelModules", "ProtectKernelLogs",
-    "ProtectKernelTunables", "ProtectControlGroups", "ProtectHostname", "ProtectProc", "ProcSubset",
-    "PrivateDevices", "PrivateNetwork", "PrivateIPC", "PrivateMounts", "DevicePolicy", "DeviceAllow",
-    "IPAddressAllow", "IPAddressDeny", "MemoryPressureWatch", "MemoryPressureThresholdSec",
+    "Type",
+    "RemainAfterExit",
+    "GuessMainPID",
+    "PIDFile",
+    "BusName",
+    "ExecStart",
+    "ExecStartPre",
+    "ExecStartPost",
+    "ExecCondition",
+    "ExecReload",
+    "ExecStop",
+    "ExecStopPost",
+    "RestartSec",
+    "TimeoutStartSec",
+    "TimeoutStopSec",
+    "TimeoutSec",
+    "Restart",
+    "SuccessExitStatus",
+    "RestartPreventExitStatus",
+    "RestartForceExitStatus",
+    "NotifyAccess",
+    "Sockets",
+    "KillMode",
+    "KillSignal",
+    "ReloadSignal",
+    "SendSIGKILL",
+    "User",
+    "Group",
+    "SupplementaryGroups",
+    "DynamicUser",
+    "WorkingDirectory",
+    "RootDirectory",
+    "UMask",
+    "Nice",
+    "OOMScoreAdjust",
+    "Environment",
+    "EnvironmentFile",
+    "PassEnvironment",
+    "UnsetEnvironment",
+    "StandardInput",
+    "StandardOutput",
+    "StandardError",
+    "TTYPath",
+    "TTYReset",
+    "TTYVHangup",
+    "TTYVTDisallocate",
+    "SyslogIdentifier",
+    "SyslogFacility",
+    "SyslogLevel",
+    "RuntimeDirectory",
+    "StateDirectory",
+    "CacheDirectory",
+    "LogsDirectory",
+    "ConfigurationDirectory",
+    "RuntimeDirectoryMode",
+    "StateDirectoryMode",
+    "CacheDirectoryMode",
+    "LogsDirectoryMode",
+    "ConfigurationDirectoryMode",
+    "RuntimeDirectoryPreserve",
+    "PrivateTmp",
+    "ProtectSystem",
+    "ProtectHome",
+    "ReadWritePaths",
+    "ReadOnlyPaths",
+    "InaccessiblePaths",
+    "NoNewPrivileges",
+    "CapabilityBoundingSet",
+    "AmbientCapabilities",
+    "Slice",
+    "MemoryMax",
+    "MemoryHigh",
+    "MemoryLimit",
+    "CPUQuota",
+    "CPUWeight",
+    "TasksMax",
+    "IOWeight",
+    "IgnoreSIGPIPE",
+    "StartLimitIntervalSec",
+    "StartLimitBurst",
+    "UtmpIdentifier",
+    "UtmpMode",
+    "Delegate",
+    "RestartMode",
+    "PAMName",
+    "DelegateSubgroup",
+    "LimitCPU",
+    "LimitFSIZE",
+    "LimitDATA",
+    "LimitSTACK",
+    "LimitCORE",
+    "LimitRSS",
+    "LimitNOFILE",
+    "LimitAS",
+    "LimitNPROC",
+    "LimitMEMLOCK",
+    "LimitLOCKS",
+    "LimitSIGPENDING",
+    "LimitMSGQUEUE",
+    "LimitNICE",
+    "LimitRTPRIO",
+    "LimitRTTIME",
+    "SendSIGHUP",
+    "TimeoutAbortSec",
+    "FileDescriptorStoreMax",
+    "SystemCallFilter",
+    "SystemCallErrorNumber",
+    "SystemCallArchitectures",
+    "RestrictAddressFamilies",
+    "RestrictNamespaces",
+    "MemoryDenyWriteExecute",
+    "LockPersonality",
+    "RestrictRealtime",
+    "RestrictSUIDSGID",
+    "ProtectClock",
+    "ProtectKernelModules",
+    "ProtectKernelLogs",
+    "ProtectKernelTunables",
+    "ProtectControlGroups",
+    "ProtectHostname",
+    "ProtectProc",
+    "ProcSubset",
+    "PrivateDevices",
+    "PrivateNetwork",
+    "PrivateIPC",
+    "PrivateMounts",
+    "DevicePolicy",
+    "DeviceAllow",
+    "IPAddressAllow",
+    "IPAddressDeny",
+    "MemoryPressureWatch",
+    "MemoryPressureThresholdSec",
 ];
 
 fn longrun_type(unit: &Unit) -> bool {
@@ -204,7 +366,10 @@ fn ms(usec: u64) -> u64 {
 
 pub fn plan(cfg: &Config) -> Plan {
     let ld = Loader::new(cfg);
-    let mut plan = Plan { extra_names: extra_names(cfg), ..Default::default() };
+    let mut plan = Plan {
+        extra_names: extra_names(cfg),
+        ..Default::default()
+    };
 
     // Seed: every concrete service and target, plus the default target.
     let mut queue: Vec<String> = ld
@@ -212,8 +377,10 @@ pub fn plan(cfg: &Config) -> Plan {
         .into_iter()
         .filter(|n| {
             let ty = loader::unit_type(n);
-            matches!(ty, "service" | "target" | "timer" | "path" | "mount" | "swap" | "automount")
-                && !n.contains("@.")
+            matches!(
+                ty,
+                "service" | "target" | "timer" | "path" | "mount" | "swap" | "automount"
+            ) && !n.contains("@.")
         })
         .collect();
     let def = ld.load("default.target");
@@ -230,11 +397,15 @@ pub fn plan(cfg: &Config) -> Plan {
     let mut socket_service: BTreeMap<String, String> = BTreeMap::new();
 
     while let Some(name) = queue.pop() {
-        if loaded.contains_key(&name) || plan.skipped.contains_key(&name) || plan.aliases.contains_key(&name) {
+        if loaded.contains_key(&name)
+            || plan.skipped.contains_key(&name)
+            || plan.aliases.contains_key(&name)
+        {
             continue;
         }
         if plan.extra_names.contains(&name) {
-            plan.skipped.insert(name, "provided by extra s6-rc source".into());
+            plan.skipped
+                .insert(name, "provided by extra s6-rc source".into());
             continue;
         }
         let unit = ld.load(&name);
@@ -249,7 +420,8 @@ pub fn plan(cfg: &Config) -> Plan {
                 continue;
             }
             LoadState::BadSetting => {
-                plan.skipped.insert(name, unit.load_error.clone().unwrap_or_default());
+                plan.skipped
+                    .insert(name, unit.load_error.clone().unwrap_or_default());
                 continue;
             }
         }
@@ -259,18 +431,28 @@ pub fn plan(cfg: &Config) -> Plan {
             continue;
         }
         if cfg.is_excluded(&unit.id) {
-            plan.skipped.insert(name, "excluded by configuration".into());
+            plan.skipped
+                .insert(name, "excluded by configuration".into());
             continue;
         }
         // Transient units (systemd-run) are supervised by the daemon from
         // RUN_DIR/dyn; in the database they would collide with that service
         // directory and make s6-rc-update fail.
-        if unit.fragment.as_ref().map(|f| f.starts_with(&cfg.transient_dir)).unwrap_or(false) {
-            plan.skipped.insert(name, "transient (supervised on demand by the daemon)".into());
+        if unit
+            .fragment
+            .as_ref()
+            .map(|f| f.starts_with(&cfg.transient_dir))
+            .unwrap_or(false)
+        {
+            plan.skipped.insert(
+                name,
+                "transient (supervised on demand by the daemon)".into(),
+            );
             continue;
         }
         if plan.extra_names.contains(&unit.id) {
-            plan.skipped.insert(name, "provided by extra s6-rc source".into());
+            plan.skipped
+                .insert(name, "provided by extra s6-rc source".into());
             continue;
         }
 
@@ -286,7 +468,10 @@ pub fn plan(cfg: &Config) -> Plan {
                 let m = format!("{}.mount", unit.id.trim_end_matches(".automount"));
                 socket_service.insert(unit.id.clone(), m.clone());
                 queue.push(m);
-                plan.skipped.insert(name, "automount: the .mount is mounted at boot instead".into());
+                plan.skipped.insert(
+                    name,
+                    "automount: the .mount is mounted at boot instead".into(),
+                );
                 continue;
             }
             "timer" => {
@@ -309,12 +494,14 @@ pub fn plan(cfg: &Config) -> Plan {
                 } else {
                     socket_service.insert(unit.id.clone(), svc.clone());
                     queue.push(svc);
-                    plan.skipped.insert(name, "socket is bound by its service's runner".into());
+                    plan.skipped
+                        .insert(name, "socket is bound by its service's runner".into());
                 }
                 continue;
             }
             other => {
-                plan.skipped.insert(name, format!("unit type .{other} is not translated"));
+                plan.skipped
+                    .insert(name, format!("unit type .{other} is not translated"));
                 continue;
             }
         }
@@ -329,13 +516,17 @@ pub fn plan(cfg: &Config) -> Plan {
         wants.extend(ld.dir_deps(&unit, "upholds"));
         let mut after = unit.get_words("Unit", "After");
         let before = unit.get_words("Unit", "Before");
-        if matches!(unit.utype(), "service" | "timer" | "path") && unit.get_bool("Unit", "DefaultDependencies", true) {
+        if matches!(unit.utype(), "service" | "timer" | "path")
+            && unit.get_bool("Unit", "DefaultDependencies", true)
+        {
             requires.push("sysinit.target".into());
             after.push("basic.target".into());
         }
         // Type=dbus implies Requires=/After=dbus.socket.
-        if unit.utype() == "service" && (unit.get("Service", "Type").as_deref() == Some("dbus")
-            || (unit.get("Service", "Type").is_none() && unit.get("Service", "BusName").is_some()))
+        if unit.utype() == "service"
+            && (unit.get("Service", "Type").as_deref() == Some("dbus")
+                || (unit.get("Service", "Type").is_none()
+                    && unit.get("Service", "BusName").is_some()))
         {
             requires.push("dbus.socket".into());
         } else if unit.utype() == "service" && unit.get("Service", "BusName").is_some() {
@@ -405,7 +596,12 @@ pub fn plan(cfg: &Config) -> Plan {
 
         for r in requires {
             if let Some(d) = resolve(r, &plan) {
-                if via_socket(r, &plan) { &mut by_socket } else { &mut by_name }.insert(d.clone());
+                if via_socket(r, &plan) {
+                    &mut by_socket
+                } else {
+                    &mut by_name
+                }
+                .insert(d.clone());
                 deps.insert(d);
             }
         }
@@ -414,7 +610,12 @@ pub fn plan(cfg: &Config) -> Plan {
                 // Targets pull in everything they want; services only wait for
                 // wanted units they are also ordered after.
                 if is_target || after.contains(&d) {
-                    if via_socket(w, &plan) { &mut by_socket } else { &mut by_name }.insert(d.clone());
+                    if via_socket(w, &plan) {
+                        &mut by_socket
+                    } else {
+                        &mut by_name
+                    }
+                    .insert(d.clone());
                     deps.insert(d);
                 }
             }
@@ -430,19 +631,23 @@ pub fn plan(cfg: &Config) -> Plan {
         }
         deps.remove(id);
         // Timers and path units start their unit through the daemon.
-        if matches!(unit.utype(), "timer" | "path") && plan.extra_names.contains(&cfg.daemon_service) {
+        if matches!(unit.utype(), "timer" | "path")
+            && plan.extra_names.contains(&cfg.daemon_service)
+        {
             deps.insert(cfg.daemon_service.clone());
         }
         // FDSTORE=1 goes to the uinitconverter-fdstore service. journald starts
         // before it otherwise (DefaultDependencies=no): "fd store not reachable".
         // So do the sockets the runner binds: unheld, a service that exits
         // (dmeventd -R) is not started again on activity.
-        let fdstore_max: usize =
-            unit.get("Service", "FileDescriptorStoreMax").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let fdstore_max: usize = unit
+            .get("Service", "FileDescriptorStoreMax")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         // Service= may name an alias of the service.
-        let has_sockets = socket_service.iter().any(|(s, svc)| {
-            s.ends_with(".socket") && plan.aliases.get(svc).unwrap_or(svc) == id
-        });
+        let has_sockets = socket_service
+            .iter()
+            .any(|(s, svc)| s.ends_with(".socket") && plan.aliases.get(svc).unwrap_or(svc) == id);
         if unit.utype() == "service"
             && (fdstore_max > 0 || has_sockets)
             && plan.extra_names.contains(FDSTORE_SERVICE)
@@ -458,7 +663,10 @@ pub fn plan(cfg: &Config) -> Plan {
             if *id == "local-fs.target" && plan.extra_names.contains("mount-fs") {
                 deps.insert("mount-fs".into());
             }
-            if *id == "sysinit.target" && cfg.journal && loaded.contains_key("systemd-journald.service") {
+            if *id == "sysinit.target"
+                && cfg.journal
+                && loaded.contains_key("systemd-journald.service")
+            {
                 deps.insert("systemd-journald.service".into());
             }
             Kind::Bundle
@@ -472,7 +680,10 @@ pub fn plan(cfg: &Config) -> Plan {
 
         if !is_target {
             for key in unit.file.keys_in("Unit") {
-                if !UNIT_KEYS.contains(&key) && !key.starts_with("Condition") && !key.starts_with("Assert") {
+                if !UNIT_KEYS.contains(&key)
+                    && !key.starts_with("Condition")
+                    && !key.starts_with("Assert")
+                {
                     warnings.push(format!("[Unit] {key}= is ignored"));
                 }
             }
@@ -486,7 +697,11 @@ pub fn plan(cfg: &Config) -> Plan {
                     warnings.push(format!("[Timer] {key}= is ignored"));
                 }
             }
-            for (sec, known) in [("Path", PATH_KEYS), ("Mount", MOUNT_KEYS), ("Swap", SWAP_KEYS)] {
+            for (sec, known) in [
+                ("Path", PATH_KEYS),
+                ("Mount", MOUNT_KEYS),
+                ("Swap", SWAP_KEYS),
+            ] {
                 for key in unit.file.keys_in(sec) {
                     if !known.contains(&key) {
                         warnings.push(format!("[{sec}] {key}= is ignored"));
@@ -499,7 +714,12 @@ pub fn plan(cfg: &Config) -> Plan {
                 }
             }
             for sec in unit.file.sections() {
-                if !["Unit", "Service", "Timer", "Path", "Mount", "Swap", "Install"].contains(&sec) && !sec.starts_with("X-") {
+                if ![
+                    "Unit", "Service", "Timer", "Path", "Mount", "Swap", "Install",
+                ]
+                .contains(&sec)
+                    && !sec.starts_with("X-")
+                {
                     warnings.push(format!("[{sec}] section is ignored"));
                 }
             }
@@ -517,7 +737,7 @@ pub fn plan(cfg: &Config) -> Plan {
             && !cfg.journal
             && cfg.log_dir.is_some()
             && !uses_tty_or_file(unit))
-            .then(|| format!("{id}.log"));
+        .then(|| format!("{id}.log"));
         let stop_atom = (kind == Kind::Longrun
             && unit.utype() == "service"
             && !unit.get_all("Service", "ExecStop").is_empty())
@@ -562,7 +782,9 @@ fn mark_on_demand(plan: &mut Plan, socket_activated: &BTreeSet<String>) {
     let mut listening = BTreeSet::new();
     let mut stack: Vec<String> = plan.default_target.iter().cloned().collect();
     while let Some(n) = stack.pop() {
-        let Some(p) = plan.units.get(&n) else { continue };
+        let Some(p) = plan.units.get(&n) else {
+            continue;
+        };
         if !started.insert(n) {
             continue;
         }
@@ -587,7 +809,9 @@ fn boot_closure(plan: &Plan) -> BTreeSet<String> {
     let mut seen = BTreeSet::new();
     let mut stack: Vec<String> = plan.default_target.iter().cloned().collect();
     while let Some(n) = stack.pop() {
-        let Some(p) = plan.units.get(&n) else { continue };
+        let Some(p) = plan.units.get(&n) else {
+            continue;
+        };
         if !seen.insert(n) {
             continue;
         }
@@ -605,8 +829,14 @@ fn boot_closure(plan: &Plan) -> BTreeSet<String> {
 /// Conflicts=: if both units would start at boot, keep the one declaring the
 /// conflict (e.g. gdm.service over getty@tty1.service) and drop the other
 /// from every target, like systemd's transaction would.
-fn resolve_conflicts(plan: &mut Plan, loaded: &BTreeMap<String, Unit>, aliases: &BTreeMap<String, String>) {
-    let Some(def) = plan.default_target.clone() else { return };
+fn resolve_conflicts(
+    plan: &mut Plan,
+    loaded: &BTreeMap<String, Unit>,
+    aliases: &BTreeMap<String, String>,
+) {
+    let Some(def) = plan.default_target.clone() else {
+        return;
+    };
     let mut boot: BTreeSet<String> = BTreeSet::new();
     let mut stack = vec![def];
     while let Some(n) = stack.pop() {
@@ -627,7 +857,11 @@ fn resolve_conflicts(plan: &mut Plan, loaded: &BTreeMap<String, Unit>, aliases: 
         }
         for c in unit.get_words("Unit", "Conflicts") {
             let c = aliases.get(&c).cloned().unwrap_or(c);
-            if c != *id && boot.contains(&c) && plan.units.contains_key(&c) && dropped.insert(c.clone()) {
+            if c != *id
+                && boot.contains(&c)
+                && plan.units.contains_key(&c)
+                && dropped.insert(c.clone())
+            {
                 drops.push((id.clone(), c));
             }
         }
@@ -639,7 +873,8 @@ fn resolve_conflicts(plan: &mut Plan, loaded: &BTreeMap<String, Unit>, aliases: 
             }
         }
         if let Some(p) = plan.units.get_mut(&dropped) {
-            p.warnings.push(format!("not started at boot: conflicts with {keeper}"));
+            p.warnings
+                .push(format!("not started at boot: conflicts with {keeper}"));
         }
     }
 }
@@ -701,7 +936,9 @@ fn break_cycles(plan: &mut Plan) {
     for (a, b) in removed {
         if let Some(p) = plan.units.get_mut(&a) {
             p.deps.remove(&b);
-            p.warnings.push(format!("dependency on {b} dropped to break an ordering cycle"));
+            p.warnings.push(format!(
+                "dependency on {b} dropped to break an ordering cycle"
+            ));
         }
         plan.broken_cycles.push(format!("{a} -> {b}"));
     }
@@ -748,10 +985,17 @@ pub fn report(plan: &Plan) -> String {
     for p in plan.units.values() {
         let _ = writeln!(s, "{} [{}]", p.id, p.kind.as_str());
         if p.on_demand {
-            let _ = writeln!(s, "    on demand: started on the first activity on its sockets");
+            let _ = writeln!(
+                s,
+                "    on demand: started on the first activity on its sockets"
+            );
         }
         if !p.deps.is_empty() {
-            let label = if p.kind == Kind::Bundle { "contents" } else { "depends" };
+            let label = if p.kind == Kind::Bundle {
+                "contents"
+            } else {
+                "depends"
+            };
             let deps: Vec<&str> = p.deps.iter().map(String::as_str).collect();
             let _ = writeln!(s, "    {label}: {}", deps.join(" "));
         }
@@ -790,7 +1034,10 @@ mod tests {
         let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
         // hostnamed: Type=notify, BusName=, started by its socket at boot.
         write("named.service", "[Unit]\nDefaultDependencies=no\n[Service]\nType=notify\nBusName=org.example.N\nExecStart=/bin/true\n");
-        write("plain.service", "[Unit]\nDefaultDependencies=no\n[Service]\nType=notify\nExecStart=/bin/true\n");
+        write(
+            "plain.service",
+            "[Unit]\nDefaultDependencies=no\n[Service]\nType=notify\nExecStart=/bin/true\n",
+        );
         let mut cfg = Config::defaults();
         cfg.unit_path = vec![units];
         cfg.extra_source = vec![extra];
@@ -805,19 +1052,32 @@ mod tests {
     /// after the store even with DefaultDependencies=no (dm-event).
     #[test]
     fn socket_service_orders_after_fdstore() {
-        let tmp = std::env::temp_dir().join(format!("uinitconverter-gen-sock-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-gen-sock-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let (units, extra) = (tmp.join("units"), tmp.join("extra"));
         fs::create_dir_all(&units).unwrap();
         fs::create_dir_all(extra.join(FDSTORE_SERVICE)).unwrap();
         fs::write(extra.join(FDSTORE_SERVICE).join("type"), "longrun\n").unwrap();
         let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
-        write("ev.socket", "[Unit]\nDefaultDependencies=no\n[Socket]\nListenFIFO=/run/ev\n");
-        write("ev.service", "[Unit]\nDefaultDependencies=no\nRequires=ev.socket\n[Service]\nExecStart=/bin/true\n");
-        write("plain.service", "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n");
+        write(
+            "ev.socket",
+            "[Unit]\nDefaultDependencies=no\n[Socket]\nListenFIFO=/run/ev\n",
+        );
+        write(
+            "ev.service",
+            "[Unit]\nDefaultDependencies=no\nRequires=ev.socket\n[Service]\nExecStart=/bin/true\n",
+        );
+        write(
+            "plain.service",
+            "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n",
+        );
         // Service= naming an alias of the service.
         write("al.socket", "[Unit]\nDefaultDependencies=no\n[Socket]\nListenFIFO=/run/al\nService=al-alias.service\n");
-        write("al.service", "[Unit]\nDefaultDependencies=no\nRequires=al.socket\n[Service]\nExecStart=/bin/true\n");
+        write(
+            "al.service",
+            "[Unit]\nDefaultDependencies=no\nRequires=al.socket\n[Service]\nExecStart=/bin/true\n",
+        );
         std::os::unix::fs::symlink("al.service", units.join("al-alias.service")).unwrap();
         let mut cfg = Config::defaults();
         cfg.unit_path = vec![units];
@@ -835,7 +1095,10 @@ mod tests {
     /// on-demand service requires does not count.
     #[test]
     fn socket_only_services_are_on_demand() {
-        let tmp = std::env::temp_dir().join(format!("uinitconverter-gen-ondemand-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "uinitconverter-gen-ondemand-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&tmp);
         let (units, extra) = (tmp.join("units"), tmp.join("extra"));
         fs::create_dir_all(units.join("sockets.target.wants")).unwrap();
@@ -844,13 +1107,17 @@ mod tests {
         fs::write(extra.join(FDSTORE_SERVICE).join("type"), "longrun\n").unwrap();
         let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
         let enable = |t: &str, n: &str| {
-            std::os::unix::fs::symlink(format!("../{n}"), units.join(format!("{t}.wants/{n}"))).unwrap()
+            std::os::unix::fs::symlink(format!("../{n}"), units.join(format!("{t}.wants/{n}")))
+                .unwrap()
         };
         write("multi-user.target", "[Unit]\nWants=sockets.target\n");
         write("sockets.target", "[Unit]\nDescription=s\n");
         std::os::unix::fs::symlink("multi-user.target", units.join("default.target")).unwrap();
         for n in ["lazy", "named", "req", "user"] {
-            write(&format!("{n}.socket"), &format!("[Unit]\nDefaultDependencies=no\n[Socket]\nListenFIFO=/run/{n}\n"));
+            write(
+                &format!("{n}.socket"),
+                &format!("[Unit]\nDefaultDependencies=no\n[Socket]\nListenFIFO=/run/{n}\n"),
+            );
             enable("sockets.target", &format!("{n}.socket"));
         }
         let svc = "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n";
@@ -877,9 +1144,15 @@ mod tests {
         assert!(p.boot.contains("lazy.service"));
         let run = |id: &str| {
             let u = &p.units[id];
-            longrun_files(&cfg, id, &u.timings, u.on_demand)[0].1.clone()
+            longrun_files(&cfg, id, &u.timings, u.on_demand)[0]
+                .1
+                .clone()
         };
-        assert!(run("lazy.service").contains(" run --on-demand "), "{}", run("lazy.service"));
+        assert!(
+            run("lazy.service").contains(" run --on-demand "),
+            "{}",
+            run("lazy.service")
+        );
         assert!(!run("named.service").contains("--on-demand"));
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -888,7 +1161,8 @@ mod tests {
     /// units and what they pull in), not to units nothing at boot wants.
     #[test]
     fn boot_closure_marks_recommended() {
-        let tmp = std::env::temp_dir().join(format!("uinitconverter-gen-boot-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-gen-boot-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let units = tmp.join("units");
         fs::create_dir_all(units.join("multi-user.target.wants")).unwrap();
@@ -896,9 +1170,16 @@ mod tests {
         write("multi-user.target", "[Unit]\nDescription=m\n");
         std::os::unix::fs::symlink("multi-user.target", units.join("default.target")).unwrap();
         write("on.service", "[Unit]\nDefaultDependencies=no\nRequires=helper.service\nAfter=helper.service\n[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n");
-        write("helper.service", "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n");
+        write(
+            "helper.service",
+            "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n",
+        );
         write("off.service", "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n");
-        std::os::unix::fs::symlink("../on.service", units.join("multi-user.target.wants/on.service")).unwrap();
+        std::os::unix::fs::symlink(
+            "../on.service",
+            units.join("multi-user.target.wants/on.service"),
+        )
+        .unwrap();
         let mut cfg = Config::defaults();
         cfg.unit_path = vec![units];
         cfg.extra_source = vec![];
@@ -924,7 +1205,8 @@ mod tests {
     /// none.
     #[test]
     fn stop_atom_for_longrun_exec_stop() {
-        let tmp = std::env::temp_dir().join(format!("uinitconverter-gen-stop-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-gen-stop-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let units = tmp.join("units");
         fs::create_dir_all(units.join("multi-user.target.wants")).unwrap();
@@ -935,14 +1217,21 @@ mod tests {
         write("app.service", "[Unit]\nDefaultDependencies=no\nRequires=db.service\nAfter=db.service\n[Service]\nExecStart=/bin/sleep 9\n");
         write("once.service", "[Unit]\nDefaultDependencies=no\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\nExecStop=/bin/true\n");
         for u in ["db.service", "app.service", "once.service"] {
-            std::os::unix::fs::symlink(format!("../{u}"), units.join("multi-user.target.wants").join(u)).unwrap();
+            std::os::unix::fs::symlink(
+                format!("../{u}"),
+                units.join("multi-user.target.wants").join(u),
+            )
+            .unwrap();
         }
         let mut cfg = Config::defaults();
         cfg.unit_path = vec![units];
         cfg.extra_source = vec![];
 
         let plan = plan(&cfg);
-        assert_eq!(plan.units["db.service"].stop_atom.as_deref(), Some("db.service.stop"));
+        assert_eq!(
+            plan.units["db.service"].stop_atom.as_deref(),
+            Some("db.service.stop")
+        );
         assert_eq!(plan.units["app.service"].stop_atom, None);
         assert_eq!(plan.units["once.service"].stop_atom, None);
         assert!(plan.boot.contains("db.service.stop"));
@@ -951,14 +1240,26 @@ mod tests {
         let stop = src.join("db.service.stop");
         assert_eq!(fs::read_to_string(stop.join("type")).unwrap(), "oneshot\n");
         assert!(stop.join("dependencies.d/db.service").exists());
-        assert_eq!(fs::read_dir(stop.join("dependencies.d")).unwrap().count(), 1);
+        assert_eq!(
+            fs::read_dir(stop.join("dependencies.d")).unwrap().count(),
+            1
+        );
         assert_eq!(fs::read_to_string(stop.join("up")).unwrap(), "");
-        assert!(fs::read_to_string(stop.join("down")).unwrap().contains(" stop-atom -- db.service\n"));
-        assert_eq!(fs::read_to_string(stop.join("timeout-down")).unwrap(), "17000\n");
+        assert!(fs::read_to_string(stop.join("down"))
+            .unwrap()
+            .contains(" stop-atom -- db.service\n"));
+        assert_eq!(
+            fs::read_to_string(stop.join("timeout-down")).unwrap(),
+            "17000\n"
+        );
         assert!(stop.join("flag-recommended").exists());
-        assert!(src.join("multi-user.target/contents.d/db.service.stop").exists());
+        assert!(src
+            .join("multi-user.target/contents.d/db.service.stop")
+            .exists());
         assert!(src.join("app.service/dependencies.d/db.service").exists());
-        assert!(!src.join("app.service/dependencies.d/db.service.stop").exists());
+        assert!(!src
+            .join("app.service/dependencies.d/db.service.stop")
+            .exists());
         assert!(!src.join("once.service.stop").exists());
         let _ = fs::remove_dir_all(&tmp);
     }

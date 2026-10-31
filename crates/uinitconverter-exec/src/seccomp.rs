@@ -48,12 +48,19 @@ fn groups() -> BTreeMap<&'static str, Vec<&'static str>> {
 }
 
 /// Expand a name or @group into syscall names (groups nest).
-fn expand(name: &str, groups: &BTreeMap<&str, Vec<&str>>, out: &mut Vec<String>, depth: u32) -> Result<(), String> {
+fn expand(
+    name: &str,
+    groups: &BTreeMap<&str, Vec<&str>>,
+    out: &mut Vec<String>,
+    depth: u32,
+) -> Result<(), String> {
     if !name.starts_with('@') {
         out.push(name.to_string());
         return Ok(());
     }
-    let members = groups.get(name).ok_or_else(|| format!("unknown system call group {name}"))?;
+    let members = groups
+        .get(name)
+        .ok_or_else(|| format!("unknown system call group {name}"))?;
     if depth > 8 {
         return Err(format!("system call group {name} nests too deeply"));
     }
@@ -107,7 +114,11 @@ impl Filter {
     /// Merge SystemCallFilter= lines the way systemd does: the first line
     /// decides between allow list (which then includes @default) and deny
     /// list (`~`); later lines of the other kind remove entries.
-    pub fn parse(lines: &[String], errno: Option<&str>, archs: &[String]) -> Result<Option<Filter>, String> {
+    pub fn parse(
+        lines: &[String],
+        errno: Option<&str>,
+        archs: &[String],
+    ) -> Result<Option<Filter>, String> {
         let groups = groups();
         let action = match errno {
             Some(v) if !v.is_empty() => parse_action(v)?,
@@ -146,12 +157,20 @@ impl Filter {
                 }
                 // `~name:errno` in an allow list keeps the entry, answered
                 // with that errno instead of the default action.
-                let add = invert != f.allow_list || (invert && f.allow_list && entry_action.is_some());
+                let add =
+                    invert != f.allow_list || (invert && f.allow_list && entry_action.is_some());
                 let mut names = Vec::new();
                 expand(name, &groups, &mut names, 0)?;
                 for n in names {
                     if add {
-                        f.syscalls.insert(n, if f.allow_list && !invert { None } else { entry_action });
+                        f.syscalls.insert(
+                            n,
+                            if f.allow_list && !invert {
+                                None
+                            } else {
+                                entry_action
+                            },
+                        );
                     } else {
                         f.syscalls.remove(&n);
                     }
@@ -161,7 +180,12 @@ impl Filter {
         let archs: Vec<String> = archs.iter().map(|a| seccomp_arch(a)).collect();
         if filter.is_none() && !archs.is_empty() {
             // Only an architecture restriction: an empty deny list.
-            filter = Some(Filter { allow_list: false, syscalls: BTreeMap::new(), action, archs: Vec::new() });
+            filter = Some(Filter {
+                allow_list: false,
+                syscalls: BTreeMap::new(),
+                action,
+                archs: Vec::new(),
+            });
         }
         if let Some(f) = filter.as_mut() {
             f.archs = archs;
@@ -172,7 +196,11 @@ impl Filter {
     pub fn from_unit(unit: &Unit) -> Result<Option<Filter>, String> {
         let lines = unit.get_all("Service", "SystemCallFilter");
         let archs = unit.get_words("Service", "SystemCallArchitectures");
-        Filter::parse(&lines, unit.get("Service", "SystemCallErrorNumber").as_deref(), &archs)
+        Filter::parse(
+            &lines,
+            unit.get("Service", "SystemCallErrorNumber").as_deref(),
+            &archs,
+        )
     }
 
     /// Load the filter into this process (right before execve).
@@ -189,7 +217,11 @@ impl Filter {
             Action::Kill => SCMP_ACT_KILL_PROCESS,
             Action::Errno(e) => SCMP_ACT_ERRNO | (e as u32 & 0xffff),
         };
-        let default = if self.allow_list { act(self.action) } else { SCMP_ACT_ALLOW };
+        let default = if self.allow_list {
+            act(self.action)
+        } else {
+            SCMP_ACT_ALLOW
+        };
         let ctx = unsafe { (lib.init)(default) };
         if ctx.is_null() {
             return Err("seccomp_init failed".into());
@@ -213,9 +245,17 @@ impl Filter {
                     "aarch64" => &["arm"],
                     _ => &[],
                 };
-                extra.iter().map(|a| lib.arch(a)).filter(|&t| t != 0).collect()
+                extra
+                    .iter()
+                    .map(|a| lib.arch(a))
+                    .filter(|&t| t != 0)
+                    .collect()
             } else {
-                self.archs.iter().map(|a| lib.arch(a)).filter(|&t| t != 0).collect()
+                self.archs
+                    .iter()
+                    .map(|a| lib.arch(a))
+                    .filter(|&t| t != 0)
+                    .collect()
             };
             for &t in &wanted {
                 if t != native {
@@ -239,7 +279,10 @@ impl Filter {
             }
             let r = (lib.load)(ctx);
             if r < 0 {
-                return Err(format!("seccomp_load: {}", std::io::Error::from_raw_os_error(-r)));
+                return Err(format!(
+                    "seccomp_load: {}",
+                    std::io::Error::from_raw_os_error(-r)
+                ));
             }
         }
         Ok(())
@@ -271,17 +314,37 @@ const SCMP_CMP_EQ: c_int = 4;
 const SCMP_CMP_MASKED_EQ: c_int = 7;
 
 fn arg_eq(arg: c_uint, v: u64) -> ArgCmp {
-    ArgCmp { arg, op: SCMP_CMP_EQ, a: v, b: 0 }
+    ArgCmp {
+        arg,
+        op: SCMP_CMP_EQ,
+        a: v,
+        b: 0,
+    }
 }
 fn arg_ne(arg: c_uint, v: u64) -> ArgCmp {
-    ArgCmp { arg, op: SCMP_CMP_NE, a: v, b: 0 }
+    ArgCmp {
+        arg,
+        op: SCMP_CMP_NE,
+        a: v,
+        b: 0,
+    }
 }
 fn arg_gt(arg: c_uint, v: u64) -> ArgCmp {
-    ArgCmp { arg, op: SCMP_CMP_GT, a: v, b: 0 }
+    ArgCmp {
+        arg,
+        op: SCMP_CMP_GT,
+        a: v,
+        b: 0,
+    }
 }
 /// (arg & bits) == bits.
 fn arg_has(arg: c_uint, bits: u64) -> ArgCmp {
-    ArgCmp { arg, op: SCMP_CMP_MASKED_EQ, a: bits, b: bits }
+    ArgCmp {
+        arg,
+        op: SCMP_CMP_MASKED_EQ,
+        a: bits,
+        b: bits,
+    }
 }
 
 /// `syscall` fails with `errno` when all `args` comparisons match.
@@ -293,7 +356,11 @@ pub struct Rule {
 }
 
 fn rule(syscall: &str, errno: i32, args: Vec<ArgCmp>) -> Rule {
-    Rule { syscall: syscall.to_string(), errno, args }
+    Rule {
+        syscall: syscall.to_string(),
+        errno,
+        args,
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -307,16 +374,53 @@ pub struct Restriction {
 }
 
 const ADDRESS_FAMILIES: &[(&str, u64)] = &[
-    ("AF_UNIX", 1), ("AF_LOCAL", 1), ("AF_INET", 2), ("AF_AX25", 3), ("AF_IPX", 4),
-    ("AF_APPLETALK", 5), ("AF_NETROM", 6), ("AF_BRIDGE", 7), ("AF_ATMPVC", 8), ("AF_X25", 9),
-    ("AF_INET6", 10), ("AF_ROSE", 11), ("AF_DECnet", 12), ("AF_NETBEUI", 13), ("AF_SECURITY", 14),
-    ("AF_KEY", 15), ("AF_NETLINK", 16), ("AF_ROUTE", 16), ("AF_PACKET", 17), ("AF_ASH", 18),
-    ("AF_ECONET", 19), ("AF_ATMSVC", 20), ("AF_RDS", 21), ("AF_SNA", 22), ("AF_IRDA", 23),
-    ("AF_PPPOX", 24), ("AF_WANPIPE", 25), ("AF_LLC", 26), ("AF_IB", 27), ("AF_MPLS", 28),
-    ("AF_CAN", 29), ("AF_TIPC", 30), ("AF_BLUETOOTH", 31), ("AF_IUCV", 32), ("AF_RXRPC", 33),
-    ("AF_ISDN", 34), ("AF_PHONET", 35), ("AF_IEEE802154", 36), ("AF_CAIF", 37), ("AF_ALG", 38),
-    ("AF_NFC", 39), ("AF_VSOCK", 40), ("AF_KCM", 41), ("AF_QIPCRTR", 42), ("AF_SMC", 43),
-    ("AF_XDP", 44), ("AF_MCTP", 45),
+    ("AF_UNIX", 1),
+    ("AF_LOCAL", 1),
+    ("AF_INET", 2),
+    ("AF_AX25", 3),
+    ("AF_IPX", 4),
+    ("AF_APPLETALK", 5),
+    ("AF_NETROM", 6),
+    ("AF_BRIDGE", 7),
+    ("AF_ATMPVC", 8),
+    ("AF_X25", 9),
+    ("AF_INET6", 10),
+    ("AF_ROSE", 11),
+    ("AF_DECnet", 12),
+    ("AF_NETBEUI", 13),
+    ("AF_SECURITY", 14),
+    ("AF_KEY", 15),
+    ("AF_NETLINK", 16),
+    ("AF_ROUTE", 16),
+    ("AF_PACKET", 17),
+    ("AF_ASH", 18),
+    ("AF_ECONET", 19),
+    ("AF_ATMSVC", 20),
+    ("AF_RDS", 21),
+    ("AF_SNA", 22),
+    ("AF_IRDA", 23),
+    ("AF_PPPOX", 24),
+    ("AF_WANPIPE", 25),
+    ("AF_LLC", 26),
+    ("AF_IB", 27),
+    ("AF_MPLS", 28),
+    ("AF_CAN", 29),
+    ("AF_TIPC", 30),
+    ("AF_BLUETOOTH", 31),
+    ("AF_IUCV", 32),
+    ("AF_RXRPC", 33),
+    ("AF_ISDN", 34),
+    ("AF_PHONET", 35),
+    ("AF_IEEE802154", 36),
+    ("AF_CAIF", 37),
+    ("AF_ALG", 38),
+    ("AF_NFC", 39),
+    ("AF_VSOCK", 40),
+    ("AF_KCM", 41),
+    ("AF_QIPCRTR", 42),
+    ("AF_SMC", 43),
+    ("AF_XDP", 44),
+    ("AF_MCTP", 45),
 ];
 const AF_MAX: u64 = 46;
 
@@ -387,7 +491,11 @@ pub fn parse_namespaces(lines: &[String]) -> Option<u64> {
             .split_whitespace()
             .filter_map(|w| NAMESPACES.iter().find(|(n, _)| *n == w).map(|(_, f)| *f))
             .fold(0, |a, f| a | f);
-        retain = Some(if invert { retain.unwrap_or(all) & !bits } else { retain.filter(|&r| r != all).unwrap_or(0) | bits });
+        retain = Some(if invert {
+            retain.unwrap_or(all) & !bits
+        } else {
+            retain.filter(|&r| r != all).unwrap_or(0) | bits
+        });
     }
     retain.filter(|&r| r != all)
 }
@@ -400,26 +508,46 @@ pub fn restrictions(unit: &Unit) -> Vec<Restriction> {
     let deny_group = |what: &'static str, group: &str| -> Restriction {
         let mut names = Vec::new();
         let _ = expand(group, &groups, &mut names, 0);
-        Restriction { what, rules: names.iter().map(|n| rule(n, libc::EPERM, vec![])).collect(), native_only: false }
+        Restriction {
+            what,
+            rules: names.iter().map(|n| rule(n, libc::EPERM, vec![])).collect(),
+            native_only: false,
+        }
     };
 
-    if let Some((allow, set)) = parse_address_families(&unit.get_all("Service", "RestrictAddressFamilies")) {
+    if let Some((allow, set)) =
+        parse_address_families(&unit.get_all("Service", "RestrictAddressFamilies"))
+    {
         let rules = if allow {
             (0..AF_MAX)
                 .filter(|f| !set.contains(f))
                 .map(|f| rule("socket", libc::EAFNOSUPPORT, vec![arg_eq(0, f)]))
-                .chain(std::iter::once(rule("socket", libc::EAFNOSUPPORT, vec![arg_gt(0, AF_MAX - 1)])))
+                .chain(std::iter::once(rule(
+                    "socket",
+                    libc::EAFNOSUPPORT,
+                    vec![arg_gt(0, AF_MAX - 1)],
+                )))
                 .collect()
         } else {
-            set.iter().map(|&f| rule("socket", libc::EAFNOSUPPORT, vec![arg_eq(0, f)])).collect()
+            set.iter()
+                .map(|&f| rule("socket", libc::EAFNOSUPPORT, vec![arg_eq(0, f)]))
+                .collect()
         };
-        out.push(Restriction { what: "RestrictAddressFamilies=", rules, native_only: true });
+        out.push(Restriction {
+            what: "RestrictAddressFamilies=",
+            rules,
+            native_only: true,
+        });
     }
     if let Some(retain) = parse_namespaces(&unit.get_all("Service", "RestrictNamespaces")) {
         let mut rules = vec![
             // Can't look into clone3()'s struct: make glibc fall back to clone().
             rule("clone3", libc::ENOSYS, vec![]),
-            if retain == 0 { rule("setns", libc::EPERM, vec![]) } else { rule("setns", libc::EPERM, vec![arg_eq(1, 0)]) },
+            if retain == 0 {
+                rule("setns", libc::EPERM, vec![])
+            } else {
+                rule("setns", libc::EPERM, vec![arg_eq(1, 0)])
+            },
         ];
         let clone_arg = if cfg!(target_arch = "s390x") { 1 } else { 0 };
         for &(_, f) in NAMESPACES.iter().filter(|(_, f)| retain & f == 0) {
@@ -429,7 +557,11 @@ pub fn restrictions(unit: &Unit) -> Vec<Restriction> {
                 rules.push(rule("setns", libc::EPERM, vec![arg_has(1, f)]));
             }
         }
-        out.push(Restriction { what: "RestrictNamespaces=", rules, native_only: false });
+        out.push(Restriction {
+            what: "RestrictNamespaces=",
+            rules,
+            native_only: false,
+        });
     }
     if on("MemoryDenyWriteExecute") {
         let wx = (libc::PROT_WRITE | libc::PROT_EXEC) as u64;
@@ -441,17 +573,27 @@ pub fn restrictions(unit: &Unit) -> Vec<Restriction> {
                 rule("mmap2", libc::EPERM, vec![arg_has(2, wx)]),
                 rule("mprotect", libc::EPERM, vec![arg_has(2, x)]),
                 rule("pkey_mprotect", libc::EPERM, vec![arg_has(2, x)]),
-                rule("shmat", libc::EPERM, vec![arg_has(2, libc::SHM_EXEC as u64)]),
+                rule(
+                    "shmat",
+                    libc::EPERM,
+                    vec![arg_has(2, libc::SHM_EXEC as u64)],
+                ),
             ],
             native_only: false,
         });
     }
     if on("RestrictRealtime") {
         // Allowed: SCHED_OTHER (0), SCHED_BATCH (3), SCHED_IDLE (5).
-        let mut rules: Vec<Rule> =
-            [1u64, 2, 4].iter().map(|&p| rule("sched_setscheduler", libc::EPERM, vec![arg_eq(1, p)])).collect();
+        let mut rules: Vec<Rule> = [1u64, 2, 4]
+            .iter()
+            .map(|&p| rule("sched_setscheduler", libc::EPERM, vec![arg_eq(1, p)]))
+            .collect();
         rules.push(rule("sched_setscheduler", libc::EPERM, vec![arg_gt(1, 5)]));
-        out.push(Restriction { what: "RestrictRealtime=", rules, native_only: false });
+        out.push(Restriction {
+            what: "RestrictRealtime=",
+            rules,
+            native_only: false,
+        });
     }
     if on("LockPersonality") {
         let current = unsafe { libc::personality(0xffff_ffff) } as u64;
@@ -467,17 +609,36 @@ pub fn restrictions(unit: &Unit) -> Vec<Restriction> {
             // As systemd's seccomp_restrict_sxid(): mkdir() and mknod() take
             // a mode too (mknod(S_IFREG|S_ISUID) makes a setuid file).
             for (sc, mode_arg) in [
-                ("chmod", 1), ("fchmod", 1), ("fchmodat", 2), ("fchmodat2", 2), ("creat", 1),
-                ("mkdir", 1), ("mkdirat", 2), ("mknod", 1), ("mknodat", 2),
+                ("chmod", 1),
+                ("fchmod", 1),
+                ("fchmodat", 2),
+                ("fchmodat2", 2),
+                ("creat", 1),
+                ("mkdir", 1),
+                ("mkdirat", 2),
+                ("mknod", 1),
+                ("mknodat", 2),
             ] {
                 rules.push(rule(sc, libc::EPERM, vec![arg_has(mode_arg, bit)]));
             }
             for flag in [libc::O_CREAT as u64, libc::O_TMPFILE as u64] {
-                rules.push(rule("open", libc::EPERM, vec![arg_has(1, flag), arg_has(2, bit)]));
-                rules.push(rule("openat", libc::EPERM, vec![arg_has(2, flag), arg_has(3, bit)]));
+                rules.push(rule(
+                    "open",
+                    libc::EPERM,
+                    vec![arg_has(1, flag), arg_has(2, bit)],
+                ));
+                rules.push(rule(
+                    "openat",
+                    libc::EPERM,
+                    vec![arg_has(2, flag), arg_has(3, bit)],
+                ));
             }
         }
-        out.push(Restriction { what: "RestrictSUIDSGID=", rules, native_only: false });
+        out.push(Restriction {
+            what: "RestrictSUIDSGID=",
+            rules,
+            native_only: false,
+        });
     }
     if on("ProtectKernelTunables") {
         // Three filters on x86_64 where systemd has two (it skips x32, which has
@@ -495,13 +656,20 @@ pub fn restrictions(unit: &Unit) -> Vec<Restriction> {
         out.push(deny_group("ProtectKernelModules=", "@module"));
     }
     if on("ProtectKernelLogs") {
-        out.push(Restriction { what: "ProtectKernelLogs=", rules: vec![rule("syslog", libc::EPERM, vec![])], native_only: false });
+        out.push(Restriction {
+            what: "ProtectKernelLogs=",
+            rules: vec![rule("syslog", libc::EPERM, vec![])],
+            native_only: false,
+        });
     }
     // "private" allows changing the hostname inside the namespace.
     if on("ProtectHostname") {
         out.push(Restriction {
             what: "ProtectHostname=",
-            rules: vec![rule("sethostname", libc::EPERM, vec![]), rule("setdomainname", libc::EPERM, vec![])],
+            rules: vec![
+                rule("sethostname", libc::EPERM, vec![]),
+                rule("setdomainname", libc::EPERM, vec![]),
+            ],
             native_only: false,
         });
     }
@@ -553,7 +721,12 @@ impl Restriction {
                 "aarch64" => &["arm"],
                 _ => &[],
             };
-            archs.extend(extra.iter().map(|a| lib.arch(a)).filter(|&t| t != 0 && t != native));
+            archs.extend(
+                extra
+                    .iter()
+                    .map(|a| lib.arch(a))
+                    .filter(|&t| t != 0 && t != native),
+            );
         } else if std::env::consts::ARCH == "x86_64" {
             // x32 has socket() of its own.
             archs.extend([lib.arch("x32")].into_iter().filter(|&t| t != 0));
@@ -579,7 +752,11 @@ impl Restriction {
                         continue;
                     }
                     let act = SCMP_ACT_ERRNO | (r.errno as u32 & 0xffff);
-                    let args = if r.args.is_empty() { std::ptr::null() } else { r.args.as_ptr() as *const c_void };
+                    let args = if r.args.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        r.args.as_ptr() as *const c_void
+                    };
                     // Like systemd: a syscall this ABI lacks is skipped.
                     if (lib.rule_add_array)(ctx, act, nr, r.args.len() as c_uint, args) == 0 {
                         added += 1;
@@ -588,7 +765,11 @@ impl Restriction {
                 let res = if added > 0 { (lib.load)(ctx) } else { 0 };
                 (lib.release)(ctx);
                 if res < 0 {
-                    return Err(format!("{}: seccomp_load: {}", self.what, std::io::Error::from_raw_os_error(-res)));
+                    return Err(format!(
+                        "{}: seccomp_load: {}",
+                        self.what,
+                        std::io::Error::from_raw_os_error(-res)
+                    ));
                 }
             }
         }
@@ -634,7 +815,9 @@ impl Lib {
     fn open() -> Result<Lib, String> {
         let h = unsafe { libc::dlopen(c"libseccomp.so.2".as_ptr(), libc::RTLD_NOW) };
         if h.is_null() {
-            return Err("SystemCallFilter= needs libseccomp.so.2, which could not be loaded".into());
+            return Err(
+                "SystemCallFilter= needs libseccomp.so.2, which could not be loaded".into(),
+            );
         }
         let sym = |name: &CStr| -> Result<*mut c_void, String> {
             let p = unsafe { libc::dlsym(h, name.as_ptr()) };
@@ -677,7 +860,9 @@ mod tests {
 
     #[test]
     fn allow_list_includes_default() {
-        let f = Filter::parse(&lines(&["@basic-io ioctl"]), Some("EPERM"), &[]).unwrap().unwrap();
+        let f = Filter::parse(&lines(&["@basic-io ioctl"]), Some("EPERM"), &[])
+            .unwrap()
+            .unwrap();
         assert!(f.allow_list);
         assert_eq!(f.action, Action::Errno(libc::EPERM));
         for s in ["read", "write", "ioctl", "execve", "exit_group"] {
@@ -689,7 +874,9 @@ mod tests {
     #[test]
     fn fwupd_filter_blocks_mlock() {
         let l = lines(&["@basic-io @file-system @io-event @ipc @network-io @process @sync @signal @timer @chown ioctl uname fadvise64 sysinfo madvise mremap splice vmsplice copy_file_range"]);
-        let f = Filter::parse(&l, Some("EPERM"), &lines(&["native"])).unwrap().unwrap();
+        let f = Filter::parse(&l, Some("EPERM"), &lines(&["native"]))
+            .unwrap()
+            .unwrap();
         assert!(!f.syscalls.contains_key("mlock"));
         assert!(f.syscalls.contains_key("openat") && f.syscalls.contains_key("clone"));
         assert_eq!(f.archs, vec![seccomp_arch("native")]);
@@ -700,17 +887,24 @@ mod tests {
 
     #[test]
     fn deny_list_and_removal() {
-        let f = Filter::parse(&lines(&["~@clock kill:EACCES", "clock_settime"]), None, &[]).unwrap().unwrap();
+        let f = Filter::parse(&lines(&["~@clock kill:EACCES", "clock_settime"]), None, &[])
+            .unwrap()
+            .unwrap();
         assert!(!f.allow_list);
         assert_eq!(f.action, Action::Kill);
-        assert_eq!(f.syscalls.get("kill"), Some(&Some(Action::Errno(libc::EACCES))));
+        assert_eq!(
+            f.syscalls.get("kill"),
+            Some(&Some(Action::Errno(libc::EACCES)))
+        );
         assert!(f.syscalls.contains_key("settimeofday"));
         assert!(!f.syscalls.contains_key("clock_settime"));
     }
 
     #[test]
     fn allow_list_removal_and_reset() {
-        let f = Filter::parse(&lines(&["@system-service", "~@resources"]), None, &[]).unwrap().unwrap();
+        let f = Filter::parse(&lines(&["@system-service", "~@resources"]), None, &[])
+            .unwrap()
+            .unwrap();
         assert!(!f.syscalls.contains_key("setpriority"));
         assert!(f.syscalls.contains_key("read"));
         // get_all() already applies "SystemCallFilter=" resets; nothing left means no filter.
@@ -719,12 +913,22 @@ mod tests {
 
     #[test]
     fn allow_list_errno_entries_and_unknown_groups() {
-        let f = Filter::parse(&lines(&["@system-service @no-such-group", "~setpriority:EPERM ~@clock"]), None, &[])
-            .unwrap()
-            .unwrap();
+        let f = Filter::parse(
+            &lines(&[
+                "@system-service @no-such-group",
+                "~setpriority:EPERM ~@clock",
+            ]),
+            None,
+            &[],
+        )
+        .unwrap()
+        .unwrap();
         assert!(f.allow_list);
         // Kept, answered with EPERM (systemd's allow list with an errno).
-        assert_eq!(f.syscalls.get("setpriority"), Some(&Some(Action::Errno(libc::EPERM))));
+        assert_eq!(
+            f.syscalls.get("setpriority"),
+            Some(&Some(Action::Errno(libc::EPERM)))
+        );
         assert!(!f.syscalls.contains_key("clock_settime"));
         assert_eq!(f.syscalls.get("read"), Some(&None));
     }
@@ -734,7 +938,8 @@ mod tests {
         let (allow, set) = parse_address_families(&lines(&["AF_UNIX AF_INET AF_INET6"])).unwrap();
         assert!(allow);
         assert_eq!(set.into_iter().collect::<Vec<_>>(), vec![1, 2, 10]);
-        let (allow, set) = parse_address_families(&lines(&["~AF_PACKET AF_NETLINK", "AF_NETLINK"])).unwrap();
+        let (allow, set) =
+            parse_address_families(&lines(&["~AF_PACKET AF_NETLINK", "AF_NETLINK"])).unwrap();
         assert!(!allow);
         assert_eq!(set.into_iter().collect::<Vec<_>>(), vec![17]);
         let (allow, set) = parse_address_families(&lines(&["none"])).unwrap();
@@ -747,15 +952,28 @@ mod tests {
         let all = all_namespaces();
         assert_eq!(parse_namespaces(&lines(&["yes"])), Some(0));
         assert_eq!(parse_namespaces(&lines(&["no"])), None);
-        assert_eq!(parse_namespaces(&lines(&["net mnt"])), Some((libc::CLONE_NEWNET | libc::CLONE_NEWNS) as u64));
-        assert_eq!(parse_namespaces(&lines(&["~user"])), Some(all & !(libc::CLONE_NEWUSER as u64)));
-        assert_eq!(parse_namespaces(&lines(&["~cgroup user pid net uts mnt ipc time"])), Some(0));
+        assert_eq!(
+            parse_namespaces(&lines(&["net mnt"])),
+            Some((libc::CLONE_NEWNET | libc::CLONE_NEWNS) as u64)
+        );
+        assert_eq!(
+            parse_namespaces(&lines(&["~user"])),
+            Some(all & !(libc::CLONE_NEWUSER as u64))
+        );
+        assert_eq!(
+            parse_namespaces(&lines(&["~cgroup user pid net uts mnt ipc time"])),
+            Some(0)
+        );
     }
 
     #[test]
     fn errors() {
         // Ignored, as systemd: an allow list of @default alone.
-        assert!(Filter::parse(&lines(&["@nope"]), None, &[]).unwrap().unwrap().syscalls.contains_key("execve"));
+        assert!(Filter::parse(&lines(&["@nope"]), None, &[])
+            .unwrap()
+            .unwrap()
+            .syscalls
+            .contains_key("execve"));
         assert!(parse_action("ENOTANERRNO").is_err());
         assert_eq!(parse_action("13").unwrap(), Action::Errno(13));
         assert_eq!(parse_action("kill").unwrap(), Action::Kill);
@@ -787,7 +1005,9 @@ mod load_tests {
             eprintln!("libseccomp.so.2 not available, skipping");
             return;
         }
-        let f = Filter::parse(&["~getppid".to_string()], Some("EPERM"), &[]).unwrap().unwrap();
+        let f = Filter::parse(&["~getppid".to_string()], Some("EPERM"), &[])
+            .unwrap()
+            .unwrap();
         let pid = unsafe { libc::fork() };
         if pid == 0 {
             let code = match f.apply() {
@@ -795,7 +1015,11 @@ mod load_tests {
                 Ok(()) => {
                     let r = unsafe { libc::syscall(libc::SYS_getppid) };
                     let e = std::io::Error::last_os_error().raw_os_error();
-                    if r == -1 && e == Some(libc::EPERM) { 0 } else { 1 }
+                    if r == -1 && e == Some(libc::EPERM) {
+                        0
+                    } else {
+                        1
+                    }
                 }
             };
             unsafe { libc::_exit(code) };
@@ -803,7 +1027,11 @@ mod load_tests {
         let mut st = 0;
         unsafe { libc::waitpid(pid, &mut st, 0) };
         assert!(libc::WIFEXITED(st), "child died: {st}");
-        assert_eq!(libc::WEXITSTATUS(st), 0, "1 = getppid not blocked, 2 = apply failed");
+        assert_eq!(
+            libc::WEXITSTATUS(st),
+            0,
+            "1 = getppid not blocked, 2 = apply failed"
+        );
     }
 
     /// RestrictAddressFamilies=AF_UNIX and RestrictNamespaces=yes in a child.
@@ -857,11 +1085,15 @@ mod load_tests {
                 if unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM, 0) } < 0 {
                     return 4;
                 }
-                if unsafe { libc::unshare(libc::CLONE_NEWUSER) } == 0 || errno() != Some(libc::EPERM) {
+                if unsafe { libc::unshare(libc::CLONE_NEWUSER) } == 0
+                    || errno() != Some(libc::EPERM)
+                {
                     return 5;
                 }
                 let p = libc::sched_param { sched_priority: 1 };
-                if unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &p) } == 0 || errno() != Some(libc::EPERM) {
+                if unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &p) } == 0
+                    || errno() != Some(libc::EPERM)
+                {
                     return 6;
                 }
                 0
@@ -871,6 +1103,10 @@ mod load_tests {
         let mut st = 0;
         unsafe { libc::waitpid(pid, &mut st, 0) };
         assert!(libc::WIFEXITED(st), "child died: {st}");
-        assert_eq!(libc::WEXITSTATUS(st), 0, "2 apply, 3 AF_INET, 4 AF_UNIX, 5 unshare, 6 SCHED_FIFO");
+        assert_eq!(
+            libc::WEXITSTATUS(st),
+            0,
+            "2 apply, 3 AF_INET, 4 AF_UNIX, 5 unshare, 6 SCHED_FIFO"
+        );
     }
 }

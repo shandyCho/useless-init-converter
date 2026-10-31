@@ -22,7 +22,9 @@ pub fn up_pid(cfg: &Config, id: &str) -> Option<Option<u32>> {
         .args(["-o", "up,pid"])
         .arg(cfg.live_dir.join("scandir").join(id))
         .output();
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let text = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
     match text.split_whitespace().collect::<Vec<_>>().as_slice() {
         ["true", pid] => Some(pid.parse::<u32>().ok().filter(|&p| p > 0)),
         _ => None,
