@@ -8612,3 +8612,45 @@ yet seen on a real file (/var/log/cron doesn't exist yet).
 4. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
 5. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner
    decides.
+
+## 2026-10-31, part 63: rsyslog's /run/user read-only (4460613)
+
+Owner: fix part 62's gap. dist/s6/syslog/run creates /run/user (0755, as tmpfiles' line) when
+it is missing, before `confine`, then restorecon: from init_t a new directory there gets
+init_var_run_t by the catch-all transition, and the path's label is user_tmp_t. Done before the
+`case`, so syslog-ng's start does it too, harmlessly. Part 62's recommendation, for the reason
+given there (ordering after tmpfiles-setup would lose early messages).
+
+tests/confine-vm.sh: new checks that /run/user is read-only for rsyslog and has mode 755. /run/user
+doesn't exist there at the start, as on a real boot. Before the fix both failed (no mount, no
+directory), which confirms part 62's cause; after it both pass.
+
+**Test race found and fixed (part 59's test, not the services).** 5 of 13 runs without the change
+failed the same 4 udevd checks: `restarted with its sandbox: got ''`, and then the fallback checks,
+because `kill -9 ""` killed nothing. In those runs a udevd was up with seccomp 2 and tries still
+1, so udevd restarted correctly and only the PID lookup came back empty. Part 59's 44/44 three times
+was luck. The test now takes the PID from `s6-svstat -p` and waits until it is a systemd-udevd. Why
+the lookup by name was empty isn't established; a dying worker of the killed udevd matching
+the wait's condition is my guess. After the change: 13 runs of 13, 46/46.
+
+Also: shellcheck and bash -n clean, sandbox default 311/311. cargo code unchanged. Not rerun:
+SANDBOX_JOURNAL=no, SANDBOX_FDSTORE=no, SANDBOX_BUS=broker (those suites don't use dist/s6/syslog).
+
+Policy read with sesearch, for what the VM can't test: init_t may relabel dirs from and to any
+file type, and create in /run. restorecon is bin_t, so it runs as init_t. **Not tested: a real
+boot**, so neither the label nor the row going away in hardencompare has been seen yet.
+
+### Current state
+
+Branch confine-rsyslog-earlyoom-udevd, this part committed as 4460613; not built into
+RPMs. Installed and booted: g79f56a3.dirty (part 59, without this fix).
+
+### Next steps
+
+1. Owner: commit, merge to main, build and install the RPMs. Then on an s6 boot: `ls -Zd /run/user`
+   (user_tmp_t), `sudo ausearch -m AVC -ts boot`, `sudo tests/hardencompare.sh snap` and
+   `tests/hardencompare.sh report`. Expected: 3 WEAKER (colord, upower, rtkit), 1 CHECK (bolt).
+2. Owner: a device plugged in on an s6 boot; `ls -l /var/log/cron` once it exists (0600).
+3. Why some boots end within a minute or two (part 61).
+4. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
+5. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
