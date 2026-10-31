@@ -52,5 +52,8 @@ install -Dm0644 dist/dbus/uinitconverter.conf %{buildroot}%{_datadir}/dbus-1/sys
 %{_datadir}/dbus-1/system.d/uinitconverter.conf
 
 %changelog
+* Sun Nov 01 2026 uinitconverter developers
+- 0.2.0, see CHANGELOG-us.md
+
 * Wed Oct 21 2026 uinitconverter developers
 - Split out of the uinitconverter package

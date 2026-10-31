@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "uinitconverter"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "uinitconverter-base",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "uinitconverter-base"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "jiff",
  "libc",
@@ -677,7 +677,7 @@ dependencies = [
 
 [[package]]
 name = "uinitconverter-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "tokio",
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "uinitconverter-exec"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "uinitconverter-base",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "uinitconverter-gen"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "tokio",
@@ -708,7 +708,7 @@ dependencies = [
 
 [[package]]
 name = "uinitconverter-install"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "uinitconverter-base",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "uinitconverter-runner"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "tokio",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "uinitconverter-timers"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "tokio",
@@ -742,11 +742,11 @@ dependencies = [
 
 [[package]]
 name = "uinitconverter-version"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "uinitconverterd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "libc",

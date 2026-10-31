@@ -9181,3 +9181,11 @@ New tests: dst_changes_as_systemd (each value checked with systemd-analyze), nam
 Cost: release uinitconverter-timers 2713496 -> 3091664 bytes (+14%), `uinitconverter` command unchanged (+16 bytes). Cargo.lock gains jiff's crates, and defmt, log, bitflags, portable-atomic are in the lock and vendor directory though not in the normal dependency tree (`cargo tree`). **Memory not measured**; each timer is its own process, so compare with tests/memcompare.sh on the next boot.
 
 Tests: cargo test 85 passed, 0 failed; sandbox 311/311, SANDBOX_JOURNAL=no 318/318, SANDBOX_FDSTORE=no 299/299; `cargo vendor --locked` works. Standalone and confine-vm not run: untouched. **Not tested: a real boot.**
+
+## 2026-11-01, part 84: release 0.2.0 prepared
+
+Owner: commit, build RPMs for GitHub, version 0.2.0, release note and changelog; then dinit as 0.3.0.
+
+CHANGELOG pair, packages/release-notes/0.2.0 pair, covering the published release `initial` (2fac273, from the GitHub API) to now. github-release.sh puts the notes in NOTES.md. Version 0.2.0 in Cargo.toml; the standalone tools stay 0.1.0, reformatted only. Spec changelogs updated.
+
+Decisions: the default dated release number rather than UINITCONVERTER_RELEASE=1, as `initial` did. No tag and no publish here: no GitHub credentials; github-release.sh prints the command. No real boot of 0.2.0: refactor (part 80) and jiff (part 83) have not booted.

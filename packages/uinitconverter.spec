@@ -144,6 +144,9 @@ fi
 %dir %attr(0750,root,wheel) %{_localstatedir}/log/uinitconverter
 
 %changelog
+* Sun Nov 01 2026 uinitconverter developers
+- 0.2.0, see CHANGELOG-us.md
+
 * Sat Oct 31 2026 uinitconverter developers
 - /var/log/uinitconverter is 0750 root:wheel
 - s6 service coredump: systemd-coredump's listener, so core dumps are kept

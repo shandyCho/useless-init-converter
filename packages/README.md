@@ -54,6 +54,12 @@ spec에는 버전을 적지 않습니다. 스크립트가 정해서 넘겨 주�
   `0.1.0 (git c8aabf8)`처럼 커밋을 보여 줍니다.
 - 공개 릴리스처럼 릴리스 번호를 직접 정하려면 `UINITCONVERTER_RELEASE=1 packages/build-rpms.sh`.
 
+## 변경 이력과 릴리스 노트
+
+릴리스 전에 `CHANGELOG.md`/`CHANGELOG-us.md`에 해당 버전 항목을 추가하고
+`packages/release-notes/VERSION.md`/`VERSION-us.md`를 작성합니다.
+`github-release.sh`가 워크스페이스 버전의 노트를 `NOTES.md`에 넣습니다.
+
 ## GitHub 릴리스
 
 패키지는 프로젝트의 [GitHub 릴리스](https://github.com/shandyCho/useless-init-converter/releases)에

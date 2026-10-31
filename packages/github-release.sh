@@ -51,6 +51,10 @@ find "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm' \
     echo
     echo "uinitconverter $VERSION ($COMMIT), RPMs for Fedora ${DIST#fc} $ARCH."
     echo
+    for note in "$HERE/release-notes/$VERSION-us.md" "$HERE/release-notes/$VERSION.md"; do
+        # Its links are relative to the file; on a release they go to the tag.
+        [ ! -f "$note" ] || { sed "s|(\.\./\.\./|(https://github.com/$GITHUB_REPO/blob/$TAG/|" "$note"; echo; }
+    done
     echo "First build and install the skarnet.org packages (skalibs, execline, s6,"
     echo "s6-rc, s6-linux-init, s6-frontend, mdevd), which this release does not include."
     echo "Download these tarballs from their pages on https://skarnet.org/software/"

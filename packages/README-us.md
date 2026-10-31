@@ -58,6 +58,12 @@ this script (plain `rpmbuild` fails for lack of a version).
 - To set the release yourself, e.g. for a published release:
   `UINITCONVERTER_RELEASE=1 packages/build-rpms.sh`.
 
+## Changelog and release notes
+
+Before a release, add its section to `CHANGELOG.md`/`CHANGELOG-us.md` and write
+`packages/release-notes/VERSION.md`/`VERSION-us.md`. `github-release.sh` puts the
+notes for the workspace's version in `NOTES.md`.
+
 ## GitHub releases
 
 The packages are published as files on the project's
