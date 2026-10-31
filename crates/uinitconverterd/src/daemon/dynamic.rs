@@ -385,6 +385,7 @@ impl Daemon {
     /// s6-rc runs it again for what is left. Instances started by an earlier
     /// daemon come from load_dynamic().
     pub(super) async fn stop_dynamic_at_shutdown(&self) {
+        self.stop_scopes_at_shutdown().await;
         let ids: Vec<(String, Kind)> = self
             .dynamic
             .lock()

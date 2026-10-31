@@ -438,7 +438,8 @@ s6가 계속 다시 시도합니다.
 s6 종료 때 콘솔에 나온 내용은 다음 부팅에서 `/var/log/uinitconverter/last-shutdown-console.log`
 (s6의 catch-all 로그)와 `last-shutdown-kernel.log`(종료가 시작된 뒤의 커널 로그, auditd가 멈춘 뒤의
 SELinux 거부 포함)로 볼 수 있습니다(root 전용). 종료가 시작되면 uinitconverterd는 새 유닛 시작과 D-Bus
-활성화를 systemd처럼 바로 거부합니다. 먼저 요청 시 시작된 인스턴스(user@UID, user-runtime-dir@UID,
+활성화를 systemd처럼 바로 거부합니다. 먼저 스코프(logind의 세션)를 멈추고 최대 11초까지 기다립니다. 그래서
+systemd에서처럼 데스크톱 세션이 사용자 매니저가 멈추기 전에 스스로 끝납니다. 그다음 요청 시 시작된 인스턴스(user@UID, user-runtime-dir@UID,
 systemd-backlight@ 등)를 logind와 D-Bus가 아직 실행 중일 때 `After=`에 맞게 멈추고, 그다음에
 s6-rc가 서비스를 멈춥니다(이 첫 단계에는 따로 2분 제한이 있습니다). s6-rc가 시작하고 3분이 지나도
 멈추지 않은 서비스는 강제로 종료되므로, 끝나지 않는 정지 때문에 기계가 꺼지지 않는 일은 없습니다.

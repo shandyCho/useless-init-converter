@@ -282,6 +282,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | fwupd | `fwupdmgr get-devices` | a device list (fwupd starts with its syscall filter) |
 | No busy runner | `top -b -n1 -o %CPU \| head -15` | no `uinitconverter` process near 100 % CPU |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (twice, a few seconds apart) | `up (pid …) N seconds`, with N growing (not restarting) |
+| Shutdown order | after an s6 reboot from GNOME: `grep -E 'org.gnome.Shell@user.service: Consumed\|Activating special unit exit.target' /var/log/uinitconverter/user@1000.service/current \| tail -4` | the shell's `Consumed` line before `Activating special unit exit.target` |
 | Core dumps | `cat /proc/sys/kernel/core_pattern; grep 'core file' /proc/1/limits; sh -c 'kill -SEGV $$'; sudo ls -l /var/lib/systemd/coredump` | `@@/run/systemd/coredumpd/kernel`; soft limit `unlimited`; a new `core.sh.*` file |
 | Log directory (`JOURNAL=no`) | `stat -c '%a %U:%G' /var/log/uinitconverter` | `750 root:wheel` |
 | On-demand services | `systemctl status virtlogd.service iscsid.service` and `ls -l /run/libvirt/virtlogd-sock`; then `sudo python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect("/run/libvirt/virtlogd-sock")'` and the status again | `inactive (dead)` with the socket file there; after the connection, `virtlogd` is `active (running)` |

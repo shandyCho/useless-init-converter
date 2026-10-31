@@ -501,9 +501,11 @@ What an s6 shutdown printed on the console is kept for the next boot in
 `/var/log/uinitconverter/last-shutdown-console.log` (s6's catch-all log) and
 `last-shutdown-kernel.log` (the kernel log from the start of the shutdown,
 including SELinux denials after auditd stops); both are root-only. Once shutdown begins, uinitconverterd refuses
-new unit starts and D-Bus activations at once, as systemd does. It stops the
-on-demand instances (user@UID, user-runtime-dir@UID, systemd-backlight@, ...)
-first, while logind and D-Bus still run, as their `After=` asks; only then does
+new unit starts and D-Bus activations at once, as systemd does. It first stops
+the scopes (logind's sessions) and waits for them, up to 11 s, so a desktop
+session ends by itself before its user manager is stopped, as on systemd. Then it
+stops the on-demand instances (user@UID, user-runtime-dir@UID, systemd-backlight@, ...),
+while logind and D-Bus still run, as their `After=` asks; only then does
 s6-rc stop its services (this first step has its own limit of 2 minutes).
 Services still not down 3 minutes after s6-rc began are killed, so a stop that
 never finishes can't keep the machine up.

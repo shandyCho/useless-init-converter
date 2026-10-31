@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use futures_util::StreamExt;
 use zbus::message::Type as MsgType;
@@ -175,6 +176,18 @@ fn apply_markers(mut cur: BTreeSet<String>, words: &[String]) -> Result<BTreeSet
 }
 
 /// Targets/services that mean "shut the machine down" (logind starts these).
+/// Wait until these cgroups have no process, up to `limit`; how many still do.
+async fn wait_cgroups_empty(dirs: &[PathBuf], limit: Duration) -> usize {
+    let start = std::time::Instant::now();
+    loop {
+        let left = dirs.iter().filter(|d| !util::cgroup_pids(d).is_empty()).count();
+        if left == 0 || start.elapsed() >= limit {
+            return left;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// The service an Accept=no socket unit activates.
 fn socket_service(id: &str, unit: &Unit) -> Option<String> {
     if !id.ends_with(".socket") || unit.get_bool("Socket", "Accept", false) {
@@ -1185,6 +1198,35 @@ impl Daemon {
         self.reply(c, msg, &()).await
     }
 
+    /// Shutdown: the scopes before the on-demand instances. systemd stops
+    /// session-N.scope and only then user@UID.service, so GNOME's session ends
+    /// by itself before its user manager goes to exit.target. Stopped at the
+    /// same time, the manager tears down the session's services under a
+    /// gnome-shell that is still exiting, and activations fail under it.
+    /// Bounded: stop_transient sends SIGKILL after 10 s.
+    async fn stop_scopes_at_shutdown(&self) {
+        let root = std::path::Path::new(crate::cgroup::CGROUP_ROOT);
+        let scopes: Vec<(String, PathBuf)> = self
+            .transient
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, t)| t.kind == "scope" && t.cgroup != root && !util::cgroup_pids(&t.cgroup).is_empty())
+            .map(|(n, t)| (n.clone(), t.cgroup.clone()))
+            .collect();
+        for (name, _) in &scopes {
+            self.stop_transient(name).await;
+        }
+        let dirs: Vec<PathBuf> = scopes.into_iter().map(|(_, d)| d).collect();
+        let t = std::time::Instant::now();
+        let left = wait_cgroups_empty(&dirs, Duration::from_secs(11)).await;
+        if left > 0 {
+            eprintln!("uinitconverterd: {left} scopes still not empty at shutdown, going on");
+        } else if t.elapsed() >= Duration::from_secs(2) {
+            eprintln!("uinitconverterd: stopping the scopes took {:.1} s", t.elapsed().as_secs_f64());
+        }
+    }
+
     async fn gc_scopes(&self) {
         let empty: Vec<(String, PathBuf)> = self
             .transient
@@ -2109,5 +2151,38 @@ mod tests {
         for bad in ["..", "../x", "a/../../b", "a/./b", "a//b", "/.", "x/.."] {
             assert_eq!(subcgroup(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn scopes_are_waited_for() {
+        let d = std::env::temp_dir().join(format!("uinitconverter-wait-{}", std::process::id()));
+        let (busy, empty) = (d.join("busy.scope"), d.join("empty.scope"));
+        std::fs::create_dir_all(&busy).unwrap();
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::write(busy.join("cgroup.procs"), "123\n").unwrap();
+        std::fs::write(empty.join("cgroup.procs"), "").unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let dirs = [busy.clone(), empty.clone()];
+            // Nothing to wait for: at once.
+            let t = std::time::Instant::now();
+            assert_eq!(wait_cgroups_empty(std::slice::from_ref(&empty), Duration::from_secs(5)).await, 0);
+            assert!(t.elapsed() < Duration::from_secs(1));
+            // Never empties: gives up at the limit and says how many.
+            let t = std::time::Instant::now();
+            assert_eq!(wait_cgroups_empty(&dirs, Duration::from_millis(100)).await, 1);
+            assert!(t.elapsed() >= Duration::from_millis(100));
+            // Waits until the last process has left.
+            let p = busy.join("cgroup.procs");
+            let writer = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                std::fs::write(p, "").unwrap();
+            });
+            let t = std::time::Instant::now();
+            assert_eq!(wait_cgroups_empty(&dirs, Duration::from_secs(5)).await, 0);
+            assert!(t.elapsed() >= Duration::from_millis(100));
+            writer.await.unwrap();
+        });
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
