@@ -435,7 +435,11 @@ If stage 2 fails, log in on tty9 (Ctrl+Alt+F9) and read
 `/run/uncaught-logs/current`. To boot the s6 database from before the last
 install, add `uinitconverter.db=previous` to the kernel command line. Nothing is
 regenerated at boot. `uinitconverter.bus=daemon` (or `=broker`) picks the system
-bus for one boot, over `BUS=`.
+bus for one boot, over `BUS=`. udevd runs with the sandbox of
+`systemd-udevd.service`; `uinitconverter.udev=plain` runs it without for one
+boot, and it also falls back by itself after three failed starts in a row.
+rsyslog and earlyoom run with their units' sandboxes too, with no fallback: if
+one can't be applied, the service stays down and s6 keeps trying.
 
 What an s6 shutdown printed on the console is kept for the next boot in
 `/var/log/uinitconverter/last-shutdown-console.log` (s6's catch-all log) and

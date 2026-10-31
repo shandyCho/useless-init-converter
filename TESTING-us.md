@@ -172,6 +172,20 @@ tests/bpf-root.sh
 
 **Expected:** `test result: ok. 1 passed`.
 
+The services s6 starts with their unit's sandbox (rsyslog, earlyoom, udevd)
+need real root to switch user, so this runs them in QEMU, unprivileged: the
+running kernel, this host's programs and unit files, `dist/s6`'s run scripts
+under `s6-supervise`. It also makes earlyoom kill a process under memory
+pressure and tests udevd's fallback. No SELinux policy is loaded in there,
+which takes a real boot. Needs `cargo build`, QEMU, `/dev/kvm`, and rsyslog,
+earlyoom and s6 installed:
+
+```sh
+tests/confine-vm.sh /tmp/sdc-confine
+```
+
+**Expected:** `failed: 0` and exit status 0.
+
 ## 4. Translation preview (read-only)
 
 This shows how uinitconverter would translate this machine's own units, without

@@ -386,49 +386,9 @@ impl Runner {
         // As systemd, ambient capabilities outside the bounding set are left
         // out: capset() would refuse them and fail the start.
         let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities").map(|a| bset.map_or(a, |b| a & b));
-        let switch_ids = !cmd.privileged && !cmd.no_setuid && self.is_root;
-        if let (Some(u), true) = (&self.user, switch_ids) {
-            if u.uid != 0 {
-                if ambient.is_some() {
-                    unsafe { libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) };
-                }
-                let gid = self.gid.unwrap_or(u.gid);
-                let groups: Vec<libc::gid_t> = self.groups.clone();
-                unsafe {
-                    if libc::setgroups(groups.len(), groups.as_ptr()) < 0 {
-                        return (EXIT_GROUP, format!("setgroups: {}", errno()));
-                    }
-                    if libc::setresgid(gid, gid, gid) < 0 {
-                        return (EXIT_GROUP, format!("setgid {gid}: {}", errno()));
-                    }
-                    if libc::setresuid(u.uid, u.uid, u.uid) < 0 {
-                        return (EXIT_USER, format!("setuid {}: {}", u.uid, errno()));
-                    }
-                }
-            } else if let Some(g) = self.gid {
-                if unsafe { libc::setresgid(g, g, g) } < 0 {
-                    return (EXIT_GROUP, format!("setgid {g}: {}", errno()));
-                }
-            }
-        } else if self.user.is_none() && switch_ids {
-            // Group=/SupplementaryGroups= without User=.
-            unsafe {
-                if !self.groups.is_empty() && libc::setgroups(self.groups.len(), self.groups.as_ptr()) < 0 {
-                    return (EXIT_GROUP, format!("setgroups: {}", errno()));
-                }
-                if let Some(g) = self.gid {
-                    if libc::setresgid(g, g, g) < 0 {
-                        return (EXIT_GROUP, format!("setgid {g}: {}", errno()));
-                    }
-                }
-            }
-        }
-        // Ambient capabilities matter only after dropping root; a root service
-        // keeps its full capability set (raising "ambient" would shrink it).
-        let non_root_user = self.user.as_ref().map(|u| u.uid != 0).unwrap_or(false);
-        if let (Some(caps), true, true) = (ambient, switch_ids, non_root_user) {
-            if let Err(e) = sandbox::raise_ambient(caps) {
-                return (EXIT_CAPABILITIES, e);
+        if !cmd.privileged && !cmd.no_setuid && self.is_root {
+            if let Err(e) = self.switch_ids(ambient) {
+                return e;
             }
         }
 
@@ -471,8 +431,58 @@ impl Runner {
         (EXIT_EXEC, format!("exec {path}: {}", errno()))
     }
 
-    /// `confine`: the unit's cgroup, limits and sandbox on this process, then
-    /// exec() ARGV with the environment and file descriptors it was given (a
+    /// As root: User=, Group= and SupplementaryGroups=, then the ambient
+    /// capabilities. The error carries systemd's exit code for it.
+    fn switch_ids(&self, ambient: Option<u64>) -> Result<(), (i32, String)> {
+        if let Some(u) = &self.user {
+            if u.uid != 0 {
+                if ambient.is_some() {
+                    unsafe { libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) };
+                }
+                let gid = self.gid.unwrap_or(u.gid);
+                let groups: Vec<libc::gid_t> = self.groups.clone();
+                unsafe {
+                    if libc::setgroups(groups.len(), groups.as_ptr()) < 0 {
+                        return Err((EXIT_GROUP, format!("setgroups: {}", errno())));
+                    }
+                    if libc::setresgid(gid, gid, gid) < 0 {
+                        return Err((EXIT_GROUP, format!("setgid {gid}: {}", errno())));
+                    }
+                    if libc::setresuid(u.uid, u.uid, u.uid) < 0 {
+                        return Err((EXIT_USER, format!("setuid {}: {}", u.uid, errno())));
+                    }
+                }
+            } else if let Some(g) = self.gid {
+                if unsafe { libc::setresgid(g, g, g) } < 0 {
+                    return Err((EXIT_GROUP, format!("setgid {g}: {}", errno())));
+                }
+            }
+        } else {
+            // Group=/SupplementaryGroups= without User=.
+            unsafe {
+                if !self.groups.is_empty() && libc::setgroups(self.groups.len(), self.groups.as_ptr()) < 0 {
+                    return Err((EXIT_GROUP, format!("setgroups: {}", errno())));
+                }
+                if let Some(g) = self.gid {
+                    if libc::setresgid(g, g, g) < 0 {
+                        return Err((EXIT_GROUP, format!("setgid {g}: {}", errno())));
+                    }
+                }
+            }
+        }
+        // Ambient capabilities matter only after dropping root; a root service
+        // keeps its full capability set (raising "ambient" would shrink it).
+        let non_root_user = self.user.as_ref().map(|u| u.uid != 0).unwrap_or(false);
+        if let (Some(caps), true) = (ambient, non_root_user) {
+            if let Err(e) = sandbox::raise_ambient(caps) {
+                return Err((EXIT_CAPABILITIES, e));
+            }
+        }
+        Ok(())
+    }
+
+    /// `confine`: the unit's cgroup, limits, sandbox and user on this process,
+    /// then exec() ARGV with the environment and file descriptors it was given (a
     /// run script's readiness pipe). Only returns on failure.
     pub fn cmd_confine(&mut self, argv: &[String]) -> i32 {
         if argv.is_empty() {
@@ -491,11 +501,17 @@ impl Runner {
             self.sandbox.apply()?;
         }
         self.apply_limits()?;
-        if sandbox::no_new_privileges(&self.unit, self.is_root) {
+        let switches_user = self.user.as_ref().is_some_and(|u| u.uid != 0);
+        if sandbox::no_new_privileges(&self.unit, self.is_root && !switches_user) {
             unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
         }
-        if let (true, Some(bset)) = (self.is_root, sandbox::bounding_set(&self.unit)) {
-            sandbox::drop_bounding_set(bset)?;
+        if self.is_root {
+            let bset = sandbox::bounding_set(&self.unit);
+            if let Some(bset) = bset {
+                sandbox::drop_bounding_set(bset)?;
+            }
+            let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities").map(|a| bset.map_or(a, |b| a & b));
+            self.switch_ids(ambient).map_err(|(_, e)| e)?;
         }
         crate::seccomp::apply_restrictions(&self.unit)?;
         if let Some(f) = crate::seccomp::Filter::from_unit(&self.unit).map_err(|e| format!("SystemCallFilter=: {e}"))? {

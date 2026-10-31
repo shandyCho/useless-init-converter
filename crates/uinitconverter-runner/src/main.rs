@@ -28,8 +28,8 @@ usage: uinitconverter-runner [--config PATH] COMMAND [--config PATH] [--mainpid 
   stop-atom    `down` of UNIT.stop: ExecStop= when s6-rc stops a longrun
   reload-exec  ExecReload= with $MAINPID (called by uinitconverterd)
   confine UNIT -- COMMAND [ARGS]
-               exec COMMAND with UNIT's cgroup, limits and sandbox (for what
-               s6 starts itself, as the system bus; not User= or stdio)
+               exec COMMAND with UNIT's cgroup, limits, sandbox and user (for
+               what s6 starts itself, as the system bus; not stdio)
   notify-helper ...
                internal: the Type=notify helper `run` starts
 ";

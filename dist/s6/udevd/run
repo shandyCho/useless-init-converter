@@ -2,4 +2,35 @@
 # systemd-udevd runs fine without systemd as PID 1. s6-notifyoncheck execs
 # into it (so s6's stop signal reaches udevd itself) and signals readiness
 # once the control socket exists.
+#
+# It runs with systemd-udevd.service's cgroup, sandbox and filters. The boot
+# needs udevd, so three starts within a minute of each other, or
+# uinitconverter.udev=plain on the kernel command line, run it without them.
+# A later restart (a systemd update) starts counting again.
+plain=
+for w in $(cat /proc/cmdline 2>/dev/null); do
+    case $w in
+    uinitconverter.udev=plain) plain="uinitconverter.udev=plain" ;;
+    esac
+done
+
+mkdir -p /run/uinitconverter
+tries=/run/uinitconverter/udevd-tries
+read -r up _ </proc/uptime
+up=${up%.*}
+n=0 last=0
+[ -r "$tries" ] && read -r n last <"$tries"
+[ $((up - last)) -gt 60 ] && n=0
+n=$((n + 1))
+echo "$n $up" >"$tries"
+[ "$n" -gt 3 ] && plain="udevd exited $((n - 1)) times in a row"
+
+# OOMScoreAdjust= of systemd-udevd.service; set here for both ways of starting.
+echo -1000 >/proc/self/oom_score_adj
+
+if [ -z "$plain" ]; then
+    exec /usr/libexec/uinitconverter/uinitconverter-runner confine systemd-udevd.service -- \
+        s6-notifyoncheck -w 50 -n 0 -c "test -S /run/udev/control" /usr/lib/systemd/systemd-udevd
+fi
+echo "udevd: without systemd-udevd.service's sandbox: $plain" >&2
 exec s6-notifyoncheck -w 50 -n 0 -c "test -S /run/udev/control" /usr/lib/systemd/systemd-udevd

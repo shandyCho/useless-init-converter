@@ -380,6 +380,10 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 읽으세요. 마지막 설치 이전의 s6 데이터베이스로 부팅하려면 커널 명령줄에
 `uinitconverter.db=previous`를 추가하세요. 부팅 때는 아무것도 다시 만들지 않습니다.
 `uinitconverter.bus=daemon`(또는 `=broker`)은 `BUS=`보다 우선해 이번 부팅의 시스템 버스를 정합니다.
+udevd는 `systemd-udevd.service`의 샌드박스로 실행됩니다. `uinitconverter.udev=plain`을 주면 이번 부팅만
+샌드박스 없이 실행하고, 연속 세 번 시작에 실패해도 스스로 샌드박스 없이 실행합니다. rsyslog와 earlyoom도
+각자 유닛의 샌드박스로 실행되지만 대체 경로는 없습니다. 샌드박스를 적용할 수 없으면 서비스가 뜨지 않고
+s6가 계속 다시 시도합니다.
 
 s6 종료 때 콘솔에 나온 내용은 다음 부팅에서 `/var/log/uinitconverter/last-shutdown-console.log`
 (s6의 catch-all 로그)와 `last-shutdown-kernel.log`(종료가 시작된 뒤의 커널 로그, auditd가 멈춘 뒤의

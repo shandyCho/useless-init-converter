@@ -4,7 +4,9 @@
 # Each uses its own configuration under /etc/uinitconverter, written by
 # uinitconverter init, so the systemd boot, where journald owns /dev/log,
 # is unaffected.
-#  - rsyslog (default): rsyslogd binds /dev/log itself (imuxsock).
+#  - rsyslog (default): rsyslogd binds /dev/log itself (imuxsock). It runs
+#    with rsyslog.service's sandbox, umask and limits; if those can't be
+#    applied it doesn't start, and s6 tries again.
 #  - syslog-ng: with /run/systemd/system present (uinitconverter's
 #    sd_booted() flag) syslog-ng refuses a plain /dev/log, so it is bound
 #    here and passed as fd 3 with LISTEN_FDS, as systemd's syslog.socket
@@ -24,10 +26,12 @@ syslog-ng)
     exec syslog-ng -F -f /etc/uinitconverter/syslog-ng.conf
     ;;
 rsyslog)
-    exec rsyslogd -n -iNONE -f /etc/uinitconverter/rsyslog.conf
+    exec /usr/libexec/uinitconverter/uinitconverter-runner confine rsyslog.service -- \
+        rsyslogd -n -iNONE -f /etc/uinitconverter/rsyslog.conf
     ;;
 *)
     echo "syslog: SYSLOG=$syslog in uinitconverter.conf: expected rsyslog or syslog-ng; using rsyslog" >&2
-    exec rsyslogd -n -iNONE -f /etc/uinitconverter/rsyslog.conf
+    exec /usr/libexec/uinitconverter/uinitconverter-runner confine rsyslog.service -- \
+        rsyslogd -n -iNONE -f /etc/uinitconverter/rsyslog.conf
     ;;
 esac

@@ -162,6 +162,19 @@ tests/bpf-root.sh
 
 **기대 결과:** `test result: ok. 1 passed`.
 
+s6가 유닛의 샌드박스로 시작하는 서비스(rsyslog, earlyoom, udevd)는 사용자를 바꾸려면 진짜 root가
+필요합니다. 그래서 이 테스트는 QEMU에서 root 권한 없이 실행합니다. 실행 중인 커널, 이 컴퓨터의
+프로그램과 유닛 파일, `s6-supervise` 아래의 `dist/s6` run 스크립트를 씁니다. 메모리가 부족할 때
+earlyoom이 프로세스를 죽이는지와 udevd의 대체 경로도 확인합니다. 그 안에서는 SELinux 정책을 읽지
+않으므로 SELinux는 실제 부팅에서 확인해야 합니다. `cargo build`, QEMU, `/dev/kvm`과 설치된 rsyslog,
+earlyoom, s6가 필요합니다:
+
+```sh
+tests/confine-vm.sh /tmp/sdc-confine
+```
+
+**기대 결과:** `failed: 0`, 종료 상태 0.
+
 ## 4. 변환 미리보기 (읽기 전용)
 
 아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 uinitconverter가 어떻게 변환할지 보여줍니다.

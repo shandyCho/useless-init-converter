@@ -4,4 +4,6 @@
 # Split with quote removal, as systemd does for $EARLYOOM_ARGS: Fedora's
 # default has quoted regexes with spaces ('^(Web Content|Isolated Web Co)$').
 eval "set -- ${EARLYOOM_ARGS:-}"
-exec /usr/bin/earlyoom "$@"
+# earlyoom.service's user, capabilities, sandbox, Nice= and OOMScoreAdjust=. If
+# they can't be applied it doesn't start, and s6 tries again.
+exec /usr/libexec/uinitconverter/uinitconverter-runner confine earlyoom.service -- /usr/bin/earlyoom "$@"
