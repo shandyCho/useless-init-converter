@@ -3,7 +3,8 @@
 # earlyoom, udevd) as real root, in QEMU, unprivileged: the running kernel, an
 # initramfs with this host's programs and unit files, dist/s6's run scripts
 # under s6-supervise. No SELinux policy is loaded in there; that takes a real
-# boot.
+# boot. Also runs dist/s6-linux-init/init-selinux, for the hard RLIMIT_NOFILE,
+# with the policy load and s6-linux-init replaced by stand-ins.
 #
 #   tests/confine-vm.sh WORKDIR [KVER]
 #
@@ -39,7 +40,7 @@ add() {
     done
 }
 for p in bash sh cat sed grep awk cut seq readlink mkdir ls stat kill sleep mount test rm tr id true chmod cp \
-    tail logger rsyslogd earlyoom udevadm s6-svscan s6-supervise s6-svstat \
+    tail logger mountpoint rsyslogd earlyoom udevadm s6-svscan s6-supervise s6-svstat \
     s6-notifyoncheck execlineb; do
     add "$(type -P "$p")"
 done
@@ -75,6 +76,15 @@ for s in syslog earlyoom udevd; do
     cp "$TOP/dist/s6/$s/run" "$R/service/$s/"
 done
 cp "$TOP/dist/s6/udevd/notification-fd" "$R/service/udevd/"
+# init-selinux, with stand-ins for what it loads and execs.
+cp "$TOP/dist/s6-linux-init/init-selinux" "$R/usr/sbin/"
+printf '#!/bin/sh\nexit 0\n' >"$R/usr/sbin/load_policy"
+mkdir -p "$R/etc/s6-linux-init/current/bin"
+cat >"$R/etc/s6-linux-init/current/bin/init" <<'STANDIN'
+#!/bin/bash
+echo "$* $(ulimit -Sn) $(ulimit -Hn) $(ulimit -Sn 65535 2>/dev/null && ulimit -Sn)"
+STANDIN
+chmod +x "$R/usr/sbin/init-selinux" "$R/usr/sbin/load_policy" "$R/etc/s6-linux-init/current/bin/init"
 
 cat >"$R/init" <<'EOF'
 #!/bin/bash
@@ -116,6 +126,18 @@ udevd_changed() {
 }
 status() { sed -n "s/^$2:[[:space:]]*//p" "/proc/$1/status"; }
 top_mount() { awk -v p="$2" '$5 == p { l = $6 } END { print l }' "/proc/$1/mountinfo" | cut -d, -f1; }
+
+echo '--- init-selinux'
+is "the kernel's limit, before init-selinux" "$(ulimit -Sn):$(ulimit -Hn)" 1024:4096
+# Arguments passed on, soft limit kept, hard limit raised, and a program can then
+# raise its soft limit as cups does (past the old hard limit even root can't).
+is "init-selinux: raises only the hard limit" "$(/usr/sbin/init-selinux a b 2>&1)" "a b 1024 524288 65535"
+# Can't raise it: the boot goes on, with the limit it had.
+nr=$(cat /proc/sys/fs/nr_open)
+echo 100000 >/proc/sys/fs/nr_open
+is "init-selinux: boots anyway if it can't" "$(/usr/sbin/init-selinux a 2>/dev/null)" "a 1024 4096 "
+/usr/sbin/init-selinux a 2>&1 | grep -q "can't raise" && ok "init-selinux: says so" || bad "init-selinux: no message"
+echo "$nr" >/proc/sys/fs/nr_open
 
 s6-svscan /service &
 wait_for '[ -n "$(pid_of systemd-udevd)" ] && [ -S /run/udev/control ]' || bad "udevd didn't start"

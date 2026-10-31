@@ -5,6 +5,11 @@
 #   semanage fcontext -a -t init_exec_t '/etc/s6-linux-init/current/bin/init'
 mountpoint -q /proc || mount -t proc proc /proc
 mountpoint -q /sys || mount -t sysfs sysfs /sys
+# The kernel starts PID 1 at 1024:4096 and every service inherits it. systemd
+# gives services a hard limit of 524288 (soft stays 1024), and programs like
+# cups raise their own soft limit up to it. Not worth failing a boot over.
+# shellcheck disable=SC3045  # -H: bash and dash both have it
+ulimit -Hn 524288 2>/dev/null || echo "init-selinux: can't raise the hard RLIMIT_NOFILE" >&2
 if ! /usr/sbin/load_policy -i; then
     echo "init-selinux: policy load failed" >&2
     grep -q '^SELINUX=enforcing' /etc/selinux/config && exec /bin/sh

@@ -176,7 +176,9 @@ The services s6 starts with their unit's sandbox (rsyslog, earlyoom, udevd)
 need real root to switch user, so this runs them in QEMU, unprivileged: the
 running kernel, this host's programs and unit files, `dist/s6`'s run scripts
 under `s6-supervise`. It also makes earlyoom kill a process under memory
-pressure and tests udevd's fallback. No SELinux policy is loaded in there,
+pressure, tests udevd's fallback, and runs `init-selinux` with stand-ins for
+the policy load and s6-linux-init, for the hard `RLIMIT_NOFILE` it sets
+(524288, as systemd gives services). No SELinux policy is loaded in there,
 which takes a real boot. Needs `cargo build`, QEMU, `/dev/kvm`, and rsyslog,
 earlyoom and s6 installed:
 

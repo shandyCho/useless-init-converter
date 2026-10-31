@@ -165,7 +165,9 @@ tests/bpf-root.sh
 s6가 유닛의 샌드박스로 시작하는 서비스(rsyslog, earlyoom, udevd)는 사용자를 바꾸려면 진짜 root가
 필요합니다. 그래서 이 테스트는 QEMU에서 root 권한 없이 실행합니다. 실행 중인 커널, 이 컴퓨터의
 프로그램과 유닛 파일, `s6-supervise` 아래의 `dist/s6` run 스크립트를 씁니다. 메모리가 부족할 때
-earlyoom이 프로세스를 죽이는지와 udevd의 대체 경로도 확인합니다. 그 안에서는 SELinux 정책을 읽지
+earlyoom이 프로세스를 죽이는지와 udevd의 대체 경로도 확인하고, 정책 읽기와 s6-linux-init을 대역으로
+바꾼 `init-selinux`를 실행해 그것이 설정하는 `RLIMIT_NOFILE` 하드 한도(systemd가 서비스에 주는 것과
+같은 524288)도 확인합니다. 그 안에서는 SELinux 정책을 읽지
 않으므로 SELinux는 실제 부팅에서 확인해야 합니다. `cargo build`, QEMU, `/dev/kvm`과 설치된 rsyslog,
 earlyoom, s6가 필요합니다:
 
