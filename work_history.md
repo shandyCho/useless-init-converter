@@ -8987,3 +8987,16 @@ Part 74 committed as 19ef73a on branch shutdown-scope-order, not merged to main.
 3. If a SEGV comes back: the backtrace (part 73's reply, gdb with debuginfod); the fix was then wrong or partial.
 4. PrivateUsers=: owner's decision (recommended: leave out).
 5. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
+
+## 2026-10-31, part 75: RPMs built from 567c7b9 (no code change)
+
+Owner: commit and build. 19ef73a (fix, docs) and 567c7b9 (history) on branch shutdown-scope-order, not merged to main. `packages/build-rpms.sh`: 0.1.0-1.20261031203711.g567c7b9.fc45, 5 RPMs in
+~/rpmbuild-uinitconverter/rpms. Read from the packages: the scope wait is in uinitconverterd, and the coredump service and the 0750 log directory are in uinitconverter. Not installed: needs sudo.
+
+### Current state
+
+Built, not installed. Installed and booted: g3f517cf. This entry uncommitted; merge to main and push open.
+
+### Next steps
+
+Part 74's.
