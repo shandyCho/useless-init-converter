@@ -625,11 +625,17 @@ crates/                    본체 (Cargo 작업공간 하나)
   uinitconverter-version/        --version이 보여 주는 빌드 버전(RPM 버전-릴리스 또는 git 커밋)
   uinitconverter-gen/            계획 → s6-rc 소스, 컴파일, s6-rc-update, 보고서 (도구 uinitconverter-gen)
   uinitconverter-runner/         실행 환경, 준비 완료 신호, 재시작 정책 (도구 uinitconverter-runner)
+    runner.rs              Runner 타입과 run, finish, up, down 명령
+    runner/                exec.rs, environment.rs, stdio.rs, sockets.rs, forking.rs,
+                           notify.rs(준비 완료 도우미), status.rs(종료 결과)
   uinitconverter-timers/         타이머와 path 유닛 러너 (도구 uinitconverter-timers)
   uinitconverterd/               D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓,
                            요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs),
                            장치가 원하는 유닛(devices.rs), SELinux 접근 검사
                            (access.rs) (도구 uinitconverterd)
+    daemon/mod.rs          Daemon 타입, 유닛 불러오기, 메인 루프
+    daemon/                dispatch.rs, manager.rs(Manager 메서드), jobs.rs,
+                           scopes.rs(StartTransientUnit), caller.rs, errors.rs, ...
   uinitconverter/                알맞은 도구를 실행하는 uinitconverter 명령과 `uinitconverter init`
 standalone/                별도 프로젝트. 각각 README와 spec이 있습니다
   uinitconverter-fdstore/        파일 디스크립터 저장소 서버

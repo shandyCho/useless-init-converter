@@ -709,11 +709,17 @@ crates/                    the core (one Cargo workspace)
   uinitconverter-version/        the build's version for --version (RPM version-release or git commit)
   uinitconverter-gen/            plan → s6-rc source, compile, s6-rc-update, report (tool uinitconverter-gen)
   uinitconverter-runner/         exec environment, readiness, restart policy (tool uinitconverter-runner)
+    runner.rs              the Runner type and the run, finish, up and down commands
+    runner/                exec.rs, environment.rs, stdio.rs, sockets.rs, forking.rs,
+                           notify.rs (readiness helpers), status.rs (exit results)
   uinitconverter-timers/         timer and path unit runners (tool uinitconverter-timers)
   uinitconverterd/               D-Bus API: dispatch, properties, s6 backend, private socket,
                            on-demand instances (dynamic.rs), systemd-run (transient.rs),
                            units wanted by devices (devices.rs), SELinux access
                            checks (access.rs) (tool uinitconverterd)
+    daemon/mod.rs          the Daemon type, unit loading, the main loop
+    daemon/                dispatch.rs, manager.rs (Manager methods), jobs.rs,
+                           scopes.rs (StartTransientUnit), caller.rs, errors.rs, ...
   uinitconverter/                the uinitconverter command, which runs the right tool, and `uinitconverter init`
 standalone/                separate projects, each with its own README and spec
   uinitconverter-fdstore/        file descriptor store server

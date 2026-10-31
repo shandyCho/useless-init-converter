@@ -9093,3 +9093,31 @@ Installed and booted: gdf289c9. Part 74's cause is still unproven: no login-scre
 2. Normal session shutdowns keep counting, with the same grep. If code=dumped comes back: the core and backtrace (part 71's step 3); the fix was then wrong or partial.
 3. PrivateUsers=: owner's decision (recommended: leave out).
 4. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
+
+## 2026-10-31, part 80: refactor for readability, branch refactor-readability (no intended behaviour change)
+
+Owner: commit the history; refactor the project, focus on readable. Done on branch refactor-readability, off main at 50ba61a, because main is the default branch. So 658ce16 (parts 78-79) is on this branch too, not on main yet.
+
+Scope, decided here: mechanical changes that can be checked, because this code boots the owner's machine. No renames, no changes to shell scripts, D-Bus names or generated output.
+- 0605961: cargo fmt over the core and standalone, which had never been run (872 hunks). So `git blame` points there for many lines; `git blame -w` doesn't skip all of it, a `--ignore-rev 0605961` does.
+- runner.rs 3279 -> 1011 lines: status, environment, exec, stdio, sockets, forking, notify. daemon/mod.rs 2707 -> 708: errors, caller, jobs, scopes, dispatch, manager. init.rs 1351 -> 671: options, checks, boot, report. Items moved whole, by a throwaway script. New modules use `use super::*` and `pub(super)`.
+- gen `plan()`: seed_names, raw_dependencies, ordering_sets, ignored_settings pulled out.
+- README pair: source layout.
+
+Left on purpose: manager_method (414 lines) and props.rs's unit_iface and service_iface are flat tables, and splitting them adds jumps without adding clarity. sandbox::apply (241 lines) is security code whose order matters and which only confine-vm and a real boot exercise; cmd_finish, setup_stdio and NotifyHelper::run for the same reason. daemon/s6.rs (1308) and short variable names: not touched. Could be done with the owner's say-so, with a real boot after.
+
+Checks:
+- For the three splits: code lines of the old and new files compared as multisets, ignoring visibility, imports and module headers. The only differences are signatures rewrapped by rustfmt (longer with `pub(super)`) and the new `impl` lines. One test doc comment was lost by the script and put back.
+- `plan()`: `uinitconverter-gen plan` on this machine's real units, built from 50ba61a and from the refactor: byte-identical, 1042 lines.
+- cargo test 83 passed 0 failed, no build warnings; standalone 3+3+3+2; sandbox default 311/311, SANDBOX_JOURNAL=no 318/318, SANDBOX_FDSTORE=no 299/299. tests/confine-vm.sh 67 passed, 0 failed in 6 of 7 runs.
+- **One unexplained result.** The first confine-vm run printed `FAIL the VM didn't finish` for console-plain.log, while its summary said `passed: 67 failed: 0`. Its log was deleted before being read, by mistake. Then 6 clean runs of about 26 s, none repeating it. Not known whether it existed before this work: the base wasn't run repeatedly. The summary line also doesn't count that FAIL, since it counts only the VM's console; a small flaw in the test, not fixed.
+- **Not tested: a real boot.** Not built into RPMs. Installed and booted stays gdf289c9.
+
+### Current state
+
+Branch refactor-readability, not merged, not pushed. Installed and booted: gdf289c9. Part 74's cause still unproven.
+
+### Next steps
+
+1. Owner: merge refactor-readability, `packages/build-rpms.sh`, install, reboot to s6, and the usual checks (`ausearch -m AVC -ts boot`, hardencompare). If confine-vm's "didn't finish" comes back, read console-plain.log.txt before anything else.
+2. Part 79's step 1 (login-screen shutdowns); steps 2-4 as listed there.
