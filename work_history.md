@@ -9163,3 +9163,21 @@ Part 81's commit is on history-part-81, not on main. This entry uncommitted. Oth
 ### Next steps
 
 As part 81, then items 1 and 2 above if the owner wants them.
+
+## 2026-11-01, part 83: time zones through jiff (branch calendar-jiff)
+
+Owner: commit, merge, start with jiff (part 82's item 1).
+
+calendar.rs: jiff 0.2.38 (features std, tz-system, tzdb-zoneinfo) instead of mktime, localtime_r, timegm, setenv(TZ) and tzset; also its date and weekday arithmetic. TzGuard and switches_tz() are gone; the daemon's props.rs now computes NextElapse for named zones as for any other. Removed dead `_unused(CString)`.
+
+**Behaviour changed, on purpose, to match systemd.** Compared old and new code on 599230 spec, zone and base time combinations (10 zones including Lord_Howe, Dublin, Apia; 31 specs; bases around each change), and every difference, plus 3000 others, against `systemd-analyze calendar --base-time` (systemd 262). My first version was wrong for repeated times; systemd showed it. After the fix: 5579 differences from the old code, all on systemd's side; 3000 of 3000 sampled agree. So these were bugs in the old code:
+- In the second pass of a repeated hour, `minutely` jumped an hour ahead.
+- A time in a repeated hour could elapse twice: in the first pass, the old code also offered the second.
+- Apia's skipped 2011-12-30: the old code ran a Friday timer on the Saturday, and `*-12-30` on the 31st, since mktime normalized the date.
+Specs without a zone follow TZ: under TZ=New_York, London and Seoul they give the same 59923 results as naming the zone; unset TZ reads /etc/localtime through jiff, compared only as "no difference from the old code" under Seoul, which has no DST. Rule, in next_at_wall(): skipped never; repeated, the first pass, or the second if the start is already in it.
+
+New tests: dst_changes_as_systemd (each value checked with systemd-analyze), named_zone_from_threads. The differential harness was temporary and isn't in the repo.
+
+Cost: release uinitconverter-timers 2713496 -> 3091664 bytes (+14%), `uinitconverter` command unchanged (+16 bytes). Cargo.lock gains jiff's crates, and defmt, log, bitflags, portable-atomic are in the lock and vendor directory though not in the normal dependency tree (`cargo tree`). **Memory not measured**; each timer is its own process, so compare with tests/memcompare.sh on the next boot.
+
+Tests: cargo test 85 passed, 0 failed; sandbox 311/311, SANDBOX_JOURNAL=no 318/318, SANDBOX_FDSTORE=no 299/299; `cargo vendor --locked` works. Standalone and confine-vm not run: untouched. **Not tested: a real boot.**

@@ -5,7 +5,9 @@
 //! time part, optional seconds, the shorthands (daily, weekly, ...), and a
 //! trailing `UTC` or IANA time zone.
 
-use std::ffi::CString;
+use jiff::civil::{Date, DateTime};
+use jiff::tz::{AmbiguousOffset, Offset, TimeZone};
+use jiff::{Timestamp, Zoned};
 
 #[derive(Debug, Clone, PartialEq)]
 struct Comp {
@@ -315,31 +317,27 @@ impl CalendarSpec {
         s
     }
 
-    /// True if next_after() switches TZ (a named zone other than UTC): it
-    /// sets an environment variable, which only a single-threaded process
-    /// may do (the timer runner, not the daemon).
-    pub fn switches_tz(&self) -> bool {
-        self.tz.as_deref().is_some_and(|z| z != "UTC")
+    /// The zone the spec is written in: the one it names, or the system's.
+    fn time_zone(&self) -> Option<TimeZone> {
+        match self.tz.as_deref() {
+            Some("UTC") => Some(TimeZone::UTC),
+            Some(name) => TimeZone::get(name).ok(),
+            None => Some(TimeZone::system()),
+        }
     }
 
-    /// First elapse strictly after `after` (seconds since the epoch). See
-    /// switches_tz() before calling it from a multi-threaded process.
+    /// First elapse strictly after `after` (seconds since the epoch).
     pub fn next_after(&self, after: i64) -> Option<i64> {
-        let _tz = TzGuard::set(self.tz.as_deref());
-        let utc = self.tz.as_deref() == Some("UTC");
+        let tz = self.time_zone()?;
         let start = after + 1;
-        let now = to_tm(start, utc);
+        let now = Timestamp::from_second(start).ok()?.to_zoned(tz.clone());
         let hours = self.hour.values(0, 23);
         let minutes = self.minute.values(0, 59);
         let seconds = self.second.values(0, 59);
         if hours.is_empty() || minutes.is_empty() || seconds.is_empty() {
             return None;
         }
-        let (mut y, mut m, mut d) = (
-            (now.tm_year + 1900) as u32,
-            (now.tm_mon + 1) as u32,
-            now.tm_mday as u32,
-        );
+        let (mut y, mut m, mut d) = (now.year() as u32, now.month() as u32, now.day() as u32);
 
         // Skip whole years and months that cannot match, so far-future dates are cheap.
         for _ in 0..200_000 {
@@ -351,7 +349,7 @@ impl CalendarSpec {
                 (m, d) = (1, 1);
                 continue;
             }
-            if !self.month.matches(m) || d > days_in_month(y, m) {
+            if !self.month.matches(m) || d > month_start(y, m).days_in_month() as u32 {
                 m += 1;
                 d = 1;
                 if m > 12 {
@@ -360,7 +358,8 @@ impl CalendarSpec {
                 }
                 continue;
             }
-            let dim = days_in_month(y, m);
+            let date = month_start(y, m);
+            let dim = date.days_in_month() as u32;
             let day_ok = if self.end_of_month {
                 self.day.matches_from_end(dim - d + 1)
             } else {
@@ -368,26 +367,17 @@ impl CalendarSpec {
             };
             let wd_ok = self
                 .weekdays
-                .map(|mask| mask & (1 << weekday(y, m, d)) != 0)
+                .map(|mask| mask & (1 << weekday(date, d)) != 0)
                 .unwrap_or(true);
             if day_ok && wd_ok {
                 for &h in &hours {
                     for &mi in &minutes {
                         for &s in &seconds {
-                            let mut t: libc::tm = unsafe { std::mem::zeroed() };
-                            t.tm_year = y as i32 - 1900;
-                            t.tm_mon = m as i32 - 1;
-                            t.tm_mday = d as i32;
-                            t.tm_hour = h as i32;
-                            t.tm_min = mi as i32;
-                            t.tm_sec = s as i32;
-                            t.tm_isdst = -1;
-                            let ts = from_tm(&mut t, utc);
-                            // Skip times that do not exist (DST gaps normalize away).
-                            if t.tm_hour as u32 != h || t.tm_min as u32 != mi {
-                                continue;
-                            }
-                            if ts >= start {
+                            let wall = DateTime::new(
+                                y as i16, m as i8, d as i8, h as i8, mi as i8, s as i8, 0,
+                            )
+                            .ok()?;
+                            if let Some(ts) = next_at_wall(&tz, wall, &now) {
                                 return Some(ts);
                             }
                         }
@@ -400,84 +390,39 @@ impl CalendarSpec {
     }
 }
 
-/// Monday = 0 ... Sunday = 6
-fn weekday(y: u32, m: u32, d: u32) -> u32 {
-    const T: [u32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
-    let y = if m < 3 { y - 1 } else { y };
-    let sunday0 = (y + y / 4 - y / 100 + y / 400 + T[(m - 1) as usize] + d) % 7;
-    (sunday0 + 6) % 7
+/// The first of the month; only for what depends on the month as a whole.
+/// Valid for every date next_after() reaches: its year is checked first.
+fn month_start(y: u32, m: u32) -> Date {
+    Date::new(y as i16, m as i8, 1).expect("year up to 9999, month 1 to 12")
 }
 
-fn days_in_month(y: u32, m: u32) -> u32 {
-    match m {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        _ if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
-        _ => 28,
-    }
+/// Monday = 0 ... Sunday = 6, for day `d` of the month that starts at `first`.
+fn weekday(first: Date, d: u32) -> u32 {
+    (first.weekday().to_monday_zero_offset() as u32 + d - 1) % 7
 }
 
-fn to_tm(t: i64, utc: bool) -> libc::tm {
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    let tt = t as libc::time_t;
-    unsafe {
-        if utc {
-            libc::gmtime_r(&tt, &mut tm);
-        } else {
-            libc::localtime_r(&tt, &mut tm);
-        }
-    }
-    tm
-}
-
-fn from_tm(tm: &mut libc::tm, utc: bool) -> i64 {
-    unsafe {
-        if utc {
-            libc::timegm(tm) as i64
-        } else {
-            libc::mktime(tm) as i64
-        }
-    }
-}
-
-/// Temporarily switch TZ for a named zone (the timer process is single-threaded).
-struct TzGuard {
-    old: Option<Option<String>>,
-}
-
-impl TzGuard {
-    fn set(tz: Option<&str>) -> TzGuard {
-        match tz {
-            Some(z) if z != "UTC" => {
-                let old = std::env::var("TZ").ok();
-                std::env::set_var("TZ", z);
-                unsafe { tzset() };
-                TzGuard { old: Some(old) }
+/// Seconds since the epoch of local time `wall`, if that isn't before `from`.
+///
+/// As systemd: a time that a DST change skips never elapses. One that happens
+/// twice elapses the first time, or the second time if `from` is already past
+/// the change; so it doesn't elapse twice when `from` is inside the first pass.
+fn next_at_wall(tz: &TimeZone, wall: DateTime, from: &Zoned) -> Option<i64> {
+    let start = from.timestamp().as_second();
+    let at = |offset: Offset| Some(offset.to_timestamp(wall).ok()?.as_second());
+    let ts = match tz.to_ambiguous_timestamp(wall).offset() {
+        AmbiguousOffset::Unambiguous { offset } => at(offset)?,
+        AmbiguousOffset::Gap { .. } => return None,
+        AmbiguousOffset::Fold { before, after } => {
+            let first = at(before)?;
+            if first >= start || from.offset() != after {
+                first
+            } else {
+                at(after)?
             }
-            _ => TzGuard { old: None },
         }
-    }
+    };
+    (ts >= start).then_some(ts)
 }
-
-impl Drop for TzGuard {
-    fn drop(&mut self) {
-        if let Some(old) = self.old.take() {
-            match old {
-                Some(v) => std::env::set_var("TZ", v),
-                None => std::env::remove_var("TZ"),
-            }
-            unsafe { tzset() };
-        }
-    }
-}
-
-extern "C" {
-    fn tzset();
-}
-
-/// Make sure `CString` stays referenced for platforms that need it.
-#[allow(dead_code)]
-fn _unused(_: CString) {}
 
 #[cfg(test)]
 mod tests {
@@ -491,16 +436,11 @@ mod tests {
     const NOW: i64 = 1792326896;
 
     fn fmt(t: i64) -> String {
-        let tm = to_tm(t, true);
-        format!(
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-            tm.tm_year + 1900,
-            tm.tm_mon + 1,
-            tm.tm_mday,
-            tm.tm_hour,
-            tm.tm_min,
-            tm.tm_sec
-        )
+        Timestamp::from_second(t)
+            .unwrap()
+            .to_zoned(TimeZone::UTC)
+            .strftime("%Y-%m-%d %H:%M:%S")
+            .to_string()
     }
 
     #[test]
@@ -575,6 +515,61 @@ mod tests {
             fmt(utc("Fri *-*-13").next_after(NOW).unwrap()),
             "2026-11-13 00:00:00"
         );
+    }
+
+    /// Expected values are what `systemd-analyze calendar --base-time` printed
+    /// (systemd 262), so these follow systemd, not this code.
+    #[test]
+    fn dst_changes_as_systemd() {
+        let next = |spec: &str, base: i64| CalendarSpec::parse(spec).unwrap().next_after(base);
+        let ny = "America/New_York";
+
+        // 2026-11-01, New York: 01:00 to 02:00 happens twice. 01:30 EDT is
+        // 1793511000, 01:30 EST is 1793514600.
+        // Before the first pass: the first.
+        assert_eq!(
+            next(&format!("*-*-* 01:30:00 {ny}"), 1793509800),
+            Some(1793511000)
+        );
+        // Inside the first pass, after it: not again, the next day.
+        assert_eq!(
+            next(&format!("*-*-* 01:30:00 {ny}"), 1793511600),
+            Some(1793601000)
+        );
+        // Inside the second pass: the second.
+        assert_eq!(
+            next(&format!("*-*-* 01:30:00 {ny}"), 1793512800),
+            Some(1793514600)
+        );
+        // Inside the second pass, a minutely timer goes on minute by minute.
+        assert_eq!(
+            next(&format!("minutely {ny}"), 1793512800),
+            Some(1793512860)
+        );
+
+        // 2026-03-08, New York: 02:30 doesn't exist, so the next day's.
+        assert_eq!(
+            next(&format!("*-*-* 02:30:00 {ny}"), 1772938800),
+            Some(1773037800)
+        );
+
+        // Apia skipped 2011-12-30, a Friday: nothing runs on it, nor on the
+        // Saturday mktime() would move it to.
+        assert_eq!(
+            next("Mon..Fri 09:00 Pacific/Apia", 1325203200),
+            Some(1325444400)
+        );
+    }
+
+    /// A named zone must not need TZ switched: the daemon calls this from its threads.
+    #[test]
+    fn named_zone_from_threads() {
+        let spec = CalendarSpec::parse("daily Asia/Seoul").unwrap();
+        std::thread::scope(|s| {
+            for _ in 0..4 {
+                s.spawn(|| assert_eq!(spec.next_after(NOW), Some(1792335600)));
+            }
+        });
     }
 
     #[test]

@@ -997,10 +997,6 @@ impl Daemon {
         let cals: Vec<(String, String, u64)> = timer::calendars(unit)
             .into_iter()
             .map(|(raw, spec)| match spec {
-                // A named zone would need TZ switched under the daemon's
-                // threads (setenv is not thread-safe): use the runner's
-                // next elapse instead.
-                Some(sp) if sp.switches_tz() => ("OnCalendar".to_string(), sp.render(), next_rt),
                 Some(sp) => {
                     let n = sp
                         .next_after(now)

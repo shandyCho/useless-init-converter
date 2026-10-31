@@ -6,3 +6,4 @@ description = "Unit files, uinitconverter.conf, state files and the database ind
 
 [dependencies]
 libc.workspace = true
+jiff.workspace = true

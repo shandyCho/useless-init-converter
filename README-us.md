@@ -138,7 +138,7 @@ How each one is built, installed and run: [standalone/uinitconverter-fdstore](st
 - `.path` units: `PathExists=`, `PathExistsGlob=`, `DirectoryNotEmpty=` (re-checked while the unit is inactive), `PathChanged=`, `PathModified=` (inotify), `MakeDirectory=`, `TriggerLimitBurst=`.
 
 **Timers**
-- `OnCalendar=` with the full `systemd.time(7)` syntax: weekdays, lists, ranges, `/step` repetitions, `~` (days from the end of the month), the shorthands, and `UTC` or IANA time zones.
+- `OnCalendar=` with the full `systemd.time(7)` syntax: weekdays, lists, ranges, `/step` repetitions, `~` (days from the end of the month), the shorthands, and `UTC` or IANA time zones. Around a DST change it elapses as systemd does (a skipped time never, a repeated time once).
 - `OnBootSec=`, `OnStartupSec=`, `OnActiveSec=`, `OnUnitActiveSec=`, `OnUnitInactiveSec=`.
 - `Persistent=` (catches up a missed run), `RandomizedDelaySec=`, `FixedRandomDelay=`, `Unit=`.
 - `systemctl list-timers` and `systemctl status x.timer` show next and last elapse.
@@ -273,8 +273,8 @@ none is needed to build. Without one, the matching feature is missing:
 **Recommended packages:** earlyoom (replaces systemd-oomd), chrony,
 NetworkManager, rsyslog or syslog-ng (only with `JOURNAL=no`).
 
-**Build:** cargo and rust. The core uses zbus, tokio, futures-util, libc
-and serde (`Cargo.toml`); the standalone tools only libc.
+**Build:** cargo and rust. The core uses zbus, tokio, futures-util, libc,
+jiff and serde (`Cargo.toml`); the standalone tools only libc.
 
 ## Testing on Fedora
 

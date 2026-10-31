@@ -129,7 +129,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - `.path` 유닛: `PathExists=`, `PathExistsGlob=`, `DirectoryNotEmpty=`(유닛이 비활성인 동안 다시 확인), `PathChanged=`, `PathModified=`(inotify), `MakeDirectory=`, `TriggerLimitBurst=`.
 
 **타이머**
-- `systemd.time(7)` 문법 전체를 지원하는 `OnCalendar=`: 요일, 목록, 범위, `/step` 반복, `~`(월말 기준 날짜), 축약형, `UTC` 또는 IANA 시간대.
+- `systemd.time(7)` 문법 전체를 지원하는 `OnCalendar=`: 요일, 목록, 범위, `/step` 반복, `~`(월말 기준 날짜), 축약형, `UTC` 또는 IANA 시간대. DST 변경 전후에는 systemd와 똑같이 동작합니다(건너뛴 시각은 실행하지 않고, 반복되는 시각은 한 번만 실행).
 - `OnBootSec=`, `OnStartupSec=`, `OnActiveSec=`, `OnUnitActiveSec=`, `OnUnitInactiveSec=`.
 - `Persistent=`(놓친 실행을 따라잡음), `RandomizedDelaySec=`, `FixedRandomDelay=`, `Unit=`.
 - `systemctl list-timers`와 `systemctl status x.timer`가 다음/마지막 실행 시각을 보여줍니다.
@@ -236,7 +236,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 **권장 패키지:** earlyoom(systemd-oomd 대신), chrony, NetworkManager,
 rsyslog 또는 syslog-ng(`JOURNAL=no`일 때만).
 
-**빌드:** cargo와 rust. 본체는 zbus, tokio, futures-util, libc, serde를, 독립 도구는 libc만 씁니다
+**빌드:** cargo와 rust. 본체는 zbus, tokio, futures-util, libc, jiff, serde를, 독립 도구는 libc만 씁니다
 (`Cargo.toml`).
 
 ## Fedora에서 시험하기

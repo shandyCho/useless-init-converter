@@ -19,6 +19,7 @@ zbus = { version = "5.19", default-features = false, features = ["tokio", "p2p"]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "time", "sync", "fs", "io-util", "signal"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 libc = "0.2"
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 serde = "1"
 
 [profile.release]
