@@ -8759,3 +8759,19 @@ Part 66 uncommitted on main on top of 16bba31. Installed and booted: g86f2b3c, w
 2. Owner: `sudo grep -hE 'requested from client|key pressed' /var/log/messages* | tail -40`, for the s6 short boots.
 3. PrivateUsers=: owner's decision (recommended: leave out).
 4. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
+
+## 2026-10-31, part 67: part 66 committed, RPMs built from 3f517cf (no code change)
+
+Owner: commit and build. 0e9384c (fix, test, TESTING pair) and 3f517cf (history) on branch init-selinux-nofile,
+not merged to main. `packages/build-rpms.sh`: exit 0, 0.1.0-1.20261031183855.g3f517cf (not dirty), 5 RPMs in
+~/rpmbuild-uinitconverter/rpms. The `ulimit -Hn 524288` line is in the uinitconverter RPM's /usr/bin/init-selinux
+(read from the package; /usr/sbin is a symlink to bin). Not installed: needs sudo.
+
+### Current state
+
+Built, not installed. Installed and booted: g86f2b3c. Merge to main open.
+
+### Next steps
+
+Part 66's, with step 1 now: `git switch main && git merge --ff-only init-selinux-nofile`; `sudo dnf upgrade
+~/rpmbuild-uinitconverter/rpms/*.rpm`; reboot to s6; then part 66's checks.
