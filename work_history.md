@@ -8922,3 +8922,68 @@ branch changed during the session), so the merge also brought that branch's 5cfc
 3. After the next shell crash (about 1 shutdown in 7): `sudo dnf install gdb; sudo dnf debuginfo-install gnome-shell mutter gjs`, unpack the newest core.gnome-shell.*.zst, `gdb /usr/bin/gnome-shell CORE`, `bt`. Then decide: an s6 side cause gets fixed here; a bug in GNOME's own teardown is described for the owner.
 4. PrivateUsers=: owner's decision (recommended: leave out). The script keeps exiting 1 until then.
 5. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
+
+## 2026-10-31, part 72: RPMs built from 73c7164 (no code change)
+
+Owner: build. `packages/build-rpms.sh`: exit 0, 0.1.0-1.20261031200123.g73c7164 (not dirty), 5 RPMs in ~/rpmbuild-uinitconverter/rpms. Read from the
+uinitconverter RPM: /var/log/uinitconverter drwxr-x--- root wheel, /etc/uinitconverter/s6/coredump present, `ulimit -Sc unlimited` in init-selinux, the new rule in the .cil.
+The rule is compiled for the first time when the package's %post loads the module. Not installed: needs sudo.
+
+### Current state
+
+Built, not installed. Installed and booted: g3f517cf. main is ahead of origin/main; this entry is uncommitted.
+
+### Next steps
+
+Part 71's, from its step 1.
+
+## 2026-10-31, part 73: the shell's SEGV is a use-after-free inside GLib's source teardown (no code change)
+
+Owner ran part 71's first step. Kernel lines, 4 of 4 in libglib-2.0.so.0.9000.1 (glib2-2.90.1-1.fc45), same function: file offset f414a three times (fault addresses 0x28, 8, 8), f414e once (0x7b9).
+Resolved with eu-addr2line and the source from debuginfod (Fedora's server, build id a1ce8424...; cached in ~/.cache/debuginfod_client): g_child_source_remove_internal, gmain.c:1709,
+`child_source->priv->parent_source` (disassembly: priv at 0x58, parent_source at priv+8). Fault at 8: priv is NULL. At 0x28: priv is 0x20. f414e at 0x7b9: parent_source is 0x761, read as a GSource. So the
+GSource it was handed is already freed or overwritten: a use-after-free, or corruption, in the shell's process, while a source is being destroyed. Called from g_source_destroy_internal and g_source_remove_child_source.
+
+Which source, and who destroyed it first, needs the stack: still unknown, so **part 71's backtrace is still needed**. Not established either: why it was seen only on s6 (part 68's small counts). Process memory isn't something s6 writes to, so an s6 cause
+could only be indirect, such as timing or a service going away during teardown. So a fix here is possible only if the backtrace shows that; otherwise it's a GNOME or GLib bug and the owner decides. No effect seen on the session, which is already ending.
+
+### Current state
+
+Built, not installed: g73c7164. Installed and booted: g3f517cf. Parts 72-73 uncommitted.
+
+### Next steps
+
+1. Owner: `sudo grep -E 'gnome-shell\[(10412|2280|6886|2320)\]' /var/log/messages | tail -40`: the shell's last messages before each crash.
+2. Part 71's step 2 onward (install, reload, reboot, checks, backtrace after the next crash).
+
+## 2026-10-31, part 74: shutdown order: session scopes before user@UID, as systemd (19ef73a)
+
+Owner sent the shell's last messages before the crashes. "Shutting down GNOME Shell" comes 36-44 ms before the SEGV, so it dies in its own exit. Just before it, activations fail under it: 15:14:19 CalendarServer "a concurrent deactivation request is already in progress",
+16:57:13 "The name is not activatable" in `_initializeUI` (main.js:277). `endSessionDialog` 1.6-1.7 s before each request, as on the systemd boot (1.8 s), so the short boots went through the normal dialog; supports part 68.
+
+**Found: the stop order differs on every shutdown, and the crashes are all on the s6 order.** From /var/log/uinitconverter/user@*/current and the journal, for each shell exit, is the user manager's exit.target before it:
+- systemd journal since 10-18: exit.target first 0, shell gone first 58.
+- s6 user@1000: exit.target first 21 of 21. s6 user@60578 (greeter): 2 of 24, the two shutdowns from the login screen, 10-29 14:17 and 10-31 16:57; the other 22 are the greeter ending at login.
+- All 4 SEGVs are in those 23; none in the other 80 exits.
+
+Systemd's sequence (14:58): session-2.scope stopping .860, shell stopping .899, shell stopped 03.265, scope stopped 03.268, only then `Stopping user@1000.service` 03.269. On s6, rc.shutdown's stop-instances stopped user@UID at once and nobody stopped the session scope before the final kill. This is part 22's stop-instances: it put instances before s6-rc's services and didn't consider scopes.
+
+**Fix.** stop_dynamic_at_shutdown first runs stop_scopes_at_shutdown: stop_transient on every non-empty scope (SIGTERM, SIGHUP if asked, SIGKILL after 10 s, as for StopUnit), then waits up to 11 s for them to empty, then stops the instances. All scopes, not only session-*: systemd stops them too. Bounded, and rc.shutdown's 120 s limit stays. The second call from s6-rc's SIGTERM skips empty scopes. gdm may try to start a new greeter during the wait: such starts are already refused (the "destructive" lines in logind's log); seen before this change too.
+
+**Not proven: that the order causes the use-after-free.** The numbers and the failed activations point to it; the mechanism inside the shell isn't traced. The test is the real thing: `Consumed` before exit.target, and no SEGV over many shutdowns. At part 68's rate (4 of 23), 20 shutdowns with no crash would happen by luck about 2% of the time. The core capture of part 71 stays useful if it crashes again.
+
+Tests: cargo test 83 passed 0 failed (new: scopes_are_waited_for, the wait only). Sandbox default 311/311, SANDBOX_JOURNAL=no 318/318. **The scope stop itself is not exercised: the sandbox has no writable cgroup (scope sections SKIP), and no real boot yet.** SANDBOX_FDSTORE=no not run: not touched. s6's user log has no "Stopping ..." lines (the journal does), so the TESTING row uses the shell's `Consumed` line; my first version of that row, using `Stopping`, was wrong and was replaced before running anything on it.
+
+Docs: README pair's shutdown paragraph, TESTING pair's table.
+
+### Current state
+
+Part 74 committed as 19ef73a on branch shutdown-scope-order, not merged to main. RPMs built from it: see part 75. The RPMs of part 72 (g73c7164) don't have it. Installed and booted: g3f517cf.
+
+### Next steps
+
+1. Owner: part 71's step 2 with the new RPMs (install, `reload --no-update`, reboot to s6, checks).
+2. Owner, after two reboots: TESTING's "Shutdown order" row; `sudo grep -E 'gnome-shell.*segfault' /var/log/messages | tail -3`; check a shutdown doesn't take visibly longer (expected: under a second more).
+3. If a SEGV comes back: the backtrace (part 73's reply, gdb with debuginfod); the fix was then wrong or partial.
+4. PrivateUsers=: owner's decision (recommended: leave out).
+5. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
