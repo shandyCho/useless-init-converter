@@ -8878,3 +8878,46 @@ Docs match the code as of 5cfce20, on branch readme-systemd-comparison. The othe
 ### Next steps
 
 Part 68's.
+
+## 2026-10-31, part 69: log directory 0750; core dumps kept on s6 (b5bebd3)
+
+Owner: fix the log directory permissions and the gnome-shell segfaults at shutdown.
+
+**Log directory: fixed.** /var/log/uinitconverter is 0750 root:wheel: spec `%attr` (an upgrade applies it) and `install -d` in
+`uinitconverter init` (a custom LOG_DIR). wheel rather than systemd-journal, which part 68's next step suggested: the owner is in wheel and not in systemd-journal,
+and wheel is who reads the journal here. Only the top directory changes: the files stay 644 under it. Writers are root. rc.shutdown.final unaffected. Checked with `init --dry-run`
+and `rpmspec -P`. **Not seen on a real install.**
+
+**The segfault: not fixed. Its cause is still unknown; this makes it diagnosable.** It can't be fixed without a backtrace, and there was none because s6 boots throw every core away:
+1. systemd-coredump.socket isn't translated (`systemd-*` excluded, Accept=yes unsupported), so /run/systemd/coredump doesn't exist and the pipe helper has nowhere to send it.
+2. Soft RLIMIT_CORE is 0 (the kernel's; systemd sets unlimited, hardencompare's limit_core DIFF). The helper then refuses: seen in the VM, "Resource limits disable core dumping for process".
+
+Tried first, no result: a headless gnome-shell in an isolated HOME and runtime dir, SIGTERM after 15 and 25 s (and six runs that aborted at startup: socket path too long). Exit status was timeout's own, and nothing about a crash in its output.
+No gdb or debuginfo installed. Not a reproduction either way.
+
+Changes:
+- dist/s6/coredump: new longrun, after uinitconverter-sysinit, flag-recommended. `systemd-coredump --manager` under `confine systemd-coredumpd.service`; once the socket exists it writes
+  `@@/run/systemd/coredumpd/kernel` to core_pattern. Manager mode rather than Accept=yes: no new socket code, and it's what the kernel (7.2) offers; `--check-requirements` passes. Without kernel support it stays down (`s6-svc -O`) and core_pattern is untouched;
+  if no socket appears, core_pattern is left too. Not `systemd-sysctl --save` as the register unit does: more policy unknowns than init_t's plain write, which sesearch allows. So a later `sysctl --system` would put the pipe back until the next boot.
+- runner: `confine` now runs create_directories (RuntimeDirectory=, StateDirectory=, and tells the sandbox they stay writable). The three existing confine units have no such directive.
+- init-selinux: `ulimit -Sc unlimited`, as systemd. Every service and user manager inherits it, so hardencompare's limit_core rows should go. Cost: crashes now write cores to /var/lib/systemd/coredump (coredump.conf's limits apply, as on systemd); a shutdown with a crash may take longer for the dump.
+- dist/selinux: systemd_coredump_t gets write/add_name/remove_name on its run directory. sesearch shows the policy has create on the sock_file but nothing on the directory (Fedora's boot uses the socket unit), so under enforcing the bind would be denied. kernel_t may connect to any domain's stream socket, init_t→systemd_coredump_t has nnp_transition, sesearch.
+
+rc.shutdown's first step is `stop-instances` (user@UID) and only then s6-rc, so the service is up when shells die at the start of a shutdown. No ordering needed.
+
+Tests: tests/confine-vm.sh (real kernel, no SELinux): 67 passed, 0 failed, on the final tree. New checks: core_pattern set, sandbox (nnp, seccomp, cgroup, / ro, state and runtime dirs rw), soft limit 0 keeps no core, a SIGSEGV with unlimited keeps a core.bash.* file, manager
+survives. s6-rc-compile of dist/s6 with a stub for the generated bundle: ok, coredump a longrun. cargo test 82 passed 0 failed; sandbox default 311/311; shellcheck, bash -n clean. SANDBOX_JOURNAL=no and SANDBOX_FDSTORE=no not run: untouched. Standalone tests not run: untouched.
+**Not tested: a real boot, so not SELinux enforcing, the policy rule (not compiled either: semodule needs root), a user's crash, or the summary reaching syslog through journal-relay.** More denials are possible there: reading the crashed process through the pidfd is the one I can't read from the policy. On failure the service restarts with a message in /run/uncaught-logs and cores are lost as before; boot isn't affected.
+Memory not rerun: one more service, so expect part 61's figures to rise slightly.
+
+### Current state
+
+Part 69 committed as b5bebd3 and merged to main, not pushed. Not built. Installed and booted: g3f517cf, without it. gnome-shell's shutdown SEGV is still happening and still unexplained.
+
+### Next steps
+
+1. Owner, now, no install needed: `sudo grep -E 'gnome-shell.*segfault' /var/log/messages | tail`, the kernel's line for the four crashes (library and offset), a cheap first look.
+2. Owner: `packages/build-rpms.sh`, `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`, `sudo uinitconverter reload --no-update` (adds the service to the database), reboot to s6. Check: `stat -c '%a %U:%G' /var/log/uinitconverter` (750 root:wheel), `cat /proc/sys/kernel/core_pattern`, `sudo s6-svstat /run/service/coredump`, `sudo ausearch -m AVC -ts boot`, then `sh -c 'kill -SEGV $$'; sudo ls -l /var/lib/systemd/coredump`.
+3. After the next shell crash (about 1 shutdown in 7): `sudo dnf install gdb; sudo dnf debuginfo-install gnome-shell mutter gjs`, unpack the newest core.gnome-shell.*.zst, `gdb /usr/bin/gnome-shell CORE`, `bt`. Then decide: an s6 side cause gets fixed here; a bug in GNOME's own teardown is described for the owner.
+4. PrivateUsers=: owner's decision (recommended: leave out). The script keeps exiting 1 until then.
+5. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
