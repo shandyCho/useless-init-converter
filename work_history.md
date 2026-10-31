@@ -9041,3 +9041,55 @@ Built, not installed. Installed and booted: g567c7b9, without the rule. This ent
 ### Next steps
 
 Part 76's, from its step 1's `sudo dnf upgrade` (commit and build are done).
+
+## 2026-10-31, part 78: part 76's rule confirmed on a real boot (no code change)
+
+Owner installed gdf289c9 (`rpm -q`), booted s6 at about 22:47, and sent part 76's checks.
+
+**Core capture: works.** /proc/1/limits and gnome-shell's: core soft and hard unlimited. `sh -c 'kill -SEGV $$'`, with no `ulimit` of its own, left core.sh.1000.*.13676.*.zst, 23:26. That file and 22:11's are test leftovers, harmless. core_pattern `@@/run/systemd/coredumpd/kernel`, coredump service up, `ausearch -m AVC -ts boot` no matches, /var/log/uinitconverter 750 root:wheel. So a real shell crash should now leave a core, but none has yet: only a test process was seen.
+
+**Part 76's side effect: none found.** Every limit_* row of the 31 s6 services in the snapshot, against systemd's on the 28 shared ones: only limit_nproc and udevd's limit_nofile differ, as before. /proc/1/limits nofile 1024/524288, unchanged from part 66.
+
+**hardencompare, as predicted.** systemd 14:57:22 vs s6 23:26:51: 28 services, 3 WEAKER (colord, upower ns_user; rtkit ns_mnt), 1 CHECK (bolt 11/9), 98 DIFF (126 minus the 28 limit_core rows), exit 1. Snapshots 22:09:07 and 23:26:51, without meta, pid and limit_core rows: identical, 0 lines differ.
+
+**Shutdown order.** 22:47:02 has the shell's `Consumed` 40 ms before exit.target, the second shutdown on the new code (21:20:11 was the first). Last SEGV still 16:57:13, on the old code. **Two of the about 20 shutdowns part 74 asked for**, which says almost nothing at a rate of 4 in 23. Only user@1000's log was read; the greeter's order on a shutdown from the login screen has not been seen on the new code. Whether a shutdown takes visibly longer: not reported.
+
+**Correction to parts 76 and earlier:** "the script keeps exiting 1 until PrivateUsers= is decided" is only partly right. rtkit's ns_mnt is also a WEAKER row and has nothing to do with PrivateUsers=, so the script still exits 1 if PrivateUsers= is implemented, unless the rtkit row is handled too.
+
+### Current state
+
+Installed and booted: gdf289c9. Part 71's capture and part 76's rule are confirmed on a real boot under enforcing. Part 74's cause is still unproven. df289c9 and part 77 (50ba61a) on main, not pushed by this session; part 78 uncommitted.
+
+### Next steps
+
+1. Owner, over about 18 more shutdowns: TESTING's "Shutdown order" row and `sudo grep -E 'gnome-shell.*segfault' /var/log/messages | tail -3`. If a SEGV comes back: the core and the backtrace (part 71's step 3); the fix was then wrong or partial.
+2. PrivateUsers=: owner's decision (recommended: leave out).
+3. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
+
+## 2026-10-31, part 79: part 78's open items read from the logs; a sharper test for the shell crash (no code change)
+
+Owner asked to fix part 78's four open items. None is a code defect; each is missing evidence. All of this was read or run as the owner on the running boot, without root: /var/log/uinitconverter is readable through wheel, so these checks don't need the owner's sudo.
+
+Method: for each logind "System is rebooting/powering" line in /var/log/uinitconverter/\*/current, merge all services' lines and measure against it. Throwaway script, not in the repo. 26 shutdowns, from 10-27 17:07 when these logs start.
+
+**Shutdown time: no visible cost in the logs.** Request to last logged line: 0.87 and 1.00 s on the new code, 0.85 to 1.63 s on the 20 old-code shutdowns without a crash. The user manager's exit.target moved from about 0.05 s to 0.55 s; the total didn't move. Limit: this stops when the loggers do, so the last stage isn't measured, and the owner's own impression is still unreported.
+
+**The login-screen path is the sharp test, and part 78's "about 18 more" was the slow one.** A code=dumped line for the shell in user@\*'s logs, old code: login screen 2 crashes of 2 (10-29 14:17, 10-31 16:57); from a user session 2 of 22 (10-28 00:48, 10-31 15:14). So those are the 4 of part 73, found without root. New code: 2 shutdowns, both from a session, none from the login screen. Two samples only, so the 2 of 2 is a lead, not a rate. If it holds, a few login-screen shutdowns tell more than many session ones, and a crash there also delivers the core. The session path keeps its count: 2 clean shutdowns would happen by luck about 69% of the time at 20 in 24.
+
+**Core capture: tested closer to the real case; still no real shell crash.**
+- gnome-shell can dump: no file capabilities, /proc/PID/mem owned by the owner, no effective capabilities, coredump_filter 0x33, RSS 257 MB of which 114 MB anonymous. So the kernel won't refuse it.
+- `systemd-run --user --slice=session.slice`, python allocating about 122 MB, then SIGSEGV: code=dumped, and core.python3.1000.\*.20291.\*.zst, 34 MB, readable by the owner. `zstd -t` passes, 134 MB ELF, contains the test's data. Written about 0.13 s after the crash time in its name. coredump.conf has no overrides. That file is a test leftover; removing it needs root.
+- Not covered: a crash during a shutdown, a crash as the greeter's dynamic UID, the real binary, and gdb on such a core. Nothing can cover these except the real event, and crashing the live shell would end the owner's session.
+
+Decision: no script added to the repo. The two greps below already do it, and neither needs sudo. Decision: not rebooting to test: that would end this session, and it needs the login screen.
+
+### Current state
+
+Installed and booted: gdf289c9. Part 74's cause is still unproven: no login-screen shutdown yet on the new code.
+
+### Next steps
+
+1. Owner: 3 to 5 shutdowns from the login screen (log out, or boot and don't log in, then power off from the login screen). After the next boot: `grep -hE 'org.gnome.Shell@gdm.service: Consumed|Activating special unit exit.target' /var/log/uinitconverter/user@60578.service/current | tail -4` (`Consumed` first on a shutdown) and `grep -hE 'Shell@.*code=dumped' /var/log/uinitconverter/user@*/current | tail -5` (nothing after 10-31 16:57). Note that a greeter ending at login has shown `Consumed` first all along, so only the entries at a shutdown's time count.
+2. Normal session shutdowns keep counting, with the same grep. If code=dumped comes back: the core and backtrace (part 71's step 3); the fix was then wrong or partial.
+3. PrivateUsers=: owner's decision (recommended: leave out).
+4. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
