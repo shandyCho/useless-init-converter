@@ -107,6 +107,13 @@ pid_of() {
     done
     echo "$last"
 }
+# The supervised process has become a new udevd. Asks s6 for the PID: looked up
+# by name right after a kill, it sometimes came back empty.
+udevd_changed() {
+    local p
+    p=$(s6-svstat -p /service/udevd)
+    [ "$p" != "$u" ] && [ "$(cat "/proc/$p/comm" 2>/dev/null)" = systemd-udevd ]
+}
 status() { sed -n "s/^$2:[[:space:]]*//p" "/proc/$1/status"; }
 top_mount() { awk -v p="$2" '$5 == p { l = $6 } END { print l }' "/proc/$1/mountinfo" | cut -d, -f1; }
 
@@ -148,6 +155,9 @@ is "rsyslog: seccomp" "$(status "$r" Seccomp)" 2
 is "rsyslog: umask" "$(status "$r" Umask)" 0066
 is "rsyslog: RLIMIT_NOFILE" "$(awk '/open files/ { print $4 ":" $5 }' "/proc/$r/limits")" 16384:16384
 case $(top_mount "$r" /home) in ro) ok "rsyslog: /home read-only" ;; *) bad "rsyslog: /home $(top_mount "$r" /home)" ;; esac
+# syslog starts before tmpfiles-setup, which would otherwise create /run/user.
+is "rsyslog: /run/user read-only" "$(top_mount "$r" /run/user)" ro
+is "rsyslog: /run/user's mode" "$(stat -c %a /run/user)" 755
 is "rsyslog: /dev/log for everyone" "$(stat -c %a /dev/log)" 666
 logger -p cron.info vm-cron-message
 logger -p authpriv.info vm-auth-message
@@ -198,14 +208,14 @@ is "udevd: one try" "$(cut -d' ' -f1 /run/uinitconverter/udevd-tries)" 1
 read -r _ last </run/uinitconverter/udevd-tries
 echo "3 $((last - 120))" >/run/uinitconverter/udevd-tries
 kill -9 "$u"
-wait_for '[ -n "$(pid_of systemd-udevd)" ] && [ "$(pid_of systemd-udevd)" != "$u" ] && [ "$(cut -d" " -f1 /run/uinitconverter/udevd-tries)" = 1 ]' || bad "udevd: no restart, tries $(cat /run/uinitconverter/udevd-tries)"
-u=$(pid_of systemd-udevd)
+wait_for 'udevd_changed && [ "$(cut -d" " -f1 /run/uinitconverter/udevd-tries)" = 1 ]' || bad "udevd: no restart, tries $(cat /run/uinitconverter/udevd-tries)"
+u=$(s6-svstat -p /service/udevd)
 is "udevd: restarted with its sandbox" "$(status "$u" Seccomp)" 2
 # Now a sandbox that can't be applied.
 rm /usr/lib/systemd/system/systemd-udevd.service
 kill -9 "$u"
-wait_for '[ "$(cut -d" " -f1 /run/uinitconverter/udevd-tries)" = 4 ] && [ -n "$(pid_of systemd-udevd)" ] && [ "$(pid_of systemd-udevd)" != "$u" ]' || bad "udevd: no fallback, tries $(cat /run/uinitconverter/udevd-tries)"
-u=$(pid_of systemd-udevd)
+wait_for '[ "$(cut -d" " -f1 /run/uinitconverter/udevd-tries)" = 4 ] && udevd_changed' || bad "udevd: no fallback, tries $(cat /run/uinitconverter/udevd-tries)"
+u=$(s6-svstat -p /service/udevd)
 is "udevd: fallback runs it without seccomp" "$(status "$u" Seccomp)" 0
 is "udevd: fallback tries" "$(cut -d' ' -f1 /run/uinitconverter/udevd-tries)" 4
 is "udevd: fallback OOM score" "$(cat "/proc/$u/oom_score_adj")" -1000

@@ -13,6 +13,14 @@
 #    would (see /etc/uinitconverter/syslog-ng.conf).
 syslog=$(sed -n 's/^[[:space:]]*SYSLOG=[[:space:]]*"\{0,1\}\([A-Za-z-]*\).*/\1/p' /etc/uinitconverter/uinitconverter.conf 2>/dev/null | tail -n 1)
 
+# syslog starts before tmpfiles-setup, and rsyslog.service's ProtectHome= only
+# covers a /run/user that already exists. Same mode as tmpfiles' line; created
+# from init_t it needs its label set.
+if [ ! -d /run/user ]; then
+    mkdir -m 0755 /run/user
+    command -v restorecon >/dev/null && restorecon /run/user 2>/dev/null
+fi
+
 case ${syslog:-rsyslog} in
 syslog-ng)
     if [ -d /run/systemd/system ]; then
