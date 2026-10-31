@@ -8671,3 +8671,91 @@ Built, not installed. Installed and booted: g79f56a3.dirty. Merge to main still 
 Part 63's, with step 1 now: `git switch main && git merge --ff-only
 confine-rsyslog-earlyoom-udevd`; `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`; `sudo
 uinitconverter reload --no-update`; boot s6; then part 63's checks.
+
+## 2026-10-31, part 65: part 63's fix confirmed on a real boot (no code change)
+
+s6 boot of 17:59:36, g86f2b3c installed (`rpm -q`), on main, enforcing. Part 63's checks, all as
+expected:
+- `ls -Zd /run/user`: system_u:object_r:user_tmp_t:s0, so the restorecon in dist/s6/syslog/run gives
+  the path's label on a real boot (part 63 had only read this from the policy).
+- `sudo ausearch -m AVC -ts boot`: `<no matches>`.
+- `tests/hardencompare.sh report`, systemd 14:57:22 vs s6 18:12:48: 28 services, 3 WEAKER, 1 CHECK,
+  148 DIFF, "Result: WEAKER on s6" because of those 3. The rsyslog row is gone.
+
+Diff of the s6 snapshots 17:21:40 and 18:12:48, without pid and meta rows: one line, rsyslog
+`mount:/run/user` from `/run tmpfs rw` to `/run/user tmpfs ro bind`. So the RPM change did this and
+nothing else in what the script reads.
+
+What is left in the report, none of it new:
+- WEAKER: colord, upower ns_user (PrivateUsers= left out on purpose; both have no effective
+  capabilities and NoNewPrivileges); rtkit ns_mnt (part 55: its unit sets only PrivateNetwork=, not a
+  file system restriction). The script will keep exiting 1 unless PrivateUsers= is implemented.
+- CHECK: bolt 11/9: its SystemCallFilter= without SystemCallArchitectures= is one filter on s6 and
+  three on systemd (part 56's count). Part 56's limit stands: this compares counts, not contents.
+- DIFF: all kinds already read in parts 55 and 58.
+
+### Current state
+
+Installed and booted: g86f2b3c, on main. Every service compared matches systemd except the 3 known
+rows. Open bug check: /var/log/cron's mode, not yet seen on a real file. earlyoom and agetty run only
+on s6, so the report doesn't compare them.
+
+### Next steps
+
+1. Owner: a device plugged in on an s6 boot; `ls -l /var/log/cron` once it exists (0600).
+2. Why some boots end within a minute or two (part 61).
+3. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
+4. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
+
+## 2026-10-31, part 66: hard RLIMIT_NOFILE, /var/log/cron, the short boots (uncommitted)
+
+Owner: "could you fix" the RLIMIT_NOFILE hard limit, the /var/log/cron check, and the short boots.
+
+**1. RLIMIT_NOFILE (owner's decision from part 65: match systemd).** The kernel starts PID 1 at
+1024:4096 and nothing raised it, so every s6 service inherited hard 4096. dist/s6-linux-init/init-selinux
+now runs `ulimit -Hn 524288` before the policy load; soft stays 1024, as systemd's default
+1024:524288. A failure prints a message and the boot goes on. Set here because it is the one place
+before s6-linux-init that everything inherits from, and skarnet's sources aren't touched. Units with
+LimitNOFILE= are unchanged (the runner sets both). cups.service has no LimitNOFILE=: the 65535 is its own
+setrlimit, capped by the hard limit. fs.nr_open isn't raised (systemd raises it to 2147483584), so
+udevd's row, 2147483584 vs 1048576, stays. The value is fixed; system.conf's DefaultLimitNOFILE= isn't read.
+
+tests/confine-vm.sh runs the real script in QEMU with stand-ins for load_policy and s6-linux-init's init:
+4 new checks, 54/54 (twice before the shellcheck comment, once after). With the old script: 4 failed, the
+raise and the message checks on each of the two VM boots. cargo test 82 passed 0 failed (sum of the result
+lines); sandbox default 311/311; shellcheck, bash -n clean. Other sandbox modes not run: they don't use
+init-selinux. TESTING pair updated. **Not tested: a real boot.**
+
+**2. /var/log/cron: confirmed.** `logger -p cron.info` as the owner's user on this s6 boot (one test line left
+in the file): `-rw-------. root root system_u:object_r:cron_log_t:s0`. /etc/uinitconverter/rsyslog.conf has
+no FileCreateMode, as part 59 predicted for an existing install, so this is confine's UMask=0066.
+
+**3. Short boots: not a crash, on the one boot with logs; nothing to fix so far.** Boot d577c13b (systemd,
+14:38:44-14:39:40, no uinitconverter process in it): login screen up at 14:39:08, then 14:39:31 gnome-shell
+`endSessionDialog: No XDG_SESSION_ID, fetched from logind: c1`, 14:39:32 logind `reboot requested from client
+PID 1739 ('gnome-session-s') (unit user@60578.service)`, then a clean shutdown. 60578 is gdm-greeter. So Restart
+was asked for through the login screen's end-session dialog, no failure before it. That fits someone choosing
+Restart there; the journal can't tell who or what did. The owner hasn't been asked yet.
+
+The s6 pairs (10-28 07:17, 10-29 14:17 and 22:08, 10-30 16:54, 10-31 16:57) can't be read from here:
+JOURNAL=no, /var/log/messages is 0600, sudo needs a password. So whether they have the same cause is **open**.
+Also seen: s6 boots leave no reboot/shutdown records in wtmp (`last -x` has only logins since 14:58, then
+shows that shutdown's end as 1970). Not fixed: not asked for.
+
+**My mistake, no effect:** a test-editing command's inner heredoc ended the outer one early, and the rest ran as
+shell with $R empty: `chmod +x` on /usr/sbin/init-selinux, /usr/sbin/load_policy and
+/etc/s6-linux-init/current/bin/init. All three refused (not root); modes checked afterwards, unchanged.
+
+### Current state
+
+Part 66 uncommitted on main on top of 16bba31. Installed and booted: g86f2b3c, without it.
+
+### Next steps
+
+1. Owner: commit, `packages/build-rpms.sh`, `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`, reboot to s6
+   (init-selinux comes from the RPM; no reload needed). Check `grep 'open files' /proc/1/limits` (1024 524288),
+   `sudo ausearch -m AVC -ts boot`, then `sudo tests/hardencompare.sh snap` and report: limit_nofile rows gone except
+   udevd's, cups 65535/524288.
+2. Owner: `sudo grep -hE 'requested from client|key pressed' /var/log/messages* | tail -40`, for the s6 short boots.
+3. PrivateUsers=: owner's decision (recommended: leave out).
+4. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
