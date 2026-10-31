@@ -8325,3 +8325,290 @@ on the bus, and the boot itself. tests/hardencompare.sh report on the old snapsh
 3. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
 4. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the
    owner decides.
+
+## 2026-10-31, part 57: s6 boot with 79f56a3 RPMs, bus checks (no code change)
+
+Owner installed the 79f56a3 RPMs (built 2026-10-30 22:03, installed 22:29) and
+rebooted into s6 (booted 14:20:52, init-selinux, enforcing). First real boot of
+part 56's `confine`. Read without root:
+
+- System bus: dbus-broker-launch 1786 and dbus-broker 1951 in
+  0::/system.slice/dbus-broker.service, seccomp mode 2, 3 filters, RLIMIT_NOFILE
+  16384/16384, system_dbusd_t. /run/uinitconverter/dbus-broker-tries = 1, `dbus`
+  active in s6-rc. So the cgroup, seccomp and limit steps work with real root and
+  SELinux enforcing, and no fallback to dbus-daemon.
+- GNOME login: session 2 on seat0 (tty2), gnome-shell running.
+- Still in cgroup `/` with 0 filters, as part 55 said: systemd-udevd, rsyslogd,
+  earlyoom.
+
+Not checked (need root; sudo asks for a password): `ausearch -m AVC -ts boot`, the
+bus's mount namespace and BPF program. No snapshot since the fixes: the latest are
+still 2026-10-30 17:19 (s6) and 17:43 (systemd). Whether the owner ran
+`uinitconverter reload --no-update` after the install was not established.
+
+### Current state
+
+Installed and booted: 79f56a3 (same code as 465df67). Bus confinement works on a
+real boot, apart from the unchecked items above. Hardening result of part 56 not
+yet measured.
+
+### Next steps
+
+1. Owner, on this s6 boot: `sudo uinitconverter reload --no-update` if not done
+   since the install, `sudo ausearch -m AVC -ts boot`,
+   `sudo tests/hardencompare.sh snap`.
+2. Owner: boot systemd, `sudo tests/hardencompare.sh snap`, then
+   `tests/hardencompare.sh report`. Expected as in part 56: of the 39, 3 left
+   (colord, upower ns_user; rtkit ns_mnt), 1 CHECK (bolt), new rows for udevd,
+   rsyslog, earlyoom; decide on those from the data.
+3. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
+4. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when
+   the owner decides.
+
+## 2026-10-31, part 58: hardencompare result after part 56 (no code change)
+
+Owner took snapshots on 79f56a3: s6 14:37:02, systemd 14:57:22, then booted s6 again
+(15:15). `tests/hardencompare.sh report`: 28 services on both, 19 WEAKER, 3 CHECK, 149
+DIFF, exit 1. Checked against the raw TSVs, the unit files and the run scripts.
+
+Part 56's fixes are confirmed, and the 39 went down to the 3 expected:
+- Left: colord, upower ns_user; rtkit ns_mnt (part 55: not a real weakening). CHECK:
+  bolt 11/9 as expected. /home, /root, /run/user, /dev rows are no longer WEAKER.
+- System bus, 0 weaker: same seccomp 2/3 filters, private mount namespace, 1 BPF
+  program, system_dbusd_t. This also settles the mount namespace and BPF program left
+  unchecked in part 57.
+- Seccomp counts are +3 where ProtectKernelTunables= applies (accounts-daemon 18->21,
+  bluetooth 3->6, chronyd 22->25, fwupd 27->30, polkit 30->33), so the new runner ran.
+
+The other 16 WEAKER and 2 CHECK are the new rows part 56 predicted, none confined:
+- rsyslog (9 + CHECK): dist/s6/syslog/run. No nnp, seccomp 0, host mount namespace,
+  /home, /proc/sys, /sys/fs/cgroup writable. syslogd_t on both.
+- udevd (7 + CHECK): dist/s6/udevd/run. Keeps sys_time, wake_alarm; seccomp 0; host
+  mount and UTS namespaces; 0 BPF programs (2 on systemd). udev_t on both.
+  oom_score_adj 0 vs -1000 (DIFF, but it means udevd can be OOM-killed on s6).
+
+Found, not visible as WEAKER in the report:
+- **New rsyslog files are world-readable on s6.** rsyslog.service has UMask=0066;
+  dist/s6/syslog/run sets no umask, and /etc/uinitconverter/rsyslog.conf has no
+  FileCreateMode. (Corrected in part 59: the FileCreateMode="0600" in /etc/rsyslog.conf,
+  first listed here too, is imjournal's, for its state file.) Tested unprivileged with
+  rsyslogd under umask 0022 and such a config: the new file was 0644. Existing files
+  keep 0600 (messages, secure, maillog, spooler, boot.log), and logrotate's `create`
+  keeps the mode, so only a file that doesn't exist yet is exposed. /var/log/cron
+  doesn't exist here, and the config writes to it. Not observed on the real service.
+- **earlyoom is the largest gap.** The systemd boot doesn't run it (disabled there,
+  oomd instead), so it is only in "Running only on s6", with no comparison. Against
+  its own unit (DynamicUser, bounding set CAP_KILL CAP_IPC_LOCK, sandbox, seccomp,
+  Nice=-20, OOMScoreAdjust=-100): uid 0, all capabilities, unconfined_service_t,
+  seccomp 0, nice 0, oom_score_adj 0.
+- Private /var/tmp is tmpfs on s6, on disk on systemd (sandbox.rs:368), so its contents
+  are in RAM and don't persist. Not a weakening; not noted in part 55.
+- agetty is only on s6 too; not compared.
+
+`confine` can't simply be added to all three: it has no User= (earlyoom). (Corrected in
+part 59: this also said it has no UMask=, which was wrong; confine calls apply_limits,
+which sets UMask=, Nice= and OOMScoreAdjust=.) Whether confine covers udevd's
+IPAddressDeny= wasn't checked.
+
+Not checked: `ausearch -m AVC -ts boot` (needs root; newest ~/avc*.txt is from 10-21).
+
+### Current state
+
+Installed and booted: 79f56a3. All services run by units match systemd apart from the
+3 known rows. rsyslog, udevd and earlyoom, started by uinitconverter's own s6 services,
+still run without their units' sandbox. Bug open: new rsyslog files 0644.
+
+### Next steps
+
+1. Fix: `umask 0066` in dist/s6/syslog/run or FileCreateMode="0600" in the generated
+   rsyslog.conf.
+2. Run rsyslog under confine (UMask= handled by step 1), then earlyoom through its unit
+   or with a dropped user and bounding set, with its Nice= and OOMScoreAdjust=.
+3. udevd: at least oom_score_adj -1000 and the bounding set. Boot-critical, so test
+   the whole of confine in a VM first, with a fallback as for the bus.
+4. Owner: `sudo ausearch -m AVC -ts boot` on an s6 boot.
+5. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
+6. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the
+   owner decides.
+
+## 2026-10-31, part 59: rsyslog, earlyoom, udevd under confine (uncommitted)
+
+Owner: `sudo ausearch -m AVC -ts boot` on the 15:15 s6 boot (79f56a3): `<no matches>`.
+"Fix them in that order": part 58's steps 1-3. Part 58 had two errors, corrected there
+(confine does apply UMask=; Fedora's FileCreateMode is imjournal's).
+
+**1. rsyslog's new files.** dist/rsyslog.conf: omfile FileCreateMode="0600". Only `init`
+copies that file to /etc/uinitconverter, so an RPM update doesn't reach it; step 2's
+UMask=0066 covers the existing install.
+
+**2. rsyslog and earlyoom.** dist/s6/syslog/run: both rsyslog branches through `confine
+rsyslog.service` (syslog-ng unchanged, perm(0600) already). confine gets User= and ambient
+capabilities: the block in exec_command became Runner::switch_ids, used by both, after
+the bounding set and before seccomp, as there. dbus-broker.service has no User=, so the
+bus doesn't change. dist/s6/earlyoom/run through `confine earlyoom.service`. Its user comes
+from DynamicUser (ensure_system_user: a persistent system user `earlyoom`, made by useradd
+at the first start; there is none on this machine yet, and the VM test has it
+in /etc/passwd, so useradd there is untested). Policy allows init_t nnp_transition to
+unconfined_service_t and syslogd_t (sesearch).
+
+Decision: no fallback for these two. If the sandbox can't be applied the service stays
+down and s6 retries each second, rather than a logger or memory killer silently running
+unconfined.
+
+**3. udevd.** dist/s6/udevd/run: `confine systemd-udevd.service -- s6-notifyoncheck ...`,
+confine outermost so a failure happens before the check child exists, oom_score_adj -1000
+set by the script for both paths. Decision: a fallback, the boot needs it. Three starts
+with gaps under 60 s, or `uinitconverter.udev=plain`, run it unconfined, with a message.
+Unlike the bus's counter this resets after 60 s, so restarts from systemd updates don't
+drop the sandbox. Limit: something that can crash udevd three times within a minute gets it
+restarted unconfined.
+
+Tests: new tests/confine-vm.sh: real root in QEMU, the running kernel, this host's programs
+and units, real run scripts under s6-supervise; 44/44 three times. rsyslog's messages (also
+the kernel's through imklog), 0600 files with /dev/log still 0666; earlyoom uid 990 with
+CapEff/CapBnd only kill and ipc_lock, kills a root process itself under memory pressure,
+restarts; udevd handles events and runs RUN+=, sees later mounts, the fallback, the reset,
+udev=plain. cargo test all pass; standalone 3+3+3+2; hardencompare-check 37/37; sandbox
+default 311/311, SANDBOX_JOURNAL=no 318/318, SANDBOX_FDSTORE=no 299/299, SANDBOX_BUS=broker
+312/312; bash -n and shellcheck clean.
+
+Not established: one VM run hung for 300 s right after an `echo h >/proc/sysrq-trigger` I had
+in the test. It went away when I took that out and I didn't trace it. Not seen with the
+final test.
+
+**Not tested: a real boot.** SELinux enforcing (the VM has no policy, so udev_t, syslogd_t,
+AVCs), useradd at boot, the BPF programs on the three (the VM can't read them), real
+hardware events. udevd is essential to the boot; if it misbehaves, boot with
+`uinitconverter.udev=plain`.
+
+### Current state
+
+Uncommitted on top of 79f56a3, not built into RPMs or booted. Installed: 79f56a3.
+
+### Next steps
+
+1. Commit, build and install the RPMs, `sudo uinitconverter reload --no-update`, boot s6.
+   Check: `getent passwd earlyoom`; `s6-svstat` of earlyoom, syslog, udevd growing;
+   `cat /run/uinitconverter/udevd-tries` (1 ...); `sudo ausearch -m AVC -ts boot`; a device
+   plugged in works; `ls -l /var/log/cron` after a cron message (0600).
+2. Owner: `sudo tests/hardencompare.sh snap` on s6, then `tests/hardencompare.sh report`
+   (the 14:57 systemd snapshot still applies). Expected: rsyslog and udevd rows gone, apart
+   from whatever the filter counts show; the 3 known rows remain. earlyoom stays under
+   "Running only on s6", as systemd doesn't run it here.
+3. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
+4. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the
+   owner decides.
+
+## 2026-10-31, part 60: memtest not running on s6, enable not committed (no code change)
+
+Owner wants memtest enabled. Installed since 10-27 and the scripts match tests/. It ran on
+the systemd boot (14:50 today), but the newest s6 snapshot is 10-30 20:04 and it isn't
+live on s6. Cause: the owner's `sudo s6 set disable` followed by `reload --no-update` took it
+out of the database, and the later `sudo s6 set enable` (working set changed 15:13) was
+never committed. `s6 set status` says active, while the compiled `default` bundle from 14:36
+has 128 services without it; it is the only active service missing there. Same in
+compiled.previous, the database of the 14:20 boot. `s6 set enable` only changes the working
+set. Nothing to fix in the code. I can't run it (sudo needs a password).
+
+### Next steps
+
+Before part 59's step 1: `sudo uinitconverter reload --no-update` commits the enable too, so
+part 59's step 1 is enough. Then on the next s6 boot, don't log in for 10 minutes;
+`s6-rc -a list | grep memtest`, `tail /var/lib/uinitconverter-memtest/log`. Part 59's
+steps otherwise unchanged.
+
+## 2026-10-31, part 61: memory comparison with part 59 installed (no code change)
+
+Owner booted s6 (16:57:36) on RPMs 1.20261031163217.g79f56a3.dirty, installed 16:45, so
+part 59's uncommitted changes are in them. Part 60's fix worked: memtest ran, snapshot
+mem-s6-20261031-170803 at uptime 627 s.
+
+`tests/memtest.sh report`: 6 systemd, 10 s6, PASS. total - available median s6 1157.1 vs
+systemd 1176.4 MiB (-19.3). Ranges: systemd 1171.1-1179.7, s6 1140.9-1166.2 apart from the
+outlier below.
+
+Latest pair (systemd 145023, s6 170803): total - available 1176.7 vs 1153.8 (-22.9); used
++96.2 with Cached -95.0 (part 42: read total - available); PSS all 556.0 vs 558.8 (+2.8):
+init +51.8 (s6-supervise x255 32.3, runner helpers x37 21.3, uinitconverterd 8.1), logging
+-41.4. Kernel side s6 higher: SUnreclaim +20.0, PageTables +17.2, KernelStack +6.1.
+
+Confine's cost, s6 170601 (10-30, before parts 56 and 59) vs 170803: total - available -3.0,
+SUnreclaim +2.3, PSS all -1.2. rsyslogd, earlyoom, udevd PSS each within 0.02 MiB. No
+measurable cost; a small kernel-side cost could be hidden in the boot-to-boot spread.
+
+Read from /proc on this boot (part 59's step 1, the parts that need no root):
+- rsyslogd: syslogd_t, nnp, seccomp 18 filters, own cgroup.
+- earlyoom: uid 969 (useradd at boot worked, part 59 had this untested), CapBnd kill and
+  ipc_lock, 30 filters, oom_score_adj -100, unconfined_service_t, own cgroup.
+- udevd: udev_t, 15 filters, oom_score_adj -1000, own cgroup, udevd-tries "1 22" (no fallback).
+- /var/log/cron still doesn't exist, so its 0600 isn't seen yet.
+
+Outlier: mem-s6-20261030-200429 was taken at uptime 8376 s (log: "snapshot in 600 s" at 17:45,
+written 20:04), total - available 1825, PSS 1318. Not comparable, cause not looked into. Left
+in the directory: the median only moves from -19.6 to -19.3 with it.
+
+Found, not explained: the log has two "boot: snapshot in 600 s" lines 1-2 minutes apart on
+some boots (10-29 22:08/22:10, 10-30 16:54/16:56, 10-31 14:39/14:40, 16:57/16:58). The first
+of today's s6 pair is 36 s before the boot's start by uptime, and `last` has a 14:39-14:39
+boot, so these look like real very short boots before the one that counts. Only one snapshot
+results, with a normal uptime, so the figures aren't affected.
+
+### Current state
+
+Part 59 still uncommitted; RPMs built from that dirty tree are installed and booted. Memory
+PASS with confine on rsyslog, earlyoom and udevd.
+
+### Next steps
+
+1. Owner: commit decision for part 59, then `sudo ausearch -m AVC -ts boot`, a device plugged
+   in, and `sudo tests/hardencompare.sh snap` + report on this s6 boot (part 59's steps 1-2).
+2. Why some boots end within a minute or two (the double log lines above).
+3. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
+4. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner
+   decides.
+
+## 2026-10-31, part 62: part 59 committed (439b19f); hardencompare on a real boot
+
+Owner asked to commit part 59. 439b19f, on branch confine-rsyslog-earlyoom-udevd, not main:
+the session's standing rule is to branch before committing from the default branch. Owner
+merges it (`git switch main && git merge --ff-only confine-rsyslog-earlyoom-udevd`). Before
+committing: cargo test passes, bash -n and shellcheck clean on the run scripts and
+confine-vm.sh. The sandbox suite and tests/confine-vm.sh weren't rerun, the tree being as
+part 59 tested it. The installed RPMs were built from this tree, marked dirty.
+
+Owner on the 16:57 s6 boot: `sudo ausearch -m AVC -ts boot`: `<no matches>`, so part 59's
+confinement caused no denials, including udev_t and syslogd_t under enforcing.
+
+`tests/hardencompare.sh report`, systemd 14:57:22 vs s6 17:21:40: 28 services, 4 WEAKER, 1
+CHECK, 148 DIFF, exit 1 (was 19 WEAKER, 3 CHECK).
+- udevd: 0 weaker. Mount and UTS namespaces, oom_score_adj -1000 and bpf_progs 2 now match,
+  so the BPF programs part 59 couldn't check in the VM are there. The remaining rows are limits
+  and seccomp 15 vs 14.
+- The 3 known: colord, upower ns_user; rtkit ns_mnt. CHECK: bolt 11/9.
+- earlyoom stays in "Running only on s6", as expected.
+- **New, part 59 predicted this row gone: rsyslog `mount:/run/user`**: systemd /run/user tmpfs
+  ro bind, s6 /run tmpfs rw. dist/s6/syslog depends only on mount-fs, so it isn't ordered after
+  tmpfiles-setup, which creates /run/user. sandbox.rs's ProtectHome= skips a directory that
+  doesn't exist, so /run/user is never made read-only. earlyoom, ordered after
+  uinitconverter-sysinit, has /run/user tmpfs ro from the same code. The cause is read from the
+  ordering and those two rows, not traced at the start itself. Effect: rsyslogd (root,
+  syslogd_t) isn't blocked by the mount from writing under /run/user/UID; SELinux still applies.
+  Other services the daemon starts are not affected unless they also start before tmpfiles-setup.
+  Not fixed: not asked for.
+
+### Current state
+
+Part 59 committed on the branch (439b19f), not on main. Installed and booted: the same tree as
+g79f56a3.dirty. Memory PASS, no AVCs. One new real gap (rsyslog /run/user), one bug's fix not
+yet seen on a real file (/var/log/cron doesn't exist yet).
+
+### Next steps
+
+1. Fix rsyslog's /run/user. Recommended: `mkdir -p /run/user` in dist/s6/syslog/run before
+   confine (same mode as tmpfiles' `d /run/user 0755 root root`), rather than ordering syslog
+   after tmpfiles-setup, which would lose early messages.
+2. Owner: a device plugged in on an s6 boot; `ls -l /var/log/cron` once it exists (0600).
+3. Why some boots end within a minute or two (part 61).
+4. PrivateUsers= and the RLIMIT_NOFILE hard limit: owner's decision.
+5. Optional: SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner
+   decides.
