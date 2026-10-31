@@ -147,6 +147,13 @@
 ; falls back to dbus-daemon). The lock gets init's own type.
 (typetransition init_t system_dbusd_var_run_t file "system_bus_socket.lock" init_var_run_t)
 
+; init-selinux raises the soft RLIMIT_CORE while PID 1 is still kernel_t, then
+; execs s6-linux-init into init_t. Without rlimitinh on that transition the
+; kernel resets every soft limit to its boot default (core: 0) and keeps the
+; hard ones, and the policy dontaudits it, so no AVC shows. systemd never meets
+; this: it sets its limits after it is in init_t. init_t -> domain has it already.
+(allow kernel_t init_t (process (rlimitinh)))
+
 ; dist/s6/coredump: systemd-coredump --manager creates its socket in
 ; /run/systemd/coredumpd. The policy has create on the socket file but nothing
 ; on the directory, as Fedora's boot uses systemd-coredump.socket instead.

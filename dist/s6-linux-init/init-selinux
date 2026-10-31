@@ -12,6 +12,7 @@ mountpoint -q /sys || mount -t sysfs sysfs /sys
 ulimit -Hn 524288 2>/dev/null || echo "init-selinux: can't raise the hard RLIMIT_NOFILE" >&2
 # The kernel starts PID 1 with no core dumps (soft 0) and every service inherits
 # it; systemd sets unlimited, and then systemd-coredump does the limiting.
+# Survives the exec into init_t only through the policy module's rlimitinh rule.
 # shellcheck disable=SC3045  # -S: bash and dash both have it
 ulimit -Sc unlimited 2>/dev/null || echo "init-selinux: can't raise the soft RLIMIT_CORE" >&2
 if ! /usr/sbin/load_policy -i; then

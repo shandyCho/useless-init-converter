@@ -9000,3 +9000,32 @@ Built, not installed. Installed and booted: g3f517cf. This entry uncommitted; me
 ### Next steps
 
 Part 74's.
+
+## 2026-10-31, part 76: first boot with g567c7b9; soft RLIMIT_CORE lost at kernel_t -> init_t (uncommitted)
+
+Owner installed g567c7b9, booted s6 (21:21:38, enforcing) and sent part 71's and part 74's checks.
+
+Good: /var/log/uinitconverter 750 root:wheel. core_pattern `@@/run/systemd/coredumpd/kernel`. coredump service up. `ausearch -m AVC -ts boot` no matches. Shutdown order: the 21:20:11 shutdown, the first on the new code, has the shell's `Consumed` 39 ms before exit.target; the 21:07 one, on the old code, has exit.target first. **One shutdown only**, so part 74's cause is still unproven (it wants about 20). Last SEGV 16:57, on the old code.
+hardencompare, systemd 14:57:22 vs s6 22:09:07: 28 services, 3 WEAKER (colord, upower ns_user; rtkit ns_mnt), 1 CHECK (bolt 11/9), 126 DIFF, same as part 68. Only on s6 now also systemd-coredumpd.service, as expected.
+
+**Bug: part 71's core capture doesn't work on a real boot.** /proc/1/limits has core soft 0, hard unlimited, and so do s6-supervise, the user manager and gnome-shell. All 28 limit_core rows stayed, though part 71 said they'd go. `sh -c 'kill -SEGV $$'` printed "core dumped" (the kernel's flag) but left no file: the only one listed is core.s6-ftrigrd of 10-19, 03:07. So a shell crash today would again leave no core.
+
+Cause: the installed init-selinux does run `ulimit -Sc unlimited`, and s6-linux-init has no rlimit code (grep of 1.2.0.2's src). But it runs in kernel_t and execs bin/init (init_exec_t) into init_t. On a transition without process:rlimitinh, the kernel (selinux_bprm_committing_creds) sets each soft limit to min(hard, init_task's soft) and keeps the hard ones. That is why part 66's hard NOFILE survived and this didn't. sesearch: no allow kernel_t init_t rlimitinh; `dontaudit domain domain:process { noatsecure rlimitinh siginh }`, hence no AVC. `allow init_t domain:process rlimitinh` exists, so only this first step loses it. The kernel's code is from memory, not read this session; the policy query and the symptom are what was checked. tests/confine-vm.sh passed in part 71 because it loads no policy.
+
+The rest of the chain works: as the owner, `sh -c 'ulimit -Sc unlimited; kill -SEGV $$'` under enforcing left core.sh.1000.*.27163.*.zst, 53 KB, 22:11. That file is still there (test leftover, harmless).
+
+**Fix.** dist/selinux/uinitconverter.cil: `(allow kernel_t init_t (process (rlimitinh)))`, plus a comment in init-selinux. Chosen over `prlimit --pid 1` in rc.init: s6-svscan and the first supervisors would already be running at 0, and no ordering is added. Side effect: PID 1 now inherits all soft limits of the init-selinux shell, not the kernel's defaults. Those should match except core, but what systemd's initramfs leaves behind wasn't read, so compare /proc/1/limits and hardencompare's limit_* rows after the boot.
+
+Tests: the module compiled against the running policy without root: `checkpolicy -M -b -C` to CIL, then `secilc` with a copy of the module minus its `(type ...)` lines (already in that policy): exit 0, and sesearch on the result shows rlimitinh on kernel_t -> init_t. cargo test 83 passed 0 failed; sandbox default 311/311; shellcheck, bash -n clean. SANDBOX_JOURNAL=no, SANDBOX_FDSTORE=no, standalone and confine-vm not run: untouched, confine-vm has no policy. **Not tested: a real boot with the rule.** Docs unchanged: README and TESTING already state the intended result.
+
+### Current state
+
+Part 76 uncommitted on main. Not built. Installed and booted: g567c7b9, without the rule. Whether part 75's branch was merged: main contains 19ef73a and 567c7b9. gnome-shell crashes on this boot's install still leave no core until the rule is booted.
+
+### Next steps
+
+1. Owner: commit, `packages/build-rpms.sh`, `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`, reboot to s6 (%post loads the module; no reload needed, no new service).
+2. Owner, after it: `grep 'core file' /proc/1/limits /proc/$(pgrep -x gnome-shell)/limits` (soft unlimited), `sh -c 'kill -SEGV $$'; ls -l /var/lib/systemd/coredump` (new core.sh.*), `cat /proc/1/limits`, `sudo tests/hardencompare.sh snap` and report. Expected: 28 limit_core rows gone, 98 DIFF, the rest unchanged.
+3. Owner, over about 20 shutdowns: TESTING's "Shutdown order" row and `sudo grep -E 'gnome-shell.*segfault' /var/log/messages | tail -3`. If a SEGV comes back: the backtrace (part 71's step 3).
+4. PrivateUsers=: owner's decision (recommended: leave out). The script keeps exiting 1 until then.
+5. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
