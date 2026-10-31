@@ -364,16 +364,12 @@ fn ms(usec: u64) -> u64 {
     }
 }
 
-pub fn plan(cfg: &Config) -> Plan {
-    let ld = Loader::new(cfg);
-    let mut plan = Plan {
-        extra_names: extra_names(cfg),
-        ..Default::default()
-    };
+/// Raw dependency names before filtering: (requires, wants, after, before).
+type Raw = (Vec<String>, Vec<String>, Vec<String>, Vec<String>);
 
-    // Seed: every concrete service and target, plus the default target.
-    let mut queue: Vec<String> = ld
-        .list_names()
+/// Where the walk over the units starts: every concrete unit of a translated type.
+fn seed_names(ld: &Loader) -> Vec<String> {
+    ld.list_names()
         .into_iter()
         .filter(|n| {
             let ty = loader::unit_type(n);
@@ -382,7 +378,130 @@ pub fn plan(cfg: &Config) -> Plan {
                 "service" | "target" | "timer" | "path" | "mount" | "swap" | "automount"
             ) && !n.contains("@.")
         })
-        .collect();
+        .collect()
+}
+
+/// The unit's dependencies as its files state them, plus the implicit ones.
+fn raw_dependencies(ld: &Loader, unit: &Unit) -> Raw {
+    let mut requires = unit.get_words("Unit", "Requires");
+    requires.extend(unit.get_words("Unit", "Requisite"));
+    requires.extend(unit.get_words("Unit", "BindsTo"));
+    requires.extend(ld.dir_deps(&unit, "requires"));
+    let mut wants = unit.get_words("Unit", "Wants");
+    wants.extend(unit.get_words("Unit", "Upholds"));
+    wants.extend(ld.dir_deps(&unit, "wants"));
+    wants.extend(ld.dir_deps(&unit, "upholds"));
+    let mut after = unit.get_words("Unit", "After");
+    let before = unit.get_words("Unit", "Before");
+    if matches!(unit.utype(), "service" | "timer" | "path")
+        && unit.get_bool("Unit", "DefaultDependencies", true)
+    {
+        requires.push("sysinit.target".into());
+        after.push("basic.target".into());
+    }
+    // Type=dbus implies Requires=/After=dbus.socket.
+    if unit.utype() == "service"
+        && (unit.get("Service", "Type").as_deref() == Some("dbus")
+            || (unit.get("Service", "Type").is_none() && unit.get("Service", "BusName").is_some()))
+    {
+        requires.push("dbus.socket".into());
+    } else if unit.utype() == "service" && unit.get("Service", "BusName").is_some() {
+        // systemd starts BusName= services (hostnamed, logind, polkit) by
+        // bus activation, so the bus is up first. Here a socket unit or
+        // WantedBy= may start them at boot before dbus-daemon has made
+        // its socket; sd-bus then waits with an inotify watch on
+        // /run/dbus, which their SELinux domains may not have, and the
+        // daemon runs without a bus. Wants= + After= dbus.socket.
+        wants.push("dbus.socket".into());
+        after.push("dbus.socket".into());
+    }
+    (requires, wants, after, before)
+}
+
+/// Ordering: After= plus reversed Before= of other units.
+fn ordering_sets(
+    raw: &BTreeMap<String, Raw>,
+    resolve: impl Fn(&str) -> Option<String>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut after_sets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (id, (_, _, after, before)) in raw {
+        for a in after {
+            if let Some(a) = resolve(a) {
+                after_sets.entry(id.clone()).or_default().insert(a);
+            }
+        }
+        for b in before {
+            if let Some(b) = resolve(b) {
+                after_sets.entry(b).or_default().insert(id.clone());
+            }
+        }
+    }
+    after_sets
+}
+
+/// Warnings for what the unit sets and uinitconverter doesn't act on.
+fn ignored_settings(unit: &Unit) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for key in unit.file.keys_in("Unit") {
+        if !UNIT_KEYS.contains(&key) && !key.starts_with("Condition") && !key.starts_with("Assert")
+        {
+            warnings.push(format!("[Unit] {key}= is ignored"));
+        }
+    }
+    for key in unit.file.keys_in("Service") {
+        if !SERVICE_KEYS.contains(&key) {
+            warnings.push(format!("[Service] {key}= is ignored"));
+        }
+    }
+    for key in unit.file.keys_in("Timer") {
+        if !TIMER_KEYS.contains(&key) {
+            warnings.push(format!("[Timer] {key}= is ignored"));
+        }
+    }
+    for (sec, known) in [
+        ("Path", PATH_KEYS),
+        ("Mount", MOUNT_KEYS),
+        ("Swap", SWAP_KEYS),
+    ] {
+        for key in unit.file.keys_in(sec) {
+            if !known.contains(&key) {
+                warnings.push(format!("[{sec}] {key}= is ignored"));
+            }
+        }
+    }
+    for (raw, spec) in uinitconverter_base::timerspec::calendars(unit) {
+        if spec.is_none() {
+            warnings.push(format!("OnCalendar={raw} cannot be parsed"));
+        }
+    }
+    for sec in unit.file.sections() {
+        if ![
+            "Unit", "Service", "Timer", "Path", "Mount", "Swap", "Install",
+        ]
+        .contains(&sec)
+            && !sec.starts_with("X-")
+        {
+            warnings.push(format!("[{sec}] section is ignored"));
+        }
+    }
+    if unit.get("Unit", "Conflicts").is_some() {
+        warnings.push("Conflicts= is not enforced".into());
+    }
+    let ty = unit.get("Service", "Type").unwrap_or_default();
+    if ty == "forking" && unit.get("Service", "PIDFile").is_none() {
+        warnings.push("Type=forking without PIDFile=: main PID is guessed".into());
+    }
+    warnings
+}
+
+pub fn plan(cfg: &Config) -> Plan {
+    let ld = Loader::new(cfg);
+    let mut plan = Plan {
+        extra_names: extra_names(cfg),
+        ..Default::default()
+    };
+
+    let mut queue = seed_names(&ld);
     let def = ld.load("default.target");
     if def.is_loaded() {
         plan.default_target = Some(def.id.clone());
@@ -390,8 +509,6 @@ pub fn plan(cfg: &Config) -> Plan {
     }
 
     let mut loaded: BTreeMap<String, Unit> = BTreeMap::new();
-    // Raw dependency names before filtering: id -> (requires, wants, after, before)
-    type Raw = (Vec<String>, Vec<String>, Vec<String>, Vec<String>);
     let mut raw: BTreeMap<String, Raw> = BTreeMap::new();
     // socket name -> service it activates
     let mut socket_service: BTreeMap<String, String> = BTreeMap::new();
@@ -506,39 +623,7 @@ pub fn plan(cfg: &Config) -> Plan {
             }
         }
 
-        let mut requires = unit.get_words("Unit", "Requires");
-        requires.extend(unit.get_words("Unit", "Requisite"));
-        requires.extend(unit.get_words("Unit", "BindsTo"));
-        requires.extend(ld.dir_deps(&unit, "requires"));
-        let mut wants = unit.get_words("Unit", "Wants");
-        wants.extend(unit.get_words("Unit", "Upholds"));
-        wants.extend(ld.dir_deps(&unit, "wants"));
-        wants.extend(ld.dir_deps(&unit, "upholds"));
-        let mut after = unit.get_words("Unit", "After");
-        let before = unit.get_words("Unit", "Before");
-        if matches!(unit.utype(), "service" | "timer" | "path")
-            && unit.get_bool("Unit", "DefaultDependencies", true)
-        {
-            requires.push("sysinit.target".into());
-            after.push("basic.target".into());
-        }
-        // Type=dbus implies Requires=/After=dbus.socket.
-        if unit.utype() == "service"
-            && (unit.get("Service", "Type").as_deref() == Some("dbus")
-                || (unit.get("Service", "Type").is_none()
-                    && unit.get("Service", "BusName").is_some()))
-        {
-            requires.push("dbus.socket".into());
-        } else if unit.utype() == "service" && unit.get("Service", "BusName").is_some() {
-            // systemd starts BusName= services (hostnamed, logind, polkit) by
-            // bus activation, so the bus is up first. Here a socket unit or
-            // WantedBy= may start them at boot before dbus-daemon has made
-            // its socket; sd-bus then waits with an inotify watch on
-            // /run/dbus, which their SELinux domains may not have, and the
-            // daemon runs without a bus. Wants= + After= dbus.socket.
-            wants.push("dbus.socket".into());
-            after.push("dbus.socket".into());
-        }
+        let (requires, wants, after, before) = raw_dependencies(&ld, &unit);
         for n in requires.iter().chain(wants.iter()) {
             queue.push(n.clone());
         }
@@ -565,20 +650,7 @@ pub fn plan(cfg: &Config) -> Plan {
     // Services whose runner can hold sockets: on_demand candidates.
     let mut socket_activated: BTreeSet<String> = BTreeSet::new();
 
-    // Ordering: After= plus reversed Before= of other units.
-    let mut after_sets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (id, (_, _, after, before)) in &raw {
-        for a in after {
-            if let Some(a) = resolve(a, &plan) {
-                after_sets.entry(id.clone()).or_default().insert(a);
-            }
-        }
-        for b in before {
-            if let Some(b) = resolve(b, &plan) {
-                after_sets.entry(b).or_default().insert(id.clone());
-            }
-        }
-    }
+    let after_sets = ordering_sets(&raw, |n| resolve(n, &plan));
 
     let mount_points: Vec<(String, String)> = loaded
         .iter()
@@ -591,7 +663,6 @@ pub fn plan(cfg: &Config) -> Plan {
         let after = after_sets.get(id).cloned().unwrap_or_default();
         let mut deps = BTreeSet::new();
         let (mut by_socket, mut by_name) = (BTreeSet::new(), BTreeSet::new());
-        let mut warnings = Vec::new();
         let is_target = unit.utype() == "target";
 
         for r in requires {
@@ -678,59 +749,11 @@ pub fn plan(cfg: &Config) -> Plan {
             Kind::Oneshot
         };
 
-        if !is_target {
-            for key in unit.file.keys_in("Unit") {
-                if !UNIT_KEYS.contains(&key)
-                    && !key.starts_with("Condition")
-                    && !key.starts_with("Assert")
-                {
-                    warnings.push(format!("[Unit] {key}= is ignored"));
-                }
-            }
-            for key in unit.file.keys_in("Service") {
-                if !SERVICE_KEYS.contains(&key) {
-                    warnings.push(format!("[Service] {key}= is ignored"));
-                }
-            }
-            for key in unit.file.keys_in("Timer") {
-                if !TIMER_KEYS.contains(&key) {
-                    warnings.push(format!("[Timer] {key}= is ignored"));
-                }
-            }
-            for (sec, known) in [
-                ("Path", PATH_KEYS),
-                ("Mount", MOUNT_KEYS),
-                ("Swap", SWAP_KEYS),
-            ] {
-                for key in unit.file.keys_in(sec) {
-                    if !known.contains(&key) {
-                        warnings.push(format!("[{sec}] {key}= is ignored"));
-                    }
-                }
-            }
-            for (raw, spec) in uinitconverter_base::timerspec::calendars(unit) {
-                if spec.is_none() {
-                    warnings.push(format!("OnCalendar={raw} cannot be parsed"));
-                }
-            }
-            for sec in unit.file.sections() {
-                if ![
-                    "Unit", "Service", "Timer", "Path", "Mount", "Swap", "Install",
-                ]
-                .contains(&sec)
-                    && !sec.starts_with("X-")
-                {
-                    warnings.push(format!("[{sec}] section is ignored"));
-                }
-            }
-            if unit.get("Unit", "Conflicts").is_some() {
-                warnings.push("Conflicts= is not enforced".into());
-            }
-            let ty = unit.get("Service", "Type").unwrap_or_default();
-            if ty == "forking" && unit.get("Service", "PIDFile").is_none() {
-                warnings.push("Type=forking without PIDFile=: main PID is guessed".into());
-            }
-        }
+        let warnings = if is_target {
+            Vec::new()
+        } else {
+            ignored_settings(unit)
+        };
 
         let log_atom = (kind == Kind::Longrun
             && unit.utype() == "service"
