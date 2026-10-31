@@ -31,6 +31,53 @@ them.
 It works at the protocol level, not by replacing libraries: the real `systemctl`
 and `libsystemd` talk to it exactly as they would talk to systemd.
 
+## Compared with booting systemd
+
+**There is little measurable benefit over booting with systemd. The main gain
+is control:** you get Fedora and GNOME with s6 as PID 1, managed with s6's
+tools. If you don't specifically want s6, plain systemd is the better choice.
+The numbers and problems below are as of 2026-10-31, from one Fedora 45
+Workstation machine.
+
+**Real benefits**
+
+- **s6 is the init and the admin interface.** PID 1 is
+  s6-linux-init/s6-svscan, not systemd. You manage services with `s6 set`,
+  `s6 live` and the s6-rc repository.
+- **Predictable boot.** The boot runs a compiled s6-rc database, and nothing
+  is regenerated at boot. If a change goes wrong, `uinitconverter.db=previous`
+  boots the database from before the last install.
+- **More of systemd can be replaced.** `--boot-only-s6=yes` removes systemd
+  from the initramfs, `--journal=no` replaces journald with rsyslog and
+  s6-log's plain-text logs, and `--resolved=no` lets NetworkManager handle DNS
+  alone. The system bus is dbus-daemon with the default `--bus=daemon`.
+- **Normal Fedora still works.** dnf, SELinux enforcing, GNOME and the real
+  `systemctl` keep working. This is the advantage over a non-systemd distro
+  like Artix, which isn't Fedora.
+
+**Not real benefits**
+
+| Area | Result on s6 compared with systemd |
+|---|---|
+| Memory | About the same: the median (total - available) is 1157 vs 1176 MiB (-19 MiB), within the normal 20-25 MiB variation between boots. |
+| Boot speed | Unknown: it has not been measured and compared. |
+| Security | Not better overall. PID 1 is smaller, but `uinitconverterd` and about 37 helper processes run as root, and the latest hardening comparison shows 3 of 28 services weaker on s6 (colord, upower, rtkit). |
+| Less systemd | Only partly. udevd, logind and `systemd --user` still run (GNOME needs logind and `systemd --user`), and the `systemd` package stays installed. |
+
+**Costs compared with systemd**
+
+- **Missing features:** `Accept=yes` sockets, generators, real autofs
+  (automounts are mounted at boot instead), watchdog, credentials,
+  `PrivateUsers=`, and encrypted volumes in `/etc/crypttab` that the initramfs
+  doesn't unlock. Details: [Not implemented (yet)](#not-implemented-yet).
+- **Limited testing:** real boots have only been checked on one machine.
+- **Known problems:** gnome-shell crashed during shutdown in 4 of 28 s6
+  shutdowns (none of the 34 shutdown requests in the systemd journal). The
+  samples are small and the cause is unknown. With `JOURNAL=no`, the service
+  logs under `/var/log/uinitconverter` are readable by any local user.
+- **More to maintain:** about 23,000 lines of Rust, much of it running as
+  root, plus the skarnet packages you have to build yourself.
+
 ## Components
 
 uinitconverter is split by role. The **core** is one Cargo workspace (`crates/`):

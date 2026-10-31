@@ -29,6 +29,48 @@ D-Bus 클라이언트가 계속 동작하게 합니다.
 라이브러리를 바꿔치기하는 방식이 아니라 프로토콜 수준에서 동작합니다. 진짜
 `systemctl`과 `libsystemd`가 systemd와 대화하듯 그대로 uinitconverter와 대화합니다.
 
+## systemd 부팅과 비교
+
+**systemd로 부팅할 때보다 측정할 수 있는 이점은 거의 없습니다. 주된 이점은 제어권입니다.**
+s6를 PID 1로 두고 s6의 도구로 관리하면서 Fedora와 GNOME을 쓸 수 있습니다. s6를 특별히
+원하는 것이 아니라면 그냥 systemd가 더 나은 선택입니다. 아래 수치와 문제는 2026-10-31
+기준이며, Fedora 45 Workstation 한 대에서 얻은 것입니다.
+
+**실제 이점**
+
+- **s6가 init이자 관리 도구입니다.** PID 1은 systemd가 아니라 s6-linux-init/s6-svscan이고,
+  서비스는 `s6 set`, `s6 live`, s6-rc 저장소로 관리합니다.
+- **부팅이 예측 가능합니다.** 컴파일된 s6-rc 데이터베이스를 그대로 실행하고, 부팅 때 아무것도
+  다시 생성하지 않습니다. 변경이 잘못되면 `uinitconverter.db=previous`로 마지막 설치 이전의
+  데이터베이스로 부팅합니다.
+- **systemd를 더 많이 대체할 수 있습니다.** `--boot-only-s6=yes`는 initramfs에서 systemd를
+  없애고, `--journal=no`는 journald를 rsyslog와 s6-log의 일반 텍스트 로그로 바꾸며,
+  `--resolved=no`는 DNS를 NetworkManager에 맡깁니다. 시스템 버스는 기본값인 `--bus=daemon`이면
+  dbus-daemon입니다.
+- **일반 Fedora가 그대로 동작합니다.** dnf, SELinux enforcing, GNOME, 진짜 `systemctl`이 계속
+  동작합니다. Artix 같은 비-systemd 배포판과 달리 Fedora를 그대로 쓸 수 있다는 점이 이점입니다.
+
+**이점이 아닌 것**
+
+| 항목 | systemd와 비교한 s6의 결과 |
+|---|---|
+| 메모리 | 거의 같습니다. 중앙값(total - available) 1157 대 1176 MiB(-19 MiB)로, 부팅마다 생기는 20-25 MiB의 차이 안에 있습니다. |
+| 부팅 속도 | 알 수 없습니다. 측정해 비교한 적이 없습니다. |
+| 보안 | 전체적으로 낫지 않습니다. PID 1은 작아지지만 `uinitconverterd`와 도우미 프로세스 약 37개가 root로 실행되고, 최근 강화 설정 비교에서 28개 서비스 중 3개(colord, upower, rtkit)가 s6에서 더 약합니다. |
+| systemd 줄이기 | 일부만 줄어듭니다. udevd, logind, `systemd --user`는 계속 실행되고(GNOME에 logind와 `systemd --user`가 필요합니다), `systemd` 패키지도 설치된 채로 남습니다. |
+
+**systemd와 비교한 비용**
+
+- **빠진 기능:** `Accept=yes` 소켓, generator, 진짜 autofs(automount는 부팅 때 바로 마운트됩니다),
+  watchdog, credential, `PrivateUsers=`, initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨.
+  자세한 내용은 [아직 구현되지 않은 것](#아직-구현되지-않은-것)에 있습니다.
+- **제한된 시험:** 실제 부팅은 한 대의 기기에서만 확인했습니다.
+- **알려진 문제:** s6 부팅의 종료 28번 중 4번에서 gnome-shell이 종료 도중 죽었습니다(systemd
+  저널의 종료 요청 34번에서는 0번). 표본이 작고 원인은 아직 모릅니다. `JOURNAL=no`일 때
+  `/var/log/uinitconverter`의 서비스 로그는 모든 로컬 사용자가 읽을 수 있습니다.
+- **유지 보수 부담:** Rust 코드가 약 23,000줄이고 그중 상당 부분이 root로 실행되며, skarnet
+  패키지는 직접 빌드해야 합니다.
+
 ## 구성 요소
 
 uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작업공간 하나(`crates/`)로,

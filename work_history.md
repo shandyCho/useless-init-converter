@@ -8739,6 +8739,8 @@ Restart there; the journal can't tell who or what did. The owner hasn't been ask
 
 The s6 pairs (10-28 07:17, 10-29 14:17 and 22:08, 10-30 16:54, 10-31 16:57) can't be read from here:
 JOURNAL=no, /var/log/messages is 0600, sudo needs a password. So whether they have the same cause is **open**.
+(Corrected in part 68: they could be read. Under JOURNAL=no logind writes to /var/log/uinitconverter/systemd-logind.service/current,
+which is world-readable, and not to /var/log/messages, so the grep suggested below can't show s6 boots.)
 Also seen: s6 boots leave no reboot/shutdown records in wtmp (`last -x` has only logins since 14:58, then
 shows that shutdown's end as 1970). Not fixed: not asked for.
 
@@ -8775,3 +8777,77 @@ Built, not installed. Installed and booted: g86f2b3c. Merge to main open.
 
 Part 66's, with step 1 now: `git switch main && git merge --ff-only init-selinux-nofile`; `sudo dnf upgrade
 ~/rpmbuild-uinitconverter/rpms/*.rpm`; reboot to s6; then part 66's checks.
+
+## 2026-10-31, part 68: part 66 confirmed on a real boot; short boots explained (no code change)
+
+s6 boot of 19:10:00, g3f517cf installed (`rpm -q`), enforcing. Owner ran part 66's checks.
+
+**RLIMIT_NOFILE: confirmed.** /proc/1/limits 1024 524288. `ausearch -m AVC -ts boot`: `<no matches>`. Report, systemd
+14:57:22 vs s6 19:35:18: 28 services, 3 WEAKER, 1 CHECK, 126 DIFF (148 before). The 22 gone are limit_nofile rows (23 -> 1);
+udevd's 2147483584 vs 1048576 stays, as part 66 said. cups 65535/524288 on both. Snapshots 18:12:48 and 19:35:18, without pid, meta
+and limit_nofile rows: identical. The 3 WEAKER are the known ones (colord, upower ns_user; rtkit ns_mnt), CHECK is bolt 11/9.
+
+**Short boots: all five s6 ones were normal end-session requests, no failure before them.** Part 66's suggested grep of
+/var/log/messages* couldn't show this: under JOURNAL=no logind's output goes to
+/var/log/uinitconverter/systemd-logind.service/current, not to messages, so the owner's output has no s6 boot in it at all,
+short or long. (Its lines are all from systemd boots; the glob also lists the current file first, so `tail` isn't chronological.
+The 14:58 poweroff of boot 02fd49ef is in the journal but not in that output; not looked into.) That log is world-readable, so part 66's
+"can't be read from here" was wrong.
+
+| Boot starts (memtest line) | Request | Client | Seconds | Logged in? |
+|---|---|---|---|---|
+| 10-28 07:17:21 | 07:18:59 | user@1000 | 98 | 07:18:30 |
+| 10-29 14:17:09 | 14:17:41 | user@60578 | 32 | no, greeter |
+| 10-29 22:08:50 | 22:09:16 | user@1000 | 26 | about 22:09:06 (`last`) |
+| 10-30 16:54:04 | 16:55:13 | user@1000 | 69 | 16:54:33 |
+| 10-31 16:57:00 | 16:57:13 | user@60578 | 13 | no, greeter |
+
+All "reboot requested from client ... ('gnome-session-s')", the path GNOME's Restart dialog takes. No power key line in logind's log. Before each
+request, all /var/log/uinitconverter/*/current filtered on fail/error/fatal/denied/abort/panic, numbers masked, against the first 100 s of three
+long boots (10-29 07:56, 10-31 17:59, 19:10): nothing new except dnf5daemon's metalink parse warning on 10-30. So no failure seen in what services log; the
+shell's own stdout isn't in these logs, and these logs can't say who clicked. A person is the likely answer (10-29 22:07:43 poweroff, then a new boot a minute later needs someone at
+the machine), but the owner hasn't confirmed it. Nothing to fix so far.
+
+**Found: gnome-shell SEGV during shutdown, s6 boots only so far.** `org.gnome.Shell@{gdm,user}.service: code=dumped, status=11/SEGV`
+at 10-28 00:48:13, 10-29 14:17:41, 10-31 15:14:19, 10-31 16:57:13. Where the order was read at sub-second level (10-29 14:17:41, 10-31 16:57:13), it comes
+110 and 188 ms after the reboot request and after `Activating special unit exit.target`, so it is a result of the shutdown, not its cause.
+It is the shell's only "Failed with result" in those logs. 4 of 28 shutdown requests in logind's s6 log (since 10-27 17:07), against none in
+the systemd journal since 10-18 (34 reboot/poweroff requests; the same query sees 273 shell lines, 150 exit.target lines). Small numbers, and the logs
+differ. Cause unknown: no backtrace, coredumpctl has nothing newer than 10-19. Why s6 boots leave no core file wasn't checked. No effect seen
+beyond the failed OnFailure= job, as the session is already ending.
+
+**Found: service logs are world-readable on s6.** /var/log/uinitconverter is 755 and its `current` files 644 or 744 (59 entries), so any local
+user can read every service's stdout (logind's session and user names, user@1000's session messages, dnf5daemon). On systemd the journal needs a group. A grep of
+those files for password, token and secret found none. Same kind of gap as part 58's rsyslog umask. Not fixed: not asked for.
+
+### Current state
+
+Installed and booted: g3f517cf, on main. Every service compared matches systemd except the 3 known rows. Memory PASS (part 61, not rerun). part
+66's three items closed, apart from the owner's confirmation of the short boots.
+
+### Next steps
+
+1. Owner: confirm the short boots were chosen by hand (the table above); if not, reopen.
+2. Owner's decision: LOG_DIR mode 0750 root:systemd-journal or similar. Recommended; checking first that nothing else reads the directory unprivileged.
+3. gnome-shell SEGV at shutdown: find out why s6 boots leave no core dump, then get a backtrace. systemd-coredump's socket under JOURNAL=no is the first thing to read.
+4. PrivateUsers=: owner's decision (recommended: leave out). The script keeps exiting 1 until then.
+5. Optional: wtmp boot records on s6; SYSLOG=syslog-ng on a real boot; boot loader provider and dinit when the owner decides.
+
+## 2026-10-31, part 69: README comparison with systemd
+
+Owner asked what the project gains over booting with systemd, then asked to add the answer to the README. Added "Compared with
+booting systemd" / "systemd 부팅과 비교" before Components in README-us.md and README.md. No code change, no tests run.
+
+Decisions: the section says plainly that the measurable benefit is small and the main gain is control, and that plain systemd is the better choice
+for anyone who doesn't specifically want s6. It's dated 2026-10-31 and says one machine, because its numbers will age.
+
+Sources: memory part 61 (1157.1 vs 1176.4 MiB); hardening part 68 (28 services, 3 WEAKER); 37 root processes parts 44 and 61; gnome-shell SEGV part 68;
+log permissions part 68; about 23,000 lines is `*.rs` in crates/ and standalone/. Boot speed: no comparison found by grepping this file, so the README says it hasn't been measured.
+
+### Current state
+
+As part 68, plus the README sections above. Update the section's numbers and known problems when they change.
+
+### Next steps
+
+Part 68's.
