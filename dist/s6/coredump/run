@@ -1,0 +1,31 @@
+#!/bin/sh
+# systemd-coredumpd.service and systemd-coredump-register.service in one s6
+# service: without a listener every core dump is thrown away. Fedora's default,
+# systemd-coredump.socket, has Accept=yes, which uinitconverter doesn't support.
+# Runs with the unit's sandbox; if that can't be applied it doesn't start, and
+# s6 tries again. Without the kernel support (or the program) it stays down, and
+# core_pattern stays what it was.
+coredump=/usr/lib/systemd/systemd-coredump
+sock=/run/systemd/coredumpd/kernel
+if ! "$coredump" --check-requirements 2>/dev/null; then
+    echo "coredump: no kernel core dump socket or no systemd-coredump; not starting" >&2
+    s6-svc -O .
+    exit 0
+fi
+rm -f "$sock"
+# What systemd-coredump-register.service does once the socket exists. Not its
+# systemd-sysctl --save: a plain write is all that init_t needs. Crashes before
+# this keep going to core_pattern's old handler, which drops them.
+(
+    i=0
+    while [ ! -S "$sock" ] && [ "$i" -lt 100 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    if [ -S "$sock" ]; then
+        echo "@@$sock" >/proc/sys/kernel/core_pattern || echo "coredump: can't set core_pattern" >&2
+    else
+        echo "coredump: no socket after 10 s, core_pattern not set" >&2
+    fi
+) &
+exec /usr/libexec/uinitconverter/uinitconverter-runner confine systemd-coredumpd.service -- "$coredump" --manager

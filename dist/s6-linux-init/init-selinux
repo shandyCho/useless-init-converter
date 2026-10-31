@@ -10,6 +10,10 @@ mountpoint -q /sys || mount -t sysfs sysfs /sys
 # cups raise their own soft limit up to it. Not worth failing a boot over.
 # shellcheck disable=SC3045  # -H: bash and dash both have it
 ulimit -Hn 524288 2>/dev/null || echo "init-selinux: can't raise the hard RLIMIT_NOFILE" >&2
+# The kernel starts PID 1 with no core dumps (soft 0) and every service inherits
+# it; systemd sets unlimited, and then systemd-coredump does the limiting.
+# shellcheck disable=SC3045  # -S: bash and dash both have it
+ulimit -Sc unlimited 2>/dev/null || echo "init-selinux: can't raise the soft RLIMIT_CORE" >&2
 if ! /usr/sbin/load_policy -i; then
     echo "init-selinux: policy load failed" >&2
     grep -q '^SELINUX=enforcing' /etc/selinux/config && exec /bin/sh

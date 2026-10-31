@@ -488,6 +488,15 @@ boot, and it also falls back by itself after three failed starts in a row.
 rsyslog and earlyoom run with their units' sandboxes too, with no fallback: if
 one can't be applied, the service stays down and s6 keeps trying.
 
+With `JOURNAL=no`, services' output is in `/var/log/uinitconverter`, readable by
+root and the `wheel` group only (0750), like the journal.
+
+Core dumps are kept as on systemd: the `coredump` s6 service runs
+`systemd-coredump --manager` with its unit's sandbox and points
+`kernel.core_pattern` at its socket, and services start with an unlimited soft
+`RLIMIT_CORE`. The files are in `/var/lib/systemd/coredump`. With `JOURNAL=no`
+`coredumpctl` lists nothing, as it reads the journal; the summary goes to syslog.
+
 What an s6 shutdown printed on the console is kept for the next boot in
 `/var/log/uinitconverter/last-shutdown-console.log` (s6's catch-all log) and
 `last-shutdown-kernel.log` (the kernel log from the start of the shutdown,

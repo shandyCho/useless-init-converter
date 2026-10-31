@@ -146,3 +146,8 @@
 ; file: the lock would be denied and the broker never start (the run script
 ; falls back to dbus-daemon). The lock gets init's own type.
 (typetransition init_t system_dbusd_var_run_t file "system_bus_socket.lock" init_var_run_t)
+
+; dist/s6/coredump: systemd-coredump --manager creates its socket in
+; /run/systemd/coredumpd. The policy has create on the socket file but nothing
+; on the directory, as Fedora's boot uses systemd-coredump.socket instead.
+(allow systemd_coredump_t systemd_coredump_var_run_t (dir (getattr search open read write add_name remove_name)))

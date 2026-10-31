@@ -141,9 +141,13 @@ fi
 %dir %{_sysconfdir}/uinitconverter
 %config(noreplace) %{_sysconfdir}/uinitconverter/uinitconverter.conf
 %config(noreplace) %{_sysconfdir}/uinitconverter/s6/
-%dir %{_localstatedir}/log/uinitconverter
+%dir %attr(0750,root,wheel) %{_localstatedir}/log/uinitconverter
 
 %changelog
+* Sat Oct 31 2026 uinitconverter developers
+- /var/log/uinitconverter is 0750 root:wheel
+- s6 service coredump: systemd-coredump's listener, so core dumps are kept
+
 * Wed Oct 28 2026 uinitconverter developers
 - Ships syslog-ng.conf; recommends rsyslog or syslog-ng (SYSLOG=)
 

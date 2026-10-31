@@ -629,7 +629,10 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
     // persist file and control socket), labelled for them by the policy.
     let syslog_state = if s.syslog == "syslog-ng" { "/var/lib/syslog-ng" } else { "/var/lib/rsyslog" };
     let (state, logs) = (ctx.cfg.state_dir.display().to_string(), log_dir(&ctx.cfg));
-    ctx.run(&["mkdir", "-p", &state, &logs, syslog_state]);
+    ctx.run(&["mkdir", "-p", &state, syslog_state]);
+    // Every service's output is in there, with s6-log's mode 644: only for
+    // root and wheel, like the journal.
+    ctx.run(&["install", "-d", "-m", "0750", "-g", "wheel", &logs]);
 }
 
 /// LOG_DIR, also when JOURNAL=yes leaves it unset (a later --journal=no needs it).

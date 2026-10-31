@@ -497,6 +497,8 @@ impl Runner {
     fn confine(&mut self, argv: &[String]) -> Result<std::convert::Infallible, String> {
         self.enter_cgroup();
         if self.is_root {
+            // Also tells the sandbox which of them stay writable.
+            self.create_directories()?;
             self.sandbox.prepare()?;
             self.sandbox.apply()?;
         }

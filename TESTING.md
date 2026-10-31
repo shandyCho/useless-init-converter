@@ -162,12 +162,12 @@ tests/bpf-root.sh
 
 **기대 결과:** `test result: ok. 1 passed`.
 
-s6가 유닛의 샌드박스로 시작하는 서비스(rsyslog, earlyoom, udevd)는 사용자를 바꾸려면 진짜 root가
+s6가 유닛의 샌드박스로 시작하는 서비스(rsyslog, earlyoom, udevd, coredump)는 사용자를 바꾸려면 진짜 root가
 필요합니다. 그래서 이 테스트는 QEMU에서 root 권한 없이 실행합니다. 실행 중인 커널, 이 컴퓨터의
 프로그램과 유닛 파일, `s6-supervise` 아래의 `dist/s6` run 스크립트를 씁니다. 메모리가 부족할 때
-earlyoom이 프로세스를 죽이는지와 udevd의 대체 경로도 확인하고, 정책 읽기와 s6-linux-init을 대역으로
-바꾼 `init-selinux`를 실행해 그것이 설정하는 `RLIMIT_NOFILE` 하드 한도(systemd가 서비스에 주는 것과
-같은 524288)도 확인합니다. 그 안에서는 SELinux 정책을 읽지
+earlyoom이 프로세스를 죽이는지와 udevd의 대체 경로, 프로세스가 죽었을 때 코어 파일이 남는지도 확인하고,
+정책 읽기와 s6-linux-init을 대역으로 바꾼 `init-selinux`를 실행해 그것이 설정하는 `RLIMIT_NOFILE` 하드
+한도(systemd가 서비스에 주는 것과 같은 524288)와 `RLIMIT_CORE` 소프트 한도(무제한)도 확인합니다. 그 안에서는 SELinux 정책을 읽지
 않으므로 SELinux는 실제 부팅에서 확인해야 합니다. `cargo build`, QEMU, `/dev/kvm`과 설치된 rsyslog,
 earlyoom, s6가 필요합니다:
 
@@ -259,6 +259,8 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | fwupd | `fwupdmgr get-devices` | 장치 목록(fwupd가 시스템 콜 필터를 켠 채 시작됩니다) |
 | 바쁜 러너 없음 | `top -b -n1 -o %CPU \| head -15` | CPU를 100 % 가까이 쓰는 `uinitconverter` 프로세스가 없습니다 |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (몇 초 간격으로 두 번) | `up (pid …) N seconds`, N이 늘어납니다(재시작하지 않음) |
+| 코어 덤프 | `cat /proc/sys/kernel/core_pattern; grep 'core file' /proc/1/limits; sh -c 'kill -SEGV $$'; sudo ls -l /var/lib/systemd/coredump` | `@@/run/systemd/coredumpd/kernel`, 소프트 한도 `unlimited`, 새 `core.sh.*` 파일 |
+| 로그 디렉터리(`JOURNAL=no`) | `stat -c '%a %U:%G' /var/log/uinitconverter` | `750 root:wheel` |
 | 요청 시 서비스 | `systemctl status virtlogd.service iscsid.service`와 `ls -l /run/libvirt/virtlogd-sock`. 그다음 `sudo python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect("/run/libvirt/virtlogd-sock")'`을 실행하고 상태를 다시 봅니다 | 소켓 파일은 있고 `inactive (dead)`. 연결한 뒤 `virtlogd`는 `active (running)` |
 | 스왑(zram) | `swapon --show`와 `s6-rc -a list \| grep -x zram` | 우선순위 `100`인 `/dev/zram0`, 크기는 systemd 부팅과 같음(기본 `min(ram, 8 GiB)`). `zram`이 나옵니다 |
 | 무선 상태(rfkill) | GNOME 설정에서 블루투스를 끄고 s6 항목으로 재부팅한 뒤 `rfkill`과 `s6-rc -a list \| grep -x rfkill` | 재부팅 뒤에도 블루투스가 `blocked`. `rfkill`이 나옵니다(systemd-rfkill이 아니라 oneshot) |

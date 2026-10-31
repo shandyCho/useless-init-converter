@@ -172,13 +172,14 @@ tests/bpf-root.sh
 
 **Expected:** `test result: ok. 1 passed`.
 
-The services s6 starts with their unit's sandbox (rsyslog, earlyoom, udevd)
-need real root to switch user, so this runs them in QEMU, unprivileged: the
+The services s6 starts with their unit's sandbox (rsyslog, earlyoom, udevd,
+coredump) need real root to switch user, so this runs them in QEMU, unprivileged: the
 running kernel, this host's programs and unit files, `dist/s6`'s run scripts
 under `s6-supervise`. It also makes earlyoom kill a process under memory
-pressure, tests udevd's fallback, and runs `init-selinux` with stand-ins for
-the policy load and s6-linux-init, for the hard `RLIMIT_NOFILE` it sets
-(524288, as systemd gives services). No SELinux policy is loaded in there,
+pressure, tests udevd's fallback, crashes a process to see its core file kept,
+and runs `init-selinux` with stand-ins for the policy load and s6-linux-init,
+for the hard `RLIMIT_NOFILE` it sets (524288, as systemd gives services) and
+the soft `RLIMIT_CORE` (unlimited). No SELinux policy is loaded in there,
 which takes a real boot. Needs `cargo build`, QEMU, `/dev/kvm`, and rsyslog,
 earlyoom and s6 installed:
 
@@ -281,6 +282,8 @@ After logging in to GNOME, open a terminal and go through this list:
 | fwupd | `fwupdmgr get-devices` | a device list (fwupd starts with its syscall filter) |
 | No busy runner | `top -b -n1 -o %CPU \| head -15` | no `uinitconverter` process near 100 % CPU |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (twice, a few seconds apart) | `up (pid …) N seconds`, with N growing (not restarting) |
+| Core dumps | `cat /proc/sys/kernel/core_pattern; grep 'core file' /proc/1/limits; sh -c 'kill -SEGV $$'; sudo ls -l /var/lib/systemd/coredump` | `@@/run/systemd/coredumpd/kernel`; soft limit `unlimited`; a new `core.sh.*` file |
+| Log directory (`JOURNAL=no`) | `stat -c '%a %U:%G' /var/log/uinitconverter` | `750 root:wheel` |
 | On-demand services | `systemctl status virtlogd.service iscsid.service` and `ls -l /run/libvirt/virtlogd-sock`; then `sudo python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect("/run/libvirt/virtlogd-sock")'` and the status again | `inactive (dead)` with the socket file there; after the connection, `virtlogd` is `active (running)` |
 | Swap (zram) | `swapon --show` and `s6-rc -a list \| grep -x zram` | `/dev/zram0` with priority `100` and the same size as on the systemd boot (`min(ram, 8 GiB)` by default); `zram` is listed |
 | Radio state (rfkill) | Turn Bluetooth off in GNOME Settings, reboot into the s6 entry, then `rfkill` and `s6-rc -a list \| grep -x rfkill` | Bluetooth still `blocked` after the reboot; `rfkill` is listed (the oneshot, not systemd-rfkill) |

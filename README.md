@@ -427,6 +427,14 @@ udevd는 `systemd-udevd.service`의 샌드박스로 실행됩니다. `uinitconve
 각자 유닛의 샌드박스로 실행되지만 대체 경로는 없습니다. 샌드박스를 적용할 수 없으면 서비스가 뜨지 않고
 s6가 계속 다시 시도합니다.
 
+`JOURNAL=no`일 때 서비스 출력은 `/var/log/uinitconverter`에 있고, 저널처럼 root와 `wheel` 그룹만
+읽을 수 있습니다(0750).
+
+코어 덤프는 systemd에서처럼 보관됩니다. `coredump` s6 서비스가 `systemd-coredump --manager`를 유닛의
+샌드박스로 실행하고 `kernel.core_pattern`을 그 소켓으로 지정하며, 서비스는 무제한 소프트
+`RLIMIT_CORE`로 시작합니다. 파일은 `/var/lib/systemd/coredump`에 있습니다. `JOURNAL=no`이면
+`coredumpctl`은 저널을 읽으므로 아무것도 보여주지 않고, 요약은 syslog로 갑니다.
+
 s6 종료 때 콘솔에 나온 내용은 다음 부팅에서 `/var/log/uinitconverter/last-shutdown-console.log`
 (s6의 catch-all 로그)와 `last-shutdown-kernel.log`(종료가 시작된 뒤의 커널 로그, auditd가 멈춘 뒤의
 SELinux 거부 포함)로 볼 수 있습니다(root 전용). 종료가 시작되면 uinitconverterd는 새 유닛 시작과 D-Bus
