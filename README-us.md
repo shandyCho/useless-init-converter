@@ -96,7 +96,7 @@ on its own, and the core works without them.
 | | `stop-instances` | Run by `rc.shutdown`: asks the daemon to stop the on-demand instances (`user@UID`, ...) before s6-rc stops the services they are ordered after. |
 | `uinitconverter-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. `stop-atom` is the `down` of a longrun's `UNIT.stop` oneshot (its `ExecStop=`). `confine UNIT -- COMMAND` gives a program s6 starts itself the unit's cgroup, limits and sandbox (the system bus with `--bus=broker`). |
 | `uinitconverter-timers` | `timer-run`, `path-run` | Runs one `.timer` (computes elapses) or `.path` unit (inotify) as an s6 longrun and asks the daemon to start the unit. |
-| `uinitconverter` | any of the above (not `stop-instances`/`stop-atom`) | The command users know (`/usr/bin/uinitconverter`): runs the tool that handles the command, so `uinitconverter reload` still works. `fdstore`, `journal-relay`, `linkwatch` and `notify` run the standalone tools when they are installed. |
+| `uinitconverter` | any of the above (not `stop-instances`/`stop-atom`/`confine`) | The command users know (`/usr/bin/uinitconverter`): runs the tool that handles the command, so `uinitconverter reload` still works. `fdstore`, `journal-relay`, `linkwatch` and `notify` run the standalone tools when they are installed. |
 | | `init` | Sets up the s6 boot entry (see [Deploying on Fedora](#deploying-on-fedora-do-it-in-a-vm-first)). |
 | | `--version` | This build and each installed tool's build. Says so and exits 1 when the core tools are from different builds. Each tool also has `--version`. |
 
@@ -254,7 +254,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 | skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, supervision, the service database. Fedora doesn't package them, and uinitconverter's releases don't include them: build them with `dist/rpm/build-skarnet-rpms.sh` |
 | s6-frontend (recommended) | The `s6` command (see [The `s6` command](#the-s6-command-s6-frontend)); built with the others |
 | mdevd (recommended) | Loads the drivers in the s6 initramfs (`--boot-only-s6=yes`); built with the others |
-| systemd | Stays installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
+| systemd | Not a package dependency (Fedora's base system has it), but it must stay installed: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | The system bus (`--systemd-activation`), or dbus-broker with `--bus=broker`; dbus-broker stays for the user bus |
 | util-linux | `mount`, `swapon`, `mountpoint` for mount units and early boot; `rfkill` for the radio state |
 | shadow-utils | `useradd` for the system users that stand in for `DynamicUser=` |
@@ -271,7 +271,7 @@ none is needed to build. Without one, the matching feature is missing:
 | `libseccomp.so.2` (libseccomp) | `SystemCallFilter=` is skipped with a message, as in systemd without seccomp. fwupd refuses to start |
 
 **Recommended packages:** earlyoom (replaces systemd-oomd), chrony,
-NetworkManager, rsyslog (only with `JOURNAL=no`).
+NetworkManager, rsyslog or syslog-ng (only with `JOURNAL=no`).
 
 **Build:** cargo and rust. The core uses zbus, tokio, futures-util, libc
 and serde (`Cargo.toml`); the standalone tools only libc.
@@ -290,7 +290,7 @@ host's init system is never touched.
 ```sh
 cargo build                           # the core; sandbox.sh builds the standalone tools
 tests/sandbox.sh ~/sdc-sandbox        # private s6-svscan, s6-rc and D-Bus bus
-tests/check.sh ~/sdc-sandbox          # about 260 scenario checks, ending with an unprivileged-caller phase (once per sandbox)
+tests/check.sh ~/sdc-sandbox          # about 310 scenario checks, ending with an unprivileged-caller phase (once per sandbox)
 tests/systemctl.sh status hello.service   # the real systemctl, in a namespace
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop
@@ -500,7 +500,7 @@ Services still not down 3 minutes after s6-rc began are killed, so a stop that
 never finishes can't keep the machine up.
 
 The skarnet versions and the SHA-256 sums of their tarballs (taken from the
-releases on 2026-10-18) are pinned in one file, `dist/skarnet.versions`,
+releases when each was pinned, last changed 2026-10-25) are pinned in one file, `dist/skarnet.versions`,
 which the RPM build script reads: to move to new releases, edit that file
 only. execline is built as one multicall binary, `/usr/bin/execline`, so the
 SELinux module does not list its commands.
@@ -678,6 +678,8 @@ crates/                    the core (one Cargo workspace)
     loader.rs              search path, aliases, templates, drop-ins, specifiers
     config.rs, envfile.rs  uinitconverter.conf, EnvironmentFile= format
     util.rs                small helpers (glob matching, ...)
+    tools.rs               TOOLS=: the programs run from other packages
+    automask.rs            cleans up what the removed AUTO_MASK= left behind
     state.rs               per-unit state files (RUN_DIR/units/<unit>/)
     index.rs               the generated database's index (unit → s6-rc service)
     fdstore.rs             fd store client and the daemon's fallback store
@@ -713,6 +715,7 @@ dist/                      config, D-Bus policy, s6 services, early-boot helper,
 packages/                  RPM specs for the core tools (one per tool), their build script, github-release.sh
 dist/rpm/                  specs and build script for the skarnet packages in dist/skarnet.versions
 tests/                     unprivileged sandbox, scenario checks, systemctl wrapper,
-                           root/QEMU checks (bpf-root, linkwatch-check, initramfs),
-                           diagnostics and memory comparison
+                           root/QEMU checks (bpf-root, linkwatch-check, initramfs, confine-vm),
+                           diagnostics, memory and hardening comparison,
+                           update-syscall-groups
 ```

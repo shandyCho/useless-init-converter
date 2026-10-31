@@ -8851,3 +8851,30 @@ As part 68, plus the README sections above. Update the section's numbers and kno
 ### Next steps
 
 Part 68's.
+
+## 2026-10-31, part 70: README and TESTING checked against the code
+
+Owner asked to update README.md and TESTING.md to match the current project. Compared both pairs with the committed code, specs, config, tests and each other. Docs only; no tests run
+(the sandbox path is shared and another session was working in this tree). The check count comes from the last recorded runs below.
+
+Corrected in both languages:
+- Sandbox checks: about 260 -> about 310 (default 311, part 66). TESTING's "a few more with SANDBOX_JOURNAL=no" still holds (318).
+- `uinitconverter` command: `confine` isn't dispatched either (main.rs tool_for).
+- systemd isn't in any spec's Requires, though the README's table said the packages require it. Now says so; it must stay installed.
+- Recommended: rsyslog or syslog-ng, as the spec.
+- Source layout: tools.rs, automask.rs, confine-vm, hardening comparison, update-syscall-groups.
+- skarnet pins: "from the releases on 2026-10-18" -> last changed 2026-10-25 (s6-frontend moved 10-20, mdevd added 10-25).
+- TESTING-us: stray "The" before "First download".
+
+Checked and left alone: init options, config keys, report.txt path, test script names and expected output strings, memtest defaults, Not implemented list. Korean/English pairs have the same headings, table rows and code fences.
+
+Deliberately not documented: uncommitted work another session left in the tree at 19:51 (LOG_DIR 0750 root:wheel, the coredump s6 service, RLIMIT_CORE, runner confine). When that lands, the README's
+"Known problems" log line in the systemd comparison section must change, and the coredump service needs documenting.
+
+### Current state
+
+Docs match the code as of 5cfce20, on branch readme-systemd-comparison. The other session's code is still uncommitted in the tree.
+
+### Next steps
+
+Part 68's.

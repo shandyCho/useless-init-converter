@@ -88,7 +88,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | | `stop-instances` | `rc.shutdown`이 실행합니다. s6-rc가 서비스를 멈추기 전에, 그 서비스들 뒤에 순서가 잡힌 요청 시 인스턴스(`user@UID` 등)를 멈추라고 데몬에 요청합니다. |
 | `uinitconverter-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 롱런의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. `confine UNIT -- COMMAND`는 s6가 직접 시작하는 프로그램에 유닛의 cgroup, 제한, 샌드박스를 적용합니다(`--bus=broker`의 시스템 버스). |
 | `uinitconverter-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
-| `uinitconverter` | 위의 모든 명령(`stop-instances`/`stop-atom` 제외) | 사용자가 쓰는 명령(`/usr/bin/uinitconverter`)입니다. 명령을 맡은 도구를 실행하므로 `uinitconverter reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
+| `uinitconverter` | 위의 모든 명령(`stop-instances`/`stop-atom`/`confine` 제외) | 사용자가 쓰는 명령(`/usr/bin/uinitconverter`)입니다. 명령을 맡은 도구를 실행하므로 `uinitconverter reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
 | | `init` | s6 부팅 항목을 설정합니다([Fedora에 배포하기](#fedora에-배포하기-먼저-vm에서-해-보세요) 참고). |
 | | `--version` | 자기 빌드와 설치된 각 도구의 빌드를 보여 줍니다. 본체 도구가 서로 다른 빌드이면 그렇게 표시하고 1로 끝납니다. 도구마다 `--version`도 있습니다. |
 
@@ -217,7 +217,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | skalibs, execline, s6, s6-rc, s6-linux-init | PID 1, 서비스 감독, 서비스 데이터베이스. Fedora에 패키지가 없고 uinitconverter 릴리스에도 들어 있지 않으므로 `dist/rpm/build-skarnet-rpms.sh`로 빌드합니다 |
 | s6-frontend (권장) | `s6` 명령([`s6` 명령](#s6-명령-s6-frontend) 참고). 나머지와 함께 빌드됩니다 |
 | mdevd (권장) | s6 initramfs(`--boot-only-s6=yes`)에서 드라이버를 로드합니다. 나머지와 함께 빌드됩니다 |
-| systemd | 설치된 채로 둡니다: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
+| systemd | 패키지 의존성은 아니지만(Fedora 기본 시스템에 있습니다) 설치된 채로 두어야 합니다: systemctl, udevd, journald, logind, `systemd --user`, tmpfiles, sysusers, libsystemd |
 | dbus-daemon | 시스템 버스(`--systemd-activation`), `--bus=broker`이면 dbus-broker. 사용자 버스는 dbus-broker가 계속 맡습니다 |
 | util-linux | 마운트 유닛과 초기 부팅의 `mount`, `swapon`, `mountpoint`, 무선 상태의 `rfkill` |
 | shadow-utils | `DynamicUser=` 대신 쓰는 시스템 사용자를 만드는 `useradd` |
@@ -234,7 +234,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | `libseccomp.so.2` (libseccomp) | systemd가 seccomp 없이 빌드됐을 때처럼 `SystemCallFilter=`를 메시지와 함께 건너뜁니다. fwupd는 시작을 거부합니다 |
 
 **권장 패키지:** earlyoom(systemd-oomd 대신), chrony, NetworkManager,
-rsyslog(`JOURNAL=no`일 때만).
+rsyslog 또는 syslog-ng(`JOURNAL=no`일 때만).
 
 **빌드:** cargo와 rust. 본체는 zbus, tokio, futures-util, libc, serde를, 독립 도구는 libc만 씁니다
 (`Cargo.toml`).
@@ -253,7 +253,7 @@ skarnet RPM을 빌드하세요. 다음 절 참고). root로 실행되는 것은 
 ```sh
 cargo build                           # 본체. 독립 도구는 sandbox.sh가 빌드합니다
 tests/sandbox.sh ~/sdc-sandbox        # 별도의 s6-svscan, s6-rc, D-Bus 버스
-tests/check.sh ~/sdc-sandbox          # 시나리오 검사 약 260개, 마지막은 비특권 호출자 단계 (샌드박스마다 한 번)
+tests/check.sh ~/sdc-sandbox          # 시나리오 검사 약 310개, 마지막은 비특권 호출자 단계 (샌드박스마다 한 번)
 tests/systemctl.sh status hello.service   # 네임스페이스 안에서 진짜 systemctl 실행
 tests/systemctl.sh list-units --all
 tests/sandbox.sh ~/sdc-sandbox stop
@@ -435,7 +435,7 @@ systemd-backlight@ 등)를 logind와 D-Bus가 아직 실행 중일 때 `After=`�
 s6-rc가 서비스를 멈춥니다(이 첫 단계에는 따로 2분 제한이 있습니다). s6-rc가 시작하고 3분이 지나도
 멈추지 않은 서비스는 강제로 종료되므로, 끝나지 않는 정지 때문에 기계가 꺼지지 않는 일은 없습니다.
 
-skarnet 버전과 타르볼의 SHA-256 값(2026-10-18 릴리스 기준)은 RPM 빌드 스크립트가 읽는
+skarnet 버전과 타르볼의 SHA-256 값(각 고정 시점의 릴리스 기준, 마지막 변경 2026-10-25)은 RPM 빌드 스크립트가 읽는
 파일 하나, `dist/skarnet.versions`에 고정되어 있습니다. 새 릴리스로 옮길 때는 그 파일만 고치면
 됩니다. execline은 multicall 바이너리 하나(`/usr/bin/execline`)로 빌드하므로 SELinux 모듈에
 명령 목록이 없습니다.
@@ -596,6 +596,8 @@ crates/                    본체 (Cargo 작업공간 하나)
     loader.rs              검색 경로, 별칭, 템플릿, 드롭인, 지정자
     config.rs, envfile.rs  uinitconverter.conf, EnvironmentFile= 형식
     util.rs                작은 도우미(glob 일치 등)
+    tools.rs               TOOLS=: 다른 패키지에서 실행하는 프로그램
+    automask.rs            제거된 AUTO_MASK=가 남긴 것을 정리
     state.rs               유닛별 상태 파일(RUN_DIR/units/<유닛>/)
     index.rs               생성된 데이터베이스의 색인(유닛 → s6-rc 서비스)
     fdstore.rs             fd 저장소 클라이언트와, 데몬이 대신 쓰는 저장소
@@ -631,6 +633,7 @@ dist/                      설정, D-Bus 정책, s6 서비스, 초기 부팅 도
 packages/                  본체 도구의 RPM spec(도구마다 하나), 빌드 스크립트, github-release.sh
 dist/rpm/                  dist/skarnet.versions에 있는 skarnet 패키지의 spec과 빌드 스크립트
 tests/                     비특권 샌드박스, 시나리오 검사, systemctl 래퍼,
-                           root/QEMU 검사(bpf-root, linkwatch-check, initramfs),
-                           진단 수집, 메모리 비교
+                           root/QEMU 검사(bpf-root, linkwatch-check, initramfs, confine-vm),
+                           진단 수집, 메모리와 강화 설정 비교,
+                           update-syscall-groups
 ```

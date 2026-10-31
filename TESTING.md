@@ -96,7 +96,7 @@ tests/sandbox.sh ~/sdc
 tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 ```
 
-**기대 결과:** 마지막 줄이 `passed: N  failed: 0`입니다(N은 260개 정도, `SANDBOX_JOURNAL=no`이면 조금 더 많습니다). 다음 줄은
+**기대 결과:** 마지막 줄이 `passed: N  failed: 0`입니다(N은 310개 정도, `SANDBOX_JOURNAL=no`이면 조금 더 많습니다). 다음 줄은
 정상이며 실패가 아닙니다.
 - `SKIP transient scope (needs a writable cgroup …)`. cgroup을 만들려면 root가 필요합니다.
 - `Call failed: Job type reload is not applicable …`. 오류가 제대로 반환되는지 확인하는 검사입니다.

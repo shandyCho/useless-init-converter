@@ -60,7 +60,7 @@ rpm -q pam libselinux libseccomp policycoreutils
 
 ## 2. Build and install the s6 packages
 
-Fedora does not package skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend or mdevd. The
+Fedora does not package skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend or mdevd.
 First download the release tarballs of the versions in
 `dist/skarnet.versions` from skarnet.org yourself, into `~/skarnet-sources`
 (named `NAME-VERSION.tar.gz`; see "Deploying on Fedora" in README-us.md).
@@ -99,7 +99,7 @@ tests/sandbox.sh ~/sdc
 tests/check.sh ~/sdc 2>&1 | tee ~/sdc/check.out
 ```
 
-**Expected:** the last line is `passed: N  failed: 0` (N is about 260, a few
+**Expected:** the last line is `passed: N  failed: 0` (N is about 310, a few
 more with `SANDBOX_JOURNAL=no`). These
 lines are normal and not failures:
 - `SKIP transient scope (needs a writable cgroup …)`. Creating cgroups needs root.
