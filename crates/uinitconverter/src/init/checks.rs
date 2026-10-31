@@ -1,0 +1,165 @@
+//! Checks before anything changes: the system, the programs, versions, LUKS.
+
+use super::*;
+
+pub(super) fn check_system(ctx: &Ctx) {
+    if !ctx.dry && unsafe { libc::geteuid() } != 0 {
+        die("run as root (or use --dry-run)");
+    }
+    let id = read("/etc/os-release")
+        .unwrap_or_default()
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("ID=")
+                .map(|v| v.trim_matches('"').to_string())
+        })
+        .unwrap_or_else(|| "unknown".into());
+    if id != "fedora" {
+        if ctx.dry && std::env::var("UINITCONVERTER_INIT_ANY_OS").as_deref() == Ok("1") {
+            warn(&format!("not Fedora ({id}); dry run only"));
+        } else {
+            die(&format!(
+                "uinitconverter init is for Fedora (found ID={id})"
+            ));
+        }
+    }
+    // What the steps copy or run; the configure step reads the two
+    // configuration files, so a real run needs them.
+    let packaged = [
+        format!("{SHARE}/s6-linux-init/skel"),
+        format!("{SHARE}/selinux/uinitconverter.cil"),
+        format!("{SHARE}/s6.conf"),
+        format!("{SHARE}/rsyslog.conf"),
+        format!("{SHARE}/syslog-ng.conf"),
+        format!("{LIBEXEC}/uinitconverter-gen"),
+    ];
+    if let Some(p) = packaged.iter().find(|p| !exists(p)) {
+        let msg = format!("{p} is missing: install the packages first (sudo dnf install ./*.rpm with the RPMs from {RELEASES})");
+        if ctx.dry {
+            warn(&msg);
+        } else {
+            die(&msg);
+        }
+    }
+}
+
+/// The programs this run needs, by package. Missing ones end init (a dry
+/// run only warns).
+pub(super) fn check_programs(ctx: &Ctx, s: &Settings) {
+    let mut need: Vec<(bool, &str)> = vec![
+        (in_path("s6-linux-init-maker"), "s6-linux-init"),
+        (in_path("semanage"), "policycoreutils-python-utils"),
+    ];
+    if s.grub {
+        need.push((in_path("grubby"), "grubby"));
+    }
+    if s.grub && s.default_s6 {
+        need.push((in_path("grub2-editenv"), "grub2-tools"));
+    }
+    if !s.journal {
+        need.push((
+            exists(&format!("{LIBEXEC}/uinitconverter-journal-relay")),
+            "uinitconverter-journal-relay",
+        ));
+        if s.syslog == "syslog-ng" {
+            need.push((in_path("syslog-ng"), "syslog-ng"));
+        } else {
+            need.push((in_path("rsyslogd"), "rsyslog"));
+        }
+    }
+    if s.broker {
+        need.push((in_path("dbus-broker-launch"), "dbus-broker"));
+    }
+    if s.grub && s.boot_only_s6 {
+        need.push((in_path("mdevd"), "mdevd"));
+    }
+    let missing: Vec<&str> = need.iter().filter(|(ok, _)| !ok).map(|(_, p)| *p).collect();
+    if !missing.is_empty() {
+        let mut msg = format!(
+            "missing packages for these settings: sudo dnf install {}",
+            missing.join(" ")
+        );
+        if missing.iter().any(|p| SKARNET_PACKAGES.contains(p)) {
+            msg += "; build s6-linux-init and mdevd with dist/rpm/build-skarnet-rpms.sh";
+        }
+        if missing.iter().any(|p| RELEASE_PACKAGES.contains(p)) {
+            msg += &format!("; uinitconverter-journal-relay is an RPM in {RELEASES}");
+        }
+        if ctx.dry {
+            warn(&msg);
+        } else {
+            die(&msg);
+        }
+    }
+    if !rpm_installed("gdm") || !rpm_installed("gnome-shell") {
+        warn("gdm/gnome-shell are not installed. For a full desktop run:");
+        warn("  dnf group install workstation-product-environment");
+    }
+}
+
+/// Show which builds are installed; the core tools must be from one build.
+pub(super) fn check_versions(ctx: &Ctx) {
+    if ctx.dry {
+        println!("  + uinitconverter --version");
+        return;
+    }
+    let (lines, ok) = crate::version_report();
+    for l in lines {
+        println!("  {}", l.trim_start());
+    }
+    if !ok {
+        warn(&format!(
+            "the uinitconverter packages are not all from one build (see above): sudo dnf upgrade {CORE_PACKAGES}"
+        ));
+    }
+}
+
+/// The /etc/crypttab entries, each with whether the initramfs unlocks it.
+pub(super) fn luks_volumes(crypttab: &str, cmdline: &str) -> Vec<(String, bool)> {
+    let cmdline = format!(" {} ", cmdline.trim());
+    crypttab
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let name = f.next()?;
+            if name.starts_with('#') {
+                return None;
+            }
+            let dev = f.next().unwrap_or("");
+            let uuid = dev.strip_prefix("UUID=").unwrap_or(dev);
+            let early = cmdline.contains(&format!(" rd.luks.uuid={uuid} "))
+                || cmdline.contains(&format!(" rd.luks.uuid=luks-{uuid} "))
+                || cmdline.contains(&format!(" rd.luks.name={uuid}="));
+            Some((name.to_string(), early))
+        })
+        .collect()
+}
+
+/// LUKS: volumes the initramfs unlocks (rd.luks.uuid=) are open before s6
+/// starts. Anything else in /etc/crypttab is opened by systemd-cryptsetup@
+/// units on a systemd boot, which do not exist under s6.
+pub(super) fn check_luks(ctx: &Ctx) {
+    let Some(crypttab) = read("/etc/crypttab").filter(|t| !t.trim().is_empty()) else {
+        return;
+    };
+    say("Checking encrypted volumes (/etc/crypttab)");
+    let mut late = Vec::new();
+    for (name, early) in luks_volumes(&crypttab, &read("/proc/cmdline").unwrap_or_default()) {
+        if early {
+            println!("  {name}: unlocked by the initramfs (fine)");
+        } else {
+            late.push(name);
+        }
+    }
+    if !late.is_empty() {
+        warn(&format!(
+            "not unlocked by the initramfs: {}",
+            late.join(" ")
+        ));
+        warn("  Under s6 nothing opens these (systemd-cryptsetup@ units are systemd-only),");
+        warn("  so filesystems on them will not be mounted. Add them to the initramfs with");
+        warn("  rd.luks.uuid= on the kernel command line, or leave them unused for this test.");
+        ctx.confirm("Continue anyway?");
+    }
+    println!("  The LUKS passphrase prompt will be plain text (the s6 entry disables plymouth).");
+}

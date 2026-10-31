@@ -1,0 +1,256 @@
+//! Command line and uinitconverter.conf: what `uinitconverter init` was asked to do.
+
+use super::*;
+
+#[derive(Debug, PartialEq)]
+pub(super) struct Opts {
+    pub(super) dry: bool,
+    pub(super) yes: bool,
+    pub(super) uninstall: bool,
+    pub(super) default_s6: Option<bool>,
+    pub(super) journal: Option<bool>,
+    pub(super) resolved: Option<bool>,
+    pub(super) broker: Option<bool>,
+    pub(super) syslog: Option<String>,
+    pub(super) enforcing: Option<bool>,
+    pub(super) boot_only_s6: Option<bool>,
+    pub(super) grub: bool,
+}
+
+/// What this run sets up: the options, or what the last run set.
+#[derive(Debug, PartialEq)]
+pub(super) struct Settings {
+    pub(super) journal: bool,
+    pub(super) resolved: bool,
+    pub(super) broker: bool,
+    pub(super) syslog: String,
+    pub(super) enforcing: bool,
+    pub(super) boot_only_s6: bool,
+    pub(super) default_s6: bool,
+    pub(super) grub: bool,
+}
+
+pub(super) fn yes_no(opt: &str, v: &str) -> Result<bool, String> {
+    match v {
+        "yes" => Ok(true),
+        "no" => Ok(false),
+        _ => Err(format!("{opt}: expected yes or no, got '{v}'")),
+    }
+}
+
+/// The options, or None for --help.
+pub(super) fn parse_args(args: &[String]) -> Result<Option<Opts>, String> {
+    let mut o = Opts {
+        dry: false,
+        yes: false,
+        uninstall: false,
+        default_s6: None,
+        journal: None,
+        resolved: None,
+        broker: None,
+        syslog: None,
+        enforcing: None,
+        boot_only_s6: None,
+        grub: true,
+    };
+    for a in args {
+        let (name, val) = match a.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (a.as_str(), None),
+        };
+        match (name, val) {
+            ("--dry-run", None) => o.dry = true,
+            ("--yes" | "-y", None) => o.yes = true,
+            ("--uninstall", None) => o.uninstall = true,
+            ("--default-s6", None) => o.default_s6 = Some(true),
+            ("--default-systemd", None) => o.default_s6 = Some(false),
+            ("--journal", Some(v)) => o.journal = Some(yes_no(name, v)?),
+            ("--resolved", Some(v)) => o.resolved = Some(yes_no(name, v)?),
+            ("--bus", Some("broker")) => o.broker = Some(true),
+            ("--bus", Some("daemon")) => o.broker = Some(false),
+            ("--bus", Some(v)) => {
+                return Err(format!("--bus: expected daemon or broker, got '{v}'"))
+            }
+            ("--syslog", Some(v)) if SYSLOGS.contains(&v) => o.syslog = Some(v.to_string()),
+            ("--syslog", Some(v)) => {
+                return Err(format!(
+                    "--syslog: expected {}, got '{v}'",
+                    SYSLOGS.join(" or ")
+                ))
+            }
+            ("--boot-only-s6", Some(v)) => o.boot_only_s6 = Some(yes_no(name, v)?),
+            ("--grub", Some(v)) => o.grub = yes_no(name, v)?,
+            ("--selinux", Some("enforcing")) => o.enforcing = Some(true),
+            ("--selinux", Some("permissive")) => o.enforcing = Some(false),
+            ("--selinux", Some(v)) => {
+                return Err(format!(
+                    "--selinux: expected enforcing or permissive, got '{v}'"
+                ))
+            }
+            ("-h" | "--help", None) => return Ok(None),
+            (
+                "--journal" | "--resolved" | "--bus" | "--syslog" | "--boot-only-s6" | "--grub"
+                | "--selinux",
+                None,
+            ) => return Err(format!("{name} needs a value ({name}=...)")),
+            // The old setup-fedora.sh spellings.
+            (
+                "--no-journal" | "--no-resolved" | "--enforcing" | "--no-grub"
+                | "--no-boot-only-s6",
+                None,
+            ) => {
+                return Err(format!(
+                    "unknown option {a}; see uinitconverter init --help (it is --NAME=yes|no now)"
+                ))
+            }
+            _ => {
+                return Err(format!(
+                    "unknown option {a} (see uinitconverter init --help)"
+                ))
+            }
+        }
+    }
+    Ok(Some(o))
+}
+
+/// Whether uinitconverter.conf text sets KEY to a true value (the last setting
+/// counts; unset is true, as both keys default to yes).
+pub(super) fn conf_bool(text: &str, key: &str) -> bool {
+    let v = text
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix(key)?.strip_prefix('='))
+        .last()
+        .map(|v| v.trim().to_ascii_lowercase());
+    !matches!(v.as_deref(), Some("no" | "false" | "0" | "off" | "n" | "f"))
+}
+
+/// The marker line above a KEY=no that init wrote.
+pub(super) fn conf_marker(key: &str) -> String {
+    format!(
+        "# set by uinitconverter init --{}=no",
+        key.to_ascii_lowercase()
+    )
+}
+
+/// uinitconverter.conf text with KEY set: false writes KEY=no, true removes the
+/// setting (the default). Other lines are kept. None if nothing changes.
+pub(super) fn set_conf_key(text: &str, key: &str, val: bool) -> Option<String> {
+    if conf_bool(text, key) == val {
+        return None;
+    }
+    let marker = conf_marker(key);
+    let old_marker = format!("# set by setup-fedora.sh --no-{}", key.to_ascii_lowercase());
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| {
+            let setting = l
+                .trim_start()
+                .strip_prefix(key)
+                .is_some_and(|r| r.starts_with('='));
+            !setting && *l != marker && *l != old_marker
+        })
+        .collect();
+    let mut out = kept.join("\n").trim_end_matches('\n').to_string();
+    if !val {
+        out.push_str(&format!("\n\n{marker}\n{key}=no"));
+    }
+    out.push('\n');
+    Some(out)
+}
+
+/// The value uinitconverter.conf text gives KEY (the last setting counts),
+/// lowercased and without quotes; None when unset.
+pub(super) fn conf_choice(text: &str, key: &str) -> Option<String> {
+    text.lines()
+        .filter_map(|l| l.trim_start().strip_prefix(key)?.strip_prefix('='))
+        .last()
+        .map(|v| v.trim().trim_matches('"').trim().to_ascii_lowercase())
+}
+
+/// Whether uinitconverter.conf text sets BUS=broker (unset is dbus-daemon).
+pub(super) fn conf_broker(text: &str) -> bool {
+    conf_choice(text, "BUS").as_deref() == Some("broker")
+}
+
+/// KEY= for option OPT, as set_conf_key does it: the text with KEY=VALUE
+/// under init's marker, or without any KEY= when VALUE is the default;
+/// None if it already says so.
+pub(super) fn set_conf_choice(
+    text: &str,
+    key: &str,
+    opt: &str,
+    value: &str,
+    default: &str,
+) -> Option<String> {
+    if conf_choice(text, key).as_deref().unwrap_or(default) == value {
+        return None;
+    }
+    let marker = format!("# set by uinitconverter init --{opt}=");
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| {
+            !l.trim_start()
+                .strip_prefix(key)
+                .is_some_and(|r| r.starts_with('='))
+                && !l.starts_with(&marker)
+        })
+        .collect();
+    let mut out = kept.join("\n").trim_end_matches('\n').to_string();
+    if value != default {
+        out.push_str(&format!("\n\n{marker}{value}\n{key}={value}"));
+    }
+    out.push('\n');
+    Some(out)
+}
+
+pub(super) fn set_conf_bus(text: &str, broker: bool) -> Option<String> {
+    set_conf_choice(
+        text,
+        "BUS",
+        "bus",
+        if broker { "broker" } else { "daemon" },
+        "daemon",
+    )
+}
+
+/// The words of a file without its # comments.
+pub(super) fn words(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|l| l.split('#').next().unwrap_or(""))
+        .flat_map(|l| l.split_whitespace().map(String::from))
+        .collect()
+}
+
+/// The s6 entry's kernel options.
+pub(super) fn boot_args(enforcing: bool) -> String {
+    // plymouth's splash would keep the display (plymouth-quit.service is a
+    // systemd-only unit), so the s6 entry boots without it and shows messages.
+    let mut args = "init=/usr/sbin/init-selinux plymouth.enable=0 rd.plymouth=0".to_string();
+    if !enforcing {
+        args.push_str(" enforcing=0");
+    }
+    args
+}
+
+pub(super) fn resolve(o: &Opts, cfg: &Config) -> Settings {
+    let conf = fs::read_to_string(&cfg.config_path).unwrap_or_default();
+    Settings {
+        journal: o.journal.unwrap_or_else(|| conf_bool(&conf, "JOURNAL")),
+        resolved: o.resolved.unwrap_or_else(|| conf_bool(&conf, "RESOLVED")),
+        broker: o.broker.unwrap_or_else(|| conf_broker(&conf)),
+        syslog: o
+            .syslog
+            .clone()
+            .or_else(|| conf_choice(&conf, "SYSLOG").filter(|v| SYSLOGS.contains(&v.as_str())))
+            .unwrap_or_else(|| SYSLOGS[0].to_string()),
+        // The last run's options file; a first run boots permissive.
+        enforcing: o.enforcing.unwrap_or_else(|| {
+            read(BOOT_OPTIONS).is_some_and(|t| !words(&t).iter().any(|w| w == "enforcing=0"))
+        }),
+        boot_only_s6: o.boot_only_s6.unwrap_or_else(|| exists(BOOT_ONLY_S6_FILE)),
+        default_s6: o
+            .default_s6
+            .unwrap_or_else(|| read(BOOT_DEFAULT_FILE).is_some_and(|t| words(&t) == ["s6"])),
+        grub: o.grub,
+    }
+}
