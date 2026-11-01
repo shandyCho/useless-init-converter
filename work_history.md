@@ -9646,3 +9646,41 @@ main, this entry's commit, ahead of origin/main (48595a3). Installed and booted:
 1. Owner: `packages/build-rpms.sh`, install, and shutdowns as usual. Then part 103's step 2.
 2. Owner: push main when wanted.
 3. Rest as part 101, from its step 3.
+
+## 2026-11-01, part 105: core RPMs built from main (no code change)
+
+`packages/build-rpms.sh`, exit 0, 20:32 to 20:43: 5 core RPMs 0.2.0-1.20261101203204.g3bc583e in ~/rpmbuild-uinitconverter/rpms, not dirty. `rpm -U --test --nosignature`, exit 0. Standalone not rebuilt: unchanged. Not installed. origin/main now equals main at 3bc583e; it was 9 behind before the build, and I didn't push, so the owner did.
+
+### Current state
+
+main at 3bc583e, level with origin/main; this entry uncommitted. Built, not installed: core g3bc583e. Installed and booted: g3016505, without the log line. Published: 0.2.0 at 48595a3.
+
+### Next steps
+
+1. Owner: `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*g3bc583e*.rpm`, reboot to s6, shutdowns as usual. Then part 103's step 2.
+2. Rest as part 101, from its step 3.
+
+## 2026-11-01, part 106: README split for first-time installers (df2a258)
+
+Owner asked for README to hold only the project summary, what's required to build, install and run, and install steps with commands, aimed at first-time users and including the standalone packages; the technical and other content moves to `etc.md` in `/docs`.
+
+**Done.** README pair rewritten, 658 and 745 lines down to about 230. New docs/etc.md and docs/etc-us.md (etc-us because every doc here is a pair, CLAUDE.md's rule) hold all the old sections unchanged, with relative links fixed, a new top section for the diagram, and "Deploying on Fedora" renamed `What uinitconverter init does`, keeping its steps, options and boot details. The old install steps themselves went to README. Checked by script: all relative links and anchors in the READMEs, docs and TESTING pairs resolve (0 problems); every old line not carried verbatim was read, and is either those steps, a link rewrite or an intro now reworded in README. TESTING pair's two pointers and CLAUDE.md's docs line updated. dist/rpm/build-skarnet-rpms.sh's "installation section of README-us.md" and packages/README's pointers stay right.
+
+**Changed for the first-time user, on my decision:**
+- skarnet tarballs: a `curl` loop over dist/skarnet.versions replaces "open each package's page and download". build-skarnet-rpms.sh still downloads nothing (the earlier decision); the user runs the loop. Owner asked for executable commands.
+- Release RPMs: a `curl` over GitHub's API, not `gh`, which needs a login.
+- Remove: `dnf remove 'uinitconverter*'`, so it also covers standalone tools and doesn't name any that were left out. Not run.
+
+**Tested, on v0.2.0 in a temporary directory:** the clone, the skarnet download loop (7 files, all pinned sums match) and the release download (10 files, `sha256sum -c` passes). On this machine's s6 boot: `cat /proc/1/comm`, `uinitconverter --version`, `s6 live status`, `uinitconverter init --dry-run`. `bash -n` over every sh block in both READMEs. **Not tested: the steps as a whole on a fresh machine**, so `dnf install`, the builds, the reboot and `--uninstall` as written are from existing docs and history, not this run.
+
+**Noticed:** README now says release RPMs are for Fedora 45 x86_64, while TESTING says Fedora 44 or 45 with the s6 boot tested on 45. Consistent, since TESTING builds from source, but a reader has to notice that. docs/etc's "gnome-shell crashed in 4 of 28" figures left as they were (10-31), though part 101 has later counts.
+
+### Current state
+
+main at df2a258, ahead of origin/main (3bc583e), with the history commit on top. Installed: core g3bc583e, as `uinitconverter --version` shows now, so the owner installed it after part 105. Whether it has been booted wasn't checked.
+
+### Next steps
+
+1. Owner: push main.
+2. A first-install run of README on a fresh Fedora 45 VM, the only real test of it.
+3. Part 103's step 2 and the rest as part 105.
