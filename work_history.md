@@ -9361,3 +9361,17 @@ main at f6b51df; sandbox.rs and confine-vm.sh changed and uncommitted, this entr
 2. Full-boot test in QEMU, as part 89; this bug is the kind it would catch.
 3. Owner: decide on rtkit's ns_mnt, the last WEAKER row. Recommended: keep the row and accept exit 1, or mark it known in the script; part 55's reasoning stands, and rtkit also chroots itself to /proc (its mount rows).
 4. Rest as part 88: publish, part 79, gdm's greeters, rustix or dinit.
+
+## 2026-11-01, part 91: part 90 committed and built; a presentation (no code change)
+
+Owner asked to commit and build. 418e01c on branch private-users-strict, off main at f6b51df, not merged, not pushed. `packages/build-rpms.sh`, exit 0: 5 core RPMs 0.2.0-1.20261101161631.g418e01c in ~/rpmbuild-uinitconverter/rpms, built from a clean tree. Not installed (needs sudo), so not on a real boot yet. Standalone tools unchanged, not rebuilt.
+
+Owner also asked for a presentation for other people: 12 slides, English, private artifact https://claude.ai/artifact/4WKaz55UDNvmzZ3rpyBggx. Hardening there stays at 3 of 28, the last full comparison, because 1 of 26 only reflects colord and upower being down. Rust is about 28,000 lines by raw count with tests (`wc -l` over crates and standalone); the README's "about 23,000" is older and wasn't changed.
+
+### Current state
+
+Branch private-users-strict at this entry's commit; main at f6b51df. Built, not installed: g418e01c. Installed and booted: g1fd0d8b, with colord, upower and malcontent-timerd failing to start. 0.2.0 not published; the assets are from g6338c79.
+
+### Next steps
+
+As part 90, starting at step 1's `sudo dnf upgrade`; merge private-users-strict once the boot check passes or sooner, as the owner prefers. After that boot, update the deck's hardening row with README's security row.
