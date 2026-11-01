@@ -10003,6 +10003,34 @@ main at this entry's commit, ahead of origin/main by 4. Release commit 3f2dea1; 
 
 ### Next steps
 
+(Target superseded by part 121: use 86535a8.)
+
 1. Owner: `git push origin main`, then the `gh release create` line: `gh release create v0.2.1 -R shandyCho/useless-init-converter --target 3f2dea12120f9a21a661c09ba9bd65307dd451bb --title "uinitconverter 0.2.1" --notes-file ~/uinitconverter-release/NOTES.md ~/uinitconverter-release/assets/*`.
 2. A fair boot-speed figure would take alternating boots of the same build, if wanted.
 3. Part 108's watch on shutdowns; part 106's fresh VM install.
+
+## 2026-11-02, part 121: docs audited and updated, assets rebuilt on 86535a8 (no code change)
+
+Owner: update the project's documents. Audited the Markdown files against parts 111-120 and the code by pattern search and reading the affected sections, not a line-by-line read. Taken to include both private slide decks, since parts 93 and 95 kept them in step; code-review.md, report-ko.md and security-review.md are git-ignored and were left alone.
+
+**Repo, both languages (86535a8):**
+- docs/etc: shutdown asks the display manager to stop first; PrivateNetwork= implies PrivateMounts= and remounts /sys; `s6-ftrigrd` in known problems.
+- docs/etc, Not implemented: part 112's `[Socket] PrivateNetwork=`, JoinsNamespaceOf=, NetworkNamespacePath=; part 113's hand-written services, whose command line and restart/stop behaviour unit files and drop-ins don't reach.
+- TESTING: real-boot rows for the display manager at shutdown and PrivateNetwork=. Commands are the ones the owner ran in parts 114 and 117; the rows themselves weren't re-run.
+- README: the update section says init restarts the daemon on the s6 boot and to reboot, which part 117 got wrong.
+
+**Left as they are:** packages/README's 0.1.0 version strings are format examples. Standalone READMEs already name rustix. README's "not speed or memory", as part 120.
+
+**Decks (both, private):** `results`, `limits` and `status` slides: part 120's figures, no setting weaker, at least 14 shutdowns, the 5 s hang, about 29,000 lines, s6-ftrigrd in the notes. Status says 0.2.0 is the latest release and 0.2.1 awaits publication, so it needs changing once published. Not checked as rendered, so overflow wasn't seen. English 1793548022-0ca4, Korean 1793548037-f796.
+
+**Assets rebuilt** so the tag has these docs: `packages/github-release.sh` on 86535a8, exit 0, 9 RPMs, `sha256sum -c` passes, NOTES.md names 86535a8. No file under crates/, dist/, tests/ or standalone/ differs from 3f2dea1, so part 120's tests weren't re-run. RPM %check ran in the build. Docs only: nothing to run beyond that.
+
+### Current state
+
+main at this entry's commit, ahead of origin/main by 6. Release target 86535a8; assets in ~/uinitconverter-release/assets, not published. Installed and booted: core gb672a6f, same code, version 0.2.0.
+
+### Next steps
+
+1. Owner: `git push origin main`, then `gh release create v0.2.1 -R shandyCho/useless-init-converter --target 86535a8d4c31689775ddec7dc4ae653ce03bda77 --title "uinitconverter 0.2.1" --notes-file ~/uinitconverter-release/NOTES.md ~/uinitconverter-release/assets/*`.
+2. After publishing: both decks' `status` slide says released.
+3. A fair boot-speed figure would take alternating boots of the same build, if wanted. Part 108's watch on shutdowns; part 106's fresh VM install.
