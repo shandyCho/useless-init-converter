@@ -179,7 +179,9 @@ under `s6-supervise`. It also makes earlyoom kill a process under memory
 pressure, tests udevd's fallback, crashes a process to see its core file kept,
 and runs `init-selinux` with stand-ins for the policy load and s6-linux-init,
 for the hard `RLIMIT_NOFILE` it sets (524288, as systemd gives services) and
-the soft `RLIMIT_CORE` (unlimited). No SELinux policy is loaded in there,
+the soft `RLIMIT_CORE` (unlimited). It also checks `PrivateUsers=` through both
+`uinitconverter-runner run` and `confine`: the maps, groups, bounding set, and that
+the namespace's capabilities don't reach the host's mounts. No SELinux policy is loaded in there,
 which takes a real boot. Needs `cargo build`, QEMU, `/dev/kvm`, and rsyslog,
 earlyoom and s6 installed:
 

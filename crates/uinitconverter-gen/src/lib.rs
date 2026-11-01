@@ -320,6 +320,7 @@ const SERVICE_KEYS: &[&str] = &[
     "PrivateNetwork",
     "PrivateIPC",
     "PrivateMounts",
+    "PrivateUsers",
     "DevicePolicy",
     "DeviceAllow",
     "IPAddressAllow",

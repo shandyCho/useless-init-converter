@@ -20,6 +20,7 @@
 
 ### 변경
 - rsyslog, earlyoom, udevd, 시스템 버스를 유닛의 샌드박스 안에서 실행합니다.
+- `PrivateUsers=`를 구현했습니다(colord, upower 등 이 설정을 쓰는 서비스가 자기 사용자 네임스페이스를 갖습니다).
 - 읽기 전용 마운트를 systemd와 맞췄습니다.
 - `/var/log/uinitconverter`는 0750 root:wheel입니다.
 - systemd와 같이 하드 `RLIMIT_NOFILE`은 524288, 소프트 `RLIMIT_CORE`는 unlimited입니다.
@@ -46,5 +47,5 @@
 ### 알려진 문제
 - 종료 순서 변경으로 gnome-shell 크래시가 해결되는지는 증명되지 않았습니다.
   지금까지 정상 종료 2회뿐이고, 로그인 화면에서의 종료는 없었습니다.
-- PrivateUsers=가 구현되어 있지 않아 `tests/hardencompare.sh`는 colord와 upower를
-  s6에서 더 약하다고 보고합니다.
+- `tests/hardencompare.sh`는 rtkit을 여전히 s6에서 더 약하다고 보고합니다(`ns_mnt`). 이 유닛은
+  `PrivateNetwork=`만 설정하므로 파일 시스템 제한이 빠진 것은 아닙니다.

@@ -20,6 +20,7 @@ Changes since the first published release (tag `initial`, 2fac273).
 
 ### Changed
 - rsyslog, earlyoom, udevd and the system bus run under their units' sandbox.
+- `PrivateUsers=` is implemented (colord, upower and others that set it get their own user namespace).
 - Read-only mounts match systemd's.
 - `/var/log/uinitconverter` is 0750 root:wheel.
 - Hard `RLIMIT_NOFILE` is 524288 and soft `RLIMIT_CORE` is unlimited, as on systemd.
@@ -46,5 +47,5 @@ Changes since the first published release (tag `initial`, 2fac273).
 ### Known issues
 - Whether the shutdown order fixes gnome-shell's crash is not proven: 2 clean
   shutdowns so far, none from the login screen.
-- PrivateUsers= isn't implemented, so `tests/hardencompare.sh` reports colord
-  and upower as weaker on s6.
+- `tests/hardencompare.sh` still reports rtkit as weaker on s6 (`ns_mnt`): its
+  unit only sets `PrivateNetwork=`, so this isn't a file system restriction lost.

@@ -40,7 +40,7 @@ add() {
         done
     done
 }
-for p in bash sh cat sed grep awk cut seq readlink mkdir ls stat kill sleep mount test rm tr id true chmod cp \
+for p in bash sh cat sed grep awk cut seq readlink mkdir ls stat kill sleep mount umount mv test rm tr id true chmod cp \
     tail logger mountpoint rsyslogd earlyoom udevadm s6-svscan s6-supervise s6-svstat s6-svc \
     s6-notifyoncheck execlineb; do
     add "$(type -P "$p")"
@@ -62,9 +62,12 @@ mkdir -p "$R"/etc/uinitconverter "$R"/etc/default "$R"/etc/udev/rules.d "$R"/ser
     "$R"/var/log "$R"/var/lib/rsyslog "$R"/var/tmp "$R"/proc "$R"/sys "$R"/dev "$R"/run \
     "$R"/tmp "$R"/home "$R"/root "$R"/mnt/late
 echo 'root:x:0:0:root:/root:/bin/bash
-earlyoom:x:990:990::/:/usr/sbin/nologin' >"$R/etc/passwd"
+earlyoom:x:990:990::/:/usr/sbin/nologin
+puser:x:991:991::/:/usr/sbin/nologin' >"$R/etc/passwd"
 echo 'root:x:0:
-earlyoom:x:990:' >"$R/etc/group"
+earlyoom:x:990:
+puser:x:991:
+pextra:x:992:puser' >"$R/etc/group"
 echo 'passwd: files
 group: files' >"$R/etc/nsswitch.conf"
 echo 'JOURNAL=no' >"$R/etc/uinitconverter/uinitconverter.conf"
@@ -78,6 +81,44 @@ for s in syslog earlyoom udevd coredump; do
     cp "$TOP/dist/s6/$s/run" "$R/service/$s/"
 done
 cp "$TOP/dist/s6/udevd/notification-fd" "$R/service/udevd/"
+# PrivateUsers=: what the process sees, one "key value" per line.
+cat >"$R/usr/bin/pu-probe" <<'PROBE'
+#!/bin/sh
+map() { awk '{ printf "%s%s %s %s", s, $1, $2, $3; s = "," } END { print "" }' "/proc/self/$1"; }
+{
+    echo "uid $(id -u)"
+    echo "gid $(id -g)"
+    echo "groups $(id -G)"
+    echo "uid_map $(map uid_map)"
+    echo "gid_map $(map gid_map)"
+    echo "setgroups $(cat /proc/self/setgroups)"
+    echo "ns $(readlink /proc/self/ns/user)"
+    echo "capbnd $(sed -n 's/^CapBnd:[[:space:]]*//p' /proc/self/status)"
+    echo "capeff $(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status)"
+    if [ -d /pu-root/usr ]; then echo "chroot no"; else echo "chroot yes"; fi
+    mkdir -p /tmp/pu-mnt 2>/dev/null
+    if mount -t tmpfs none /tmp/pu-mnt 2>/dev/null; then echo "mount allowed"; else echo "mount refused"; fi
+} >"$1.tmp"
+mv "$1.tmp" "$1"
+PROBE
+chmod +x "$R/usr/bin/pu-probe"
+pu_unit() { # name, then the [Service] lines
+    local name=$1
+    shift
+    {
+        echo '[Service]'
+        echo "ExecStart=/usr/bin/pu-probe /run/pu/$name"
+        printf '%s\n' "$@"
+    } >"$R/usr/lib/systemd/system/$name.service"
+}
+pu_unit pu-none User=puser
+pu_unit pu-user User=puser PrivateUsers=yes CapabilityBoundingSet=
+pu_unit pu-root PrivateUsers=yes CapabilityBoundingSet=
+pu_unit pu-caps PrivateUsers=yes
+pu_unit pu-identity PrivateUsers=identity
+pu_unit pu-full PrivateUsers=full
+pu_unit pu-no PrivateUsers=no
+pu_unit pu-chroot PrivateUsers=yes RootDirectory=/pu-root
 # init-selinux, with stand-ins for what it loads and execs.
 cp "$TOP/dist/s6-linux-init/init-selinux" "$R/usr/sbin/"
 printf '#!/bin/sh\nexit 0\n' >"$R/usr/sbin/load_policy"
@@ -266,6 +307,64 @@ is "udevd: fallback runs it without seccomp" "$(status "$u" Seccomp)" 0
 is "udevd: fallback tries" "$(cut -d' ' -f1 /run/uinitconverter/udevd-tries)" 4
 is "udevd: fallback OOM score" "$(cat "/proc/$u/oom_score_adj")" -1000
 wait_for 's6-svstat /service/udevd | grep -q ready' && ok "udevd: fallback ready" || bad "udevd: fallback not ready"
+
+echo '--- PrivateUsers='
+mkdir -m 1777 /run/pu
+pu() { sed -n "s/^$2 //p" "/run/pu/$1" 2>/dev/null; }
+pu_run() { # command (run or confine) and unit: the probe's file appears
+    rm -f "/run/pu/$2"
+    case $1 in
+        run) /usr/libexec/uinitconverter/uinitconverter-runner run -- "$2.service" >"/run/$2.log" 2>&1 & ;;
+        confine) /usr/libexec/uinitconverter/uinitconverter-runner confine "$2.service" -- /usr/bin/pu-probe "/run/pu/$2" >"/run/$2.log" 2>&1 & ;;
+    esac
+    wait_for "[ -e /run/pu/$2 ]" || { bad "$2 ($1): no result: $(cat "/run/$2.log")"; return 1; }
+}
+host_ns=$(readlink /proc/self/ns/user)
+for how in run confine; do
+    pu_run "$how" pu-none
+    is "PrivateUsers ($how): unset, the host's namespace" "$(pu pu-none ns)" "$host_ns"
+    pu_run "$how" pu-no
+    is "PrivateUsers=no ($how): the host's namespace" "$(pu pu-no ns)" "$host_ns"
+
+    pu_run "$how" pu-user
+    [ "$(pu pu-user ns)" != "$host_ns" ] && ok "PrivateUsers=yes, User= ($how): own namespace" || bad "PrivateUsers=yes, User= ($how): host's namespace"
+    is "PrivateUsers=yes, User= ($how): uid" "$(pu pu-user uid)" 991
+    is "PrivateUsers=yes, User= ($how): gid" "$(pu pu-user gid)" 991
+    is "PrivateUsers=yes, User= ($how): uid_map" "$(pu pu-user uid_map)" "0 0 1,991 991 1"
+    is "PrivateUsers=yes, User= ($how): gid_map" "$(pu pu-user gid_map)" "0 0 1,991 991 1"
+    is "PrivateUsers=yes, User= ($how): setgroups denied" "$(pu pu-user setgroups)" deny
+    # Set before the namespace; an unmapped group shows as nobody.
+    is "PrivateUsers=yes, User= ($how): extra group kept, unmapped" "$(pu pu-user groups)" "991 65534"
+    is "PrivateUsers=yes, User= ($how): bounding set applied in the namespace" "$(pu pu-user capbnd)" 0000000000000000
+
+    pu_run "$how" pu-root
+    is "PrivateUsers=yes, root ($how): uid_map" "$(pu pu-root uid_map)" "0 0 1"
+    is "PrivateUsers=yes, root ($how): gid_map" "$(pu pu-root gid_map)" "0 0 1"
+    is "PrivateUsers=yes, root ($how): no capabilities" "$(pu pu-root capeff)" 0000000000000000
+
+    # All capabilities, but only in its own namespace.
+    pu_run "$how" pu-caps
+    [ "$(pu pu-caps capeff)" != 0000000000000000 ] && ok "PrivateUsers=yes, root ($how): has capabilities in the namespace" || bad "PrivateUsers=yes, root ($how): capeff $(pu pu-caps capeff)"
+    is "PrivateUsers=yes, root ($how): they don't reach the host's mounts" "$(pu pu-caps mount)" refused
+
+    pu_run "$how" pu-identity
+    is "PrivateUsers=identity ($how): uid_map" "$(pu pu-identity uid_map)" "0 0 65536"
+    is "PrivateUsers=identity ($how): setgroups denied" "$(pu pu-identity setgroups)" deny
+
+    pu_run "$how" pu-full
+    is "PrivateUsers=full ($how): uid_map" "$(pu pu-full uid_map)" "0 0 4294967295"
+    is "PrivateUsers=full ($how): setgroups allowed" "$(pu pu-full setgroups)" allow
+    is "PrivateUsers=full ($how): no host mounts" "$(pu pu-full mount)" refused
+done
+# unshare(CLONE_NEWUSER) fails in a chroot, so the order matters. Only `run`
+# does RootDirectory=.
+mkdir -p /pu-root
+mount --rbind / /pu-root
+/usr/libexec/uinitconverter/uinitconverter-runner run -- pu-chroot.service >/run/pu-chroot.log 2>&1 &
+wait_for '[ -e /run/pu/pu-chroot ]' || bad "PrivateUsers= with RootDirectory=: no result: $(cat /run/pu-chroot.log)"
+is "PrivateUsers= with RootDirectory=: chrooted" "$(pu pu-chroot chroot)" yes
+is "PrivateUsers= with RootDirectory=: uid_map" "$(pu pu-chroot uid_map)" "0 0 1"
+umount -l /pu-root
 
 echo VM-DONE
 sleep 1

@@ -9241,3 +9241,66 @@ main at 6338c79, not pushed. Installed and booted: g6338c79 (0.2.0). No AVCs, me
 2. Owner: to go on with dinit, allow building and running dinit's source here (permission rule) and `sudo dnf install gcc-c++ m4`.
 3. Part 79's login-screen shutdowns.
 4. PrivateUsers=: owner's decision; `hardencompare.sh report` keeps exiting 1 until it's implemented.
+
+## 2026-11-01, part 87: parts 85-86 merged; unread core files found (no code change)
+
+8f17ef1 fast-forwarded onto main, 12 commits ahead of origin/main, not pushed; the branch is deleted. (Part 86's "uncommitted" was true when written.)
+
+**New, not read yet.** /var/lib/systemd/coredump has 6 `core.gnome-session-i.*` of 01:32 on 11-01, one each for uids 60579-60584, the time of the last s6 shutdown (last-shutdown-*.log, 01:32), with the 0.2.0 RPMs installed at 01:24. Files are root-only, so signal and backtrace aren't known, and neither is whether this is the shutdown, the reload or part 79's area. None since. Also 5 `core.s6-ftrigrd.*` for uid 1000 (10-19, and four between 10-31 23:36 and 11-01 00:42); possibly from test runs, not established.
+
+Part 79's grep: last gnome-shell SEGV is still 10-31 16:57, old code. The 12:25 `Consumed`/`exit.target` pair is the greeter stopping at login, not a shutdown, so it doesn't count for part 79.
+
+### Current state
+
+main at 8f17ef1, not pushed. Installed and booted: g6338c79. This entry uncommitted.
+
+**Read: the 6 gnome-session-i cores don't block 0.2.0.** All six: `/usr/libexec/gnome-session-init-worker gnome-login`, signal 6, stack main -> g_log -> g_log_default_handler -> abort, so a g_error from the worker's own main (the message wasn't read; symbols only). Logind's log for 01:32:02: poweroff requested .145, session 2 logged out .394, then for each uid in turn `Failed to start user service 'user@UID.service': Transaction ... is destructive (the system is shutting down)` at .396, .498, .577, .657, .738, .823, each followed by that uid's core 30-40 ms later (.439, .528, .605, .686, .772, .852). So: the user's session ended, gdm, still up, started a new greeter, the start was refused, and the greeter's worker aborted; repeated six times. That chain is read from the timing, not traced inside gdm.
+
+Why now: part 74 stops the scopes while gdm still runs, and part 74 already noted the refused starts. The new part is that they leave cores. 23:25-01:32 was the first session shutdown after core capture started working (part 76), and logind's log has the same 6 refused user@ starts at the 21:20 and 22:47 shutdowns of 10-31, before 0.2.0 (3-5 at earlier ones), so this isn't new in 0.2.0. Cost seen: under 0.5 s and about 1.5 MB of cores per session shutdown; poweroff went on. Not fixed: the obvious fix, stopping gdm before the wait, changes the order part 79 is still testing, and could bring back the old order's problem. Revisit after part 79's shutdowns.
+
+### Next steps
+
+1. Owner: push and publish 0.2.0.
+2. Part 79's login-screen shutdowns (3 to 5).
+3. After that: gdm starting greeters during shutdown (6 cores per session shutdown).
+4. Owner's decision: dinit (needs building its source allowed here and `sudo dnf install gcc-c++ m4`) or rustix (part 82's item 2).
+5. PrivateUsers=: owner's decision; `hardencompare.sh report` keeps exiting 1 until it's implemented.
+
+## 2026-11-01, part 88: PrivateUsers= implemented (branch private-users, uncommitted)
+
+Owner's decision, reversing the standing "leave out" recommendation: 0.1.0 was "just bootable", 0.2.0 is security and memory, so PrivateUsers= belongs in 0.2.0. Publishing 0.2.0 waits for it, and the RPMs in ~/uinitconverter-release/assets are now out of date.
+
+**What.** sandbox.rs: `private_users()`, `id_map()`, `enter_user_namespace()`. Values: yes/true/self (root and the unit's own IDs mapped to themselves), identity (first 65536), full (all, setgroups allowed). `managed` needs systemd-nsresourced and no unit here uses it, so it gets the minimal mapping. uinitconverter-gen: the key is no longer reported as ignored. Units on this machine that it now applies to: colord, upower, chrony-wait, malcontent-timerd, -webd, -webd-update, -timer-extension-agent.
+
+**Order, the part that matters** (exec_command and confine):
+sandbox.apply -> setrlimit -> setgroups + setresgid -> unshare(CLONE_NEWUSER) -> chroot -> chdir -> NoNewPrivileges -> bounding set -> setresuid -> seccomp.
+- After the mounts: they stay owned by the host's namespace, so the service can't change them, even with capabilities in its own.
+- setrlimit before: raising a hard limit needs CAP_SYS_RESOURCE in the host's namespace.
+- setgroups before: denied in the namespace.
+- chroot after: unshare gives EPERM in a chroot.
+- Bounding set after: unshare resets it to full.
+So switch_ids() is split into switch_groups() and switch_user(), which moves the group switch before chroot and the bounding set for **every** service, not only these. No effect expected (still root with its capabilities), and the suites below pass.
+
+The maps need CAP_SETUID and CAP_SETGID in the parent namespace, which the process loses at unshare(), so a forked helper that stays behind writes them, as systemd's does (from memory of exec-invoke.c; its source isn't here).
+
+**Decision: fail closed.** If unshare or the maps fail, the unit doesn't start (exit 217, as EXIT_USER), rather than running less confined than asked. Exception: EINVAL (kernel without user namespaces) is logged and ignored, since the man page says units shouldn't rely on it alone. Cost: with user.max_user_namespaces=0, colord and upower wouldn't start. That differs or may differ from systemd's handling, which I couldn't read.
+
+**Tests.** cargo test 88 passed, 0 failed (new: private_users_values, private_users_maps, enters_a_user_namespace). tests/confine-vm.sh 109 passed, 0 failed, of which 42 new, as real root through both `run` and `confine`: namespace on and off, uid, gid, both maps, setgroups, extra group kept and shown as 65534, bounding set 0 inside, a root service with all capabilities in its namespace can't mount, identity, full, RootDirectory= really chrooted. Sandbox default 311/311, SANDBOX_JOURNAL=no 318/318, SANDBOX_FDSTORE=no 299/299. cargo fmt, bash -n and shellcheck clean.
+
+**Not tested: a real boot.** The VM has no SELinux policy and doesn't run colord or upower. Read with sesearch only: `allow init_t init_t:user_namespace create`, and init_t has cap_userns setuid, setgid, setpcap. systemd does the same from init_t on this policy (its report rows show ns_user private), which supports it but doesn't prove ours.
+
+Docs: README, CHANGELOG, release-notes, TESTING pairs. README's "3 of 28 services weaker" is left until a boot measures it.
+
+**hardencompare will still say WEAKER, exit 1**: rtkit's ns_mnt has nothing to do with this (part 78's correction).
+
+### Current state
+
+Branch private-users, off main at 8f17ef1; this part and part 87 uncommitted. Installed and booted: g6338c79, without PrivateUsers=. 0.2.0 not published.
+
+### Next steps
+
+1. Owner: commit, merge, `packages/build-rpms.sh`, install, `sudo uinitconverter init --yes`, reboot to s6. Then `sudo ausearch -m AVC -ts boot`, `sudo tests/hardencompare.sh snap`, report. Expected: colord and upower ns_user rows gone, 1 WEAKER (rtkit), 1 CHECK (bolt), DIFF counts otherwise as now; upower working (`upower -d`, battery in GNOME), colord starting (`busctl introspect org.freedesktop.ColorManager /org/freedesktop/ColorManager`). Update README's security row.
+2. Owner: decide on rtkit's ns_mnt, the last WEAKER row. Without it the script keeps exiting 1.
+3. `packages/github-release.sh` again, push, publish.
+4. Part 79's login-screen shutdowns; then gdm starting greeters during shutdown (part 87).
+5. Owner's decision: rustix or dinit.

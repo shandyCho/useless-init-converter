@@ -156,6 +156,19 @@ impl Runner {
             return (EXIT_LIMITS, e);
         }
 
+        let own_ids = unsafe { (libc::getuid(), libc::getgid()) };
+        let sets_ids = !cmd.privileged && !cmd.no_setuid && self.is_root;
+        if sets_ids {
+            if let Err(e) = self.switch_groups() {
+                return e;
+            }
+        }
+        if sandboxed {
+            if let Err(e) = self.enter_user_namespace(own_ids, sets_ids) {
+                return e;
+            }
+        }
+
         if !cmd.privileged {
             if let Some(root) = self.unit.get("Service", "RootDirectory") {
                 let c = cstr(&root);
@@ -213,8 +226,8 @@ impl Runner {
         // out: capset() would refuse them and fail the start.
         let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities")
             .map(|a| bset.map_or(a, |b| a & b));
-        if !cmd.privileged && !cmd.no_setuid && self.is_root {
-            if let Err(e) = self.switch_ids(ambient) {
+        if sets_ids {
+            if let Err(e) = self.switch_user(ambient) {
                 return e;
             }
         }
@@ -258,45 +271,63 @@ impl Runner {
         (EXIT_EXEC, format!("exec {path}: {}", errno()))
     }
 
-    /// As root: User=, Group= and SupplementaryGroups=, then the ambient
-    /// capabilities. The error carries systemd's exit code for it.
-    pub(super) fn switch_ids(&self, ambient: Option<u64>) -> Result<(), (i32, String)> {
-        if let Some(u) = &self.user {
-            if u.uid != 0 {
-                if ambient.is_some() {
-                    unsafe { libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) };
-                }
-                let gid = self.gid.unwrap_or(u.gid);
-                let groups: Vec<libc::gid_t> = self.groups.clone();
-                unsafe {
-                    if libc::setgroups(groups.len(), groups.as_ptr()) < 0 {
-                        return Err((EXIT_GROUP, format!("setgroups: {}", errno())));
-                    }
-                    if libc::setresgid(gid, gid, gid) < 0 {
-                        return Err((EXIT_GROUP, format!("setgid {gid}: {}", errno())));
-                    }
-                    if libc::setresuid(u.uid, u.uid, u.uid) < 0 {
-                        return Err((EXIT_USER, format!("setuid {}: {}", u.uid, errno())));
-                    }
-                }
-            } else if let Some(g) = self.gid {
-                if unsafe { libc::setresgid(g, g, g) } < 0 {
-                    return Err((EXIT_GROUP, format!("setgid {g}: {}", errno())));
-                }
+    /// As root: Group= and SupplementaryGroups=, or User='s. The error carries
+    /// systemd's exit code for it.
+    pub(super) fn switch_groups(&self) -> Result<(), (i32, String)> {
+        let setgroups = |groups: &[libc::gid_t]| {
+            if unsafe { libc::setgroups(groups.len(), groups.as_ptr()) } < 0 {
+                return Err((EXIT_GROUP, format!("setgroups: {}", errno())));
             }
-        } else {
-            // Group=/SupplementaryGroups= without User=.
-            unsafe {
-                if !self.groups.is_empty()
-                    && libc::setgroups(self.groups.len(), self.groups.as_ptr()) < 0
-                {
-                    return Err((EXIT_GROUP, format!("setgroups: {}", errno())));
+            Ok(())
+        };
+        let gid = match &self.user {
+            Some(u) if u.uid != 0 => {
+                setgroups(&self.groups)?;
+                Some(self.gid.unwrap_or(u.gid))
+            }
+            Some(_) => self.gid,
+            None => {
+                if !self.groups.is_empty() {
+                    setgroups(&self.groups)?;
                 }
-                if let Some(g) = self.gid {
-                    if libc::setresgid(g, g, g) < 0 {
-                        return Err((EXIT_GROUP, format!("setgid {g}: {}", errno())));
-                    }
-                }
+                self.gid
+            }
+        };
+        if let Some(g) = gid {
+            if unsafe { libc::setresgid(g, g, g) } < 0 {
+                return Err((EXIT_GROUP, format!("setgid {g}: {}", errno())));
+            }
+        }
+        Ok(())
+    }
+
+    /// PrivateUsers=, between switch_groups() and switch_user(). `own_ids` are the
+    /// IDs from before switch_groups(); `sets_ids` says if the command gets the
+    /// unit's IDs at all ('!' commands don't).
+    pub(super) fn enter_user_namespace(
+        &self,
+        own_ids: (u32, u32),
+        sets_ids: bool,
+    ) -> Result<(), (i32, String)> {
+        let mode = sandbox::private_users(&self.unit);
+        if mode == sandbox::PrivateUsers::No {
+            return Ok(());
+        }
+        let user = self.user.as_ref().filter(|_| sets_ids);
+        let gid = self.gid.filter(|_| sets_ids).or(user.map(|u| u.gid));
+        sandbox::enter_user_namespace(mode, own_ids, (user.map(|u| u.uid), gid))
+            .map_err(|e| (EXIT_USER, e))
+    }
+
+    /// As root: User=, after switch_groups(), then the ambient capabilities.
+    /// The error carries systemd's exit code for it.
+    pub(super) fn switch_user(&self, ambient: Option<u64>) -> Result<(), (i32, String)> {
+        if let Some(u) = self.user.as_ref().filter(|u| u.uid != 0) {
+            if ambient.is_some() {
+                unsafe { libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) };
+            }
+            if unsafe { libc::setresuid(u.uid, u.uid, u.uid) } < 0 {
+                return Err((EXIT_USER, format!("setuid {}: {}", u.uid, errno())));
             }
         }
         // Ambient capabilities matter only after dropping root; a root service
@@ -332,6 +363,12 @@ impl Runner {
             self.sandbox.apply()?;
         }
         self.apply_limits()?;
+        if self.is_root {
+            let own_ids = unsafe { (libc::getuid(), libc::getgid()) };
+            self.switch_groups().map_err(|(_, e)| e)?;
+            self.enter_user_namespace(own_ids, true)
+                .map_err(|(_, e)| e)?;
+        }
         let switches_user = self.user.as_ref().is_some_and(|u| u.uid != 0);
         if sandbox::no_new_privileges(&self.unit, self.is_root && !switches_user) {
             unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
@@ -343,7 +380,7 @@ impl Runner {
             }
             let ambient = sandbox::parse_capset(&self.unit, "AmbientCapabilities")
                 .map(|a| bset.map_or(a, |b| a & b));
-            self.switch_ids(ambient).map_err(|(_, e)| e)?;
+            self.switch_user(ambient).map_err(|(_, e)| e)?;
         }
         crate::seccomp::apply_restrictions(&self.unit)?;
         if let Some(f) = crate::seccomp::Filter::from_unit(&self.unit)

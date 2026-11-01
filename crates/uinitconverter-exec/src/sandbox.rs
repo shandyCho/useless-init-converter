@@ -1,8 +1,8 @@
 //! Best-effort subset of systemd's sandboxing: PrivateTmp, ProtectSystem,
 //! ProtectHome, ReadOnly/ReadWrite/InaccessiblePaths, the ProtectKernel*,
 //! ProtectControlGroups, ProtectProc/ProcSubset, PrivateDevices,
-//! PrivateNetwork, PrivateIPC, ProtectHostname and PrivateMounts namespaces
-//! and mounts, NoNewPrivileges and capability sets. The syscall filters of
+//! PrivateNetwork, PrivateIPC, ProtectHostname, PrivateMounts and PrivateUsers
+//! namespaces and mounts, NoNewPrivileges and capability sets. The syscall filters of
 //! these settings are in seccomp.rs. Everything here runs in the forked child
 //! (or right before the final exec), as root.
 
@@ -813,6 +813,145 @@ pub fn no_new_privileges(unit: &Unit, runs_as_root: bool) -> bool {
             .is_some()
 }
 
+/// PrivateUsers=. `managed` needs systemd-nsresourced, so it gets the minimal
+/// mapping too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateUsers {
+    No,
+    Minimal,
+    Identity,
+    Full,
+}
+
+pub fn private_users(unit: &Unit) -> PrivateUsers {
+    match unit.get("Service", "PrivateUsers").as_deref() {
+        Some("self" | "managed") => PrivateUsers::Minimal,
+        Some("identity") => PrivateUsers::Identity,
+        Some("full") => PrivateUsers::Full,
+        _ if unit.get_bool("Service", "PrivateUsers", false) => PrivateUsers::Minimal,
+        _ => PrivateUsers::No,
+    }
+}
+
+/// The contents of uid_map or gid_map: `own` is the ID before any user or group
+/// change, `target` the one the unit runs as, as systemd.
+fn id_map(mode: PrivateUsers, own: u32, target: Option<u32>) -> String {
+    match (mode, target) {
+        (PrivateUsers::Identity, _) => "0 0 65536\n".into(),
+        (PrivateUsers::Full, _) => "0 0 4294967295\n".into(),
+        (_, Some(t)) if t != own => format!("{own} {own} 1\n{t} {t} 1\n"),
+        _ => format!("{own} {own} 1\n"),
+    }
+}
+
+/// Move this process into a new user namespace with the mapping of `mode`.
+///
+/// Call it after the other namespaces and mounts (they stay owned by the host's
+/// namespace, so the unit can't change them), setgroups() (it may be denied in
+/// here) and setrlimit(), and before chroot() (unshare refuses it after one),
+/// the capability bounding set (unshare resets it) and setuid().
+///
+/// The maps need CAP_SETUID and CAP_SETGID in the parent namespace, which this
+/// process no longer has after unshare(), so a child that stays behind writes
+/// them, as systemd's does. A kernel without user namespaces (EINVAL) is only
+/// reported; any other failure is an error, so the unit doesn't start less
+/// confined than asked.
+pub fn enter_user_namespace(
+    mode: PrivateUsers,
+    own: (u32, u32),
+    target: (Option<u32>, Option<u32>),
+) -> Result<(), String> {
+    let uid_map = id_map(mode, own.0, target.0);
+    let gid_map = id_map(mode, own.1, target.1);
+    let setgroups = if mode == PrivateUsers::Full {
+        "allow"
+    } else {
+        "deny"
+    };
+    let (mut go, mut result) = ([-1; 2], [-1; 2]);
+    unsafe {
+        if libc::pipe2(go.as_mut_ptr(), libc::O_CLOEXEC) < 0 {
+            return Err(format!("PrivateUsers=: pipe: {}", errno()));
+        }
+        if libc::pipe2(result.as_mut_ptr(), libc::O_CLOEXEC) < 0 {
+            let e = errno();
+            libc::close(go[0]);
+            libc::close(go[1]);
+            return Err(format!("PrivateUsers=: pipe: {e}"));
+        }
+    }
+    let parent = std::process::id();
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        unsafe {
+            libc::close(go[1]);
+            libc::close(result[0]);
+            let mut b = 0u8;
+            // End of file: unshare() failed, there is nothing to do.
+            if libc::read(go[0], (&mut b as *mut u8).cast(), 1) == 1 {
+                let write = |name: &str, text: &str| {
+                    fs::write(format!("/proc/{parent}/{name}"), text)
+                        .map_err(|e| format!("{name}: {e}"))
+                };
+                let r = write("uid_map", &uid_map)
+                    .and_then(|_| write("setgroups", setgroups))
+                    .and_then(|_| write("gid_map", &gid_map));
+                if let Err(e) = r {
+                    libc::write(result[1], e.as_ptr().cast(), e.len());
+                    libc::_exit(1);
+                }
+            }
+            libc::_exit(0);
+        }
+    }
+    let unshared = if child < 0 {
+        Err(std::io::Error::last_os_error())
+    } else if unsafe { libc::unshare(libc::CLONE_NEWUSER) } < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    };
+    let (mut message, mut status) = (Vec::new(), 0);
+    unsafe {
+        libc::close(go[0]);
+        libc::close(result[1]);
+        if unshared.is_ok() {
+            libc::write(go[1], b"1".as_ptr().cast(), 1);
+        }
+        libc::close(go[1]);
+        let mut buf = [0u8; 256];
+        loop {
+            let n = libc::read(result[0], buf.as_mut_ptr().cast(), buf.len());
+            if n <= 0 {
+                break;
+            }
+            message.extend_from_slice(&buf[..n as usize]);
+        }
+        libc::close(result[0]);
+        if child > 0 {
+            libc::waitpid(child, &mut status, 0);
+        }
+    }
+    match unshared {
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
+            eprintln!("PrivateUsers=: no user namespaces in this kernel, going on without");
+            return Ok(());
+        }
+        Err(e) => return Err(format!("PrivateUsers=: unshare: {e}")),
+        Ok(()) => {}
+    }
+    if !message.is_empty() {
+        return Err(format!(
+            "PrivateUsers=: {}",
+            String::from_utf8_lossy(&message)
+        ));
+    }
+    if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
+        return Err("PrivateUsers=: the helper writing the maps failed".into());
+    }
+    Ok(())
+}
+
 pub fn drop_bounding_set(keep: u64) -> Result<(), String> {
     for c in 0..=last_cap() {
         if keep & (1 << c) == 0
@@ -950,6 +1089,84 @@ mod tests {
         let reset = "[Service]\nCapabilityBoundingSet=CAP_SYS_ADMIN\nCapabilityBoundingSet=\nCapabilityBoundingSet=CAP_NET_ADMIN\n";
         assert_eq!(bounding_set(&test_unit(reset)), Some(net));
         assert_eq!(bounding_set(&test_unit("[Service]\nUser=x\n")), None);
+    }
+
+    #[test]
+    fn private_users_values() {
+        let mode = |v: &str| private_users(&test_unit(&format!("[Service]\nPrivateUsers={v}\n")));
+        for v in ["yes", "true", "1", "self", "managed"] {
+            assert_eq!(mode(v), PrivateUsers::Minimal, "{v}");
+        }
+        for v in ["no", "false", "0", ""] {
+            assert_eq!(mode(v), PrivateUsers::No, "{v}");
+        }
+        assert_eq!(mode("identity"), PrivateUsers::Identity);
+        assert_eq!(mode("full"), PrivateUsers::Full);
+        assert_eq!(private_users(&test_unit("[Service]\n")), PrivateUsers::No);
+    }
+
+    #[test]
+    fn private_users_maps() {
+        let m = PrivateUsers::Minimal;
+        assert_eq!(id_map(m, 0, None), "0 0 1\n");
+        assert_eq!(id_map(m, 0, Some(0)), "0 0 1\n");
+        assert_eq!(id_map(m, 0, Some(990)), "0 0 1\n990 990 1\n");
+        assert_eq!(id_map(PrivateUsers::Identity, 0, Some(990)), "0 0 65536\n");
+        assert_eq!(id_map(PrivateUsers::Full, 0, Some(990)), "0 0 4294967295\n");
+    }
+
+    /// In a user namespace where this process is root, so the helper may write
+    /// the nested maps. Other users need real root: tests/confine-vm.sh.
+    #[test]
+    fn enters_a_user_namespace() {
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let code = (|| {
+                if unsafe { libc::unshare(libc::CLONE_NEWUSER) } < 0
+                    || fs::write("/proc/self/setgroups", "deny").is_err()
+                    || fs::write("/proc/self/uid_map", format!("0 {uid} 1")).is_err()
+                    || fs::write("/proc/self/gid_map", format!("0 {gid} 1")).is_err()
+                {
+                    return 77;
+                }
+                let before = fs::read_link("/proc/self/ns/user").ok();
+                if let Err(e) = enter_user_namespace(PrivateUsers::Minimal, (0, 0), (None, None)) {
+                    eprintln!("enter: {e}");
+                    return 2;
+                }
+                if fs::read_link("/proc/self/ns/user").ok() == before {
+                    return 3;
+                }
+                let fields = |f: &str| {
+                    fs::read_to_string(f)
+                        .unwrap_or_default()
+                        .split_whitespace()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                };
+                if fields("/proc/self/uid_map") != ["0", "0", "1"]
+                    || fields("/proc/self/gid_map") != ["0", "0", "1"]
+                    || fields("/proc/self/setgroups") != ["deny"]
+                {
+                    return 4;
+                }
+                // No helper left behind.
+                if unsafe { libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) } != -1 {
+                    return 5;
+                }
+                0
+            })();
+            unsafe { libc::_exit(code) };
+        }
+        let mut status = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+        let code = libc::WEXITSTATUS(status);
+        if code == 77 {
+            eprintln!("no user namespaces here, skipped");
+            return;
+        }
+        assert_eq!(code, 0);
     }
 
     /// In a user namespace, where this process counts as root for mounts.

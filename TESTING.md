@@ -167,7 +167,8 @@ s6가 유닛의 샌드박스로 시작하는 서비스(rsyslog, earlyoom, udevd,
 프로그램과 유닛 파일, `s6-supervise` 아래의 `dist/s6` run 스크립트를 씁니다. 메모리가 부족할 때
 earlyoom이 프로세스를 죽이는지와 udevd의 대체 경로, 프로세스가 죽었을 때 코어 파일이 남는지도 확인하고,
 정책 읽기와 s6-linux-init을 대역으로 바꾼 `init-selinux`를 실행해 그것이 설정하는 `RLIMIT_NOFILE` 하드
-한도(systemd가 서비스에 주는 것과 같은 524288)와 `RLIMIT_CORE` 소프트 한도(무제한)도 확인합니다. 그 안에서는 SELinux 정책을 읽지
+한도(systemd가 서비스에 주는 것과 같은 524288)와 `RLIMIT_CORE` 소프트 한도(무제한)도 확인합니다. `uinitconverter-runner run`과 `confine` 양쪽으로 `PrivateUsers=`도
+확인합니다(매핑, 그룹, bounding set, 네임스페이스의 capability가 호스트 마운트에 닿지 않는지). 그 안에서는 SELinux 정책을 읽지
 않으므로 SELinux는 실제 부팅에서 확인해야 합니다. `cargo build`, QEMU, `/dev/kvm`과 설치된 rsyslog,
 earlyoom, s6가 필요합니다:
 
