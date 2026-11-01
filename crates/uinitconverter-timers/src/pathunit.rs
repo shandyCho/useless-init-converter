@@ -7,8 +7,13 @@
 
 use std::ffi::CString;
 use std::fs;
+use std::mem::MaybeUninit;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use rustix::event::{poll, PollFd, PollFlags, Timespec};
+use rustix::fs::inotify::{self, CreateFlags, ReadFlags, WatchFlags};
 
 use crate::config::Config;
 use crate::loader::Loader;
@@ -59,86 +64,60 @@ fn watch_target(p: &str) -> PathBuf {
 }
 
 struct Inotify {
-    fd: i32,
+    fd: OwnedFd,
 }
 
 impl Inotify {
     fn new() -> Option<Inotify> {
-        let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC | libc::IN_NONBLOCK) };
-        (fd >= 0).then_some(Inotify { fd })
+        let fd = inotify::init(CreateFlags::CLOEXEC | CreateFlags::NONBLOCK).ok()?;
+        Some(Inotify { fd })
     }
 
-    fn watch(&self, p: &Path) -> i32 {
-        let Ok(c) = CString::new(p.as_os_str().as_encoded_bytes()) else {
-            return -1;
-        };
-        let mask = libc::IN_CREATE
-            | libc::IN_DELETE
-            | libc::IN_MOVED_TO
-            | libc::IN_MOVED_FROM
-            | libc::IN_CLOSE_WRITE
-            | libc::IN_MODIFY
-            | libc::IN_ATTRIB
-            | libc::IN_DELETE_SELF
-            | libc::IN_MOVE_SELF;
-        unsafe { libc::inotify_add_watch(self.fd, c.as_ptr(), mask) }
+    fn watch(&self, p: &Path) -> Option<i32> {
+        let mask = WatchFlags::CREATE
+            | WatchFlags::DELETE
+            | WatchFlags::MOVED_TO
+            | WatchFlags::MOVED_FROM
+            | WatchFlags::CLOSE_WRITE
+            | WatchFlags::MODIFY
+            | WatchFlags::ATTRIB
+            | WatchFlags::DELETE_SELF
+            | WatchFlags::MOVE_SELF;
+        inotify::add_watch(&self.fd, p, mask).ok()
     }
 
     fn unwatch(&self, wd: i32) {
-        unsafe { libc::inotify_rm_watch(self.fd, wd) };
+        let _ = inotify::remove_watch(&self.fd, wd);
     }
 
     /// Wait up to `ms` for events; returns (any event, any write-type event, any modify event).
-    fn wait(&self, ms: i32) -> (bool, bool, bool) {
-        let mut p = libc::pollfd {
-            fd: self.fd,
-            events: libc::POLLIN,
-            revents: 0,
+    fn wait(&self, ms: i64) -> (bool, bool, bool) {
+        let mut p = [PollFd::new(&self.fd, PollFlags::IN)];
+        let timeout = Timespec {
+            tv_sec: ms / 1000,
+            tv_nsec: ms % 1000 * 1_000_000,
         };
-        if unsafe { libc::poll(&mut p, 1, ms) } <= 0 {
+        if !matches!(poll(&mut p, Some(&timeout)), Ok(n) if n > 0) {
             return (false, false, false);
         }
-        let mut buf = [0u8; 8192];
+        let write_type = ReadFlags::CLOSE_WRITE
+            | ReadFlags::CREATE
+            | ReadFlags::DELETE
+            | ReadFlags::MOVED_TO
+            | ReadFlags::MOVED_FROM
+            | ReadFlags::ATTRIB
+            | ReadFlags::DELETE_SELF
+            | ReadFlags::MOVE_SELF;
+        let mut buf = [MaybeUninit::uninit(); 8192];
+        let mut events = inotify::Reader::new(&self.fd, &mut buf);
         let (mut any, mut changed, mut modified) = (false, false, false);
-        loop {
-            let n =
-                unsafe { libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-            if n <= 0 {
-                break;
-            }
-            let mut off = 0usize;
-            while off + std::mem::size_of::<libc::inotify_event>() <= n as usize {
-                // The byte buffer is not aligned for inotify_event.
-                let ev: libc::inotify_event = unsafe {
-                    std::ptr::read_unaligned(buf.as_ptr().add(off) as *const libc::inotify_event)
-                };
-                any = true;
-                let m = ev.mask;
-                if m & (libc::IN_CLOSE_WRITE
-                    | libc::IN_CREATE
-                    | libc::IN_DELETE
-                    | libc::IN_MOVED_TO
-                    | libc::IN_MOVED_FROM
-                    | libc::IN_ATTRIB
-                    | libc::IN_DELETE_SELF
-                    | libc::IN_MOVE_SELF)
-                    != 0
-                {
-                    changed = true;
-                }
-                if m & libc::IN_MODIFY != 0 {
-                    modified = true;
-                }
-                off += std::mem::size_of::<libc::inotify_event>() + ev.len as usize;
-            }
+        // Until the non-blocking read has nothing left.
+        while let Ok(ev) = events.next() {
+            any = true;
+            changed |= ev.events().intersects(write_type);
+            modified |= ev.events().contains(ReadFlags::MODIFY);
         }
         (any, changed, modified)
-    }
-}
-
-impl Drop for Inotify {
-    fn drop(&mut self) {
-        unsafe { libc::close(self.fd) };
     }
 }
 
@@ -192,9 +171,7 @@ pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
             .unwrap_or(0o755);
         for (_, p) in &specs {
             if !p.contains(['*', '?', '[']) && fs::create_dir_all(p).is_ok() {
-                if let Ok(c) = CString::new(p.as_str()) {
-                    unsafe { libc::chmod(c.as_ptr(), mode) };
-                }
+                let _ = rustix::fs::chmod(p.as_str(), rustix::fs::Mode::from_raw_mode(mode));
             }
         }
     }
@@ -240,9 +217,9 @@ pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
             // while the path did not exist yet.
             let mut now: Vec<i32> = Vec::new();
             for (_, p) in &specs {
-                now.push(ino.watch(&watch_target(p)));
+                now.extend(ino.watch(&watch_target(p)));
                 if Path::new(p).is_dir() {
-                    now.push(ino.watch(Path::new(p)));
+                    now.extend(ino.watch(Path::new(p)));
                 }
             }
             for wd in wds.iter().filter(|w| !now.contains(w)) {
@@ -305,4 +282,81 @@ pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "uinitconverter-inotify-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn inotify_sorts_the_events() {
+        let d = temp_dir("sort");
+        let ino = Inotify::new().unwrap();
+        assert!(ino.watch(&d).is_some());
+        // Nothing yet: the wait times out.
+        assert_eq!(ino.wait(0), (false, false, false));
+
+        let f = d.join("f");
+        fs::write(&f, "1").unwrap();
+        let (any, changed, _) = ino.wait(2000);
+        assert!(any && changed, "a new file is a change");
+
+        // Written and left open: IN_MODIFY without IN_CLOSE_WRITE.
+        use std::io::Write;
+        let mut open = fs::OpenOptions::new().append(true).open(&f).unwrap();
+        ino.wait(0);
+        open.write_all(b"2").unwrap();
+        assert_eq!(ino.wait(2000), (true, false, true));
+        drop(open);
+        assert_eq!(ino.wait(2000), (true, true, false), "closed after writing");
+
+        fs::remove_file(&f).unwrap();
+        let (any, changed, _) = ino.wait(2000);
+        assert!(any && changed, "a removed file is a change");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn inotify_drains_more_than_one_buffer() {
+        let d = temp_dir("drain");
+        let ino = Inotify::new().unwrap();
+        assert!(ino.watch(&d).is_some());
+        // Long names, so the events take several reads of the 8 KiB buffer.
+        for i in 0..200 {
+            fs::write(d.join(format!("{i:0>200}")), "").unwrap();
+        }
+        assert!(ino.wait(2000).0);
+        assert_eq!(ino.wait(0), (false, false, false), "all read at once");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn inotify_watches_can_go_and_be_refused() {
+        let d = temp_dir("watch");
+        let ino = Inotify::new().unwrap();
+        let wd = ino.watch(&d).unwrap();
+        assert_eq!(
+            ino.watch(&d),
+            Some(wd),
+            "the same path keeps its descriptor"
+        );
+        assert!(ino.watch(&d.join("missing")).is_none());
+        assert!(ino.watch(Path::new("bad\0path")).is_none());
+        ino.unwatch(wd);
+        // Removing a watch queues IN_IGNORED: not a change.
+        assert_eq!(ino.wait(2000), (true, false, false));
+        fs::write(d.join("f"), "").unwrap();
+        assert_eq!(ino.wait(0), (false, false, false));
+        let _ = fs::remove_dir_all(&d);
+    }
 }

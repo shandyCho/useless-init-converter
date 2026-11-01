@@ -404,7 +404,7 @@ impl Daemon {
         name: &str,
         props: &[(String, OwnedValue)],
     ) -> Result<(), String> {
-        use std::os::fd::AsRawFd;
+        use std::os::fd::AsFd;
         let store = self.cfg.run_dir.join("fdstore");
         for (k, v) in props {
             let Some(key) = k
@@ -420,7 +420,7 @@ impl Daemon {
                 &store,
                 &format!("{name}#stdio"),
                 stdio_name(key),
-                fd.as_raw_fd(),
+                fd.as_fd(),
                 3,
             )
             .map_err(|e| format!("{k}: {e}"))?;

@@ -5,6 +5,13 @@
 버전은 본체 패키지의 버전입니다. 독립 도구는 버전이 따로 있습니다.
 릴리스 노트: [packages/release-notes](packages/release-notes).
 
+## 미출시
+
+### 변경
+- `.path` 유닛의 inotify와 fd 저장소의 소켓 처리를 libc 직접 호출에서 rustix로 옮겼습니다.
+  의도한 동작 변경은 없습니다. 수신 자격 증명(`SCM_CREDENTIALS`, `SO_PEERCRED`)은 libc에
+  남겼습니다. 커널이 pid 0을 보고할 수 있는데, rustix의 `UCred`는 이 값을 담을 수 없습니다.
+
 ## 0.2.0 (2026-11-01)
 
 첫 공개 릴리스(태그 `initial`, 2fac273) 이후의 변경 사항입니다.

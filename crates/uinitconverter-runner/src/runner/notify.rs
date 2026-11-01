@@ -276,9 +276,9 @@ impl NotifyHelper {
                 }
                 if store_fds {
                     for f in &fds {
-                        use std::os::fd::AsRawFd;
+                        use std::os::fd::AsFd;
                         if let Err(e) =
-                            crate::fdstore::put(store, unit_id, &fdname, f.as_raw_fd(), fdstore_max)
+                            crate::fdstore::put(store, unit_id, &fdname, f.as_fd(), fdstore_max)
                         {
                             eprintln!("uinitconverter[{unit_id}]: FDSTORE: {e}");
                         }

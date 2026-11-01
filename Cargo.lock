@@ -673,6 +673,7 @@ version = "0.2.0"
 dependencies = [
  "jiff",
  "libc",
+ "rustix",
 ]
 
 [[package]]
@@ -733,6 +734,7 @@ name = "uinitconverter-timers"
 version = "0.2.0"
 dependencies = [
  "libc",
+ "rustix",
  "tokio",
  "uinitconverter-base",
  "uinitconverter-client",

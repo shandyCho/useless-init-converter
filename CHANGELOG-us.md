@@ -5,6 +5,14 @@
 Versions apply to the core packages. The standalone tools have their own
 versions. Release notes: [packages/release-notes](packages/release-notes).
 
+## Unreleased
+
+### Changed
+- `.path` units' inotify and the fd store's socket handling use rustix instead
+  of raw libc calls. No behaviour change intended. Received credentials
+  (`SCM_CREDENTIALS`, `SO_PEERCRED`) stay on libc: the kernel can report pid 0,
+  which rustix's `UCred` can't hold.
+
 ## 0.2.0 (2026-11-01)
 
 Changes since the first published release (tag `initial`, 2fac273).

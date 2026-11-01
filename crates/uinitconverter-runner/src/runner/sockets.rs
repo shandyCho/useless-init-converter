@@ -56,7 +56,7 @@ impl Runner {
         &self,
         socks: &[Unit],
     ) -> Result<Vec<(String, std::os::fd::OwnedFd)>, String> {
-        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::os::fd::{AsFd, FromRawFd, OwnedFd};
         let store = self.cfg.run_dir.join("fdstore");
         let key = format!("{}#sockets", self.unit.id);
         // As systemd: the sockets carry the label of the service's domain.
@@ -75,7 +75,7 @@ impl Runner {
                 &store,
                 &key,
                 &b.name,
-                owned.as_raw_fd(),
+                owned.as_fd(),
                 crate::fdstore::SOCKETS_MAX,
             );
             fds.push((b.name, owned));

@@ -274,7 +274,7 @@ none is needed to build. Without one, the matching feature is missing:
 NetworkManager, rsyslog or syslog-ng (only with `JOURNAL=no`).
 
 **Build:** cargo and rust. The core uses zbus, tokio, futures-util, libc,
-jiff and serde (`Cargo.toml`); the standalone tools only libc.
+rustix, jiff and serde (`Cargo.toml`); the standalone tools only libc.
 
 ## Testing on Fedora
 

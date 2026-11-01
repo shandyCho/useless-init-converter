@@ -15,43 +15,42 @@
 //!   DEL\0<key>[\0<name>]      -> "OK"
 
 use std::collections::HashMap;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::io::IoSlice;
+use std::mem::MaybeUninit;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-fn errno() -> String {
-    std::io::Error::last_os_error().to_string()
-}
+use rustix::event::{poll, PollFd, PollFlags, Timespec};
+use rustix::net::{self, sockopt};
 
-pub fn send(sock: RawFd, data: &[u8], fd: Option<RawFd>) -> std::io::Result<()> {
-    unsafe {
-        let mut iov = libc::iovec {
-            iov_base: data.as_ptr() as *mut libc::c_void,
-            iov_len: data.len(),
-        };
-        // u64s: aligned for cmsghdr, as a byte array is not.
-        let mut cbuf = [0u64; 8];
-        let mut msg: libc::msghdr = std::mem::zeroed();
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        if let Some(fd) = fd {
-            msg.msg_control = cbuf.as_mut_ptr() as *mut libc::c_void;
-            msg.msg_controllen = libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) as _;
-            let c = libc::CMSG_FIRSTHDR(&msg);
-            (*c).cmsg_level = libc::SOL_SOCKET;
-            (*c).cmsg_type = libc::SCM_RIGHTS;
-            (*c).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
-            std::ptr::write_unaligned(libc::CMSG_DATA(c) as *mut RawFd, fd);
-        }
-        if libc::sendmsg(sock, &msg, libc::MSG_NOSIGNAL) < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+pub fn send(sock: impl AsFd, data: &[u8], fd: Option<BorrowedFd<'_>>) -> std::io::Result<()> {
+    let fds;
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = net::SendAncillaryBuffer::new(&mut space);
+    if let Some(fd) = fd {
+        fds = [fd];
+        let pushed = control.push(net::SendAncillaryMessage::ScmRights(&fds));
+        debug_assert!(pushed, "the buffer is sized for one fd");
     }
+    net::sendmsg(
+        sock,
+        &[IoSlice::new(data)],
+        &mut control,
+        net::SendFlags::NOSIGNAL,
+    )?;
     Ok(())
 }
 
 /// Receive one message; returns (data, fds, sender credentials). The
 /// credentials are only present if the socket has SO_PASSCRED set.
+///
+/// On libc, not rustix: the kernel reports pid 0 for a sender it has no pid
+/// for (sent before SO_PASSCRED was set, or from outside our PID namespace),
+/// and rustix's UCred holds a non-zero Pid, so reading that through rustix
+/// would be undefined behaviour. The notify socket is world-writable, so any
+/// local process could cause it.
 pub fn recv(sock: RawFd) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>, Option<libc::ucred>)> {
     recv_max(sock, 8192)
 }
@@ -102,32 +101,33 @@ pub fn recv_max(
     }
 }
 
+fn seqpacket_socket() -> rustix::io::Result<OwnedFd> {
+    net::socket_with(
+        net::AddressFamily::UNIX,
+        net::SocketType::SEQPACKET,
+        net::SocketFlags::CLOEXEC,
+        None,
+    )
+}
+
 fn connect(path: &Path) -> Option<OwnedFd> {
-    let p = path.display().to_string();
-    if p.len() >= 100 {
+    if path.as_os_str().len() >= 100 {
         return None;
     }
-    unsafe {
-        let fd = libc::socket(libc::AF_UNIX, libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC, 0);
-        if fd < 0 {
-            return None;
-        }
-        let owned = OwnedFd::from_raw_fd(fd);
-        let mut addr: libc::sockaddr_un = std::mem::zeroed();
-        addr.sun_family = libc::AF_UNIX as u16;
-        for (i, b) in p.bytes().enumerate() {
-            addr.sun_path[i] = b as libc::c_char;
-        }
-        let len = (std::mem::size_of::<libc::sa_family_t>() + p.len() + 1) as u32;
-        if libc::connect(fd, &addr as *const _ as *const libc::sockaddr, len) < 0 {
-            return None;
-        }
-        Some(owned)
-    }
+    let addr = net::SocketAddrUnix::new(path).ok()?;
+    let fd = seqpacket_socket().ok()?;
+    net::connect(&fd, &addr).ok()?;
+    Some(fd)
 }
 
 /// Client: store one fd; `max` is how many the key may hold.
-pub fn put(path: &Path, key: &str, name: &str, fd: RawFd, max: usize) -> Result<(), String> {
+pub fn put(
+    path: &Path,
+    key: &str,
+    name: &str,
+    fd: BorrowedFd<'_>,
+    max: usize,
+) -> Result<(), String> {
     // NUL separates the fields: "x\0<n>" as a name would turn the retry
     // below into a request with the client's own <max>.
     if key.contains('\0') || name.contains('\0') {
@@ -141,9 +141,9 @@ pub fn put(path: &Path, key: &str, name: &str, fd: RawFd, max: usize) -> Result<
     }
 }
 
-fn put_msg(path: &Path, msg: &str, fd: RawFd) -> Result<(), String> {
+fn put_msg(path: &Path, msg: &str, fd: BorrowedFd<'_>) -> Result<(), String> {
     let s = connect(path).ok_or("fd store not reachable")?;
-    send(s.as_raw_fd(), msg.as_bytes(), Some(fd)).map_err(|e| e.to_string())?;
+    send(&s, msg.as_bytes(), Some(fd)).map_err(|e| e.to_string())?;
     let (reply, _, _) = recv(s.as_raw_fd()).map_err(|e| e.to_string())?;
     if reply == b"OK" {
         Ok(())
@@ -157,7 +157,7 @@ pub fn get(path: &Path, key: &str) -> Vec<(String, OwnedFd)> {
     let Some(s) = connect(path) else {
         return Vec::new();
     };
-    if send(s.as_raw_fd(), format!("GET\0{key}").as_bytes(), None).is_err() {
+    if send(&s, format!("GET\0{key}").as_bytes(), None).is_err() {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -214,7 +214,7 @@ pub fn del(path: &Path, key: &str, name: Option<&str>) {
             Some(n) => format!("DEL\0{key}\0{n}"),
             None => format!("DEL\0{key}"),
         };
-        let _ = send(s.as_raw_fd(), msg.as_bytes(), None);
+        let _ = send(&s, msg.as_bytes(), None);
         let _ = recv(s.as_raw_fd());
     }
 }
@@ -229,30 +229,44 @@ fn prune_hung_up(key: &str, list: &mut Vec<(String, OwnedFd)>) {
         return;
     }
     list.retain(|(_, fd)| {
-        let mut p = libc::pollfd {
-            fd: fd.as_raw_fd(),
-            events: 0,
-            revents: 0,
+        let mut p = [PollFd::new(fd, PollFlags::empty())];
+        let now = Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
         };
-        let r = unsafe { libc::poll(&mut p, 1, 0) };
-        !(r > 0 && p.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0)
+        let ready = matches!(poll(&mut p, Some(&now)), Ok(n) if n > 0);
+        !(ready
+            && p[0]
+                .revents()
+                .intersects(PollFlags::HUP | PollFlags::ERR | PollFlags::NVAL))
     });
 }
 
 /// Both fds refer to the same open file description (systemd's same_fd():
 /// kcmp(), or the inode and flags without it).
-fn same_file(a: RawFd, b: RawFd) -> bool {
+fn same_file(a: BorrowedFd<'_>, b: BorrowedFd<'_>) -> bool {
+    // rustix has no kcmp().
     const KCMP_FILE: libc::c_int = 0;
     let pid = unsafe { libc::getpid() };
-    let r = unsafe { libc::syscall(libc::SYS_kcmp, pid, pid, KCMP_FILE, a, b) };
+    let r = unsafe {
+        libc::syscall(
+            libc::SYS_kcmp,
+            pid,
+            pid,
+            KCMP_FILE,
+            a.as_raw_fd(),
+            b.as_raw_fd(),
+        )
+    };
     if r >= 0 {
         return r == 0;
     }
-    let stat = |fd: RawFd| {
-        let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        (unsafe { libc::fstat(fd, &mut st) } == 0).then_some((st.st_dev, st.st_ino))
-    };
-    let flags = |fd: RawFd| unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    same_inode_and_flags(a, b)
+}
+
+fn same_inode_and_flags(a: BorrowedFd<'_>, b: BorrowedFd<'_>) -> bool {
+    let stat = |fd| rustix::fs::fstat(fd).ok().map(|st| (st.st_dev, st.st_ino));
+    let flags = |fd| rustix::fs::fcntl_getfl(fd).ok();
     stat(a).is_some() && stat(a) == stat(b) && flags(a) == flags(b)
 }
 
@@ -299,6 +313,24 @@ fn peer_label(fd: RawFd) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+/// The peer's uid (SO_PEERCRED); None if the lookup fails. On libc for the
+/// same reason as recv(): a peer outside our PID namespace has pid 0.
+fn peer_uid(fd: BorrowedFd<'_>) -> Option<u32> {
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as u32;
+    let r = unsafe {
+        libc::getsockopt(
+            fd.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    // A failed lookup leaves the zeroed ucred, which would read as root.
+    (r == 0).then_some(cred.uid)
+}
+
 /// The serving side.
 #[derive(Clone, Default)]
 pub struct Store {
@@ -314,85 +346,43 @@ impl Store {
         limit: impl Fn(&str) -> usize + Send + 'static,
     ) -> Result<(), String> {
         let p = path.display().to_string();
-        if p.len() >= 100 {
+        if path.as_os_str().len() >= 100 {
             return Err(format!("{p}: path too long"));
         }
         let _ = std::fs::remove_file(path);
         if let Some(d) = path.parent() {
             let _ = std::fs::create_dir_all(d);
         }
-        let lfd = unsafe {
-            let fd = libc::socket(libc::AF_UNIX, libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC, 0);
-            if fd < 0 {
-                return Err(errno());
-            }
-            let mut addr: libc::sockaddr_un = std::mem::zeroed();
-            addr.sun_family = libc::AF_UNIX as u16;
-            for (i, b) in p.bytes().enumerate() {
-                addr.sun_path[i] = b as libc::c_char;
-            }
-            let len = (std::mem::size_of::<libc::sa_family_t>() + p.len() + 1) as u32;
-            if libc::bind(fd, &addr as *const _ as *const libc::sockaddr, len) < 0
-                || libc::listen(fd, 64) < 0
-            {
-                return Err(format!("{p}: {}", errno()));
-            }
-            libc::chmod(std::ffi::CString::new(p.clone()).unwrap().as_ptr(), 0o600);
-            OwnedFd::from_raw_fd(fd)
-        };
-        let me = unsafe { libc::geteuid() };
+        let addr = net::SocketAddrUnix::new(path).map_err(|e| format!("{p}: {e}"))?;
+        let lfd = seqpacket_socket().map_err(|e| e.to_string())?;
+        net::bind(&lfd, &addr)
+            .and_then(|()| net::listen(&lfd, 64))
+            .map_err(|e| format!("{p}: {e}"))?;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        let me = rustix::process::geteuid().as_raw();
         let own = own_label();
         let store = self.clone();
         std::thread::spawn(move || loop {
-            let c = unsafe {
-                libc::accept4(
-                    lfd.as_raw_fd(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    libc::SOCK_CLOEXEC,
-                )
-            };
-            if c < 0 {
+            let Ok(conn) = net::accept_with(&lfd, net::SocketFlags::CLOEXEC) else {
                 // EMFILE and the like stay until something is freed: don't spin.
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 continue;
-            }
-            let conn = unsafe { OwnedFd::from_raw_fd(c) };
-            // Only root (or the daemon's own user, in tests) may use the store.
-            let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
-            let mut len = std::mem::size_of::<libc::ucred>() as u32;
-            // A failed lookup leaves the zeroed ucred, which would read as root.
-            let r = unsafe {
-                libc::getsockopt(
-                    c,
-                    libc::SOL_SOCKET,
-                    libc::SO_PEERCRED,
-                    &mut cred as *mut _ as *mut libc::c_void,
-                    &mut len,
-                )
             };
-            if r < 0 || (cred.uid != 0 && cred.uid != me) {
+            // Only root (or the daemon's own user, in tests) may use the store.
+            if !matches!(peer_uid(conn.as_fd()), Some(uid) if uid == 0 || uid == me) {
                 continue;
             }
-            if !same_domain(c, own.as_deref()) {
+            if !same_domain(conn.as_raw_fd(), own.as_deref()) {
                 continue;
             }
             // One thread serves everyone: a client that connects and then
             // neither sends nor reads must not stop the store.
-            let tv = libc::timeval {
-                tv_sec: 2,
-                tv_usec: 0,
-            };
-            for opt in [libc::SO_RCVTIMEO, libc::SO_SNDTIMEO] {
-                unsafe {
-                    libc::setsockopt(
-                        c,
-                        libc::SOL_SOCKET,
-                        opt,
-                        &tv as *const _ as *const libc::c_void,
-                        std::mem::size_of::<libc::timeval>() as u32,
-                    );
-                }
+            for kind in [sockopt::Timeout::Recv, sockopt::Timeout::Send] {
+                let _ = sockopt::set_socket_timeout(
+                    &conn,
+                    kind,
+                    Some(std::time::Duration::from_secs(2)),
+                );
             }
             store.handle(&conn, &limit);
         });
@@ -408,7 +398,7 @@ impl Store {
             .map(|p| String::from_utf8_lossy(p).into_owned())
             .collect();
         let reply = |m: &[u8]| {
-            let _ = send(conn.as_raw_fd(), m, None);
+            let _ = send(conn, m, None);
         };
         match parts.first().map(String::as_str) {
             Some("PUT") if parts.len() == 3 || parts.len() == 4 => {
@@ -428,9 +418,7 @@ impl Store {
                 // and each name must get its fd. Keep in step with
                 // standalone/uinitconverter-fdstore/src/store.rs (no shared code).
                 if !parts[1].ends_with("#stdio")
-                    && list
-                        .iter()
-                        .any(|(_, f)| same_file(f.as_raw_fd(), fd.as_raw_fd()))
+                    && list.iter().any(|(_, f)| same_file(f.as_fd(), fd.as_fd()))
                 {
                     return reply(b"OK");
                 }
@@ -445,13 +433,9 @@ impl Store {
                 if let Some(v) = map.get_mut(&parts[1]) {
                     prune_hung_up(&parts[1], v);
                 }
-                let dups: Vec<(String, RawFd)> = map
-                    .get(&parts[1])
-                    .map(|v| v.iter().map(|(n, f)| (n.clone(), f.as_raw_fd())).collect())
-                    .unwrap_or_default();
-                drop(map);
-                for (n, fd) in dups {
-                    let _ = send(conn.as_raw_fd(), format!("FD\0{n}").as_bytes(), Some(fd));
+                // The lock stays held: this thread is the only one that takes it.
+                for (n, fd) in map.get(&parts[1]).into_iter().flatten() {
+                    let _ = send(conn, format!("FD\0{n}").as_bytes(), Some(fd.as_fd()));
                 }
                 reply(b"END");
             }
@@ -494,11 +478,7 @@ mod tests {
         let files: Vec<std::fs::File> = (0..3)
             .map(|_| std::fs::File::open("/dev/null").unwrap())
             .collect();
-        let (fd, fd2, fd3) = (
-            files[0].as_raw_fd(),
-            files[1].as_raw_fd(),
-            files[2].as_raw_fd(),
-        );
+        let (fd, fd2, fd3) = (files[0].as_fd(), files[1].as_fd(), files[2].as_fd());
 
         // The client's <max> wins over the server's limit.
         put(&sock, "a.service", "x", fd, 2).unwrap();
@@ -540,21 +520,154 @@ mod tests {
         // A journald stream: once its other end is closed the stored fd
         // hangs up and goes, so the key has room again.
         let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
-        put(&sock, "j.service", "stored", a.as_raw_fd(), 1).unwrap();
+        put(&sock, "j.service", "stored", a.as_fd(), 1).unwrap();
         drop(b);
         let f = std::fs::File::open("/dev/null").unwrap();
-        put(&sock, "j.service", "stored", f.as_raw_fd(), 1).unwrap();
+        put(&sock, "j.service", "stored", f.as_fd(), 1).unwrap();
         assert_eq!(get(&sock, "j.service").len(), 1);
         // Held sockets and stdio ("#" keys) stay.
         let (c, d) = std::os::unix::net::UnixStream::pair().unwrap();
-        put(&sock, "j.service#stdio", "stdin", c.as_raw_fd(), 3).unwrap();
+        put(&sock, "j.service#stdio", "stdin", c.as_fd(), 3).unwrap();
         drop(d);
         assert_eq!(get(&sock, "j.service#stdio").len(), 1);
         // One socket as both stdin and stdout keeps both names.
         let (e, _f) = std::os::unix::net::UnixStream::pair().unwrap();
-        put(&sock, "k.service#stdio", "stdin", e.as_raw_fd(), 3).unwrap();
-        put(&sock, "k.service#stdio", "stdout", e.as_raw_fd(), 3).unwrap();
+        put(&sock, "k.service#stdio", "stdin", e.as_fd(), 3).unwrap();
+        put(&sock, "k.service#stdio", "stdout", e.as_fd(), 3).unwrap();
         assert_eq!(get(&sock, "k.service#stdio").len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_passed_fd_arrives_usable_and_cloexec() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::{UnixDatagram, UnixStream};
+        let (a, b) = UnixDatagram::pair().unwrap();
+        let (mut payload, other) = UnixStream::pair().unwrap();
+        send(&a, b"hello", Some(other.as_fd())).unwrap();
+        drop(other);
+        let (data, mut fds, cred) = recv(b.as_raw_fd()).unwrap();
+        assert_eq!(data, b"hello");
+        assert_eq!(fds.len(), 1);
+        assert!(cred.is_none(), "no credentials without SO_PASSCRED");
+        let got = fds.pop().unwrap();
+        let flags = unsafe { libc::fcntl(got.as_raw_fd(), libc::F_GETFD) };
+        assert_eq!(flags & libc::FD_CLOEXEC, libc::FD_CLOEXEC);
+        let mut got = std::fs::File::from(got);
+        got.write_all(b"x").unwrap();
+        let mut one = [0u8; 1];
+        payload.read_exact(&mut one).unwrap();
+        assert_eq!(&one, b"x");
+        // No fd: just the data.
+        send(&a, b"plain", None).unwrap();
+        let (data, fds, _) = recv(b.as_raw_fd()).unwrap();
+        assert_eq!((data.as_slice(), fds.len()), (&b"plain"[..], 0));
+    }
+
+    #[test]
+    fn sending_to_a_closed_peer_is_an_error() {
+        let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+        drop(b);
+        let e = send(&a, b"x", None).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn a_long_message_is_cut_to_the_buffer() {
+        let (a, b) = std::os::unix::net::UnixDatagram::pair().unwrap();
+        send(&a, b"0123456789", None).unwrap();
+        let (data, _, _) = recv_max(b.as_raw_fd(), 4).unwrap();
+        assert_eq!(data, b"0123");
+    }
+
+    /// The kernel reports pid 0 for a sender it has no pid for: here a
+    /// datagram sent before the receiver set SO_PASSCRED. This is why recv()
+    /// stays on libc: rustix's UCred holds a non-zero Pid, so reading this
+    /// through it would be undefined behaviour, and the notify socket is
+    /// world-writable. Also for a sender outside the receiver's PID namespace.
+    #[test]
+    fn credentials_with_pid_zero_are_read() {
+        use std::os::unix::net::UnixDatagram;
+        let (a, b) = UnixDatagram::pair().unwrap();
+        a.send(b"early").unwrap();
+        let on: libc::c_int = 1;
+        let r = unsafe {
+            libc::setsockopt(
+                b.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PASSCRED,
+                &on as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as u32,
+            )
+        };
+        assert_eq!(r, 0);
+        a.send(b"late").unwrap();
+        let (data, _, cred) = recv(b.as_raw_fd()).unwrap();
+        assert_eq!(data, b"early");
+        assert_eq!(cred.unwrap().pid, 0);
+        let (data, _, cred) = recv(b.as_raw_fd()).unwrap();
+        assert_eq!(data, b"late");
+        assert_eq!(cred.unwrap().pid, std::process::id() as i32);
+    }
+
+    #[test]
+    fn connecting_fails_cleanly() {
+        let dir = std::env::temp_dir().join(format!(
+            "uinitconverter-fdstore-conn-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!is_served(&dir.join("nothing")));
+        let long = dir.join("x".repeat(120));
+        assert!(!is_served(&long));
+        assert!(Store::default().serve(&long, |_| 0).is_err());
+        // Bound, but a directory is in the way of the socket.
+        let blocked = dir.join("sub");
+        std::fs::create_dir_all(&blocked).unwrap();
+        assert!(Store::default().serve(&blocked, |_| 0).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_socket_is_private_and_a_silent_client_doesnt_stop_the_store() {
+        let dir = std::env::temp_dir().join(format!(
+            "uinitconverter-fdstore-silent-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sock = dir.join("s");
+        Store::default().serve(&sock, |_| 0).unwrap();
+        let mode = std::fs::metadata(&sock).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let silent = connect(&sock).unwrap();
+        let start = std::time::Instant::now();
+        assert!(get(&sock, "nothing.service").is_empty());
+        let waited = start.elapsed();
+        assert!(waited < std::time::Duration::from_secs(5), "{waited:?}");
+        drop(silent);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// same_file()'s fallback, for kernels without kcmp().
+    #[test]
+    fn same_inode_and_flags_as_fallback() {
+        let dir = std::env::temp_dir().join(format!(
+            "uinitconverter-fdstore-same-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (one, two) = (dir.join("one"), dir.join("two"));
+        std::fs::write(&one, "").unwrap();
+        std::fs::write(&two, "").unwrap();
+        let a = std::fs::File::open(&one).unwrap();
+        let again = a.try_clone().unwrap();
+        let other = std::fs::File::open(&two).unwrap();
+        let writing = std::fs::OpenOptions::new().write(true).open(&one).unwrap();
+        assert!(same_inode_and_flags(a.as_fd(), again.as_fd()));
+        assert!(!same_inode_and_flags(a.as_fd(), other.as_fd()));
+        assert!(!same_inode_and_flags(a.as_fd(), writing.as_fd()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

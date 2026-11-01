@@ -11,3 +11,4 @@ uinitconverter-client.workspace = true
 zbus.workspace = true
 tokio.workspace = true
 libc.workspace = true
+rustix.workspace = true
