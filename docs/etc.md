@@ -63,7 +63,8 @@ s6를 PID 1로 두고 s6의 도구로 관리하면서 Fedora와 GNOME을 쓸 수
 - **알려진 문제:** s6 부팅의 종료 28번 중 4번에서 gnome-shell이 종료 도중 충돌했습니다(systemd
   저널의 종료 요청 34번에서는 0번). 2026-10-31에 종료 순서를 바꾼 뒤로는 최소 14번의 종료에서
   충돌이 없었지만, 고쳐졌다고 하기에는 적은 수입니다. 그 종료 중 한 번은 gnome-shell이 5초 동안
-  멈춰 강제 종료되었고(systemd에서는 61번 중 0번) 원인은 모릅니다. `JOURNAL=no`일 때
+  멈춰 강제 종료되었고(systemd에서는 61번 중 0번) 원인은 모릅니다. 서비스를 추가하는 재적재 중에
+  `s6-ftrigrd`가 충돌할 수 있는데, 업스트림의 동작입니다. 재적재는 다시 시도해 복구하고 코어 파일이 남습니다. `JOURNAL=no`일 때
   `/var/log/uinitconverter`의 서비스 로그는 root와 `wheel` 그룹이 읽을 수 있습니다.
 - **유지 보수 부담:** Rust 코드가 약 29,000줄이고 그중 상당 부분이 root로 실행되며, skarnet
   패키지는 직접 빌드해야 합니다.
@@ -158,7 +159,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 출력은 stdout 스트림 프로토콜을 통해 **systemd-journald**로 보냅니다(PID 1이 하는 방식 그대로). journald가 cgroup으로 유닛을 식별하므로 `journalctl -u UNIT`과 `systemctl status`의 로그 줄이 동작합니다. `JOURNAL=no`이면 서비스마다 s6-log 디렉터리를 씁니다.
 - 조건과 단언: 경로, 커널 명령줄, 가상화, 보안 등에 대한 `Condition*=`/`Assert*=`.
 - systemd와 같은 경로(`system.slice/<unit>`)의 cgroup v2, `KillMode=`, `MemoryMax/High`, `CPUQuota/Weight`, `TasksMax`, `IOWeight`. `MemoryPressureWatch=`/`MemoryPressureThresholdSec=`에 따라 systemd처럼 서비스에 `MEMORY_PRESSURE_WATCH`/`MEMORY_PRESSURE_WRITE`를 줍니다(cgroup의 `memory.pressure`, `off`이면 `/dev/null`). 이 변수가 없으면 sd-event를 쓰는 데몬이 /proc/pressure를 찾는데, 일부(systemd-hostnamed)는 SELinux가 이를 거부합니다.
-- 샌드박스: `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `Read{Write,Only}Paths`, `InaccessiblePaths`, `NoNewPrivileges`, `CapabilityBoundingSet`, `AmbientCapabilities`, `PrivateDevices`, `PrivateNetwork`, `PrivateIPC`, `PrivateMounts`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `ProtectProc`, `ProcSubset`, `PrivateUsers`(`self`, `identity`, `full`. `managed`는 systemd-nsresourced가 필요하므로 `self` 매핑을 씁니다. 네임스페이스를 만들 수 없으면 유닛이 시작되지 않으며, 사용자 네임스페이스가 없는 커널만 예외입니다). 마운트, capability 제거, 시스템 콜 필터, 암묵적인 `NoNewPrivileges=`는 systemd와 같습니다. 차이점: 유닛의 각 프로세스(`ExecStartPre=`, 주 프로세스, `ExecStop=`)가 네트워크/IPC/UTS 네임스페이스를 따로 받습니다(systemd는 유닛마다 하나를 공유). `ProtectControlGroups=private|strict`는 cgroup 트리를 읽기 전용으로만 만듭니다(cgroup 네임스페이스 없음). 나머지 지시어는 보고서에 "ignored"로 표시됩니다.
+- 샌드박스: `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `Read{Write,Only}Paths`, `InaccessiblePaths`, `NoNewPrivileges`, `CapabilityBoundingSet`, `AmbientCapabilities`, `PrivateDevices`, `PrivateNetwork`, `PrivateIPC`, `PrivateMounts`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `ProtectProc`, `ProcSubset`, `PrivateUsers`(`self`, `identity`, `full`. `managed`는 systemd-nsresourced가 필요하므로 `self` 매핑을 씁니다. 네임스페이스를 만들 수 없으면 유닛이 시작되지 않으며, 사용자 네임스페이스가 없는 커널만 예외입니다). 마운트, capability 제거, 시스템 콜 필터, 암묵적인 `NoNewPrivileges=`는 systemd와 같습니다. `PrivateNetwork=`는 꺼 두지 않는 한 `PrivateMounts=`도 함께 적용하고, 새 네트워크 네임스페이스에 맞춰 `/sys`를 다시 마운트하며 그 아래의 마운트는 유지합니다. 다시 마운트하지 못해도 서비스는 시작하고 그 사실을 로그에 남깁니다. 차이점: 유닛의 각 프로세스(`ExecStartPre=`, 주 프로세스, `ExecStop=`)가 네트워크/IPC/UTS 네임스페이스를 따로 받습니다(systemd는 유닛마다 하나를 공유). `ProtectControlGroups=private|strict`는 cgroup 트리를 읽기 전용으로만 만듭니다(cgroup 네임스페이스 없음). 나머지 지시어는 보고서에 "ignored"로 표시됩니다.
 - seccomp: `SystemCallFilter=`, `SystemCallErrorNumber=`, `SystemCallArchitectures=`. systemd의 시스템 콜 그룹(`@system-service` 등, `systemd-analyze syscall-filter`에서 만든 `crates/uinitconverter-exec/src/syscall-groups.txt`)을 씁니다. 또한 `RestrictAddressFamilies=`, `RestrictNamespaces=`, `MemoryDenyWriteExecute=`(커널에 `PR_SET_MDWE`가 있으면 systemd처럼 그것을 사용), `LockPersonality=`, `RestrictRealtime=`, `RestrictSUIDSGID=`를 systemd와 같은 규칙과 errno로 적용합니다. systemd와 마찬가지로 `RestrictAddressFamilies=`는 i386 ABI에는 적용되지 않습니다(`socket()`이 `socketcall()`을 거침). libseccomp는 실행 중에 불러옵니다.
 - cgroup BPF: `DevicePolicy=`, `DeviceAllow=`(`/dev/` 노드, 그리고 /proc/devices의 `char-`/`block-` 분류, 글롭 포함. `PrivateDevices=`는 `DevicePolicy=closed`를 뜻함), `IPAddressDeny=`, `IPAddressAllow=`(주소, 프리픽스, `any`, `localhost`, `link-local`, `multicast`). systemd처럼 러너가 직접 조립한 eBPF 프로그램(`sd_devices`, `sd_fw_ingress`, `sd_fw_egress`)을 유닛의 cgroup에서 아무것도 실행되기 전에 붙입니다. 커널이 거부한 프로그램은 시작을 실패시키지 않고 로그만 남깁니다(`... not enforced: ...`). 차이점: 주소 목록을 BPF 맵 대신 프로그램 안에 넣어 컴파일하고, 슬라이스에 설정한 목록은 적용하지 않습니다.
 - SELinux는 systemd에서와 같습니다. s6 트리 전체가 `init_t`로 실행되므로(정책 모듈 `dist/selinux/uinitconverter.cil`) 서비스는 각자의 도메인(`chronyd_t`, `xdm_t` 등)으로 들어가고, `user@.service`는 `systemd --user`를 사용자 도메인에서 시작할 수 있습니다. `RuntimeDirectory=` 등의 디렉터리와 소켓 파일은 file_contexts의 레이블을 받고, 소켓 유닛의 소켓은 그것을 쓰는 서비스의 레이블을 가집니다.
@@ -193,6 +194,8 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - `AccuracySec=`(타이머를 묶지 않고 정시에 실행), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. 이 타이머 키들은 허용되지만 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.
 - 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=`(systemd에서는 BPF LSM 프로그램), IP 사용량 집계(`IPAccounting=`).
 - 이미 실행 중인 작업의 취소.
+- `[Socket]`의 `PrivateNetwork=`, `JoinsNamespaceOf=`, `NetworkNamespacePath=`.
+- `dist/s6`에 자체 스크립트가 있는 서비스(`dbus`, `udevd`, `earlyoom`, `syslog`, `coredump`)의 유닛 설정: cgroup, 제한, 샌드박스, 사용자는 유닛에서 가져오지만 명령줄과 재시작, 정지 동작은 스크립트에 있습니다. 그래서 `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=`, `Type=`을 바꾸는 드롭인은 적용되지 않습니다.
 
 ## 오프라인 업데이트와 커널 업데이트
 
@@ -386,7 +389,7 @@ s6가 계속 다시 시도합니다.
 s6 종료 때 콘솔에 나온 내용은 다음 부팅에서 `/var/log/uinitconverter/last-shutdown-console.log`
 (s6의 catch-all 로그)와 `last-shutdown-kernel.log`(종료가 시작된 뒤의 커널 로그, auditd가 멈춘 뒤의
 SELinux 거부 포함)로 볼 수 있습니다(root 전용). 종료가 시작되면 uinitconverterd는 새 유닛 시작과 D-Bus
-활성화를 systemd처럼 바로 거부합니다. 먼저 스코프(logind의 세션)를 멈추고 최대 11초까지 기다립니다. 그래서
+활성화를 systemd처럼 바로 거부합니다. 먼저 디스플레이 관리자(`display-manager.service`)에 멈추라고 요청해 세션이 끝날 때 새 그리터를 시작하지 않게 하고, 스코프(logind의 세션)를 멈춘 뒤 최대 11초까지 기다립니다. 그래서
 systemd에서처럼 데스크톱 세션이 사용자 매니저가 멈추기 전에 자체 종료합니다. 그다음 요청 시 시작된 인스턴스(user@UID, user-runtime-dir@UID,
 systemd-backlight@ 등)를 logind와 D-Bus가 아직 실행 중일 때 `After=`에 맞게 멈추고, 그다음에
 s6-rc가 서비스를 멈춥니다(이 첫 단계에는 따로 2분 제한이 있습니다). s6-rc가 시작하고 3분이 지나도

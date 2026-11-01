@@ -216,7 +216,8 @@ sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm \
 sudo uinitconverter init --yes
 ```
 
-Rebuild the s6 packages only if `dist/skarnet.versions` changed.
+On the s6 boot, `init` restarts `uinitconverterd` so the new build takes over; reboot
+to finish the update. Rebuild the s6 packages only if `dist/skarnet.versions` changed.
 
 ### Remove
 

@@ -209,6 +209,7 @@ sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm \
 sudo uinitconverter init --yes
 ```
 
+s6 부팅에서는 `init`이 `uinitconverterd`를 다시 시작해 새 빌드로 바꿉니다. 업데이트를 마치려면 재부팅하세요.
 s6 패키지는 `dist/skarnet.versions`가 바뀌었을 때만 다시 빌드합니다.
 
 ### 제거

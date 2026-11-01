@@ -69,7 +69,8 @@ Workstation machine. The systemd numbers are from boots up to 2026-10-31.
   crashed since the shutdown order changed on 2026-10-31, in at least 14
   shutdowns, which is too few to call it fixed. One of those shutdowns had
   gnome-shell hang for 5 s until it was aborted (0 of 61 under systemd), cause
-  unknown. With `JOURNAL=no`, the service logs under `/var/log/uinitconverter`
+  unknown. `s6-ftrigrd` can crash during a reload that adds services, which is
+  upstream behaviour: the reload retries and recovers, and a core file is left. With `JOURNAL=no`, the service logs under `/var/log/uinitconverter`
   are readable by root and the `wheel` group.
 - **More to maintain:** about 29,000 lines of Rust, much of it running as
   root, plus the skarnet packages you have to build yourself.
@@ -175,7 +176,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - Output goes to **systemd-journald** through its stdout stream protocol (as PID 1 does). journald attributes it to the unit from the cgroup, so `journalctl -u UNIT` and the log lines in `systemctl status` work. With `JOURNAL=no`, each service gets an s6-log directory instead.
 - Conditions and asserts: `Condition*=`/`Assert*=` for paths, the kernel command line, virtualization, security and more.
 - cgroup v2 at systemd's paths (`system.slice/<unit>`), `KillMode=`, and `MemoryMax/High`, `CPUQuota/Weight`, `TasksMax`, `IOWeight`. `MemoryPressureWatch=`/`MemoryPressureThresholdSec=` give the services `MEMORY_PRESSURE_WATCH`/`MEMORY_PRESSURE_WRITE` as systemd does (the cgroup's `memory.pressure`, `/dev/null` for `off`); without them sd-event daemons search /proc/pressure, which SELinux denies for some (systemd-hostnamed).
-- Sandboxing: `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `Read{Write,Only}Paths`, `InaccessiblePaths`, `NoNewPrivileges`, `CapabilityBoundingSet`, `AmbientCapabilities`, `PrivateDevices`, `PrivateNetwork`, `PrivateIPC`, `PrivateMounts`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `ProtectProc`, `ProcSubset`, `PrivateUsers` (`self`, `identity`, `full`; `managed` needs systemd-nsresourced, so it gets the `self` mapping; if the namespace can't be set up the unit doesn't start, except on a kernel without user namespaces), with the same mounts, capability drops, syscall filters and implied `NoNewPrivileges=` as systemd. Differences: each process of a unit (`ExecStartPre=`, main, `ExecStop=`) gets its own network/IPC/UTS namespace, where systemd shares one per unit; `ProtectControlGroups=private|strict` only make the cgroup tree read-only (no cgroup namespace). Every other directive is listed as "ignored" in the report.
+- Sandboxing: `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `Read{Write,Only}Paths`, `InaccessiblePaths`, `NoNewPrivileges`, `CapabilityBoundingSet`, `AmbientCapabilities`, `PrivateDevices`, `PrivateNetwork`, `PrivateIPC`, `PrivateMounts`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `ProtectProc`, `ProcSubset`, `PrivateUsers` (`self`, `identity`, `full`; `managed` needs systemd-nsresourced, so it gets the `self` mapping; if the namespace can't be set up the unit doesn't start, except on a kernel without user namespaces), with the same mounts, capability drops, syscall filters and implied `NoNewPrivileges=` as systemd. `PrivateNetwork=` also implies `PrivateMounts=` unless that is turned off and remounts `/sys` for the new network namespace, keeping the mounts below it; if the remount fails, the service still starts and logs it. Differences: each process of a unit (`ExecStartPre=`, main, `ExecStop=`) gets its own network/IPC/UTS namespace, where systemd shares one per unit; `ProtectControlGroups=private|strict` only make the cgroup tree read-only (no cgroup namespace). Every other directive is listed as "ignored" in the report.
 - seccomp: `SystemCallFilter=`, `SystemCallErrorNumber=` and `SystemCallArchitectures=`, with systemd's syscall groups (`@system-service`, ...; `crates/uinitconverter-exec/src/syscall-groups.txt`, from `systemd-analyze syscall-filter`), and `RestrictAddressFamilies=`, `RestrictNamespaces=`, `MemoryDenyWriteExecute=` (the kernel's `PR_SET_MDWE` when it has it, as systemd), `LockPersonality=`, `RestrictRealtime=`, `RestrictSUIDSGID=`, with systemd's rules and errnos. As in systemd, `RestrictAddressFamilies=` doesn't cover the i386 ABI (its `socket()` goes through `socketcall()`). libseccomp is loaded at run time.
 - cgroup BPF: `DevicePolicy=`, `DeviceAllow=` (`/dev/` nodes and `char-`/`block-` classes from /proc/devices, globs included; `PrivateDevices=` implies `DevicePolicy=closed`), `IPAddressDeny=` and `IPAddressAllow=` (addresses, prefixes, `any`, `localhost`, `link-local`, `multicast`). Like systemd, the runner attaches hand-assembled eBPF programs (`sd_devices`, `sd_fw_ingress`, `sd_fw_egress`) to the unit's cgroup before anything runs there, and a program the kernel refuses is logged (`... not enforced: ...`) without failing the start. Differences: the address lists are compiled into the program instead of BPF maps, and lists set on slices are not applied.
 - SELinux as under systemd: the s6 tree runs in `init_t` (policy module `dist/selinux/uinitconverter.cil`), so services enter their own domains (`chronyd_t`, `xdm_t`, ...) and `user@.service` can start `systemd --user` in the user's domain. `RuntimeDirectory=` and the other directories, and socket files, get their file_contexts label; the sockets of socket units carry the label of the service that uses them.
@@ -226,6 +227,8 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. These timer keys are accepted without effect, so the report doesn't list them as ignored.
 - Watchdog, credentials (`LoadCredential=`, `ImportCredential=`), `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=` (a BPF LSM program in systemd), and IP accounting (`IPAccounting=`).
 - Cancelling a job that is already running.
+- `PrivateNetwork=` in `[Socket]`, `JoinsNamespaceOf=` and `NetworkNamespacePath=`.
+- Unit settings of the services with their own s6 scripts in `dist/s6` (`dbus`, `udevd`, `earlyoom`, `syslog`, `coredump`): they take the cgroup, limits, sandbox and user from the unit, but the command line and the restart and stop behaviour are in the script. So drop-ins that change `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=` or `Type=` don't reach them.
 
 ## Offline updates and kernel updates
 
@@ -444,9 +447,11 @@ What an s6 shutdown printed on the console is kept for the next boot in
 `/var/log/uinitconverter/last-shutdown-console.log` (s6's catch-all log) and
 `last-shutdown-kernel.log` (the kernel log from the start of the shutdown,
 including SELinux denials after auditd stops); both are root-only. Once shutdown begins, uinitconverterd refuses
-new unit starts and D-Bus activations at once, as systemd does. It first stops
-the scopes (logind's sessions) and waits for them, up to 11 s, so a desktop
-session ends by itself before its user manager is stopped, as on systemd. Then it
+new unit starts and D-Bus activations at once, as systemd does. It first asks the
+display manager (`display-manager.service`) to stop, so it doesn't try new
+greeters when its session ends, then stops the scopes (logind's sessions) and
+waits for them, up to 11 s, so a desktop session ends by itself before its user
+manager is stopped, as on systemd. Then it
 stops the on-demand instances (user@UID, user-runtime-dir@UID, systemd-backlight@, ...),
 while logind and D-Bus still run, as their `After=` asks; only then does
 s6-rc stop its services (this first step has its own limit of 2 minutes).
