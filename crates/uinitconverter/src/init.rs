@@ -485,6 +485,7 @@ pub fn main(args: &[String]) -> ! {
     println!();
     check_programs(&ctx, &s);
     check_luks(&ctx);
+    check_root_stack(&ctx, &s);
     ctx.confirm("Continue?");
     check_versions(&ctx);
     configure_uinitconverter(&ctx, &s);
@@ -646,6 +647,22 @@ mod tests {
         assert!(boot_args(false).ends_with(" enforcing=0"));
         assert_eq!(words("# s6: comment\ns6\n"), ["s6"]);
         assert!(words("# x\ninit=/a enforcing=0 # y\n").contains(&"enforcing=0".to_string()));
+    }
+
+    #[test]
+    fn root_the_s6_initramfs_cant_assemble() {
+        assert_eq!(
+            unassembled_root("root=/dev/mapper/fedora-root rd.lvm.lv=fedora/root ro quiet"),
+            ["rd.lvm.lv=fedora/root"]
+        );
+        assert_eq!(
+            unassembled_root("rd.md.uuid=a rd.lvm.vg=b"),
+            ["rd.md.uuid=a", "rd.lvm.vg=b"]
+        );
+        // A plain root, an encrypted one, and words that only look alike.
+        assert!(unassembled_root("root=UUID=a ro quiet").is_empty());
+        assert!(unassembled_root("root=UUID=a rd.luks.uuid=luks-a").is_empty());
+        assert!(unassembled_root("rd.lvm=0 xrd.lvm.lv=a").is_empty());
     }
 
     #[test]

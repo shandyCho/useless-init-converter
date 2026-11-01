@@ -389,14 +389,18 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 `/init`(execline)은 **s6-svscan을 PID 1로** 실행하고, s6-svscan은 **mdevd**(skarnet의 uevent
 데몬. `mdevd-coldplug`로 발견된 하드웨어의 드라이버를 장치의 modalias에 따라 로드합니다)와
 `rootfs` 서비스를 감독합니다. 이 서비스는 커널 명령줄의 `root=`, `rootflags=`, `rootfstype=`,
-`ro`/`rw`, `init=`, `rd.luks.uuid=`, `rd.luks.name=`, `rd.luks=0`을 읽고, 콘솔에서 LUKS 암호를 요청하고(3회,
+`ro`/`rw`, `init=`, `rd.luks.uuid=`, `rd.luks.name=`, `rd.luks=0`을 읽고, 명령줄에 지정된 LUKS 볼륨이 있으면 콘솔에서 암호를 요청하고(3회,
 `/etc/crypttab`의 `discard`를 따릅니다), 루트를 `/sysroot`에 마운트한 뒤 s6-svscan을 멈춥니다.
 그러면 s6-svscan의 `.s6-svscan/finish`가 `/dev`, `/proc`, `/sys`, `/run`을 옮기고 `init=`
 (`/usr/sbin/init-selinux`)로 `switch_root`합니다. 실패하면 복구 셸을 열고, 셸을 나가면 다시
 시도합니다. `rd.break`는 전환 직전에 셸을 열고, `uinitconverter.initrd.timeout=초`는 디스크를 기다리는
 시간(기본 30초)을 정합니다. dracut은 이미지를 만들 때 도구로만 쓰이며(`dracut-install`이
 프로그램을 라이브러리와 함께, 모듈을 의존 모듈과 함께 복사합니다) 부팅 때는 아무것도 실행되지
-않습니다. 제한: 루트는 입력한 암호로 열어야 하고(TPM2/FIDO2/PKCS#11 잠금 해제 없음), plymouth가
+않습니다. 암호화하지 않은 루트는 그대로 마운트합니다(QEMU에서 ext4, xfs, btrfs로 확인). `cryptsetup`은 LUKS에만
+필요합니다. 없으면 LUKS를 지원하지 않는 이미지를 만들지만, `/etc/crypttab`에 항목이 있거나 명령줄에
+`rd.luks.uuid=`, `rd.luks.name=`이 있으면 빌드가 실패합니다. 제한: 암호화된 루트는 입력한 암호로 열어야 하고
+(TPM2/FIDO2/PKCS#11 잠금 해제 없음), LVM이나 MD 위의 루트는 조립할 수 없으며(`uinitconverter init`이 경고합니다.
+`--boot-only-s6=no`를 쓰세요), plymouth가
 없으며(s6 항목은 원래 없음), 최대 절전 모드 복귀가 없고, 암호 입력에 US가 아닌 키맵을 쓰지
 않습니다. 추가 모듈은 `/etc/uinitconverter/initramfs-modules`에 적습니다(한 줄에 이름 또는 `=DIR`
 하나). initramfs에서는 udev가 실행되지 않으므로, systemd initramfs가 하듯 LUKS 매핑의 udev 활성화
@@ -407,7 +411,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 
 | 역할 | s6 + uinitconverter에서 |
 |---|---|
-| Initramfs | Fedora의 것(dracut, systemd가 PID 1). `--boot-only-s6=yes`이면 uinitconverter의 것: s6-svscan, mdevd, cryptsetup |
+| Initramfs | Fedora의 것(dracut, systemd가 PID 1). `--boot-only-s6=yes`이면 uinitconverter의 것: s6-svscan, mdevd, 설치되어 있으면 cryptsetup |
 | PID 1 / 서비스 | s6-linux-init, s6-rc, uinitconverter |
 | 시스템 버스 | dbus-daemon, `--bus=broker`이면 dbus-broker (사용자 버스용으로 dbus-broker는 유지) |
 | 로그 | s6 서비스로 실행되는 systemd-journald (`--journal=no`: rsyslog + s6-log) |

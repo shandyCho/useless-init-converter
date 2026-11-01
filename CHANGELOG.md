@@ -11,6 +11,9 @@
 - `.path` 유닛의 inotify와 fd 저장소의 소켓 처리를 libc 직접 호출에서 rustix로 옮겼습니다.
   의도한 동작 변경은 없습니다. 수신 자격 증명(`SCM_CREDENTIALS`, `SO_PEERCRED`)은 libc에
   남겼습니다. 커널이 pid 0을 보고할 수 있는데, rustix의 `UCred`는 이 값을 담을 수 없습니다.
+- s6 initramfs는 암호화된 볼륨이 없으면 `cryptsetup`이 필요하지 않고, `dm_crypt`도 LUKS를 쓸 때만
+  불러옵니다. `/etc/crypttab`이나 명령줄에 암호화 볼륨이 지정되어 있는데 cryptsetup이 없으면 빌드가 실패합니다.
+- `uinitconverter init --boot-only-s6=yes`는 LVM이나 MD 위의 루트를 경고합니다. 이 initramfs는 이를 조립할 수 없습니다.
 
 ## 0.2.0 (2026-11-01)
 

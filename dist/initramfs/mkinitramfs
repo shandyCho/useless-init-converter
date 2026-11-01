@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the s6 initramfs (uinitconverter init --boot-only-s6=yes): s6-svscan is its
-# PID 1, mdevd loads the drivers, and a bash script opens LUKS and mounts the
-# root (see root/ beside this script, installed as /usr/share/uinitconverter/initramfs).
+# PID 1, mdevd loads the drivers, and a bash script opens LUKS, if any, and mounts
+# the root (see root/ beside this script, installed as /usr/share/uinitconverter/initramfs).
 # No systemd and no dracut run at boot; dracut-install only copies binaries
 # with their libraries and kernel modules with their dependencies here.
 #
@@ -15,7 +15,10 @@
 #     --no-microcode    no early CPU microcode
 #
 # Extra modules are also read from /etc/uinitconverter/initramfs-modules (one name
-# or =DIR per line). Runs unprivileged when the output is writable.
+# or =DIR per line). cryptsetup goes in when it's installed. Without it the image
+# has no LUKS support, and building one is refused when /etc/crypttab has an
+# entry or the kernel command line has rd.luks.uuid= or rd.luks.name=.
+# Runs unprivileged when the output is writable.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
@@ -29,6 +32,8 @@ MICROCODE=1
 EXTRA_MODULES=()
 EXTRA_FILES=()
 MODULES_FILE=${UINITCONVERTER_INITRAMFS_MODULES:-/etc/uinitconverter/initramfs-modules}
+CRYPTTAB=${UINITCONVERTER_INITRAMFS_CRYPTTAB:-/etc/crypttab}
+CMDLINE=${UINITCONVERTER_INITRAMFS_CMDLINE:-/proc/cmdline}
 DI=/usr/lib/dracut/dracut-install
 
 die() { echo "mkinitramfs: $*" >&2; exit 1; }
@@ -41,7 +46,7 @@ while [ $# -gt 0 ]; do
     --add-module) EXTRA_MODULES+=("$2"); shift ;;
     --add) EXTRA_FILES+=("$2"); shift ;;
     --no-microcode) MICROCODE=0 ;;
-    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,22p' "$0"; exit 0 ;;
     *) die "unknown option: $1" ;;
     esac
     shift
@@ -55,9 +60,17 @@ KDIR=/lib/modules/$KVER
 [ -d "$SRC" ] || die "$SRC: no initramfs tree"
 [ -d "$KDIR" ] || die "$KDIR: no modules for kernel $KVER"
 [ -x "$DI" ] || die "$DI missing (dnf install dracut)"
-for p in cpio zstd depmod mdevd s6-svscan execlineb cryptsetup; do
+for p in cpio zstd depmod mdevd s6-svscan execlineb; do
     command -v "$p" >/dev/null || die "$p not found"
 done
+# An image that couldn't open the root must fail here, not at the next boot.
+if ! command -v cryptsetup >/dev/null; then
+    if grep -Eqs '^[[:space:]]*[^#[:space:]]' "$CRYPTTAB" ||
+        grep -Eqs '(^|[[:space:]])rd\.luks\.(uuid|name)=' "$CMDLINE"; then
+        die "cryptsetup not found, and $CRYPTTAB or the kernel command line names encrypted volumes"
+    fi
+    echo "mkinitramfs: cryptsetup not found: this image can't open LUKS volumes" >&2
+fi
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/uinitconverter-initramfs.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
@@ -110,12 +123,13 @@ prog() {
 for p in execlineb export foreground redirfd fdmove importas \
     s6-svscan s6-supervise s6-svscanctl s6-svc s6-svwait \
     mdevd mdevd-coldplug \
-    bash mount umount mountpoint switch_root setsid blkid cryptsetup \
+    bash mount umount mountpoint switch_root setsid blkid \
     modprobe insmod lsmod depmod \
     printf cat sleep mkdir ls ln rm dmesg; do
     prog "$p"
 done
 type -P btrfs >/dev/null && prog btrfs
+type -P cryptsetup >/dev/null && prog cryptsetup
 # s6-svwait (rootfs waits for mdevd) starts s6's ftrigrd helper.
 [ -x /usr/libexec/s6/s6-ftrigrd ] || die "/usr/libexec/s6/s6-ftrigrd missing (s6's helper for s6-svwait)"
 inst /usr/libexec/s6/s6-ftrigrd
@@ -125,7 +139,7 @@ ln -sfn bash "$R/usr/bin/sh"
 for f in "${EXTRA_FILES[@]}"; do
     inst "$f"
 done
-[ -r /etc/crypttab ] && cp /etc/crypttab "$R/etc/crypttab"
+[ -r "$CRYPTTAB" ] && cp "$CRYPTTAB" "$R/etc/crypttab"
 
 # Kernel modules: what can sit between the CPU and the root filesystem or
 # the keyboard. mdevd loads only those the hardware asks for.

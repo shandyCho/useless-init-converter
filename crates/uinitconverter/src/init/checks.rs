@@ -114,6 +114,38 @@ pub(super) fn check_versions(ctx: &Ctx) {
     }
 }
 
+/// What the kernel command line asks an initramfs to assemble and the s6
+/// initramfs can't: it has no LVM or MD tools.
+pub(super) fn unassembled_root(cmdline: &str) -> Vec<&str> {
+    cmdline
+        .split_whitespace()
+        .filter(|w| {
+            ["rd.lvm.lv=", "rd.lvm.vg=", "rd.md.uuid="]
+                .iter()
+                .any(|p| w.starts_with(p))
+        })
+        .collect()
+}
+
+/// A root on LVM or MD doesn't boot with --boot-only-s6=yes: the s6 entry would
+/// stop at the initramfs's rescue shell. Fedora's initramfs handles them.
+pub(super) fn check_root_stack(ctx: &Ctx, s: &Settings) {
+    if !s.boot_only_s6 {
+        return;
+    }
+    let cmdline = read("/proc/cmdline").unwrap_or_default();
+    let found = unassembled_root(&cmdline);
+    if !found.is_empty() {
+        warn(&format!(
+            "the s6 initramfs can't assemble this root: {}",
+            found.join(" ")
+        ));
+        warn("  It has no LVM or MD tools, so the s6 entry would stop at a rescue shell.");
+        warn("  Use --boot-only-s6=no, which keeps Fedora's initramfs.");
+        ctx.confirm("Continue anyway?");
+    }
+}
+
 /// The /etc/crypttab entries, each with whether the initramfs unlocks it.
 pub(super) fn luks_volumes(crypttab: &str, cmdline: &str) -> Vec<(String, bool)> {
     let cmdline = format!(" {} ", cmdline.trim());

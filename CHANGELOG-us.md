@@ -12,6 +12,11 @@ versions. Release notes: [packages/release-notes](packages/release-notes).
   of raw libc calls. No behaviour change intended. Received credentials
   (`SCM_CREDENTIALS`, `SO_PEERCRED`) stay on libc: the kernel can report pid 0,
   which rustix's `UCred` can't hold.
+- The s6 initramfs no longer needs `cryptsetup` when nothing is encrypted, and
+  loads `dm_crypt` only for LUKS. The build fails if cryptsetup is missing while
+  `/etc/crypttab` or the command line names encrypted volumes.
+- `uinitconverter init --boot-only-s6=yes` warns about a root on LVM or MD, which
+  that initramfs can't assemble.
 
 ## 0.2.0 (2026-11-01)
 

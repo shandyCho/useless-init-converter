@@ -1,6 +1,6 @@
 #!/bin/bash
 # The s6 initramfs's one job: open the LUKS volumes named on the kernel
-# command line, mount the root on /sysroot, then stop s6-svscan, whose
+# command line, if any, mount the root on /sysroot, then stop s6-svscan, whose
 # .s6-svscan/finish switches to it. On any failure: a rescue shell on the
 # console; when it exits, s6-supervise runs this again.
 #
@@ -50,7 +50,6 @@ done
 # mdevd loads the drivers; the coldplug replays what came before it.
 s6-svwait -U -t 10000 /service/mdevd || say "mdevd is not ready; trying anyway"
 mdevd-coldplug
-modprobe -q dm_crypt
 
 # find_dev SPEC: the device for root=-style SPEC, waiting up to $timeout.
 find_dev() {
@@ -87,7 +86,10 @@ crypt_opts() {
     done </etc/crypttab
 }
 
-if [ "$luks" = 1 ]; then
+if [ "$luks" = 1 ] && [ "${#luks_name[@]}" -gt 0 ]; then
+    command -v cryptsetup >/dev/null ||
+        rescue "rd.luks.* is on the kernel command line, but this initramfs has no cryptsetup"
+    modprobe -q dm_crypt
     mkdir -p /run/cryptsetup
     for u in "${!luks_name[@]}"; do
         name=${luks_name[$u]}

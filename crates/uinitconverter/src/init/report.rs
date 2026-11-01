@@ -82,8 +82,8 @@ pub(super) fn next_steps(s: &Settings) -> String {
          \x20      sudo uinitconverter init --selinux=enforcing\n"
     };
     let only_s6 = if s.boot_only_s6 {
-        "     With the s6 initramfs (--boot-only-s6=yes) the LUKS passphrase prompt is\n\
-         \x20    plain text on the console. If it fails it opens a rescue shell (exit it to\n\
+        "     With the s6 initramfs (--boot-only-s6=yes) an encrypted root's passphrase\n\
+         \x20    prompt is plain text on the console. A failure opens a rescue shell (exit it to\n\
          \x20    try again); rd.break on the kernel command line gives a shell before the\n\
          \x20    switch. To boot one time with Fedora's initramfs, change the entry's\n\
          \x20    initrd line from initramfs-KVER-s6.img to initramfs-KVER.img (press e).\n"

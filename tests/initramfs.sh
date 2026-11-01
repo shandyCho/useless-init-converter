@@ -1,7 +1,8 @@
 #!/bin/bash
 # Boot the s6 initramfs (dist/initramfs, uinitconverter init --boot-only-s6=yes) in
 # QEMU, unprivileged: a LUKS2 disk with a btrfs root in subvol=root, opened
-# with a passphrase typed on the serial console.
+# with a passphrase typed on the serial console; then roots with no encryption
+# (ext4, xfs and btrfs on partitions), also from an image without cryptsetup.
 #
 #   tests/initramfs.sh WORKDIR [KVER]
 #
@@ -53,7 +54,9 @@ udevdb=""
 for f in /run/udev/data/b*; do
     [ -e "$f" ] && grep -q '^E:DM_UDEV_PRIMARY_SOURCE_FLAG=1$' "$f" && udevdb="$udevdb ${f##*/}"
 done
-echo "S6-INITRAMFS-TEST pid=$$ args=[$*] root=$root run=$run procs=[${procs# }] udevdb=[${udevdb# }]"
+dmcrypt=no
+grep -q '^dm_crypt ' /proc/modules && dmcrypt=yes
+echo "S6-INITRAMFS-TEST pid=$$ args=[$*] root=$root run=$run procs=[${procs# }] udevdb=[${udevdb# }] dm_crypt=$dmcrypt"
 # sysrq's message would land in the middle of the line above.
 sleep 1
 echo o >/proc/sysrq-trigger
@@ -84,17 +87,44 @@ install -m 0755 /test-init /mnt/root/usr/bin/init-selinux
 echo "PREP luks=\$(blkid -s UUID -o value /dev/vda) root=\$(blkid -s UUID -o value /dev/mapper/prep)"
 umount /mnt
 cryptsetup close prep
+# The second disk: no encryption, one partition per file system.
+fill() {
+    cp -a /usr "\$1/"
+    for l in bin sbin lib lib64; do cp -a /\$l "\$1/"; done
+    mkdir -p "\$1/dev" "\$1/proc" "\$1/sys" "\$1/run"
+    install -m 0755 /test-init "\$1/usr/bin/init-selinux"
+}
+printf 'label: gpt\nsize=500M\nsize=500M\nsize=500M\n' | sfdisk -q /dev/vdb
+mkfs.ext4 -q /dev/vdb1
+mount /dev/vdb1 /mnt
+fill /mnt
+umount /mnt
+mkfs.xfs -q -L plainxfs /dev/vdb2
+mount /dev/vdb2 /mnt
+fill /mnt
+umount /mnt
+mkfs.btrfs -q /dev/vdb3
+mount /dev/vdb3 /mnt
+btrfs -q subvolume create /mnt/root
+fill /mnt/root
+umount /mnt
+echo "PLAIN ext4=\$(blkid -s UUID -o value /dev/vdb1) btrfs=\$(blkid -s PARTUUID -o value /dev/vdb3)"
+# sysrq's message would land in the middle of the lines above.
+sleep 1
 echo PREP-DONE
 echo o >/proc/sysrq-trigger
 sleep 30
 EOF
 chmod 755 "$W/prep/init" "$W/prep/test-init"
 "$MK" -k "$KVER" -o "$W/prep.img" --source "$W/prep" --no-microcode \
-    --add "$(type -P mkfs.btrfs)" --add "$(type -P install)" --add "$(type -P cp)" --add "$(type -P tr)" --add "$(type -P grep)" >/dev/null
+    --add "$(type -P mkfs.btrfs)" --add "$(type -P mkfs.ext4)" --add "$(type -P mkfs.xfs)" --add "$(type -P sfdisk)" \
+    --add "$(type -P install)" --add "$(type -P cp)" --add "$(type -P tr)" --add "$(type -P grep)" >/dev/null
 "$MK" -k "$KVER" -o "$W/s6.img" >/dev/null
 truncate -s 512M "$W/disk.img"
+truncate -s 1600M "$W/plain.img"
 if python3 -I "$CONSOLE" "$W/prep.log" 300 "wait:PREP-DONE" -- \
     "${QEMU[@]}" -initrd "$W/prep.img" -drive "file=$W/disk.img,if=virtio,format=raw" \
+    -drive "file=$W/plain.img,if=virtio,format=raw" \
     -append "console=ttyS0 panic=-1 quiet"; then
     ok "prep: LUKS2 + btrfs subvol=root test disk"
 else
@@ -106,7 +136,8 @@ root=$(sed -n 's/^PREP .* root=\([^ \r]*\).*/\1/p' "$W/prep.log" | tr -d '\r')
 cmdline="console=ttyS0 panic=-1 quiet root=UUID=$root rootflags=subvol=root rootflags=subvol=root ro rd.luks.uuid=luks-$luks init=/usr/sbin/init-selinux"
 disk=(-drive "file=$W/disk.img,if=virtio,format=raw")
 
-# boot NAME APPEND [DISK...] -- STEP...: boot the s6 initramfs once.
+IMG=$W/s6.img
+# boot NAME APPEND [DISK...] -- STEP...: boot the s6 initramfs ($IMG) once.
 boot() {
     local name=$1 append=$2 d=() log
     log=$W/$(printf %s "$1" | tr -c 'a-zA-Z0-9.' '-').log
@@ -114,13 +145,13 @@ boot() {
     while [ "$1" != -- ]; do d+=("$1"); shift; done
     shift
     if python3 -I "$CONSOLE" "$log" 120 "$@" -- \
-        "${QEMU[@]}" -initrd "$W/s6.img" "${d[@]}" -append "$append"; then
+        "${QEMU[@]}" -initrd "$IMG" "${d[@]}" -append "$append"; then
         ok "$name"
     else
         bad "$name" "$log"
     fi
 }
-result='S6-INITRAMFS-TEST pid=1 args=\[testarg\] root=/root run=yes procs=\[init-selinux\] udevdb=\[b25[0-9]:0\]'
+result='S6-INITRAMFS-TEST pid=1 args=\[testarg\] root=/root run=yes procs=\[init-selinux\] udevdb=\[b25[0-9]:0\] dm_crypt=yes'
 
 boot "passphrase, LUKS2 + btrfs subvol, switch_root to init with its args" \
     "$cmdline testarg" "${disk[@]}" -- \
@@ -146,6 +177,74 @@ boot "rd.break: shell before switching, then boots" \
 boot "no disk: times out into the rescue shell" \
     "$cmdline uinitconverter.initrd.timeout=2" -- \
     "wait:LUKS device UUID=$luks not found" "wait:rescue shell" "send:echo o >/proc/sysrq-trigger"
+
+# --- No encryption. No passphrase prompt, no dm device, so no udev record.
+ext4=$(sed -n 's/^PLAIN ext4=\([^ ]*\) .*/\1/p' "$W/prep.log" | tr -d '\r')
+partuuid=$(sed -n 's/^PLAIN .* btrfs=\([^ \r]*\).*/\1/p' "$W/prep.log" | tr -d '\r')
+plain=(-drive "file=$W/plain.img,if=virtio,format=raw")
+append="console=ttyS0 panic=-1 quiet ro init=/usr/sbin/init-selinux testarg"
+seen() {
+    echo "wait:S6-INITRAMFS-TEST pid=1 args=\\[testarg\\] root=$1 run=yes procs=\\[init-selinux\\] udevdb=\\[\\] dm_crypt=$2"
+}
+boot "no encryption: ext4, root=UUID=" "root=UUID=$ext4 $append" "${plain[@]}" -- "$(seen / '[a-z]*')"
+boot "no encryption: xfs, root=LABEL=" "root=LABEL=plainxfs $append" "${plain[@]}" -- "$(seen / '[a-z]*')"
+boot "no encryption: btrfs subvol, root=PARTUUID=" \
+    "root=PARTUUID=$partuuid rootflags=subvol=root $append" "${plain[@]}" -- "$(seen /root '[a-z]*')"
+boot "no encryption: root=/dev/vda1" "root=/dev/vda1 $append" "${plain[@]}" -- "$(seen / '[a-z]*')"
+boot "no encryption: partition on NVMe, mdevd loads the module" \
+    "root=UUID=$ext4 $append" -drive "file=$W/plain.img,if=none,id=d0,format=raw" \
+    -device nvme,drive=d0,serial=sdc0 -- "$(seen / '[a-z]*')"
+boot "no encryption: dm_crypt isn't loaded when nothing needs it" \
+    "root=UUID=$ext4 $append" "${plain[@]}" -- "$(seen / no)"
+
+# --- A system without cryptsetup: this image must build and boot without it.
+farm=$W/no-cryptsetup
+mkdir -p "$farm"
+for f in /usr/bin/*; do
+    [ "${f##*/}" = cryptsetup ] || ln -s "$f" "$farm/"
+done
+none=$W/none
+: >"$none"
+# mk_without CRYPTTAB CMDLINE OUTPUT: as on a host with those files.
+mk_without() {
+    UINITCONVERTER_INITRAMFS_PATH=${MDEVD_BIN:+$MDEVD_BIN:}$farm \
+        UINITCONVERTER_INITRAMFS_CRYPTTAB=$1 UINITCONVERTER_INITRAMFS_CMDLINE=$2 \
+        "$MK" -k "$KVER" -o "$3" --no-microcode
+}
+if mk_without "$none" "$none" "$W/s6-plain.img" >"$W/mk-plain.log" 2>&1 &&
+    ! zstd -dc "$W/s6-plain.img" | cpio -t --quiet 2>/dev/null | grep -q 'bin/cryptsetup$'; then
+    ok "no cryptsetup, nothing encrypted: the image builds, without it"
+    IMG=$W/s6-plain.img
+    boot "image without cryptsetup: boots an unencrypted root" \
+        "root=UUID=$ext4 $append" "${plain[@]}" -- "$(seen / no)"
+    boot "image without cryptsetup: rd.luks.uuid= gives a rescue shell that says why" \
+        "root=UUID=$ext4 rd.luks.uuid=luks-$luks $append" "${disk[@]}" "${plain[@]}" -- \
+        "wait:no cryptsetup" "wait:rescue shell" "send:echo o >/proc/sysrq-trigger"
+    IMG=$W/s6.img
+else
+    bad "no cryptsetup, nothing encrypted: the image builds, without it" "$W/mk-plain.log"
+fi
+# Comments alone in crypttab are nothing encrypted.
+printf '# nothing here\n\n' >"$W/crypttab-comments"
+if mk_without "$W/crypttab-comments" "$none" "$W/s6-comments.img" >"$W/mk-comments.log" 2>&1; then
+    ok "no cryptsetup, a crypttab of comments: the image builds"
+else
+    bad "no cryptsetup, a crypttab of comments: the image builds" "$W/mk-comments.log"
+fi
+# Encryption in use and no cryptsetup: stop now, not at the next boot.
+echo 'luks-a UUID=a none' >"$W/crypttab-luks"
+echo 'root=UUID=a ro rd.luks.uuid=luks-a' >"$W/cmdline-luks"
+echo 'root=UUID=a ro rd.luks.name=a=crypt' >"$W/cmdline-luks-name"
+refuses() {
+    if ! mk_without "$2" "$3" "$W/refused.img" >"$W/refused.log" 2>&1 && grep -q cryptsetup "$W/refused.log"; then
+        ok "$1"
+    else
+        bad "$1" "$W/refused.log"
+    fi
+}
+refuses "no cryptsetup, a crypttab entry: refuses to build" "$W/crypttab-luks" "$none"
+refuses "no cryptsetup, rd.luks.uuid=: refuses to build" "$none" "$W/cmdline-luks"
+refuses "no cryptsetup, rd.luks.name=: refuses to build" "$none" "$W/cmdline-luks-name"
 
 echo
 echo "passed: $pass  failed: $fail"

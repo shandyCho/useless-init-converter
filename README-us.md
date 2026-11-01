@@ -445,16 +445,22 @@ supervises **mdevd** (skarnet's uevent daemon: `mdevd-coldplug` makes it load
 the drivers for the hardware found, from each device's modalias) and a
 `rootfs` service. That service reads `root=`, `rootflags=`, `rootfstype=`,
 `ro`/`rw`, `init=`, `rd.luks.uuid=`, `rd.luks.name=` and `rd.luks=0` from the kernel
-command line, asks for the LUKS passphrase on the console (3 tries;
-`discard` from `/etc/crypttab` is honoured), mounts the root on `/sysroot`
+command line, asks for the passphrase of any LUKS volume named there on the console (3
+tries; `discard` from `/etc/crypttab` is honoured), mounts the root on `/sysroot`
 and stops s6-svscan, whose `.s6-svscan/finish` moves `/dev`, `/proc`, `/sys`
 and `/run` and runs `switch_root` to `init=` (`/usr/sbin/init-selinux`).
 On a failure it opens a rescue shell; exiting it tries again. `rd.break`
 gives a shell before the switch, `uinitconverter.initrd.timeout=SECONDS` sets how
 long to wait for the disks (30). dracut is used only as a tool when the
 image is built (`dracut-install` copies programs with their libraries and
-modules with their dependencies); nothing of it runs at boot. Limits: the
-root must be opened by a typed passphrase (no TPM2/FIDO2/PKCS#11 unlock), no
+modules with their dependencies); nothing of it runs at boot. A root with no
+encryption just mounts (checked in QEMU with ext4, xfs and btrfs), and
+`cryptsetup` is only needed for LUKS: without it the image is built with no
+LUKS support, unless `/etc/crypttab` has an entry or the command line has
+`rd.luks.uuid=` or `rd.luks.name=`, when the build fails. Limits: an encrypted
+root must be opened by a typed passphrase (no TPM2/FIDO2/PKCS#11 unlock), a
+root on LVM or MD can't be assembled (`uinitconverter init` warns; use
+`--boot-only-s6=no`), no
 plymouth (the s6 entry has none anyway), no hibernation resume, no
 non-US keymap for the prompt. Extra modules go in
 `/etc/uinitconverter/initramfs-modules` (one name or `=DIR` per line). Because
@@ -467,7 +473,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 
 | Role | Under s6 + uinitconverter |
 |---|---|
-| Initramfs | Fedora's (dracut, systemd as its PID 1); with `--boot-only-s6=yes` uinitconverter's: s6-svscan, mdevd, cryptsetup |
+| Initramfs | Fedora's (dracut, systemd as its PID 1); with `--boot-only-s6=yes` uinitconverter's: s6-svscan, mdevd, and cryptsetup if installed |
 | PID 1 / services | s6-linux-init, s6-rc, uinitconverter |
 | System bus | dbus-daemon, or dbus-broker with `--bus=broker` (dbus-broker stays for the user bus) |
 | Logging | systemd-journald as an s6 service (`--journal=no`: rsyslog + s6-log) |

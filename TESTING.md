@@ -489,9 +489,11 @@ tests/initramfs.sh /tmp/sdc-initramfs
 ```
 
 btrfs 루트를 `subvol=root`에 둔 LUKS2 디스크를 만들고, 실행 중인 커널을 s6 initramfs로 부팅해
-시리얼 콘솔에서 암호를 입력합니다. 기대 결과: `passed: 6  failed: 0`(암호 입력, udev 링크
+시리얼 콘솔에서 암호를 입력합니다. 기대 결과: `passed: 20  failed: 0`(테스트 디스크, 암호 입력, udev 링크
 없는 `root=/dev/disk/by-uuid/…`, mdevd가 드라이버를 로드해야 하는 NVMe 디스크, 잘못된 암호 세 번 입력 뒤 복구 셸과 재시도, `rd.break`, 디스크
-없음).
+없음. 이어서 암호화하지 않은 루트: 파티션의 ext4, xfs, btrfs, `root=/dev/...`, NVMe, `dm_crypt` 미적재. 이어서
+cryptsetup 없이 만든 이미지: 그런 루트 부팅, `rd.luks.uuid=`일 때 이유를 알려 주는 복구 셸. 그리고 암호화 볼륨이
+지정되어 있으면 cryptsetup 없는 빌드 거부). 이 부팅은 대역 init에서 끝나므로, 그런 루트의 전체 s6 부팅을 시험하는 것은 아닙니다.
 
 그다음 머신에서:
 

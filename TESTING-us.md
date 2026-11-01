@@ -530,9 +530,14 @@ tests/initramfs.sh /tmp/sdc-initramfs
 
 It makes a LUKS2 disk with a btrfs root in `subvol=root`, boots the running
 kernel with the s6 initramfs and types the passphrase on the serial console.
-Expected: `passed: 6  failed: 0` (passphrase, a `root=/dev/disk/by-uuid/…`
+Expected: `passed: 20  failed: 0` (the test disk; passphrase, a `root=/dev/disk/by-uuid/…`
 without udev's links, an NVMe disk whose driver mdevd must load, three wrong
-passphrases then the rescue shell and a retry, `rd.break`, no disk).
+passphrases then the rescue shell and a retry, `rd.break`, no disk; then roots
+with no encryption: ext4, xfs and btrfs on partitions, `root=/dev/...`, NVMe,
+`dm_crypt` left unloaded; then an image built without cryptsetup, which boots
+such a root and gives a rescue shell that says why for `rd.luks.uuid=`; and
+building without cryptsetup refused when volumes are named as encrypted). These
+boots end at a stand-in init: this doesn't test a full s6 boot on such a root.
 
 Then on the machine:
 
