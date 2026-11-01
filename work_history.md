@@ -9442,3 +9442,17 @@ Owner pushed main and created the release; the first attempt gave HTTP 422 `Rele
 2. Part 79's login-screen shutdowns (3 to 5); then gdm starting greeters during shutdown (part 87).
 3. Full-boot test in QEMU (part 89); it would also cover the scope tests no automatic suite reaches.
 4. Owner's decision: rustix or dinit.
+
+## 2026-11-01, part 96: part 79's login-screen shutdowns not found in the logs (no code change)
+
+Owner reported doing them and asked for the logs to be read. **They aren't on this machine's record, so none are counted.** Read at 18:11: uptime 2080 s, so the boot began at 17:36:45, before part 93's checks; last-shutdown-*.log are from 17:36:16; logind's only requests today are 01:32:02 (poweroff), 15:31:34 and 17:36:11 (reboot); the journal's last boot ended 10-31 14:58, so no systemd boot in between either. Session 2 (owner, tty2), from the 17:43 login, is still open. Not yet asked how the shutdowns were done.
+
+Today's three shutdowns were from a session, not the login screen: user@60578 has no greeter-ending `Consumed` line at any of those times, its entries being 12:25, 15:47 and 17:43, each followed about 10 s later by exit.target, which is the greeter stopping at login. All three were clean: the last `Shell@.*code=dumped` is still 10-31 16:57, on old code.
+
+### Current state
+
+main at 5236481, ahead of origin/main by 1; this entry uncommitted. 0.2.0 released. Installed and booted: gf6f4a3d. Login-screen shutdowns on the new code: still 0.
+
+### Next steps
+
+As part 95. For step 2: boot s6, power off from the login screen without logging in, repeat 3 to 5 times, then log in; read with part 79's two greps and logind's request lines.
