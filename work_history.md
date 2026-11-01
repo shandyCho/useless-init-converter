@@ -10061,6 +10061,8 @@ main at this entry's commit, ahead of origin/main by 6. Release target 86535a8; 
 
 Owner ran `sudo dnf upgrade --refresh` on the s6 boot (376 packages, including selinux-policy 45.23, systemd 262.1, kernel 7.2.13) at 01:21. Every reload from 01:26:36 failed with `unable to manage new service directories in /run/s6-rc: Permission denied`, then dnf hung after its last scriptlet. Affects 0.2.1 and earlier: any selinux-policy update that runs this scriptlet on a running s6 boot. Why earlier policy updates here didn't show it wasn't looked into; the scriptlet's relabel sits in a conditional part.
 
+**Correction (part 126):** the scriptlet named here isn't what relabeled /run/service; `restorecon -R /var/run` doesn't descend the symlink. See part 126.
+
 **Cause 1, reloads.** selinux-policy-targeted's scriptlet runs `restorecon -Ri /usr/sbin /var/run`. /run/service/.s6-svscan/control, the s6-linux-init services' supervise/control and shutdownd/fifo became var_run_t, which init_t can't open for write. AVCs: `denied { write } name=control ino=39`, from s6-rc-update and s6-svlink. s6_supervise_link_names fails on writing the rescan request and unlinks every name, so /run/service dropped to 7 entries with 264 supervisors alive. The denied rescan is why nothing died. The live database advanced with each attempt; the boot link stayed at hAMScT (01:26:05).
 
 **Cause 2, ours: no relink after the last attempt.** commit_and_install ran relink_supervised between attempts, not after the last.
@@ -10140,3 +10142,50 @@ Branch fix-policy-relabel at this entry's commit, from main at df25380. Built, n
 2. If it passes: merge, 0.2.2.
 3. Then fresh-install VM and QEMU full-boot test, parts 106 and 89.
 
+
+## 2026-11-02, part 126: the upgrade test passed but didn't relabel anything; real trigger found (21ca9b1)
+
+Owner ran part 125's test on 3eed142: installed, downgraded the policy to 45.21, rebooted (02:38), `dnf upgrade selinux-policy selinux-policy-targeted` to 45.23 (02:40), `dnf reinstall systemd` (02:42). Passed as written: no var_run_t fifos, reload exit 0, no s6 AVCs, 262 entries in /run/service, dnf finished both times with no hang.
+
+**But it doesn't test the filecons.** After the upgrade .s6-svscan/control was still initctl_t and .s6-svscan and shutdownd/supervise tmpfs_t, the fresh-boot labels, where `matchpathcon` now gives init_var_run_t. So nothing relabeled /run/service. It does show the filecons are loaded (`matchpathcon`) and that a policy update alone is harmless. `dnf reinstall systemd` likewise had no failing start to hang on.
+
+**Part 123's cause was wrong.** `restorecon -Rnv /var/run` lists 0 paths, `/var/run/` too; `/run/` lists 295 under /run/service. /var/run is a symlink and restorecon doesn't descend it, so the scriptlet's line does nothing there. TESTING's row used that command, so it could not reproduce anything; part 124's reasoning on the labels stands.
+
+**What did it, by evidence from dnf5.log and a simulation, not seen directly:** passt-selinux, updated in transaction 103 and not in the owner's test. Its %pre copies file_contexts to /var/lib/rpm-state/file_contexts.pre if absent; its %posttrans runs `fixfiles -C` on that copy. In 103 its %pre ran at 16:25:54, after selinux-policy-targeted's files were unpacked and %post finished, and before that package's %posttrans rebuilt the policy with `semodule -B` (16:26:22-31). So the copy is the packaged file_contexts, without local modules' rules. Passing the packaged 45.21 file against the installed one through fixfiles' own sed gives `/run/service/*` among 149 patterns, restored with `restorecon -R`. It came from our own module's filecons. passt's %posttrans ended 16:26:35; the first failed reload was 16:26:36. selinux-policy's own `.pre` is taken in %pretrans, before the unpack, so it doesn't see this.
+
+So the condition is selinux-policy-targeted updated in one transaction with a package using the same macro (installed here: passt-selinux, swtpm-selinux, nbdkit-selinux, container-selinux, NetworkManager-ssh-selinux). This also answers part 123's open question of why earlier policy updates didn't show it, as far as it fits: not checked against those transactions.
+
+The filecons remain the right fix: the restore goes by path, and they give init_var_run_t and uinitconverter_log_fifo_t (`matchpathcon -m pipe` on all of them). Not covered: a fifo inside an `event` directory gets var_run_t, a client's short-lived one. Not seen to matter; new ones inherit from the directory.
+
+**Changed:** CIL comment, TESTING pair row (now `restorecon -R /run/service`, with a check that control became init_var_run_t, which tells a relabel that ran from one that didn't), CHANGELOG pair wording. No rule or code changed, so no build needed and none of the suites re-run.
+
+**My mistake:** part 123 named the scriptlet from reading it, and the row and part 125's test plan followed from that without a dry run of the command.
+
+### Current state
+
+As written before the commit; part 127 supersedes it. Branch fix-policy-relabel, these edits uncommitted. Installed and booted: 3eed142 (0.2.1 plus the fix), kernel 7.2.13, policy 45.23, systemd 262.1. Filecons loaded, not yet exercised by a relabel.
+
+### Next steps
+
+1. Owner: `sudo dnf reinstall selinux-policy-targeted passt-selinux`, then TESTING's checks. `control` should turn init_var_run_t, proving the trigger; if it stays initctl_t, the reinstall didn't reproduce it, so run `sudo restorecon -R /run/service` and check again.
+2. If it passes: merge, 0.2.2.
+3. Then fresh-install VM and QEMU full-boot test, parts 106 and 89.
+
+## 2026-11-02, part 127: committed and merged for 0.2.2 (21ca9b1)
+
+Owner: commit, merge into main; the owner does the 0.2.2 release. 21ca9b1 is part 126's edits, with the CIL comment rewrapped; fix-policy-relabel fast-forwarded onto main with this entry, as in part 116; the branch is kept. Not pushed.
+
+Version bump not done: Cargo.toml is still 0.2.1, and the CHANGELOG pair still says Unreleased. Left to the owner's release, along with the rest of part 120's list (lock, README pair's `VERSION=`, release notes pair, spec changelogs).
+
+**Not verified at merge:** part 126's reinstall test wasn't reported, so no real relabel has yet run against the filecons on a booted system. Part 123's reload failure and repair are the only live evidence for init_var_run_t fifos working.
+
+Tests: none re-run. 21ca9b1 changes a comment and docs; part 123's results are on the same code, with 3eed142 adding part 124's comment only.
+
+### Current state
+
+main at this entry's commit, ahead of origin/main. Installed and booted: 3eed142, kernel 7.2.13, policy 45.23, systemd 262.1. The packaged code is the same apart from the CIL comment.
+
+### Next steps
+
+1. Owner: part 126's reinstall test, then release 0.2.2.
+2. Then fresh-install VM and QEMU full-boot test, parts 106 and 89.
