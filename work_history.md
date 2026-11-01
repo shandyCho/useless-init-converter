@@ -9768,7 +9768,7 @@ As part 108; parts 107-110 uncommitted. memtest removed. Installed and booted: c
 2. Odd exit.target: read the scope line on the next one.
 3. Rest as part 106.
 
-## 2026-11-01, part 111: PrivateNetwork= now gives a mount namespace and a new /sys (uncommitted)
+## 2026-11-01, part 111: PrivateNetwork= now gives a mount namespace and a new /sys (1c3532b)
 
 Owner asked to commit the history (a4c1cc0) and fix rtkit's WEAKER row, and plans 0.2.1 after this and "the current problem". I took that as the 21:07 shell hang (part 108); the owner didn't name it.
 
@@ -9789,11 +9789,129 @@ Tests: `cargo test` 102 passed 0 failed; new private_network_implies_private_mou
 
 ### Current state
 
-main at a4c1cc0 plus uncommitted sandbox.rs, tests, CHANGELOG pair, this entry. Installed and booted: core g3bc583e, without this change.
+(Committed as 1c3532b, see part 112.) Installed and booted: core g3bc583e, without this change.
 
 ### Next steps
 
 1. Owner: commit, `packages/build-rpms.sh`, `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`, reboot to s6. `sudo ausearch -m AVC -ts boot`; `sudo grep 'not remounted' /var/log/messages`; `sudo tests/hardencompare.sh snap`, then report: expect 0 WEAKER and exit 0, with bolt's CHECK still printed (it doesn't affect the exit code). Log in, use sudo/polkit, hostnamectl and audio, as those units are the ones that changed.
 2. Then update docs/etc pair's security row and release 0.2.1, with the owner's call on the hang.
 3. Part 108's steps as before.
+
+## 2026-11-01, part 112: PrivateNetwork= isn't hardcoded per package (no code change)
+
+Owner asked to commit part 111 (1c3532b) and to check whether PrivateNetwork= is hardcoded for specific packages.
+
+**It isn't.** `git grep` over all tracked files: the only implementation is crates/uinitconverter-exec/src/sandbox.rs, which reads the key from whichever unit it's given, drop-ins included through the loader. gen/lib.rs:320 is the list of known keys. No unit name selects it. The unit names found nearby are unrelated to it: config.rs's INCLUDE list says which systemd units are converted; dist/s6's earlyoom, coredump, syslog, udevd and dbus run scripts call `runner confine UNIT`, which reads that unit's own settings. Live `s6 live status` lists all the other units as ordinary services.
+
+**Gaps against systemd.exec(5), all generic, none package-specific:**
+- `[Socket] PrivateNetwork=`: not implemented; only [Service] is read.
+- `JoinsNamespaceOf=` and `NetworkNamespacePath=` aren't implemented for this; each process of a unit gets its own network namespace (sandbox.rs's comment), where systemd shares one per unit. So ExecStartPre= and ExecStart= don't share one.
+- Not root (`is_root` false): the sandbox isn't applied. The user managers are real systemd, so this doesn't reach them.
+
+None of the unit files in /usr/lib/systemd/system or /etc/systemd/system here uses the first two (.socket with PrivateNetwork=, or JoinsNamespaceOf=/NetworkNamespacePath=), so these are limits on other machines' units, not a problem here. The ExecStartPre= split is not checked against these units.
+
+### Current state
+
+main at 1c3532b; this entry uncommitted. Built and installed: core g3bc583e, without 1c3532b.
+
+### Next steps
+
+As part 111: build, install, boot, check.
+
+## 2026-11-01, part 113: audit, is any unit/service/exec/kill/resource-control translation tied to a package? (no code change)
+
+Owner asked. Method: pattern search of non-test code in crates/ (quoted unit names, product names, branches on a unit's name), then reading each hit, plus dist/s6's run scripts against the units on this machine. Not a line-by-line read of the 26k lines.
+
+**The directive translation isn't tied to any package.** Exec, kill, resource-control and sandbox settings are read from whichever unit is loaded. Names in that code are systemd's own rules: Type=dbus -> dbus.socket, suffixes, special targets in daemon/mod.rs. Only exception: stdio.rs:27 skips the journal stream for systemd-journald.service, since it can't log to itself. gen/lib.rs:410's BusName= -> Wants/After dbus.socket is ours, not systemd's, but is keyed on the setting, not a package.
+
+**Tied to packages: the hand-written s6 services of five units,** dist/s6/{dbus,udevd,earlyoom,syslog,coredump}. They take cgroup, limits, sandbox and user from the unit via `runner confine`, but their command line, restart and stop behaviour are in the script, so unit files and drop-ins don't reach those:
+- Command line fixed: all five. rsyslog runs its own config and doesn't read /etc/sysconfig/rsyslog's $SYSLOGD_OPTIONS, on purpose for the s6 config. earlyoom's script re-implements EnvironmentFile=/etc/default/earlyoom.
+- OOMScoreAdjust= in the script: dbus -900, udevd -1000. Both match the units today. dbus's is redundant with confine's apply_limits; udevd's also covers its fallback without confine, where the line is needed.
+- Not read: Restart=, KillMode=, TimeoutStopSec=, Type=. No timeout-kill file in these dirs. E.g. rsyslog's Restart=on-failure and coredumpd's TimeoutStopSec=6min. Effect on real stops not tested.
+
+Also by name, but choosing units rather than translating them: config.rs's EXCLUDE, INCLUDE and dep_map; gen/s6.rs's system-update bundle (logind); `uinitconverter init` enabling chronyd, NetworkManager, gdm; SELinux rules per domain.
+
+Decision: nothing changed; none of it blocks 0.2.1.
+
+### Current state
+
+As part 112; parts 112-113 uncommitted. (Part 114 follows.)
+
+### Next steps
+
+As part 111: build, install, boot, check.
+
+## 2026-11-01, part 114: 1c3532b booted: nothing weaker on s6 (docs row updated)
+
+Owner ran part 111's checks on core g1c3532b (installed 22:36:51, booted 22:42:09, /proc/1/comm s6-svscan, Enforcing).
+
+**Results:**
+- AVCs this boot: none. `systemctl --failed`: 0 units.
+- rtkit: mount namespace differs from PID 1's. Snapshot's `ns_mnt` went host -> private.
+- polkitd, direct: /sys/class/net lists only lo; /sys/fs/cgroup/system.slice and /sys/fs/selinux/enforce still there, so the submounts came back.
+- `hardencompare report`: 28 services, 0 weaker, 98 different, 1 CHECK (bolt, seccomp 11 vs 9, as before), exit 0. **First run with nothing weaker.**
+- hostnamectl, localectl, pkexec, accounts and rtkit's D-Bus properties answered. speaker-test ran without error, and the owner re-ran it and reports it works fine. rtkit answering doesn't show it granted realtime to anything. A SEGV'd `sleep` left a core in /var/lib/systemd/coredump.
+
+**Compared with the previous s6 snapshot (20:17:36):** only rtkit's ns_mnt changed, plus virtqemud being present (it isn't always running). So the DIFF rows didn't come from this change, including the 5 `mount:/sys` rows (systemd rw, s6 ro), which are on units without PrivateNetwork= (bluetooth, chronyd, colord, fwupd, rsyslog). 26 of the 98 are limit_nproc, 54074 vs 54259; not looked into further.
+
+**How far the empty `not remounted` grep goes.** The runner sets up stdio before sandbox.apply (runner/exec.rs:141, 150), so the message goes to the unit's stderr: the journal stream for ordinary units, /var/log/uinitconverter/UNIT for `confine` ones (earlyoom, coredumpd), and that tree has no match either. No failure has been seen to arrive, so the path is read from code, not shown. A unit with StandardError=null wouldn't log it. /sys was seen directly for polkitd only.
+
+**Docs:** docs/etc pair's security row now says no setting weaker of 28, bolt to check. "Not better overall" stays: root helpers are unchanged. 0.2.0's known issue stays, true of that release.
+
+Not seen yet: a shutdown of this build, so part 108's greps have nothing from it. Version not bumped: 0.2.1 waits for the owner's call on the hang.
+
+### Current state
+
+main at 1c3532b; parts 112-114 and the docs/etc pair uncommitted. Installed and booted: core g1c3532b; standalone tools 0.1.0 g3016505.
+
+### Next steps
+
+1. Owner: release 0.2.1 with the 21:07 hang as a known issue (recommended, part 111), or hold it.
+2. After each shutdown: part 110's step 1 and 2 greps.
+3. Rest as part 106.
+
+## 2026-11-01, part 115: known issues gone through; gdm stopped with the sessions (5147837)
+
+Owner: "I want fix all known issues." Then, during the work: fix s6-ftrigrd's crash on our side if it's upstream's, without touching skarnet's source; if that can't be done, don't fix it.
+
+Taken to mean recorded bugs and problems. Not the "Not implemented" features (Accept=yes, autofs, generators, watchdog, credentials, ...) or part 112's gaps: new features, not bugs, and not done here.
+
+**Fixed: six gnome-session-init-worker cores per shutdown (part 87).** stop_scopes_at_shutdown now first sends `s6-svc -d` to whatever display-manager.service resolves to, without waiting, then stops the scopes. So gdm gets SIGTERM before it sees the session end, and shouldn't try greeters. This is the move part 87 held back until part 79's shutdowns were done; they were. Decisions: no wait, so part 74's scope order stays; through the alias, so no product is named (the live index has `alias display-manager.service gdm.service`); `-d`, so Restart=always can't bring it back, and s6-rc's later stop finds it down. systemd's concurrent stop is from memory of how its jobs are queued, not read from its source. **Not run on a real boot;** gdm's reaction to SIGTERM at that moment is inferred. Expected from the owner's check: no new `core.gnome-session-i.*` after a shutdown, no `is destructive` user@ lines from logind, and no new shell crash.
+
+**Explained, no change needed: bolt's CHECK.** Filters: @module 3 + RestrictRealtime 3 + RestrictAddressFamilies 2 + SystemCallFilter 3 = systemd's 11, with 1 for SystemCallFilter here = our 9. systemd's breakdown is inferred from the counts. Filter::apply loads one program holding all ABIs. New test one_deny_filter_covers_every_abi: `~@mount` answers on x86-64, i386 (`int 0x80`) and x32; the 32-bit ABI was present here, so all three ran. MDWE is the prctl on our side. hardencompare still prints CHECK, since it only sees a number. docs/etc pair says why.
+
+**Docs that were stale, fixed:** JOURNAL=no logs "readable by any local user": since 0.2.0 the directory is 0750 root:wheel (init.rs:309, seen live). Known-problems figures: no shell SEGV since the order change, at least 10 shutdowns, 1 hang.
+
+**Not fixed: s6-ftrigrd's SIGSEGV. Upstream, and by the owner's rule left alone.** Already known (gen/s6.rs:705). s6_supervise_link_names subscribes to each new service directory in turn; if an event fires before the later subscriptions (skalibs' sassserver removes a query that isn't kept, while s6-ftrigrd's own list still holds it), a later one crashes it. Whether that stale entry is the exact faulting access wasn't proven; the core's list does repeat a directory, in line with a reused slot. Happens in one of today's three suite runs (22:55:59, core shows that sandbox's dirs in a reload). 22 cores in all: 21 uid 1000, 1 uid 0 (11-01 14:32, root-only, unread). Our side can't close it: the event needs s6-svscan to rescan during s6-rc-update's loop, and that can come from any rescan, not only ours. Serializing our own s6-svlink and `s6-svscanctl -a` with reloads would narrow it, not end it, and which rescan caused today's isn't known. One new service per s6-rc-update would avoid it with no log subdirs, at the cost of a database per service in every reload: out of proportion. Effect stays what it was: the reload's retry and relink_supervised recover it, and the suites pass.
+
+**Can't be fixed from here without more evidence or outside this project:**
+- gnome-shell's SEGV at shutdown: none since the order change, not proven fixed: at the old rate (4 of 28), 0 of 10 still happens about 2 times in 10.
+- 21:07 hang: once; a mutter to Xwayland round trip; nothing points at our side, and Xwayland's state wasn't seen. Needs a second occurrence.
+- Odd exit.target at 19:55: once of 11, cost nothing measurable; the log line now in place waits for the next one.
+
+Also: a heredoc of mine broke on its own delimiter; Python failed before writing, and the one stray shell line, a write to /notifier.service, was denied. Tree checked, nothing changed.
+
+Tests: `cargo test` all passed (103); sandbox 313/313, SANDBOX_JOURNAL=no 320/320, SANDBOX_FDSTORE=no 301/301, with new checks: stand-in display manager down and staying down after stop-instances, hello still up. Not confirmed failing without the fix. cargo fmt, bash -n, shellcheck clean. No version bump.
+
+### Current state
+
+main at 1c3532b; uncommitted: scopes.rs, seccomp.rs, tests, CHANGELOG pair, docs/etc pair, parts 112-115. Installed and booted: core g1c3532b, without the gdm change.
+
+### Next steps
+
+1. Owner: commit, `packages/build-rpms.sh`, `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`, reboot to s6, then shut down once from a session and once from the login screen. Check: `ls -lt /var/lib/systemd/coredump | head`; `grep -hE "Shell@.*(code=dumped|timed out)" /var/log/uinitconverter/user@*/current | sort | tail -5`; `sudo grep -c 'is destructive' /var/log/messages` before and after.
+2. Then 0.2.1, with the hang, the SEGV's unproven state and s6-ftrigrd as known issues.
+3. Part 108's watch on shutdowns; part 106's fresh VM install.
+
+## 2026-11-01, part 116: committed and merged (no code change)
+
+Owner asked to commit and merge into main. 5147837 is part 115's change, committed on branch shutdown-display-manager and fast-forwarded onto main with this history; the branch is kept. Not pushed. No tests run for the merge: a fast-forward changes no tree, and part 115's results are on this same code. No RPMs built from it.
+
+### Current state
+
+main at this entry's commit, ahead of origin/main. Installed and booted: core g1c3532b, without the gdm change.
+
+### Next steps
+
+As part 115, from building the RPMs.
 
