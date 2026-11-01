@@ -9915,3 +9915,68 @@ main at this entry's commit, ahead of origin/main. Installed and booted: core g1
 
 As part 115, from building the RPMs.
 
+## 2026-11-01, part 117: part 115's `is destructive` check was wrong (no code change)
+
+Owner ran part 115's `sudo grep -c 'is destructive' /var/log/messages`: 0. **My mistake: that grep can't see these lines.** They were written at 22:41:44 today to /var/log/uinitconverter/systemd-logind.service/current, and /var/log/messages, rotated 01:32 today, counts none of them. So 0 says nothing about the fix. Right check, no sudo: `grep "Failed to start user service 'user@" /var/log/uinitconverter/systemd-logind.service/current | tail -3` and read the times.
+
+Also: core gb672a6f is installed (built 23:29) but this boot is from 22:42:09, and the spec doesn't restart the daemon (part 107). So the running daemon lacks the fix, and the next shutdown still runs the old one and can still leave six cores. Only shutdowns after that reboot count. (Wrong, see part 119: the owner's `uinitconverter init` restarted the daemon at 23:45:06, so the fix was already running.)
+
+### Current state
+
+main at b672a6f; this entry uncommitted. Installed: core gb672a6f. Booted: g1c3532b.
+
+### Next steps
+
+1. Owner: reboot to s6 (doesn't count), then shut down from a session and from the login screen; boot back and read the core list, part 115's shell grep and the grep above. Fixed if the times of the `core.gnome-session-i.*` files and of those lines stop at that first reboot.
+2. Rest as part 115.
+
+
+## 2026-11-01, part 118: gb672a6f booted, no gnome-session cores; but the old daemon's shutdown was clean too (no code change)
+
+Owner pasted part 117's three checks, taken at about 23:51, after dnf upgrade at 23:44:26 and three reboots.
+
+| Shutdown | Started from | Daemon | `is destructive` lines | `core.gnome-session-i.*` |
+|---|---|---|---|---|
+| 19:55, 19:56, 19:58, 21:07, 21:30, 22:41 | greeter and session | older | 12 each | 6 each |
+| 23:47:25 | `reboot` in a terminal, session | g1c3532b by inference (wrong: gb672a6f, see part 119) | 0 | 0 |
+| 23:49:08 | GNOME menu, session | gb672a6f | 0 | 0 |
+| 23:49:58 | login screen | gb672a6f | 0 | 0 |
+
+**On part 117's test, fixed:** both counted shutdowns, session and login screen, are clean. Last core of that name is 22:41:45, last such line 22:41:45.030. Not slower: request to next `New seat` is 39 s and 38 s, against 39 s at 21:30.
+
+**The attribution isn't proven: 23:47 was clean too, and part 117 expected the old daemon to be able to leave six.** Its shape matches 22:41 exactly (`reboot` from a tty session, shell and Ptyxis up), and 22:41 left six. No restart mechanism was found: the specs have no restart, dnf's log shows only filesystem, glibc and uinitconverter's own scriptlets in that transaction, and Reload/Reexecute only call reload_db. Either the daemon was restarted some way I haven't found, or something other than the fix can stop gdm's retries, which is timing, say. Not settled here: the daemon's `ready, serving` line goes to /var/log/messages, root-only, and this session has no sudo. Check: `sudo grep -E 'uinitconverterd: (ready|shutdown scopes)' /var/log/messages | tail -12`. A `ready` between 22:42 and 23:47 means the daemon was new there. None means the old daemon had a clean shutdown, so two clean ones are weaker evidence, and only further shutdowns can tell. Six in a row before against these three still points at the fix.
+
+**Shell:** part 108's grep is unchanged, last entries 21:07 (hang) and 10-31 16:57 (SEGV). Four more shutdowns without either, 22:41 to 23:49:58, so at least 14 without a SEGV since the order change; hang still 1. No new core of any kind since 22:55:59, which is part 115's s6-ftrigrd; 22:45's `sleep` is part 114's.
+
+Docs not changed: CHANGELOG describes the change and "at least 10" is still true. Tests: none, nothing changed. Nothing committed.
+
+### Current state
+
+main at b672a6f; parts 117-118 uncommitted. Installed and booted: core gb672a6f, since 23:50:18; standalone tools 0.1.0 g3016505.
+
+### Next steps
+
+1. Owner: the `sudo grep` above; keep reading the core list on later shutdowns. Any new `core.gnome-session-i.*` on gb672a6f means the fix doesn't hold.
+2. Owner's call: 0.2.1, with the hang, the SEGV's unproven state and s6-ftrigrd as known issues (recommended; the 23:47 question doesn't block it, since nothing shows the change does harm).
+3. Part 108's watch on shutdowns; part 106's fresh VM install.
+
+## 2026-11-02, part 119: the 23:47 question answered: the daemon was already new, three of three clean (no code change)
+
+Owner ran part 118's grep. `ready, serving` at 22:42:34 (pid 1915), then **23:45:06 (pid 83159)**, before the 23:47:25 reboot; that same pid wrote 23:47's `shutdown scopes` lines. So 23:47 ran gb672a6f.
+
+**My mistake in parts 117 and 118: I looked at the specs and missed that the owner runs `sudo uinitconverter init ...` after an upgrade.** The shell history has it after the dnf upgrade, and docs/etc says init restarts uinitconverterd on an s6 boot. The sudo session c11 ran 23:44:58 to 23:45:19, around the restart. That init caused it is from this fit and the docs; the command's own output wasn't seen. The history doesn't time-stamp it. No uinitconverterd core exists, so it wasn't a crash.
+
+**Result: fixed, as far as shutdowns can show.** gb672a6f: 3 of 3 clean, from a terminal, the GNOME menu and the login screen. On 11-01 before it, all nine shutdowns with cores (15:31 to 22:41) left six each, and the six from 19:55 on are confirmed as every shutdown of that span. No other cause is needed now. gdm's reaction isn't seen directly: its log is empty, so this rests on the cores and logind's lines.
+
+`shutdown scopes` lines: session-2.scope 0 left after 0.765 s and 0.616 s, session-c1.scope 0.106 s at the login screen; each followed by the empty line at s6-rc's SIGTERM, as part 108 expected. So gdm's `-d` didn't disturb the scope wait. Part 115's "not run on a real boot" no longer holds.
+
+Order at 23:47: shell `Consumed` 26.496, wait ends 26.541, exit.target 26.573, the ordinary case; the other two weren't compared. Docs unchanged: CHANGELOG already says this. Tests: none, nothing changed. Nothing committed.
+
+### Current state
+
+main at b672a6f; parts 117-119 uncommitted. Installed and booted: core gb672a6f, since 23:50:18; standalone tools 0.1.0 g3016505.
+
+### Next steps
+
+1. Owner's call: 0.2.1, with the hang, the SEGV's unproven state and s6-ftrigrd as known issues (recommended).
+2. Part 108's watch on shutdowns; part 106's fresh VM install. A new `core.gnome-session-i.*` on this build reopens the fix.
