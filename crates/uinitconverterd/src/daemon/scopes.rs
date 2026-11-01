@@ -468,20 +468,20 @@ impl Daemon {
             })
             .map(|(n, t)| (n.clone(), t.cgroup.clone()))
             .collect();
-        for (name, _) in &scopes {
+        let names: Vec<&str> = scopes.iter().map(|(n, _)| n.as_str()).collect();
+        let t = std::time::Instant::now();
+        for name in &names {
             self.stop_transient(name).await;
         }
-        let dirs: Vec<PathBuf> = scopes.into_iter().map(|(_, d)| d).collect();
-        let t = std::time::Instant::now();
+        let dirs: Vec<PathBuf> = scopes.iter().map(|(_, d)| d.clone()).collect();
         let left = wait_cgroups_empty(&dirs, Duration::from_secs(11)).await;
-        if left > 0 {
-            eprintln!("uinitconverterd: {left} scopes still not empty at shutdown, going on");
-        } else if t.elapsed() >= Duration::from_secs(2) {
-            eprintln!(
-                "uinitconverterd: stopping the scopes took {:.1} s",
-                t.elapsed().as_secs_f64()
-            );
-        }
+        // Always logged, unlike the slow-stop lines: its time against the user
+        // manager's exit.target says whether this wait is what ordered them.
+        eprintln!(
+            "uinitconverterd: shutdown scopes [{}]: {left} not empty after {:.3} s",
+            names.join(" "),
+            t.elapsed().as_secs_f64()
+        );
     }
 
     pub(super) async fn gc_scopes(&self) {
