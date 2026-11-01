@@ -10189,3 +10189,26 @@ main at this entry's commit, ahead of origin/main. Installed and booted: 3eed142
 
 1. Owner: part 126's reinstall test, then release 0.2.2.
 2. Then fresh-install VM and QEMU full-boot test, parts 106 and 89.
+
+## 2026-11-02, part 128: relabel test passed, release 0.2.2 prepared (13050d4)
+
+**Part 126's test, on the booted 3eed142, by the owner:** `dnf reinstall selinux-policy-targeted passt-selinux`, no hang. .s6-svscan/control went from initctl_t to init_var_run_t, so a relabel did run; no var_run_t fifos under /run/service or /run/uinitconverter; `daemon-reload` exit 0; no s6 AVCs in `ausearch -ts recent`. **This is the first real relabel against the filecons, and they hold.** It also confirms part 126's trigger as far as a test can: the policy alone didn't relabel, the policy with passt-selinux did. Other packages named in part 126 weren't tried; they share the scriptlet.
+
+Not exercised after that relabel: restarting a service whose `run` is now var_run_t, or a shutdown (a reboot starts from fresh labels). Part 123's state had the same labels and got through a reload, but that wasn't tested specifically either.
+
+**Release, as part 120:** branch release-0.2.2 fast-forwarded onto main. Cargo.toml and lock, README pair's `VERSION=`, CHANGELOG pair renamed, release notes pair, five spec changelogs. Standalone tools stay 0.1.0, untouched. The release note says the `dnf` hang is covered by the test suite, not reproduced on a real boot, and that the reinstall check was on a running s6 boot. Known issues carried from 0.2.1 unchanged.
+
+13050d4 differs from the installed 3eed142 in no file under crates/, tests/ or standalone/; dist/ only by the CIL comment. So these exact RPMs haven't been installed, but their code has been booted.
+
+`packages/github-release.sh` on 13050d4, exit 0: 9 RPMs and SHA256SUMS, `sha256sum -c` passes, NOTES.md's links go to v0.2.2, RPM %check run in the build. It replaced part 121's unpublished g86535a8 files in ~/uinitconverter-release; those were never published. Checked the remote first this time (part 122's mistake): origin/main at df25380, tags up to v0.2.1. **Not pushed or published:** no credentials here.
+
+Tests on the release tree: `cargo test` 103 passed, 0 failed; standalone 10, 7, 6, 10 passed; sandbox 315/315, SANDBOX_JOURNAL=no 322/322, SANDBOX_FDSTORE=no 303/303; cargo fmt, bash -n, shellcheck clean.
+
+### Current state
+
+main at this entry's commit, ahead of origin/main. Release commit 13050d4; assets in ~/uinitconverter-release/assets, not published. Installed and booted: 3eed142, same code, version 0.2.1; kernel 7.2.13, policy 45.23, systemd 262.1.
+
+### Next steps
+
+1. Owner: `git push origin main`, then the `gh release create` line: `gh release create v0.2.2 -R shandyCho/useless-init-converter --target 13050d4e99c0ba0bd0c4b82f0e6a9ff4b25bef83 --title "uinitconverter 0.2.2" --notes-file ~/uinitconverter-release/NOTES.md ~/uinitconverter-release/assets/*`.
+2. Then fresh-install VM and QEMU full-boot test, parts 106 and 89.
