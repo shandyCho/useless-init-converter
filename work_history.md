@@ -9456,3 +9456,47 @@ main at 5236481, ahead of origin/main by 1; this entry uncommitted. 0.2.0 releas
 ### Next steps
 
 As part 95. For step 2: boot s6, power off from the login screen without logging in, repeat 3 to 5 times, then log in; read with part 79's two greps and logind's request lines.
+
+## 2026-11-01, part 97: rustix for .path units' inotify and the fd store (branch rustix-fd-inotify)
+
+Owner: do rustix (part 82's item 2), commit, build RPMs and test them. d0b4f75 on rustix-fd-inotify, off main at 5236481, with b40a53a (part 96) under it; not merged, not pushed. Only part 82's two named pieces; standalone stays libc only. No new package: rustix 1.1.5 was already in the lockfile through zbus, Cargo.lock only gains the dependency lines. It's now also in the `uinitconverter` command through base; that binary's size didn't grow (581896 bytes, installed 581912).
+
+**Stays on libc, on purpose: recv() (SCM_CREDENTIALS) and SO_PEERCRED.** rustix's UCred holds a NonZeroI32 Pid and reads the kernel's value with read_unaligned, so pid 0 is undefined behaviour inside rustix. The kernel does report 0: measured unprivileged with a throwaway script, for a datagram sent before the receiver set SO_PASSCRED (pid 0, uid 65534) and for a sender outside the receiver's PID namespace, both SCM_CREDENTIALS and SO_PEERCRED. The first case is reachable here: notify.rs binds a world-writable socket and sets SO_PASSCRED just after, so any local process sending in that gap would cause it in a root process. Today's libc code is safe with it (no /proc/0, sender refused). Test credentials_with_pid_zero_are_read pins this. **Don't move notify.rs or devices.rs's credential reading to rustix** while UCred is like this. Possible rustix bug, read from its source and not reported; the owner's call.
+
+Also still libc: kcmp and SO_PEERSEC (not in rustix); in pathunit.rs glob() and the fd 3 readiness write (not part of the inotify piece).
+
+**Changes in API and behaviour.** put() and send() take BorrowedFd instead of RawFd; so sockets.rs, notify.rs and transient.rs pass as_fd(). GET now holds the store's lock while sending, because the borrow checker refuses raw fds after releasing it; only the store's thread takes that lock, so nothing can wait on it. Inotify::watch returns Option, so failed watches no longer put -1 in the list and call rm_watch(-1). Fixed in passing: serve() no longer leaks the socket when bind fails, non-UTF-8 paths are no longer turned lossy. Timeout errors are still ignored and chmod's too, as before. poll() goes out as ppoll through rustix's raw syscalls; not a concern as path-run, the store and the notify helper have no seccomp filter of their own.
+
+**Noticed, not changed:** IN_Q_OVERFLOW counts as an event but not as a change, in the old code and the new, so a PathChanged= unit can miss a change if the queue overflows. systemd's behaviour here wasn't checked.
+
+**Tests.** 9 new ones written first and run on the old libc code, all passing there (fd passing and CLOEXEC, closed peer, cut message, pid 0, failed connect and bind, socket mode and a silent client, 3 on inotify including more than one buffer's worth), then kept through the conversion with only the fd arguments changed. Plus same_inode_and_flags_as_fallback afterwards, since that function is new. `tests/all.sh`, exit 0: shell pass, cargo 98, standalone 3+3+3+2, hardencompare-check 37, memtest-check 24, sandbox 311, JOURNAL=no 318, FDSTORE=no 299, BUS=broker 312 (3 SKIP each, as before), confine-vm 115, 0 failed.
+
+**RPMs.** `packages/build-rpms.sh`, exit 0: 5 core RPMs 0.2.0-1.20261101182839.gd0b4f75 in ~/rpmbuild-uinitconverter/rpms, not dirty. Standalone unchanged, not rebuilt. Tested without installing: the release binaries unpacked from the RPMs, put in place of target/debug in a copy of the tree, then sandbox 311, FDSTORE=no 299, JOURNAL=no 318 (PathExists= and PathChanged= among them), confine-vm 115, 0 failed. All report gd0b4f75 from --version. `rpm -U --test --nosignature`, exit 0. Timers' Requires differs only by losing GLIBC_2.4. My first confine-vm run there failed on my own script leaving out WORKDIR, not on the RPMs.
+
+**Not tested: a real boot**, so no SELinux enforcing on any of this. Same operations as before from the same domains, so no new denial is expected, but only a boot shows that.
+
+### Current state
+
+Branch rustix-fd-inotify at d0b4f75, this entry uncommitted. main at 5236481; origin/main at 48595a3. Built, not installed: gd0b4f75. Installed and booted: gf6f4a3d. Published: 0.2.0 at 48595a3, which doesn't contain this.
+
+### Next steps
+
+1. Owner: `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*gd0b4f75*.rpm`, `sudo uinitconverter init --yes`, reboot to s6, then `sudo ausearch -m AVC -ts boot`. Merge after that.
+2. Part 79's login-screen shutdowns, still 0; can be the same reboots.
+3. Rest as part 95. More rustix only piece by piece, and not credentials.
+
+## 2026-11-01, part 98: the s6 initramfs without cryptsetup; unencrypted roots tested in QEMU (branch initramfs-no-luks)
+
+Owner asked whether an unencrypted root works, and to make it work. Off rustix-fd-inotify, so one reboot checks both.
+
+**Tested on the old code first** (tests/initramfs.sh, new boots): ext4, xfs, `root=/dev/vda1` and an NVMe partition already booted with no encryption. So the boot script was fine. Real defects: mkinitramfs died without cryptsetup (`mkinitramfs: cryptsetup not found`), and rootfs loaded dm_crypt for nothing. The btrfs FAIL there was my test's: the sysrq message split the PLAIN line, so PARTUUID was empty; a `sleep 1` fixes it.
+
+**Changes.** mkinitramfs: cryptsetup goes in when installed, so images on machines that have it stay as they were. Without it, the build goes on with a note, unless /etc/crypttab has an entry or the command line has rd.luks.uuid= or rd.luks.name=, when it fails: better at build time than at the next boot. `rd.luks=0` isn't considered. rootfs/run: dm_crypt only with LUKS volumes named; rd.luks.* on an image without cryptsetup gives a rescue shell that says so. `uinitconverter init`: check_root_stack warns and asks with --boot-only-s6=yes and rd.lvm.lv=, rd.lvm.vg= or rd.md.uuid= on the command line. The report's passphrase text no longer implies LUKS. Test hooks UINITCONVERTER_INITRAMFS_CRYPTTAB and _CMDLINE, as _PATH and _MODULES.
+
+**Not done, on purpose: LVM and MD in the s6 initramfs.** A different feature (tools, activation). Fedora Server's default is LVM, so an unencrypted Server install stays limited to --boot-only-s6=no. The warning only sees those three words; a `root=/dev/mapper/...` LVM root without them isn't caught. check_root_stack has a unit test on its parsing; the confirm path wasn't run.
+
+**Tests.** tests/initramfs.sh passed 20, failed 0: the 7 LUKS ones unchanged (dm_crypt now shown loaded), ext4, xfs, btrfs subvol on PARTUUID, /dev/vda1, NVMe, dm_crypt not loaded, image without cryptsetup builds and boots, rd.luks gives the rescue shell, crypttab of comments builds, 3 refusals. TESTING's old "passed: 6" was already off by one. Image 31.4 MB with cryptsetup, 30.1 MB without. tests/all.sh exit 0 (it doesn't include initramfs.sh, since it needs mdevd); numbers below.
+
+**Not tested: a full s6 boot on an unencrypted root.** These boots end at a stand-in init. No code after the initramfs mentions encryption or btrfs (grep of dist/early, dist/s6, dist/s6-linux-init, dist/kernel-install and crates/uinitconverter), which supports it but doesn't prove it. Nor has default mode, with Fedora's initramfs, been booted on one.
+
+`tests/all.sh`, exit 0: shell pass, cargo 99, standalone 3+3+3+2, hardencompare-check 37, memtest-check 24, sandbox 311, JOURNAL=no 318, FDSTORE=no 299, BUS=broker 312 (3 SKIP each, as before), confine-vm 115, 0 failed. Owner asked to commit if nothing failed.
