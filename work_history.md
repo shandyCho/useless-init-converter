@@ -10003,7 +10003,7 @@ main at this entry's commit, ahead of origin/main by 4. Release commit 3f2dea1; 
 
 ### Next steps
 
-(Target superseded by part 121: use 86535a8.)
+(Done by the owner, see part 122.)
 
 1. Owner: `git push origin main`, then the `gh release create` line: `gh release create v0.2.1 -R shandyCho/useless-init-converter --target 3f2dea12120f9a21a661c09ba9bd65307dd451bb --title "uinitconverter 0.2.1" --notes-file ~/uinitconverter-release/NOTES.md ~/uinitconverter-release/assets/*`.
 2. A fair boot-speed figure would take alternating boots of the same build, if wanted.
@@ -10034,3 +10034,25 @@ main at this entry's commit, ahead of origin/main by 6. Release target 86535a8; 
 1. Owner: `git push origin main`, then `gh release create v0.2.1 -R shandyCho/useless-init-converter --target 86535a8d4c31689775ddec7dc4ae653ce03bda77 --title "uinitconverter 0.2.1" --notes-file ~/uinitconverter-release/NOTES.md ~/uinitconverter-release/assets/*`.
 2. After publishing: both decks' `status` slide says released.
 3. A fair boot-speed figure would take alternating boots of the same build, if wanted. Part 108's watch on shutdowns; part 106's fresh VM install.
+
+(Parts of this entry's plan were wrong: see part 122.)
+
+## 2026-11-02, part 122: 0.2.1 was already published (no code change)
+
+**0.2.1 is released.** The owner pushed main at 00:42:22 (35560c8) and published v0.2.1 on 3f2dea1, as part 120 said: GitHub API read back, published 2026-11-01T15:42:34Z, 10 assets, RPMs named g3f2dea1. Downloading and installing them wasn't tried.
+
+**My mistake in part 121:** I didn't check the remote before the audit, and treated the release as unpublished. So:
+- Part 121's rebuild was unnecessary. ~/uinitconverter-release/assets now holds g86535a8 files that were never published, and the published g3f2dea1 files were removed from that directory; GitHub has them. Same code. Nothing here depends on them.
+- Part 121's "ahead by 6", target 86535a8 and its `gh release create` line are wrong: **don't run it.** The tag exists.
+- The decks said "awaiting publication" for a few minutes; both `status` slides now say released (English and Korean, this session's last version).
+
+**Effect on the release:** the tag v0.2.1 has part 120's docs, not 86535a8's. So part 121's doc additions reach readers on main after the next push, not in the tag, whose docs are still correct but say less. Moving a published tag isn't worth it; no retag.
+
+### Current state
+
+0.2.1 released, tag and target 3f2dea1. main at this entry's commit, ahead of origin/main by 3: 86535a8 (docs), parts 121-122. Installed and booted: core gb672a6f, same code, version 0.2.0.
+
+### Next steps
+
+1. Owner: `git push origin main`, for the docs.
+2. Part 108's watch on shutdowns; part 106's fresh VM install. A fair boot-speed figure would take alternating boots of the same build, if wanted.
