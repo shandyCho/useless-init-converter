@@ -76,6 +76,7 @@
 (typeattributeset non_security_file_type (uinitconverter_log_fifo_t))
 (typeattributeset non_auth_file_type (uinitconverter_log_fifo_t))
 (filecon "/run/service/s6-svscan-log/fifo" pipe (system_u object_r uinitconverter_log_fifo_t ((s0) (s0))))
+(filecon "/run/service/s6-linux-init-shutdownd/fifo" pipe (system_u object_r uinitconverter_log_fifo_t ((s0) (s0))))
 (typetransition init_t tmpfs_t fifo_file "fifo" uinitconverter_log_fifo_t)
 (allow init_t uinitconverter_log_fifo_t (fifo_file (create open read write append ioctl getattr setattr lock unlink)))
 (allow domain uinitconverter_log_fifo_t (fifo_file (write append ioctl getattr)))
@@ -100,6 +101,16 @@
 ; directory: fifos created there keep that type, which init_t may write.
 (typetransition init_t tmpfs_t dir "event" init_var_run_t)
 (filecon "/run/service/[^/]+/event" dir (system_u object_r init_var_run_t ((s0) (s0))))
+
+; selinux-policy's scriptlet runs `restorecon -Ri /var/run`. Without rules of
+; their own the rest of the s6-linux-init tree in /run/service became var_run_t,
+; whose fifos init_t may not open for writing: every s6-rc-update and s6-svlink
+; then failed on .s6-svscan/control with "Permission denied", on a running
+; system, until the next boot. A fresh boot makes these fifos initctl_t and the
+; rest tmpfs_t, from the same transitions as the live directory's supervisors;
+; restorecon makes those init_var_run_t, so these get that too.
+(filecon "/run/service/\.s6-svscan(/.*)?" any (system_u object_r init_var_run_t ((s0) (s0))))
+(filecon "/run/service/[^/]+/supervise(/.*)?" any (system_u object_r init_var_run_t ((s0) (s0))))
 
 ; s6-rc-update and s6-rc-format-upgrade switch the live database: they
 ; create the scan directory's links and the live directory's service

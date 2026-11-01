@@ -655,6 +655,11 @@ fn commit_and_install(
         // A failed rollback leaves a running service's directory in the
         // new live directory: every retry fails on the rename.
         if attempt >= 3 || e.contains("unable to rollback") {
+            // No retry to repair what the last attempt left: the running
+            // services must not stay without their links.
+            if e.contains("manage new service directories") {
+                relink_supervised(&cfg.live_dir);
+            }
             return Err(match first {
                 Some(f) if f != e => format!("{}\n(last attempt: {})", f.trim(), e.trim()),
                 _ => e,

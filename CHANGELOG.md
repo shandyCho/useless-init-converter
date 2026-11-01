@@ -5,6 +5,18 @@
 버전은 본체 패키지의 버전입니다. 독립 도구는 버전이 따로 있습니다.
 릴리스 노트: [packages/release-notes](packages/release-notes).
 
+## 미출시
+
+### 수정
+- s6 부팅에서 `selinux-policy`를 업데이트해도 실행 중인 시스템이 망가지지 않습니다. 이 패키지의
+  스크립틀릿이 `/run`의 레이블을 다시 붙이면서 s6-svscan과 s6-linux-init 서비스의 fifo에 `init_t`가
+  쓸 수 없게 되었고, 그 뒤의 모든 재적재가 `unable to manage new service directories ... Permission denied`로
+  실패했습니다. 이제 SELinux 모듈이 이 파일들의 레이블을 따로 지정하고, 패키지 업데이트와
+  `uinitconverter init`이 이전 업데이트가 남긴 상태를 복구합니다.
+- 재적재의 마지막 시도가 실패해도 이전 시도들처럼 실행 중인 서비스의 스캔 디렉터리 링크를 되돌립니다.
+- 실행되기 전에 시작이 실패한 임시 서비스를 내리고 저장해 둔 표준 입출력을 놓습니다. 이전에는 호출자의
+  파이프를 계속 잡고 있어, `systemctl --user -M`을 실행한 스크립틀릿에서 `dnf`가 끝없이 기다렸습니다.
+
 ## 0.2.1 (2026-11-02)
 
 ### 수정

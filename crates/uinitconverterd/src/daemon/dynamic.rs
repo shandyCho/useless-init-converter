@@ -267,6 +267,12 @@ impl Daemon {
                 .await;
             if !st.map(|s| s.success()).unwrap_or(false) {
                 eprintln!("uinitconverterd: {id}: s6-svlink failed");
+                // Never an instance, so no stop would remove the directory.
+                // Kept if the link is still there: a dangling entry makes
+                // s6-svscan abort every scan.
+                if fs::symlink_metadata(scan.join(id)).is_err() {
+                    let _ = fs::remove_dir_all(&dir);
+                }
                 return "failed";
             }
             self.dynamic.lock().unwrap().insert(

@@ -5,6 +5,21 @@
 Versions apply to the core packages. The standalone tools have their own
 versions. Release notes: [packages/release-notes](packages/release-notes).
 
+## Unreleased
+
+### Fixed
+- A `selinux-policy` update on the s6 boot no longer breaks the running system.
+  Its scriptlet relabels `/run`, which made s6-svscan's and the s6-linux-init
+  services' fifos unwritable for `init_t`, so every reload then failed with
+  `unable to manage new service directories ... Permission denied`. The SELinux
+  module now gives them their own labels; updating the package and running
+  `uinitconverter init` repair what an earlier update left.
+- A reload's last failed attempt puts back the links of running services in the
+  scan directory, as the earlier attempts did.
+- A transient service whose start fails before it runs is unloaded, and its
+  stored stdio released. It used to hold the caller's pipe, which left `dnf`
+  waiting forever on a scriptlet that ran `systemctl --user -M`.
+
 ## 0.2.1 (2026-11-02)
 
 ### Fixed

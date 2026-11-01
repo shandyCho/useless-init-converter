@@ -103,6 +103,9 @@ if [ -x /usr/sbin/semodule ]; then
     [ -d /var/lib/s6-rc ] && restorecon -R /var/lib/s6-rc || :
     [ -p /run/service/s6-svscan-log/fifo ] && restorecon /run/service/s6-svscan-log/fifo || :
     restorecon /run/service/*/event 2>/dev/null || :
+    [ -d /run/service/.s6-svscan ] && restorecon -R /run/service/.s6-svscan || :
+    restorecon -R /run/service/*/supervise 2>/dev/null || :
+    [ -p /run/service/s6-linux-init-shutdownd/fifo ] && restorecon /run/service/s6-linux-init-shutdownd/fifo || :
 fi
 
 %posttrans

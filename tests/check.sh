@@ -535,6 +535,15 @@ print(a.makefile().read().strip())
 p.wait()
 ' "$(dirname "$0")/systemctl.sh" -PGq --wait /bin/sed 's/^/got /')
     expect_eq "systemd-run -P with stdin and stdout one socket" "$out" "got piped"
+    # A start that fails before the unit is an instance: its stored stdio must
+    # not hold the caller's pipe, or dnf waits for good on a scriptlet's output.
+    # Reads through a pipe that ends only when every holder has closed it.
+    timeout 40 sh -c 'SYSTEMCTL=$1 "$2" --unit=sr-dead -p Requires=bad.service -PGq --wait /bin/true 2>/dev/null; :' sh "$SR" "$(dirname "$0")/systemctl.sh" | cat >/dev/null &
+    sr_pipe=$!
+    i=0; while kill -0 "$sr_pipe" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.5; i=$((i+1)); done
+    if kill -0 "$sr_pipe" 2>/dev/null; then bad "failed transient start keeps the pipe open"; kill "$sr_pipe" 2>/dev/null; else ok "failed transient start releases the pipe"; fi
+    i=0; while [ -e "$R/transient/sr-dead.service" ] && [ $i -lt 60 ]; do sleep 0.5; i=$((i+1)); done
+    [ ! -e "$R/transient/sr-dead.service" ] && ok "failed transient start is unloaded" || bad "sr-dead.service left behind"
     # The failed sr-wait.service stays loaded; a reload must not put it into
     # the s6-rc database (its service directory collided with the daemon's).
     call Reload && ok "daemon-reload with a failed transient unit loaded"

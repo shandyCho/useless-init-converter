@@ -380,7 +380,24 @@ impl Daemon {
             &(job, op(job_path(job)), id.clone()),
         )
         .await;
-        self.execute_job(job, &id, &unit, "start", mode).await;
+        let result = self.execute_job(job, &id, &unit, "start", mode).await;
+        // A start that failed before the unit became an instance (s6-svlink,
+        // a dependency): watch_dynamic never sees it, so it would stay loaded
+        // and the fd store would keep its Standard*FileDescriptor, which holds
+        // the caller's pipe open: `systemctl --user -M` in an RPM scriptlet
+        // left dnf waiting for good. Listed as a finished oneshot, it unloads
+        // like any other inactive transient unit, once clients read the result.
+        if result != "done" && unit.utype() == "service" && self.dynamic_kind(&id).is_none() {
+            crate::state::for_unit(&self.cfg.run_dir, &id)
+                .stamp(crate::state::keys::INACTIVE_ENTER);
+            self.dynamic.lock().unwrap().insert(
+                id.clone(),
+                super::dynamic::Dynamic {
+                    kind: crate::gen::Kind::Oneshot,
+                    active: false,
+                },
+            );
+        }
         Ok(())
     }
 

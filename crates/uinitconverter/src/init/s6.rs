@@ -171,9 +171,27 @@ pub(super) fn relabel_runtime(ctx: &Ctx) {
         }
     }
     // ... lets the services write their stderr to the catch-all logger's fifo.
-    let fifo = "/run/service/s6-svscan-log/fifo";
-    if exists(fifo) {
-        ctx.run(&["restorecon", fifo]);
+    for fifo in [
+        "/run/service/s6-svscan-log/fifo",
+        "/run/service/s6-linux-init-shutdownd/fifo",
+    ] {
+        if exists(fifo) {
+            ctx.run(&["restorecon", fifo]);
+        }
+    }
+    // ... lets s6-rc-update and s6-svc write s6-svscan's and the supervisors'
+    // control fifos, whatever a policy update's restorecon made them.
+    let mut tree = vec!["/run/service/.s6-svscan".to_string()];
+    tree.extend(
+        list_dir("/run/service", |_| true)
+            .into_iter()
+            .filter(|d| !Path::new(d).is_symlink())
+            .map(|d| format!("{d}/supervise")),
+    );
+    for d in tree {
+        if Path::new(&d).is_dir() {
+            ctx.run(&["restorecon", "-R", &d]);
+        }
     }
     // ... lets s6-supervise notify waiters started from a shell (s6-svc -w).
     // (The s6-rc services' are in the live directory, relabelled below.)
