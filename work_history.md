@@ -9414,3 +9414,31 @@ main at f6f4a3d, level with origin/main; README pair and this entry uncommitted.
 3. Part 79's login-screen shutdowns (3 to 5); then gdm starting greeters during shutdown (part 87).
 4. Full-boot test in QEMU (part 89); it would also cover the scope tests no automatic suite reaches.
 5. Owner's decision: rustix or dinit.
+
+## 2026-11-01, part 94: part 93 committed; release assets rebuilt (no code change)
+
+Owner asked to commit and run the release script. 48595a3 on main, 1 commit ahead of origin/main, not pushed. `packages/github-release.sh`, exit 0: 9 RPMs and SHA256SUMS in ~/uinitconverter-release/assets, NOTES.md beside them, all named g48595a3, not dirty, `sha256sum -c` passes. 48595a3 differs from gf6f4a3d, the boot checked in part 93, only in the README pair and this file, so no code in these RPMs is unbooted, though these exact RPMs haven't been installed. Not published: no credentials here.
+
+### Current state
+
+main at 48595a3, ahead of origin/main by 1; this entry uncommitted. Installed and booted: gf6f4a3d. Assets: g48595a3, current. No v0.2.0 tag locally.
+
+### Next steps
+
+1. Owner: push main (48595a3 must be on GitHub before the tag can point at it), then the `gh release create` command the script printed.
+2. The rest as part 93, from its step 2.
+
+## 2026-11-01, part 95: 0.2.0 published (no code change)
+
+Owner pushed main and created the release; the first attempt gave HTTP 422 `Release.target_commitish is invalid` because 48595a3 wasn't on GitHub yet. Read back: https://github.com/shandyCho/useless-init-converter/releases/tag/v0.2.0, published 09:06:30 UTC, not draft or prerelease, tag v0.2.0 and origin/main at 48595a3, 10 assets all uploaded with the same names and sizes as ~/uinitconverter-release/assets. Downloading and installing them wasn't tried. Both decks' `status` slide now says released.
+
+### Current state
+
+0.2.0 released. main at 48595a3, level with origin/main; this entry and part 94 uncommitted. Installed and booted: gf6f4a3d, same code as the release, different build.
+
+### Next steps
+
+1. Owner: decide on rtkit's ns_mnt, the last WEAKER row. Recommended as in part 90: keep the row and accept exit 1, or mark it known in the script.
+2. Part 79's login-screen shutdowns (3 to 5); then gdm starting greeters during shutdown (part 87).
+3. Full-boot test in QEMU (part 89); it would also cover the scope tests no automatic suite reaches.
+4. Owner's decision: rustix or dinit.
