@@ -9500,3 +9500,37 @@ Owner asked whether an unencrypted root works, and to make it work. Off rustix-f
 **Not tested: a full s6 boot on an unencrypted root.** These boots end at a stand-in init. No code after the initramfs mentions encryption or btrfs (grep of dist/early, dist/s6, dist/s6-linux-init, dist/kernel-install and crates/uinitconverter), which supports it but doesn't prove it. Nor has default mode, with Fedora's initramfs, been booted on one.
 
 `tests/all.sh`, exit 0: shell pass, cargo 99, standalone 3+3+3+2, hardencompare-check 37, memtest-check 24, sandbox 311, JOURNAL=no 318, FDSTORE=no 299, BUS=broker 312 (3 SKIP each, as before), confine-vm 115, 0 failed. Owner asked to commit if nothing failed.
+
+## 2026-11-01, part 99: rustix in the standalone tools (branch standalone-rustix, uncommitted)
+
+**Owner's decision, reversing part 82's "standalone stays libc only":** they want the project to get the benefit of Rust's automatic release. Rust memory was already released automatically; what wasn't was raw fds with hand-written close(). With rustix they're OwnedFd. Each project's code is its own copy, no path dependencies or shared code, as CLAUDE.md requires. Off initramfs-no-luks at 0bea892.
+
+| non-test code, `unsafe` lines/`libc::` uses | before | after |
+|---|---|---|
+| fdstore store.rs | 16/75 | 6/32 |
+| fdstore main.rs (ready fd) | 1/3 | 1/3 |
+| notify main.rs | 14/56 | 6/9 |
+| journal-relay relay.rs | 4/18 | 3/10 |
+| journal-relay scm.rs | 1/17 | 1/17 |
+| linkwatch main.rs | 4/13 | 0/0 |
+
+**Stays on libc:** received credentials and SO_PEERCRED everywhere (part 97's pid 0; journal-relay's sockets are world-writable too), SO_PEERSEC, kcmp. notify: getpwnam and execvp (C library functions, not syscalls), setgroups/setresgid/setresuid (rustix has only per-thread versions), and the fcntl check of --fd=N: rustix takes fds known to be open, and BorrowedFd can't hold -1. The fds it passed are then borrowed with one unsafe, justified by that check. The ready fd's write and close in fdstore and relay: it comes from the command line for the same reason, and closes right after, so nothing to leak.
+
+**linkwatch has no direct libc dependency, and no unsafe. The binary still links glibc through Rust's std,** and libc stays in its Cargo.lock as rustix's optional dependency, though not built: `cargo tree` shows rustix, bitflags, linux-raw-sys. Sending credentials (notify) goes through rustix: the pid is never 0 there, as source > 1.
+
+**Fixed in passing:** fdstore's serve() leaked the socket when bind failed; notify closed its pipe and socket by hand on each path. GET holds the lock while sending, as in the core. rustix 1.1.5 doesn't compile with `net` alone (needs `crate::timespec`): journal-relay also enables `time`. Possible rustix bug, not reported.
+
+**Tests.** 21 new ones written first and run on the old libc code, all passing there, then kept with only the fd arguments and helpers changed: fdstore 6 (fd passing and CLOEXEC, closed peer, cut message, pid 0, failed bind, socket mode and silent client), notify 8 (credentials with fds, EPERM fallback, abstract socket, errors, 124/125 fds limit, barrier timeout, bad --fd, clock), relay 4 (whole path to syslog with the pid, buffer size, peer pid, pid 0), linkwatch 3 (clock and uid, lock, fifo without a reader). Plus same_inode_and_flags_as_fallback afterwards. `tests/all.sh`, exit 0: shell pass, cargo 99, standalone 10+7+6+10, hardencompare-check 37, memtest-check 24, sandbox 311, JOURNAL=no 318, FDSTORE=no 299, BUS=broker 312 (3 SKIP each), confine-vm 115, 0 failed. Each `standalone/*/build-rpm.sh` exit 0 into a temporary directory, which runs each spec's tests from the vendored tarball; those RPMs were dirty and are deleted. Not rebuilt for release.
+
+**Not tested: a real boot**, and tests/linkwatch-check.sh, which needs one and sudo; linkwatch's fcntl_getlk has real-lock coverage only from its unit test. Versions stay 0.1.0: owner's call.
+
+### Current state
+
+Branch standalone-rustix on initramfs-no-luks on rustix-fd-inotify, none merged; main at 5236481, origin/main at 48595a3. Standalone changes and this entry uncommitted. Built, not installed: core gd0b4f75, which lacks the initramfs change. Installed and booted: gf6f4a3d.
+
+### Next steps
+
+1. Owner: commit, then `packages/build-rpms.sh` and each `standalone/*/build-rpm.sh`, install, `sudo uinitconverter init --yes`, reboot to s6. Then `sudo ausearch -m AVC -ts boot`, `sudo tests/linkwatch-check.sh`, and logs. Merge after that.
+2. Part 79's login-screen shutdowns, still 0; can be the same reboots.
+3. A full s6 boot on an unencrypted root, which only a VM or a second machine can give.
+4. Rest as part 95.
