@@ -8,9 +8,11 @@ versions. Release notes: [packages/release-notes](packages/release-notes).
 ## Unreleased
 
 ### Fixed
-- A `selinux-policy` update on the s6 boot no longer breaks the running system.
-  Its scriptlet relabels `/run`, which made s6-svscan's and the s6-linux-init
-  services' fifos unwritable for `init_t`, so every reload then failed with
+- Updating `selinux-policy-targeted` with a package that has its own SELinux
+  module (such as `passt-selinux`) on the s6 boot no longer breaks the running
+  system. The update restores the labels under `/run/service`, which made
+  s6-svscan's and the s6-linux-init services' fifos unwritable for `init_t`, so
+  every reload then failed with
   `unable to manage new service directories ... Permission denied`. The SELinux
   module now gives them their own labels; updating the package and running
   `uinitconverter init` repair what an earlier update left.

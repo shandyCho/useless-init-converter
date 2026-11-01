@@ -8,8 +8,9 @@
 ## 미출시
 
 ### 수정
-- s6 부팅에서 `selinux-policy`를 업데이트해도 실행 중인 시스템이 망가지지 않습니다. 이 패키지의
-  스크립틀릿이 `/run`의 레이블을 다시 붙이면서 s6-svscan과 s6-linux-init 서비스의 fifo에 `init_t`가
+- s6 부팅에서 `selinux-policy-targeted`를 자체 SELinux 모듈을 가진 패키지(`passt-selinux` 등)와 함께
+  업데이트해도 실행 중인 시스템이 망가지지 않습니다. 이 업데이트가 `/run/service` 아래의 레이블을
+  복원하면서 s6-svscan과 s6-linux-init 서비스의 fifo에 `init_t`가
   쓸 수 없게 되었고, 그 뒤의 모든 재적재가 `unable to manage new service directories ... Permission denied`로
   실패했습니다. 이제 SELinux 모듈이 이 파일들의 레이블을 따로 지정하고, 패키지 업데이트와
   `uinitconverter init`이 이전 업데이트가 남긴 상태를 복구합니다.

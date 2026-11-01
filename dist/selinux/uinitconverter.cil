@@ -102,9 +102,13 @@
 (typetransition init_t tmpfs_t dir "event" init_var_run_t)
 (filecon "/run/service/[^/]+/event" dir (system_u object_r init_var_run_t ((s0) (s0))))
 
-; selinux-policy's scriptlet runs `restorecon -Ri /var/run`. Without rules of
-; their own the rest of the s6-linux-init tree in /run/service became var_run_t,
-; whose fifos init_t may not open for writing: every s6-rc-update and s6-svlink
+; Updating selinux-policy-targeted with a package that has its own SELinux
+; module (passt-selinux and others) runs `fixfiles -C` against a file_contexts
+; copied after the new policy was unpacked and before modules were rebuilt, so
+; this module's rules count as changed and `/run/service/*` is restored
+; recursively. Without rules of their own the rest of the s6-linux-init tree
+; in /run/service became var_run_t, whose fifos init_t may not open for
+; writing: every s6-rc-update and s6-svlink
 ; then failed on .s6-svscan/control with "Permission denied", on a running
 ; system, until the next boot. A fresh boot makes these fifos initctl_t and the
 ; rest tmpfs_t, from the same transitions as the live directory's supervisors;
