@@ -41,7 +41,8 @@ if they turned out to be wrong.
   crates); if that isn't possible, describe the upstream behaviour and
   leave the decision to the owner.
 - Shell scripts must pass `bash -n` and `shellcheck -S warning`.
-- Docs exist in Korean and English: `README.md`/`README-us.md`,
+- Docs exist in Korean and English: `README.md`/`README-us.md` (first install
+  only; everything else goes in `docs/etc.md`/`docs/etc-us.md`),
   `TESTING.md`/`TESTING-us.md`, and each standalone project's README pair.
   Change both together.
 - The owner pushes to GitHub; this machine has no GitHub credentials.

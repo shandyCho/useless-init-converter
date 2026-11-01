@@ -48,7 +48,7 @@ git log -1 --oneline               # 보고할 때 쓸 커밋 해시를 적어 �
 sudo dnf install -y gcc make rpm-build cpio cargo rust dbus-daemon python3
 ```
 
-전체 의존성 목록은 [README.md](README.md#의존성)에 있습니다. uinitconverter는 libpam,
+전체 의존성 목록은 [docs/etc.md](docs/etc.md#의존성)에 있습니다. uinitconverter는 libpam,
 libselinux, libseccomp를 링크하지 않고 실행 중에 불러옵니다. Fedora Workstation에는
 이미 있지만, 네 개가 모두 설치되어 있는지 확인하세요.
 
@@ -60,8 +60,8 @@ rpm -q pam libselinux libseccomp policycoreutils
 
 Fedora는 skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd를 패키지로 제공하지 않습니다.
 먼저 `dist/skarnet.versions`에 적힌 버전의 릴리스 타르볼을 skarnet.org에서 직접
-`~/skarnet-sources`에 받습니다(파일 이름은 `이름-버전.tar.gz`. README.md의 "Fedora에
-배포하기" 참고). 빌드 스크립트는 아무것도 내려받지 않고, 타르볼을 고정된 SHA-256 값으로
+`~/skarnet-sources`에 받습니다(파일 이름은 `이름-버전.tar.gz`. README.md의 "설치"
+참고). 빌드 스크립트는 아무것도 내려받지 않고, 타르볼을 고정된 SHA-256 값으로
 검증한 뒤 의존성 순서대로 RPM을 빌드합니다. 없는 타르볼이 있으면 그 파일 이름을 알려 주고
 멈춥니다.
 
