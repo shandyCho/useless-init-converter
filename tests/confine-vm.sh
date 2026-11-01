@@ -98,6 +98,8 @@ map() { awk '{ printf "%s%s %s %s", s, $1, $2, $3; s = "," } END { print "" }' "
     if [ -d /pu-root/usr ]; then echo "chroot no"; else echo "chroot yes"; fi
     mkdir -p /tmp/pu-mnt 2>/dev/null
     if mount -t tmpfs none /tmp/pu-mnt 2>/dev/null; then echo "mount allowed"; else echo "mount refused"; fi
+    # Root in its namespace owns /, so only a read-only mount stops this.
+    if touch /pu-rootfs 2>/dev/null; then echo "rootfs rw"; rm -f /pu-rootfs; else echo "rootfs ro"; fi
 } >"$1.tmp"
 mv "$1.tmp" "$1"
 PROBE
@@ -119,6 +121,7 @@ pu_unit pu-identity PrivateUsers=identity
 pu_unit pu-full PrivateUsers=full
 pu_unit pu-no PrivateUsers=no
 pu_unit pu-chroot PrivateUsers=yes RootDirectory=/pu-root
+pu_unit pu-strict PrivateUsers=yes ProtectSystem=strict
 # init-selinux, with stand-ins for what it loads and execs.
 cp "$TOP/dist/s6-linux-init/init-selinux" "$R/usr/sbin/"
 printf '#!/bin/sh\nexit 0\n' >"$R/usr/sbin/load_policy"
@@ -357,6 +360,13 @@ for how in run confine; do
     is "PrivateUsers=full ($how): uid_map" "$(pu pu-full uid_map)" "0 0 4294967295"
     is "PrivateUsers=full ($how): setgroups allowed" "$(pu pu-full setgroups)" allow
     is "PrivateUsers=full ($how): no host mounts" "$(pu pu-full mount)" refused
+
+    # A mount stacked on / counts as a chroot to unshare(CLONE_NEWUSER): every
+    # unit of this shape failed with EPERM on a real boot (colord, upower).
+    pu_run "$how" pu-strict
+    [ -n "$(pu pu-strict ns)" ] && [ "$(pu pu-strict ns)" != "$host_ns" ] && ok "PrivateUsers=yes, ProtectSystem=strict ($how): own namespace" || bad "PrivateUsers=yes, ProtectSystem=strict ($how): host's namespace"
+    is "PrivateUsers=yes, ProtectSystem=strict ($how): uid_map" "$(pu pu-strict uid_map)" "0 0 1"
+    is "PrivateUsers=yes, ProtectSystem=strict ($how): / read-only" "$(pu pu-strict rootfs)" ro
 done
 # unshare(CLONE_NEWUSER) fails in a chroot, so the order matters. Only `run`
 # does RootDirectory=.

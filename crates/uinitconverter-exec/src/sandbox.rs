@@ -102,13 +102,26 @@ fn bind(src: &str, dst: &str) -> Result<(), String> {
     mount(src, dst, None, libc::MS_BIND | libc::MS_REC, None)
 }
 
+/// Make `path` a mount of its own, so its flags can be set apart from its parent's.
+///
+/// Not for /: it's already one, the root of this mount namespace's own copy. A
+/// bind on it would also be out of reach (this process's root stays on the mount
+/// below, so paths never enter it) and makes the process count as chrooted, for
+/// which unshare(CLONE_NEWUSER) gives EPERM (PrivateUsers=).
+fn bind_self(path: &str) -> Result<(), String> {
+    if Path::new(path).parent().is_none() {
+        return Ok(());
+    }
+    bind(path, path)
+}
+
 fn bind_ro(path: &str) -> Result<(), String> {
-    bind(path, path)?;
+    bind_self(path)?;
     set_readonly(path, true)
 }
 
 fn bind_rw(path: &str) -> Result<(), String> {
-    bind(path, path)?;
+    bind_self(path)?;
     set_readonly(path, false)
 }
 
@@ -1225,6 +1238,14 @@ mod tests {
                     .is_err()
                 {
                     return 3;
+                }
+                if fs::write("/usr/.uinitconverter-sandbox-test", "").is_ok() {
+                    return 4;
+                }
+                // A mount stacked on / would count as a chroot here (EPERM).
+                if unsafe { libc::unshare(libc::CLONE_NEWUSER) } < 0 {
+                    eprintln!("nested user namespace: {}", errno());
+                    return 5;
                 }
                 0
             })();

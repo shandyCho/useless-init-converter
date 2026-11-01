@@ -9332,3 +9332,32 @@ main at 1fd0d8b; tests/all.sh, Containerfile, container.sh, the confine-vm fix, 
 1. Owner: `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`, `sudo uinitconverter init --yes`, reboot to s6, part 88's checks.
 2. Full-boot test in QEMU (real Fedora image, SELinux enforcing), layer 3 of the plan given to the owner. It would also cover the scopes above.
 3. Rest as part 88: rtkit's ns_mnt, publish, part 79, gdm's greeters, rustix or dinit.
+
+## 2026-11-01, part 90: PrivateUsers= failed on the real boot, fixed (uncommitted)
+
+**Boot read.** Owner installed g1fd0d8b and booted s6. `tests/hardencompare.sh report`, systemd 14:57:22 vs s6 15:48:46: 26 services, 1 WEAKER (rtkit ns_mnt), 1 CHECK (bolt 11/9), 83 DIFF, exit 1. This looks like part 88's prediction but **isn't**: colord and upower dropped out of the comparison ("Running only on systemd") because they couldn't start. Their ns_user rows are gone, not fixed. For the 26 shared services no row changed against s6 12:26:22 (pid left out).
+
+**Bug.** /var/log/uinitconverter/{colord,upower,malcontent-timerd}.service/current: `PrivateUsers=: unshare: Operation not permitted`, at every start, including D-Bus activation at login. So on this boot no battery service and no colord, for GNOME or anyone. Part 88's fail-closed did what it was meant to; the service stays down rather than less confined.
+
+**Cause, reproduced.** The Sandbox's `bind_ro("/")` for ProtectSystem=strict stacks a mount on /. The process's root stays on the mount below (paths start from fs->root and never enter the top one), and the kernel's current_chrooted() compares that root with the top of the stack, so the process counts as chrooted and unshare(CLONE_NEWUSER) gives EPERM. Unprivileged: `unshare -Urm sh -c 'mount --rbind / / && unshare -U true'` fails, on a subdirectory it doesn't. All 7 PrivateUsers= units on this machine have ProtectSystem=strict, and none of confine-vm's had, which is why part 88's 42 VM tests passed. Part 88's "from init_t" SELinux reading wasn't the issue: this is EPERM from the chroot check, before the LSM hook.
+
+**Not a security hole in what ran before.** set_readonly("/") resolves to the lower mount and is recursive, so the tree services actually use was read-only as intended; later binds also landed on it. The stacked copy was unused. Checked too: mountinfo lists by creation here, so hardencompare's "last row wins" reads the right row despite the extra copy; earlier reports stand.
+
+**Fix.** sandbox.rs: `bind_self()`, used by bind_ro and bind_rw, doesn't bind / (already a mount, the root of the namespace's own copy). Rejected: moving the root onto the top copy at the end (`cd /..; chroot .`), since it lacks all the later binds, and at the start, which is more code for the same result. Effect on all strict units, not only PrivateUsers= ones: same flags on the same tree, one mount fewer. Their mountinfo loses the unreachable copy, so hardencompare's rows should not change, but a real boot has to show it.
+
+**Tests.** Written first and seen failing with the boot's error: read_only_mounts_as_systemd now also checks /usr unwritable and a nested user namespace (exit 5 before the fix); confine-vm's pu-strict through run and confine (own namespace, uid_map, / read-only; 6 failures before). `tests/all.sh`, exit 0: shell pass, cargo 88, standalone 3+3+3+2, hardencompare-check 37, memtest-check 24, sandbox 311, JOURNAL=no 318, FDSTORE=no 299, BUS=broker 312 (3 SKIP each, as before), confine-vm 115, 0 failed. cargo fmt, bash -n, shellcheck clean.
+
+**Not tested: a real boot** (needs sudo and a reboot). The steps after unshare (map writes under SELinux, upower and colord running in the namespace) have still never run on one, since the failure came first. Part 88's sesearch reading is all there is for them.
+
+**Weakness in the tool, not changed:** hardencompare can't tell a service that failed from one not yet activated; both land in "Running only on systemd". Read that line against part 88's kind of prediction, and the unit's log.
+
+### Current state
+
+main at f6b51df; sandbox.rs and confine-vm.sh changed and uncommitted, this entry too. Installed and booted: g1fd0d8b, with colord, upower and malcontent-timerd failing to start. 0.2.0 not published; the assets are from g6338c79.
+
+### Next steps
+
+1. Owner: commit, `packages/build-rpms.sh`, `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`, `sudo uinitconverter init --yes`, reboot to s6. Then `upower -d`, `busctl introspect org.freedesktop.ColorManager /org/freedesktop/ColorManager` (both activate the service), `sudo ausearch -m AVC -ts boot`, and only with both running `sudo tests/hardencompare.sh snap` and report. Expected: 28 services, colord and upower with ns_user private and listed only for other rows, 1 WEAKER (rtkit), 1 CHECK (bolt). Then update README's security row.
+2. Full-boot test in QEMU, as part 89; this bug is the kind it would catch.
+3. Owner: decide on rtkit's ns_mnt, the last WEAKER row. Recommended: keep the row and accept exit 1, or mark it known in the script; part 55's reasoning stands, and rtkit also chroots itself to /proc (its mount rows).
+4. Rest as part 88: publish, part 79, gdm's greeters, rustix or dinit.
