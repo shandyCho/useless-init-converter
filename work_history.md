@@ -9980,3 +9980,29 @@ main at b672a6f; parts 117-119 uncommitted. Installed and booted: core gb672a6f,
 
 1. Owner's call: 0.2.1, with the hang, the SEGV's unproven state and s6-ftrigrd as known issues (recommended).
 2. Part 108's watch on shutdowns; part 106's fresh VM install. A new `core.gnome-session-i.*` on this build reopens the fix.
+
+## 2026-11-02, part 120: release 0.2.1 prepared, s6/systemd comparison updated (679075e, 2ac71cb, 3f2dea1)
+
+Owner: commit the history, release 0.2.1, update the comparison of booting s6 and booting systemd. On branch release-0.2.1, fast-forwarded onto main, as 0.2.0 was. **Not pushed or published:** no credentials here.
+
+**Comparison (docs/etc pair), as of 2026-11-02. No new boots were taken for it, so no systemd boot since 10-31 and no snapshot of gb672a6f or 0.2.1;** it reads what's stored.
+- Memory: `tests/memtest.sh report`, 21 s6 and 6 systemd snapshots, total - available median 1153.8 vs 1176.4 (-22.6). Newest s6 snapshot 11-01 21:41, g3bc583e, the last before memtest was removed. Still about the variation between boots.
+- **Boot speed: first figure, replacing "unknown".** Kernel start to logind's `New session 'c1' ... 'gdm-greeter'`: s6 median about 19 s, 23 boots, range 16 to 53; systemd 28.3 s, 11 boots, range 22 to 43 plus two at 262 and 337 s, whose seat also came late, cause not looked into. systemd from the journal's short-monotonic. s6 from the logind log minus boot time from snapshots' date and uptime (22 boots) and `uptime -s` (this boot), so to about 1 s, and only boots having a snapshot. Not controlled: different days, builds, initramfs images. Session opening isn't the login screen appearing. Also: under systemd the seat comes 6 to 8 s before the greeter session, on s6 0.1 s, not looked into. The docs say this. The row stays under "Not real benefits" and README's "not speed or memory" is unchanged: a controlled test could change that. Scripts for it weren't added to the repo.
+- Hardening: `tests/hardencompare.sh report` on 22:44's snapshot, g1c3532b: 28 services, 0 weaker, 98 different, 1 CHECK.
+- Shutdowns without a shell crash: at least 14 (part 118). Lines of Rust: about 29,000 (26,670 in crates/, 2,353 in standalone/), was 23,000.
+
+**Release:** Cargo.toml and lock, README pair's `VERSION=`, CHANGELOG pair with `Unreleased` renamed and two lines added (scope wait log, README split), release notes pair, five spec changelogs. Standalone tools stay 0.1.0, though d7ff4f9 changed them (rustix): as with 0.2.0 their versions are separate, and bumping them was not asked for. Known issues as part 115: SEGV unproven, 21:07 hang, s6-ftrigrd.
+
+`packages/github-release.sh` on 3f2dea1, exit 0: 9 RPMs and SHA256SUMS, `sha256sum -c` passes. It replaced 0.2.0's files in ~/uinitconverter-release; those remain on GitHub per part 95. 3f2dea1 differs from the booted gb672a6f in no file under crates/, dist/, tests/ or standalone/; only version, docs and specs. These exact RPMs haven't been installed.
+
+Tests on the release tree: `cargo test` 103 passed, 0 failed; standalone 10, 7, 6, 10 passed; sandbox 313/313, SANDBOX_JOURNAL=no 320/320, SANDBOX_FDSTORE=no 301/301; cargo fmt, bash -n, shellcheck clean.
+
+### Current state
+
+main at this entry's commit, ahead of origin/main by 4. Release commit 3f2dea1; assets in ~/uinitconverter-release/assets, not published. Installed and booted: core gb672a6f, same code, version 0.2.0.
+
+### Next steps
+
+1. Owner: `git push origin main`, then the `gh release create` line: `gh release create v0.2.1 -R shandyCho/useless-init-converter --target 3f2dea12120f9a21a661c09ba9bd65307dd451bb --title "uinitconverter 0.2.1" --notes-file ~/uinitconverter-release/NOTES.md ~/uinitconverter-release/assets/*`.
+2. A fair boot-speed figure would take alternating boots of the same build, if wanted.
+3. Part 108's watch on shutdowns; part 106's fresh VM install.
