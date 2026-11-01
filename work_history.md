@@ -9189,3 +9189,55 @@ Owner: commit, build RPMs for GitHub, version 0.2.0, release note and changelog;
 CHANGELOG pair, packages/release-notes/0.2.0 pair, covering the published release `initial` (2fac273, from the GitHub API) to now. github-release.sh puts the notes in NOTES.md. Version 0.2.0 in Cargo.toml; the standalone tools stay 0.1.0, reformatted only. Spec changelogs updated.
 
 Decisions: the default dated release number rather than UINITCONVERTER_RELEASE=1, as `initial` did. No tag and no publish here: no GitHub credentials; github-release.sh prints the command. No real boot of 0.2.0: refactor (part 80) and jiff (part 83) have not booted.
+
+## 2026-11-01, part 85: 0.2.0 RPMs built; dinit (0.3.0) blocked, design only
+
+**0.2.0.** Merged to main as 6338c79, 11 commits ahead of origin/main, not pushed. `packages/github-release.sh`: exit 0, ~/uinitconverter-release/assets has 9 RPMs (5 core 0.2.0-1.20261101004756.g6338c79.fc45, 4 standalone 0.1.0) and SHA256SUMS, 9 of 9 OK; NOTES.md carries both release notes, with links to the tag. Not published: push first, then the printed `gh release create`. **Not booted**, so parts 80 and 83 have no real boot.
+
+**dinit: no code written.** The dinit source (0.22.1 from GitHub, unpacked in the session's scratchpad) can be read, but building and running it was refused by the session's permission check (external code), and this machine has no g++ or m4 and Fedora has no dinit package. Without it nothing can be validated, not even generated service files with dinit-check, so writing the backend blind was not attempted.
+
+Design from dinit's man pages (not tried):
+- plan() needs no change. New backend beside gen/s6.rs: Bundle -> `type = internal`; Oneshot -> `scripted` with runner up/down; Longrun -> `process` with `ready-notification = pipefd:3`, which the man page calls compatible with s6, so signal_ready should work unchanged.
+- Service names allow only alphanumerics, `.`, `-`, `_`, and `@` means a template argument, so unit ids need escaping (`getty@tty1.service`) and a mapping back, unlike s6-rc.
+- **The main gap: dinit has no `finish` script**, and the runner's finish does cleanup and Restart=. Proposed: the runner stays as the main process's parent, as exec_with_pam's supervisor already does, and runs finish itself. Cost: one more process per service; measure with memcompare.
+- Daemon: s6-rc, s6-svc, s6-svstat calls in daemon/s6.rs and dynamic.rs become dinitctl (start, stop, status, list, unload, `-d` directories for dynamic instances). A trait is fixed at this point, per part 45. Readings of supervise/ lock files and the "beside" logic are s6-specific and need their own answer.
+- Boot: init-selinux execs dinit instead of s6-linux-init; dist/s6 (23 services) and the s6-linux-init skel need dinit equivalents; shutdown through dinit's own; the SELinux module needs checking for dinit's binary; dist/rpm/dinit.spec as for skarnet, no patches. INIT=dinit stays refused by Config until this works.
+- Size: daemon/s6.rs 1308, dynamic.rs 532, gen/s6.rs 901, init/s6.rs 221 lines touch this. Several sessions, and it needs VM and real boots.
+
+### Current state
+
+main at 6338c79, not pushed. RPMs built, not installed; installed and booted: gdf289c9. This entry uncommitted. Version stays 0.2.0 until dinit exists.
+
+### Next steps
+
+1. Owner: install the 0.2.0 RPMs, `sudo uinitconverter init --yes`, boot s6, usual checks (`ausearch -m AVC -ts boot`, hardencompare, tests/memcompare.sh for jiff's cost, a timer running). Then push and publish.
+2. Owner: to go on with dinit, allow building and running dinit's source here (permission rule) and `sudo dnf install gcc-c++ m4`.
+3. Part 79's login-screen shutdowns.
+
+## 2026-11-01, part 86: 0.2.0 on a real boot, memory and hardening read (no code change)
+
+Owner installed g6338c79 (01:24) and booted s6 (02:36:59), so parts 80 and 83 now have a real boot. `sudo ausearch -m AVC -ts boot`: `<no matches>`.
+
+**Hardening.** systemd 14:57:22 vs s6 2026-11-01 12:26:22: 28 services, 3 WEAKER (colord, upower ns_user; rtkit ns_mnt), 1 CHECK (bolt 11/9), 98 DIFF, exit 1, same as part 78's counts. Against s6 23:26:51, without meta and pid rows, the only lines that differ are the 47 rows each of geoclue.service and snapperd.service, which are new in "Running only on s6". So the refactor and jiff changed nothing in what the script reads for the 28. Both were gone from `ps` two minutes after the snapshot, so they were up on demand; systemd's snapshot doesn't have them, so they are uncompared. Read against their units: geoclue uid 986, no capabilities, nnp, private mount namespace, geoclue_t; snapperd has exactly the unit's 9 capabilities, nnp 0 (the unit's NoNewPrivileges=false), private net and UTS, snapperd_t.
+
+**Memory.** `tests/memtest.sh report`, exit 0: PASS, 6 systemd, 16 s6, total - available median s6 1153.2 vs systemd 1176.4 (-23.2). This boot's snapshot (02:47:22, uptime 622 s, at the greeter): 1140.8, inside the s6 range, against systemd 145023's 1176.7 (-35.9). used (as free) +84.7, mostly Unevictable 131.4 vs 2.2 MiB (part 42: read total - available; what holds systemd's unevictable pages not traced).
+
+**0.2.0's memory cost, part 83's open question.** Same 37 runner-family processes, PSS 22.4 MiB against 21.2-21.3 on all of the previous 8 s6 snapshots, so +1.1 MiB is real, not noise. Whole-system totals don't show it (total - available -9.0 against the previous boot, within noise). Not separable between the refactor and jiff from these snapshots, because the process name is cut to `uinitconverter-`. RssAnon of a timer process now: 0.3-0.4 MiB.
+
+**Timers fire on 0.2.0.** My first check was wrong in two ways: I looked at /var/lib/systemd/timers (systemd's stamps; ours are /var/lib/uinitconverter/timers) and suggested `snapper list`, whose default config `root` doesn't exist here (the config is `con`). Read instead from /run/uinitconverter/units and the logs:
+- snapper-timeline.timer (hourly, the jiff calendar path): triggered at 13:00:00, service result success, its log has `Running timeline for 'con'` at 13:00:00.07.
+- snapper-boot.timer 02:37:22, snapper-cleanup.timer 13:19:55, dnf-makecache.timer 02:46:59 (monotonic 600 s, OnBootSec=10min; next 11400 s, 3 h after, as OnUnitInactiveSec=3h). Results success. dnf-makecache's service exited within a second of the trigger; why so fast wasn't read.
+- Not exercised on this boot: the Persistent= catch-up. logrotate, unbound-anchor and raid-check stamped at 00:36, 00:00 and 01:00 on the previous boot, so nothing was missed; their next elapses (11-02 00:00, 11-08 01:00) are right.
+
+**The machine slept for most of this "boot".** CLOCK_BOOTTIME 39779 s, CLOCK_MONOTONIC 5404 s: 9.5 h suspended, inferred from the clocks, no kernel log read. The memtest snapshot (622 s) was before it. The timeline log goes 01:00 (previous boot), 12:25:48, 13:00: no entries 03:00-12:00, one firing at wake, none skipped while awake. That firing started snapperd, which is why it was in the 12:26:22 hardening snapshot; login was at 12:25 (user@1000).
+
+### Current state
+
+main at 6338c79, not pushed. Installed and booted: g6338c79 (0.2.0). No AVCs, memory PASS, timers fire, hardening shows only the 3 known WEAKER rows and no change on the 28 services. Parts 85 and 86 uncommitted.
+
+### Next steps
+
+1. Owner: push and publish 0.2.0; its checks are done.
+2. Owner: to go on with dinit, allow building and running dinit's source here (permission rule) and `sudo dnf install gcc-c++ m4`.
+3. Part 79's login-screen shutdowns.
+4. PrivateUsers=: owner's decision; `hardencompare.sh report` keeps exiting 1 until it's implemented.
