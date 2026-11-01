@@ -9375,3 +9375,7 @@ Branch private-users-strict at this entry's commit; main at f6b51df. Built, not 
 ### Next steps
 
 As part 90, starting at step 1's `sudo dnf upgrade`; merge private-users-strict once the boot check passes or sooner, as the owner prefers. After that boot, update the deck's hardening row with README's security row.
+
+## 2026-11-01, part 92: merged; Korean presentation (no code change)
+
+private-users-strict fast-forwarded into main at 077f935 and deleted; 2 commits ahead of origin/main, not pushed. Correction to part 91's "Current state": the work is on main now. Korean version of the presentation, same 12 slides and figures, private artifact https://claude.ai/artifact/Wtm3iTbdPsN67MPXwKEGCU. Both decks' hardening row and "not confirmed" wording need updating after the boot check. Installed and booted is still g1fd0d8b; the next steps stay as part 90's, from `sudo dnf upgrade`.
