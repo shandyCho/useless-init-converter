@@ -9379,3 +9379,38 @@ As part 90, starting at step 1's `sudo dnf upgrade`; merge private-users-strict 
 ## 2026-11-01, part 92: merged; Korean presentation (no code change)
 
 private-users-strict fast-forwarded into main at 077f935 and deleted; 2 commits ahead of origin/main, not pushed. Correction to part 91's "Current state": the work is on main now. Korean version of the presentation, same 12 slides and figures, private artifact https://claude.ai/artifact/Wtm3iTbdPsN67MPXwKEGCU. Both decks' hardening row and "not confirmed" wording need updating after the boot check. Installed and booted is still g1fd0d8b; the next steps stay as part 90's, from `sudo dnf upgrade`.
+
+## 2026-11-01, part 93: PrivateUsers= confirmed on a real boot; docs and decks updated (README pair uncommitted)
+
+**Boot read.** Owner installed gf6f4a3d (0.2.0-1.20261101171402; standalone tools 0.1.0 from the same commit) and booted s6, SELinux enforcing, boot about 17:37. This closes part 90's step 1.
+
+- upower: running as devicekit_power_t, uid_map `0 0 1`; `upower -d` reads the battery (85%, thresholds 80/85).
+- colord: running as colord_t, uid_map `0 0 1; 990 990 1`; answers on the bus.
+- malcontent-timerd: activated at 17:37, exited on its inactivity timeout, no `unshare` error. Its namespace wasn't read, since it had exited by then.
+- No `PrivateUsers=`/`unshare` error in those logs since boot. The latest are 15:47 (colord) and 16:27 (upower), both earlier boots.
+- `sudo ausearch -m AVC -ts boot`: `<no matches>`. So part 88's sesearch reading holds: the map writes work under the real policy.
+- GNOME Shell up and answering on the session bus.
+
+**Hardening, `tests/hardencompare.sh report`, systemd 10-31 14:57:22 vs s6 11-01 17:45:47:** 28 services, 1 WEAKER (rtkit ns_mnt), 1 CHECK (bolt seccomp 11/9), 98 DIFF, exit 1. As part 90 predicted. Compared with the 15:48:46 snapshot, the only new rows are colord's 8 and upower's 7 (83 + 15 = 98), none WEAKER, and no row changed on the other 26, so part 90's removal of the stacked mount on / changed nothing else that the script reads.
+
+**Not exercised on this boot:** chrony-wait, malcontent-webd, malcontent-webd-update, malcontent-timer-extension-agent have no log directory, so they appear not to have run. PrivateUsers= is confirmed for colord, upower and malcontent-timerd only (the last by absence of the error).
+
+**Log lines checked, none new:** malcontent-timerd's `mct_time_span_new` CRITICAL (25 in its log, from 10-27), accounts-daemon's homed warning (100 before today), NetworkManager-dispatcher's iscsi reload (64 before today), bolt's uid warning (27 before today).
+
+**Cores:** six `core.gnome-session-i.*` at 17:36:12, during the shutdown before this boot, same pattern as part 87. None since boot, as of the check at about 17:44.
+
+**Docs.** README pair's security row: 1 of 28 (rtkit) and 1 to check (bolt). Both decks, `results` and `status` slides: same figures, "passed its real-boot check; not published yet". CHANGELOG pair and release notes already said the right thing, unchanged.
+
+**Correction to part 92:** main is no longer ahead of origin/main; the owner has pushed since.
+
+### Current state
+
+main at f6f4a3d, level with origin/main; README pair and this entry uncommitted. Installed and booted: gf6f4a3d. Release assets in ~/uinitconverter-release/assets are still from g6338c79, so they don't contain PrivateUsers= or its fix.
+
+### Next steps
+
+1. Owner: commit this, `packages/github-release.sh` so the assets are rebuilt, then publish 0.2.0.
+2. Owner: decide on rtkit's ns_mnt, the last WEAKER row. Recommended as in part 90: keep the row and accept exit 1, or mark it known in the script.
+3. Part 79's login-screen shutdowns (3 to 5); then gdm starting greeters during shutdown (part 87).
+4. Full-boot test in QEMU (part 89); it would also cover the scope tests no automatic suite reaches.
+5. Owner's decision: rustix or dinit.

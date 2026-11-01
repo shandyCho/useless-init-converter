@@ -61,7 +61,7 @@ Workstation machine.
 |---|---|
 | Memory | About the same: the median (total - available) is 1157 vs 1176 MiB (-19 MiB), within the normal 20-25 MiB variation between boots. |
 | Boot speed | Unknown: it has not been measured and compared. |
-| Security | Not better overall. PID 1 is smaller, but `uinitconverterd` and about 37 helper processes run as root, and the latest hardening comparison shows 3 of 28 services weaker on s6 (colord, upower, rtkit). |
+| Security | Not better overall. PID 1 is smaller, but `uinitconverterd` and about 37 helper processes run as root, and the latest hardening comparison shows 1 of 28 services weaker on s6 (rtkit's mount namespace) and 1 to check (bolt's seccomp filter count). |
 | Less systemd | Only partly. udevd, logind and `systemd --user` still run (GNOME needs logind and `systemd --user`), and the `systemd` package stays installed. |
 
 **Costs compared with systemd**

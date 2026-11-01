@@ -56,7 +56,7 @@ s6를 PID 1로 두고 s6의 도구로 관리하면서 Fedora와 GNOME을 쓸 수
 |---|---|
 | 메모리 | 거의 같습니다. 중앙값(total - available) 1157 대 1176 MiB(-19 MiB)로, 부팅마다 생기는 20-25 MiB의 차이 안에 있습니다. |
 | 부팅 속도 | 알 수 없습니다. 측정해 비교한 적이 없습니다. |
-| 보안 | 전체적으로 낫지 않습니다. PID 1은 작아지지만 `uinitconverterd`와 도우미 프로세스 약 37개가 root로 실행되고, 최근 강화 설정 비교에서 28개 서비스 중 3개(colord, upower, rtkit)가 s6에서 더 약합니다. |
+| 보안 | 전체적으로 낫지 않습니다. PID 1은 작아지지만 `uinitconverterd`와 도우미 프로세스 약 37개가 root로 실행되고, 최근 강화 설정 비교에서 28개 서비스 중 1개(rtkit의 마운트 네임스페이스)가 s6에서 더 약하고, 1개(bolt의 seccomp 필터 수)는 확인이 필요합니다. |
 | systemd 줄이기 | 일부만 줄어듭니다. udevd, logind, `systemd --user`는 계속 실행되고(GNOME에 logind와 `systemd --user`가 필요합니다), `systemd` 패키지도 설치된 채로 남습니다. |
 
 **systemd와 비교한 비용**
