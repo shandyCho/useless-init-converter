@@ -53,6 +53,9 @@ install -Dm0644 dist/dbus/uinitconverter.conf %{buildroot}%{_datadir}/dbus-1/sys
 
 %changelog
 * Mon Nov 02 2026 uinitconverter developers
+- 0.2.2, see CHANGELOG-us.md
+
+* Mon Nov 02 2026 uinitconverter developers
 - 0.2.1, see CHANGELOG-us.md
 
 * Sun Nov 01 2026 uinitconverter developers

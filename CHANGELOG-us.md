@@ -5,7 +5,7 @@
 Versions apply to the core packages. The standalone tools have their own
 versions. Release notes: [packages/release-notes](packages/release-notes).
 
-## Unreleased
+## 0.2.2 (2026-11-02)
 
 ### Fixed
 - Updating `selinux-policy-targeted` with a package that has its own SELinux

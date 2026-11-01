@@ -5,7 +5,7 @@
 버전은 본체 패키지의 버전입니다. 독립 도구는 버전이 따로 있습니다.
 릴리스 노트: [packages/release-notes](packages/release-notes).
 
-## 미출시
+## 0.2.2 (2026-11-02)
 
 ### 수정
 - s6 부팅에서 `selinux-policy-targeted`를 자체 SELinux 모듈을 가진 패키지(`passt-selinux` 등)와 함께
