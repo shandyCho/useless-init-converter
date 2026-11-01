@@ -457,6 +457,7 @@ impl Daemon {
     /// gnome-shell that is still exiting, and activations fail under it.
     /// Bounded: stop_transient sends SIGKILL after 10 s.
     pub(super) async fn stop_scopes_at_shutdown(&self) {
+        self.stop_display_manager_at_shutdown().await;
         let root = std::path::Path::new(crate::cgroup::CGROUP_ROOT);
         let scopes: Vec<(String, PathBuf)> = self
             .transient
@@ -482,6 +483,31 @@ impl Daemon {
             names.join(" "),
             t.elapsed().as_secs_f64()
         );
+    }
+
+    /// systemd queues the display manager's stop together with the sessions'.
+    /// Left running until s6-rc's turn, gdm sees its session end and starts a
+    /// new greeter, whose user@UID is refused (destructive); its worker aborts,
+    /// up to gdm's limit of six tries. Only asks: this doesn't wait, so it adds
+    /// nothing to the order above. display-manager.service is the alias name
+    /// display managers install, so no product is named here. Sent again at
+    /// s6-rc's SIGTERM, which changes nothing.
+    async fn stop_display_manager_at_shutdown(&self) {
+        let id = self
+            .index
+            .read()
+            .unwrap()
+            .resolve("display-manager.service")
+            .to_string();
+        let dir = self.scandir(&id);
+        if !dir.is_dir() {
+            return;
+        }
+        let _ = tokio::process::Command::new(crate::tools::path("s6-svc"))
+            .arg("-d")
+            .arg(dir)
+            .status()
+            .await;
     }
 
     pub(super) async fn gc_scopes(&self) {

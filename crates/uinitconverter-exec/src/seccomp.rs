@@ -1036,6 +1036,76 @@ mod load_tests {
 
     /// RestrictAddressFamilies=AF_UNIX and RestrictNamespaces=yes in a child.
     #[cfg(target_arch = "x86_64")]
+    /// bolt's CHECK row: one SystemCallFilter= filter here where systemd loads
+    /// one per ABI. That one filter must still cover all three ABIs.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn one_deny_filter_covers_every_abi() {
+        if unsafe { libc::dlopen(c"libseccomp.so.2".as_ptr(), libc::RTLD_NOW) }.is_null() {
+            eprintln!("libseccomp.so.2 not available, skipping");
+            return;
+        }
+        // The arguments don't matter: the filter answers before the kernel reads them.
+        fn int80(nr: i64) -> i64 {
+            let mut r = nr;
+            unsafe {
+                std::arch::asm!("int 0x80", inout("rax") r, lateout("r8") _, lateout("r9") _,
+                    lateout("r10") _, lateout("r11") _);
+            }
+            r
+        }
+        const I386_GETPID: i64 = 20;
+        const I386_UMOUNT2: i64 = 52;
+        const X32_BIT: libc::c_long = 0x4000_0000;
+        let f = Filter::parse(&["~@mount".to_string()], Some("EXDEV"), &[])
+            .unwrap()
+            .unwrap();
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            unsafe {
+                let exdev = -(libc::EXDEV as i64);
+                // Kernels can be built or booted without the 32-bit ABI.
+                let compat = int80(I386_GETPID) > 0;
+                libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+                if f.apply().is_err() {
+                    libc::_exit(10);
+                }
+                let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+                let before = status
+                    .lines()
+                    .find_map(|l| l.strip_prefix("Seccomp_filters:"))
+                    .and_then(|v| v.trim().parse::<u32>().ok());
+                // The test harness may already sit under filters of its own.
+                if before.unwrap_or(0) < 1 {
+                    libc::_exit(11);
+                }
+                if libc::syscall(libc::SYS_umount2, 0, 0) != -1
+                    || *libc::__errno_location() != libc::EXDEV
+                {
+                    libc::_exit(12);
+                }
+                if compat && int80(I386_UMOUNT2) != exdev {
+                    libc::_exit(13);
+                }
+                if libc::syscall(X32_BIT + libc::SYS_umount2, 0, 0) != -1
+                    || *libc::__errno_location() != libc::EXDEV
+                {
+                    libc::_exit(14);
+                }
+                libc::_exit(if compat { 0 } else { 20 });
+            }
+        }
+        let mut st = 0;
+        unsafe { libc::waitpid(pid, &mut st, 0) };
+        assert!(libc::WIFEXITED(st), "status {st}");
+        let code = libc::WEXITSTATUS(st);
+        assert!(code == 0 || code == 20, "child exit {code}");
+        if code == 20 {
+            eprintln!("no 32-bit ABI in this kernel: x86 not checked");
+        }
+    }
+
     #[test]
     fn protect_kernel_tunables_blocks_sysctl() {
         if unsafe { libc::dlopen(c"libseccomp.so.2".as_ptr(), libc::RTLD_NOW) }.is_null() {

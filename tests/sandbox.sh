@@ -118,6 +118,19 @@ WantedBy=multi-user.target
 Alias=hello-alias.service
 EOF
 
+# Stands in for gdm: at shutdown it's asked down at once, and Restart=always
+# must not bring it back.
+cat > "$U/fake-dm.service" <<EOF
+[Unit]
+Description=Display manager stand-in
+[Service]
+ExecStart=/bin/sleep 1000
+Restart=always
+[Install]
+WantedBy=multi-user.target
+Alias=display-manager.service
+EOF
+
 cat > "$U/notifier.service" <<EOF
 [Unit]
 Description=Type=notify service

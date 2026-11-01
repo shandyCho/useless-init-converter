@@ -54,7 +54,7 @@ Workstation machine.
 |---|---|
 | Memory | About the same: the median (total - available) is 1157 vs 1176 MiB (-19 MiB), within the normal 20-25 MiB variation between boots. |
 | Boot speed | Unknown: it has not been measured and compared. |
-| Security | Not better overall. PID 1 is smaller, but `uinitconverterd` and about 37 helper processes run as root, and the latest hardening comparison shows 1 of 28 services weaker on s6 (rtkit's mount namespace) and 1 to check (bolt's seccomp filter count). |
+| Security | Not better overall. PID 1 is smaller, but `uinitconverterd` and about 37 helper processes run as root, and the latest hardening comparison of 28 services shows no setting weaker on s6. It still flags bolt's seccomp filter count (9 vs 11): one filter here covers the three ABIs where systemd loads one per ABI. |
 | Less systemd | Only partly. udevd, logind and `systemd --user` still run (GNOME needs logind and `systemd --user`), and the `systemd` package stays installed. |
 
 **Costs compared with systemd**
@@ -65,9 +65,12 @@ Workstation machine.
   doesn't unlock. Details: [Not implemented (yet)](#not-implemented-yet).
 - **Limited testing:** real boots have only been checked on one machine.
 - **Known problems:** gnome-shell crashed during shutdown in 4 of 28 s6
-  shutdowns (none of the 34 shutdown requests in the systemd journal). The
-  samples are small and the cause is unknown. With `JOURNAL=no`, the service
-  logs under `/var/log/uinitconverter` are readable by any local user.
+  shutdowns (none of the 34 shutdown requests in the systemd journal). None has
+  crashed since the shutdown order changed on 2026-10-31, in at least 10
+  shutdowns, which is too few to call it fixed. One of those shutdowns had
+  gnome-shell hang for 5 s until it was aborted (0 of 61 under systemd), cause
+  unknown. With `JOURNAL=no`, the service logs under `/var/log/uinitconverter`
+  are readable by root and the `wheel` group.
 - **More to maintain:** about 23,000 lines of Rust, much of it running as
   root, plus the skarnet packages you have to build yourself.
 

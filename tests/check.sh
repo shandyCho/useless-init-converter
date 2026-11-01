@@ -940,6 +940,10 @@ call StopUnit ss prep@c.service replace >/dev/null 2>&1
 wait $sipid
 expect_eq "stop-instances" "$?:$(cat "$W/stop-instances.out")" "0:"
 t1=$(date +%s)
+sleep 1.5
+expect_eq "the display manager is asked down and stays down" "$(s6-svstat -o up,wantedup "$R/live/servicedirs/fake-dm.service" 2>/dev/null)" "false false"
+expect_eq "other services wait for s6-rc" "$(s6-svstat -o up "$R/live/servicedirs/hello.service" 2>/dev/null)" "true"
+s6-svc -u "$R/live/servicedirs/fake-dm.service"
 kill -0 "$(cat "$W/daemon.pid")" && ok "the daemon still runs after stop-instances" || bad "daemon gone after stop-instances"
 # Its ExecStop= made an activation: answered while the daemon stops units.
 [ $((t1 - t0)) -lt 5 ] && ok "bus answered while stopping at shutdown" || bad "prep@c's stop took $((t1 - t0)) s"

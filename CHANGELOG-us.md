@@ -12,6 +12,10 @@ versions. Release notes: [packages/release-notes](packages/release-notes).
   remounts `/sys` for the new network namespace, as systemd does. Before, such a
   service stayed in the host's mount namespace and `/sys/class/net` listed the
   host's devices. If the remount fails, the service still starts and logs it.
+- Shutdown asks the display manager (`display-manager.service`) to stop along
+  with the session scopes, as systemd stops them together. Before, gdm saw the
+  session end and tried to start a new greeter up to six times, each refused,
+  leaving six `gnome-session-init-worker` core files per shutdown.
 
 ### Changed
 - `.path` units' inotify and the fd store's socket handling use rustix instead
