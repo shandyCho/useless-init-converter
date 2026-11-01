@@ -236,7 +236,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 **권장 패키지:** earlyoom(systemd-oomd 대신), chrony, NetworkManager,
 rsyslog 또는 syslog-ng(`JOURNAL=no`일 때만).
 
-**빌드:** cargo와 rust. 본체는 zbus, tokio, futures-util, libc, rustix, jiff, serde를, 독립 도구는 libc만 씁니다
+**빌드:** cargo와 rust. 본체는 zbus, tokio, futures-util, libc, rustix, jiff, serde를, 독립 도구는 libc와 rustix를 씁니다(`uinitconverter-linkwatch`는 rustix만)
 (`Cargo.toml`).
 
 ## Fedora에서 테스트하기

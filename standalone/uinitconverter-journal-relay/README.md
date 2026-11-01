@@ -8,7 +8,7 @@ systemd-journald 없이 운영하는 시스템을 위한 도구입니다. journa
 이 소켓이 없으면 시작하지 않는 프로그램이 있어서 필요합니다.
 
 uinitconverter 프로젝트에서 분리한 독립 도구입니다. 다른 uinitconverter 구성 요소 없이
-빌드·설치·실행됩니다. 의존성은 libc와, 실행할 때 `/dev/log`를 여는 syslog
+빌드·설치·실행됩니다. 의존성은 libc와 rustix, 그리고 실행할 때 `/dev/log`를 여는 syslog
 데몬(rsyslog 등)입니다.
 
 ## 빌드

@@ -67,46 +67,33 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::store::{self, Store};
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
     use std::path::Path;
 
     fn connect(path: &Path) -> OwnedFd {
-        let p = path.display().to_string();
-        unsafe {
-            let fd = libc::socket(libc::AF_UNIX, libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC, 0);
-            assert!(fd >= 0);
-            let mut addr: libc::sockaddr_un = std::mem::zeroed();
-            addr.sun_family = libc::AF_UNIX as u16;
-            for (i, b) in p.bytes().enumerate() {
-                addr.sun_path[i] = b as libc::c_char;
-            }
-            let len = (std::mem::size_of::<libc::sa_family_t>() + p.len() + 1) as u32;
-            assert_eq!(
-                libc::connect(fd, &addr as *const _ as *const libc::sockaddr, len),
-                0
-            );
-            OwnedFd::from_raw_fd(fd)
-        }
+        use rustix::net;
+        let fd = net::socket_with(
+            net::AddressFamily::UNIX,
+            net::SocketType::SEQPACKET,
+            net::SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        net::connect(&fd, &net::SocketAddrUnix::new(path).unwrap()).unwrap();
+        fd
     }
 
-    fn request(path: &Path, msg: &str, fd: Option<i32>) -> Vec<Vec<u8>> {
+    fn request(path: &Path, msg: &str, fd: Option<BorrowedFd<'_>>) -> Vec<Vec<u8>> {
         let s = connect(path);
-        store::send(s.as_raw_fd(), msg.as_bytes(), fd).unwrap();
+        store::send(&s, msg.as_bytes(), fd).unwrap();
         let mut out = Vec::new();
         loop {
             let mut buf = [0u8; 256];
-            let n = unsafe {
-                libc::recv(
-                    s.as_raw_fd(),
-                    buf.as_mut_ptr() as *mut libc::c_void,
-                    buf.len(),
-                    0,
-                )
-            };
-            if n <= 0 {
+            let n = rustix::io::read(&s, &mut buf).unwrap_or(0);
+            if n == 0 {
                 break;
             }
-            let data = buf[..n as usize].to_vec();
+            let data = buf[..n].to_vec();
             let more = data.starts_with(b"FD\0");
             out.push(data);
             if !more {
@@ -114,6 +101,27 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn the_socket_is_private_and_a_silent_client_doesnt_stop_the_store() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "uinitconverter-fdstore-silent-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sock = dir.join("s");
+        Store::default().serve(&sock, |_| 0).unwrap();
+        let mode = std::fs::metadata(&sock).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let silent = connect(&sock);
+        let start = std::time::Instant::now();
+        assert_eq!(request(&sock, "GET\0nothing.service", None), [b"END"]);
+        let waited = start.elapsed();
+        assert!(waited < std::time::Duration::from_secs(5), "{waited:?}");
+        drop(silent);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -126,7 +134,7 @@ mod tests {
             .serve(&sock, |k| store::key_limit(k).unwrap_or(0))
             .unwrap();
         let file = std::fs::File::open("/dev/null").unwrap();
-        let fd = Some(file.as_raw_fd());
+        let fd = Some(file.as_fd());
 
         // A unit's key without <max>: the store knows no unit files, so 0.
         assert_eq!(
@@ -139,7 +147,7 @@ mod tests {
         assert_eq!(request(&sock, "PUT\0a.service\0x\x001", fd)[0], b"OK");
         let other = std::fs::File::open("/dev/null").unwrap();
         assert_eq!(
-            request(&sock, "PUT\0a.service\0y\x001", Some(other.as_raw_fd()))[0],
+            request(&sock, "PUT\0a.service\0y\x001", Some(other.as_fd()))[0],
             b"ERR fd store full"
         );
         // Held sockets have their own limit.
@@ -167,20 +175,20 @@ mod tests {
         // drops FDSTORE= fds on POLLHUP, so the key has room again.
         let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
         assert_eq!(
-            request(&sock, "PUT\0j.service\0stored\x001", Some(a.as_raw_fd()))[0],
+            request(&sock, "PUT\0j.service\0stored\x001", Some(a.as_fd()))[0],
             b"OK"
         );
         drop(b);
         let file = std::fs::File::open("/dev/null").unwrap();
         assert_eq!(
-            request(&sock, "PUT\0j.service\0stored\x001", Some(file.as_raw_fd()))[0],
+            request(&sock, "PUT\0j.service\0stored\x001", Some(file.as_fd()))[0],
             b"OK"
         );
         assert_eq!(request(&sock, "GET\0j.service", None).len(), 2);
         // Held sockets and stdio ("#" keys) stay.
         let (c, d) = std::os::unix::net::UnixStream::pair().unwrap();
         assert_eq!(
-            request(&sock, "PUT\0j.service#stdio\0stdin", Some(c.as_raw_fd()))[0],
+            request(&sock, "PUT\0j.service#stdio\0stdin", Some(c.as_fd()))[0],
             b"OK"
         );
         drop(d);
@@ -188,11 +196,11 @@ mod tests {
         // One socket as both stdin and stdout keeps both names.
         let (e, _f) = std::os::unix::net::UnixStream::pair().unwrap();
         assert_eq!(
-            request(&sock, "PUT\0k.service#stdio\0stdin", Some(e.as_raw_fd()))[0],
+            request(&sock, "PUT\0k.service#stdio\0stdin", Some(e.as_fd()))[0],
             b"OK"
         );
         assert_eq!(
-            request(&sock, "PUT\0k.service#stdio\0stdout", Some(e.as_raw_fd()))[0],
+            request(&sock, "PUT\0k.service#stdio\0stdout", Some(e.as_fd()))[0],
             b"OK"
         );
         assert_eq!(request(&sock, "GET\0k.service#stdio", None).len(), 3);

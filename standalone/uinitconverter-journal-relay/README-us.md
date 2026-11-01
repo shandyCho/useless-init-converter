@@ -9,7 +9,7 @@ rsyslog). Some programs, such as dbus-broker-launch, refuse to start when
 those sockets are missing.
 
 A standalone tool split out of uinitconverter. It builds, installs and runs without
-the other uinitconverter parts. It needs libc, and at run time a syslog daemon
+the other uinitconverter parts. It needs libc and rustix, and at run time a syslog daemon
 (rsyslog or another) on `/dev/log`.
 
 ## Build

@@ -8,7 +8,17 @@
 //! --no-block.
 
 use std::ffi::CString;
+use std::io::IoSlice;
+use std::mem::MaybeUninit;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::process::exit;
+
+use rustix::event::{poll, PollFd, PollFlags, Timespec};
+use rustix::io::Errno;
+use rustix::net;
+use rustix::pipe::{pipe_with, PipeFlags};
+use rustix::process::Pid;
+use rustix::time::{clock_gettime, ClockId};
 
 const USAGE: &str = "\
 usage: uinitconverter-notify [OPTIONS] [VAR=VALUE...]
@@ -32,7 +42,7 @@ usage: uinitconverter-notify [OPTIONS] [VAR=VALUE...]
 ";
 
 /// How long the barrier waits, as sd_notify_barrier()'s default.
-const BARRIER_TIMEOUT_MS: i32 = 5000;
+const BARRIER_TIMEOUT_SECS: i64 = 5;
 
 fn errno() -> std::io::Error {
     std::io::Error::last_os_error()
@@ -96,6 +106,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             s if s.starts_with("--uid=") => o.uid = Some(s[6..].to_string()),
             s if s.starts_with("--fd=") => {
                 let n: i32 = s[5..].parse().map_err(|_| format!("bad fd {}", &s[5..]))?;
+                // A number from the command line: on libc, as rustix only
+                // takes fds already known to be open.
                 if unsafe { libc::fcntl(n, libc::F_GETFD) } < 0 {
                     return Err(format!("fd {n}: {}", errno()));
                 }
@@ -126,15 +138,11 @@ fn parse(args: &[String]) -> Result<Opts, String> {
 }
 
 fn parent_pid() -> i32 {
-    unsafe { libc::getppid() }
+    Pid::as_raw(rustix::process::getppid())
 }
 
 fn monotonic_usec() -> u64 {
-    let mut ts = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    let ts = clock_gettime(ClockId::Monotonic);
     ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1000
 }
 
@@ -163,7 +171,13 @@ fn run(args: &[String]) -> i32 {
     // itself) or another PID was named.
     let source = o.pid.unwrap_or_else(parent_pid);
     let source = (source > 1).then_some(source);
-    if let Err(e) = send(&sock, o.lines.join("\n").as_bytes(), source, &o.fds) {
+    // SAFETY: parse() found each one open, and nothing here closes them.
+    let fds: Vec<BorrowedFd<'_>> = o
+        .fds
+        .iter()
+        .map(|&n| unsafe { BorrowedFd::borrow_raw(n) })
+        .collect();
+    if let Err(e) = send(&sock, o.lines.join("\n").as_bytes(), source, &fds) {
         eprintln!("uinitconverter-notify: {e}");
         return 1;
     }
@@ -214,119 +228,90 @@ fn become_user(name: &str) -> Result<(), String> {
 /// One datagram to $NOTIFY_SOCKET, with `fds` and, if `pid` is given,
 /// credentials naming it. Naming another process needs privileges: without
 /// them the message goes with our own (the kernel's default).
-fn send(sock: &str, data: &[u8], pid: Option<i32>, fds: &[i32]) -> std::io::Result<()> {
-    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
-    if fd < 0 {
-        return Err(errno());
-    }
-    let r = match pid {
-        Some(p) => match sendmsg(fd, sock, data, Some(p), fds) {
-            Err(e) if e.raw_os_error() == Some(libc::EPERM) => sendmsg(fd, sock, data, None, fds),
+fn send(sock: &str, data: &[u8], pid: Option<i32>, fds: &[BorrowedFd<'_>]) -> std::io::Result<()> {
+    let fd = net::socket_with(
+        net::AddressFamily::UNIX,
+        net::SocketType::DGRAM,
+        net::SocketFlags::CLOEXEC,
+        None,
+    )?;
+    let addr = socket_addr(sock)?;
+    match pid {
+        Some(p) => match sendmsg(&fd, &addr, data, Some(p), fds) {
+            Err(e) if e.raw_os_error() == Some(Errno::PERM.raw_os_error()) => {
+                sendmsg(&fd, &addr, data, None, fds)
+            }
             r => r,
         },
-        None => sendmsg(fd, sock, data, None, fds),
-    };
-    unsafe { libc::close(fd) };
-    r
+        None => sendmsg(&fd, &addr, data, None, fds),
+    }
 }
 
-fn sendmsg(fd: i32, sock: &str, data: &[u8], pid: Option<i32>, fds: &[i32]) -> std::io::Result<()> {
-    unsafe {
-        let mut addr: libc::sockaddr_un = std::mem::zeroed();
-        addr.sun_family = libc::AF_UNIX as u16;
-        if sock.len() >= addr.sun_path.len() {
-            return Err(std::io::Error::from_raw_os_error(libc::ENAMETOOLONG));
-        }
-        let abstract_ns = sock.starts_with('@');
-        for (i, b) in sock.bytes().enumerate() {
-            addr.sun_path[i] = if abstract_ns && i == 0 {
-                0
-            } else {
-                b as libc::c_char
-            };
-        }
-        let len = (std::mem::size_of::<libc::sa_family_t>()
-            + sock.len()
-            + usize::from(!abstract_ns)) as u32;
-        let mut iov = libc::iovec {
-            iov_base: data.as_ptr() as *mut libc::c_void,
-            iov_len: data.len(),
+/// A path, or @name for the abstract namespace.
+fn socket_addr(sock: &str) -> std::io::Result<net::SocketAddrUnix> {
+    // The size of sun_path.
+    if sock.len() >= 108 {
+        return Err(Errno::NAMETOOLONG.into());
+    }
+    Ok(match sock.strip_prefix('@') {
+        Some(name) => net::SocketAddrUnix::new_abstract_name(name.as_bytes())?,
+        None => net::SocketAddrUnix::new(sock)?,
+    })
+}
+
+/// Control data for one message; a message that needs more is refused.
+#[repr(align(8))]
+struct ControlSpace([MaybeUninit<u8>; 512]);
+
+fn sendmsg(
+    fd: &OwnedFd,
+    addr: &net::SocketAddrUnix,
+    data: &[u8],
+    pid: Option<i32>,
+    fds: &[BorrowedFd<'_>],
+) -> std::io::Result<()> {
+    let mut space = ControlSpace([MaybeUninit::uninit(); 512]);
+    let mut control = net::SendAncillaryBuffer::new(&mut space.0);
+    if let Some(p) = pid {
+        let cred = net::UCred {
+            pid: Pid::from_raw(p).ok_or(Errno::INVAL)?,
+            uid: rustix::process::geteuid(),
+            gid: rustix::process::getegid(),
         };
-        // u64s: aligned for cmsghdr, as a byte array is not.
-        let mut cbuf = [0u64; 64];
-        let mut msg: libc::msghdr = std::mem::zeroed();
-        msg.msg_name = &mut addr as *mut _ as *mut libc::c_void;
-        msg.msg_namelen = len;
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        let cred_space = libc::CMSG_SPACE(std::mem::size_of::<libc::ucred>() as u32) as usize;
-        let fds_space = libc::CMSG_SPACE(std::mem::size_of_val(fds) as u32) as usize;
-        let mut total = 0;
-        if pid.is_some() {
-            total += cred_space;
-        }
-        if !fds.is_empty() {
-            total += fds_space;
-        }
-        if total > std::mem::size_of_val(&cbuf) {
-            return Err(std::io::Error::from_raw_os_error(libc::E2BIG));
-        }
-        if total > 0 {
-            msg.msg_control = cbuf.as_mut_ptr() as *mut libc::c_void;
-            msg.msg_controllen = total as _;
-            let mut c = libc::CMSG_FIRSTHDR(&msg);
-            if let Some(p) = pid {
-                (*c).cmsg_level = libc::SOL_SOCKET;
-                (*c).cmsg_type = libc::SCM_CREDENTIALS;
-                (*c).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<libc::ucred>() as u32) as _;
-                let cred = libc::ucred {
-                    pid: p,
-                    uid: libc::geteuid(),
-                    gid: libc::getegid(),
-                };
-                std::ptr::write_unaligned(libc::CMSG_DATA(c) as *mut libc::ucred, cred);
-                c = libc::CMSG_NXTHDR(&msg, c);
-            }
-            if !fds.is_empty() {
-                (*c).cmsg_level = libc::SOL_SOCKET;
-                (*c).cmsg_type = libc::SCM_RIGHTS;
-                (*c).cmsg_len = libc::CMSG_LEN(std::mem::size_of_val(fds) as u32) as _;
-                let d = libc::CMSG_DATA(c) as *mut i32;
-                for (i, f) in fds.iter().enumerate() {
-                    std::ptr::write_unaligned(d.add(i), *f);
-                }
-            }
-        }
-        if libc::sendmsg(fd, &msg, libc::MSG_NOSIGNAL) < 0 {
-            return Err(errno());
+        if !control.push(net::SendAncillaryMessage::ScmCredentials(cred)) {
+            return Err(Errno::TOOBIG.into());
         }
     }
+    if !fds.is_empty() && !control.push(net::SendAncillaryMessage::ScmRights(fds)) {
+        return Err(Errno::TOOBIG.into());
+    }
+    net::sendmsg_addr(
+        fd,
+        addr,
+        &[IoSlice::new(data)],
+        &mut control,
+        net::SendFlags::NOSIGNAL,
+    )?;
     Ok(())
 }
 
 /// sd_notify_barrier(): send BARRIER=1 with the write end of a pipe, and
 /// wait for the manager to close it, i.e. to have read what came before.
 fn barrier(sock: &str, pid: Option<i32>) -> Result<(), String> {
-    let mut p = [0i32; 2];
-    if unsafe { libc::pipe2(p.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
-        return Err(errno().to_string());
+    let (read, write) = pipe_with(PipeFlags::CLOEXEC).map_err(|e| e.to_string())?;
+    let sent = send(sock, b"BARRIER=1", pid, &[write.as_fd()]);
+    drop(write);
+    sent.map_err(|e| e.to_string())?;
+    let mut p = [PollFd::new(&read, PollFlags::empty())];
+    let timeout = Timespec {
+        tv_sec: BARRIER_TIMEOUT_SECS,
+        tv_nsec: 0,
+    };
+    match poll(&mut p, Some(&timeout)) {
+        Ok(0) => Err("timed out".into()),
+        Ok(_) => Ok(()),
+        Err(e) => Err(e.to_string()),
     }
-    let r = send(sock, b"BARRIER=1", pid, &[p[1]]);
-    unsafe { libc::close(p[1]) };
-    let out = r.map_err(|e| e.to_string()).and_then(|()| {
-        let mut pfd = libc::pollfd {
-            fd: p[0],
-            events: 0,
-            revents: 0,
-        };
-        match unsafe { libc::poll(&mut pfd, 1, BARRIER_TIMEOUT_MS) } {
-            n if n > 0 => Ok(()),
-            0 => Err("timed out".into()),
-            _ => Err(errno().to_string()),
-        }
-    });
-    unsafe { libc::close(p[0]) };
-    out
 }
 
 #[cfg(test)]
@@ -354,6 +339,185 @@ mod tests {
         assert!(parse(&args(&["--exec", "--ready"])).is_err());
         assert!(parse(&args(&["--bogus"])).is_err());
         assert_eq!(parse(&args(&["--pid"])).unwrap().pid, Some(parent_pid()));
+    }
+
+    /// One datagram with its credentials and fds, as a manager reads it.
+    fn receive(
+        rx: &std::os::unix::net::UnixDatagram,
+    ) -> (Vec<u8>, Option<libc::ucred>, Vec<std::fs::File>) {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let mut buf = vec![0u8; 4096];
+        let mut control = [0u64; 512];
+        unsafe {
+            let mut iov = libc::iovec {
+                iov_base: buf.as_mut_ptr().cast(),
+                iov_len: buf.len(),
+            };
+            let mut msg: libc::msghdr = std::mem::zeroed();
+            msg.msg_iov = &mut iov;
+            msg.msg_iovlen = 1;
+            msg.msg_control = control.as_mut_ptr().cast();
+            msg.msg_controllen = std::mem::size_of_val(&control) as _;
+            let n = libc::recvmsg(rx.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC);
+            assert!(n >= 0, "{}", errno());
+            buf.truncate(n as usize);
+            let (mut cred, mut fds) = (None, Vec::new());
+            let mut c = libc::CMSG_FIRSTHDR(&msg);
+            while !c.is_null() {
+                if (*c).cmsg_type == libc::SCM_CREDENTIALS {
+                    cred = Some(std::ptr::read_unaligned(
+                        libc::CMSG_DATA(c) as *const libc::ucred
+                    ));
+                } else if (*c).cmsg_type == libc::SCM_RIGHTS {
+                    let count = ((*c).cmsg_len as usize - libc::CMSG_LEN(0) as usize) / 4;
+                    let d = libc::CMSG_DATA(c) as *const i32;
+                    for i in 0..count {
+                        fds.push(std::fs::File::from_raw_fd(std::ptr::read_unaligned(
+                            d.add(i),
+                        )));
+                    }
+                }
+                c = libc::CMSG_NXTHDR(&msg, c);
+            }
+            (buf, cred, fds)
+        }
+    }
+
+    /// A socket at a temporary path that asks for credentials.
+    fn listening(name: &str) -> (std::os::unix::net::UnixDatagram, std::path::PathBuf) {
+        use std::os::fd::AsRawFd;
+        let path = std::env::temp_dir().join(format!(
+            "uinitconverter-notify-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let rx = std::os::unix::net::UnixDatagram::bind(&path).unwrap();
+        let on: libc::c_int = 1;
+        let r = unsafe {
+            libc::setsockopt(
+                rx.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PASSCRED,
+                &on as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as u32,
+            )
+        };
+        assert_eq!(r, 0);
+        (rx, path)
+    }
+
+    #[test]
+    fn credentials_and_fds_go_together() {
+        use std::io::{Read, Write};
+        let (rx, path) = listening("creds");
+        let (mut a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+        let me = std::process::id() as i32;
+        send(
+            &path.display().to_string(),
+            b"FDSTORE=1",
+            Some(me),
+            &[b.as_fd()],
+        )
+        .unwrap();
+        let (data, cred, mut fds) = receive(&rx);
+        assert_eq!(data, b"FDSTORE=1");
+        let cred = cred.unwrap();
+        assert_eq!(cred.pid, me);
+        assert_eq!(cred.uid, unsafe { libc::geteuid() });
+        assert_eq!(cred.gid, unsafe { libc::getegid() });
+        assert_eq!(fds.len(), 1);
+        fds[0].write_all(b"x").unwrap();
+        let mut one = [0u8; 1];
+        a.read_exact(&mut one).unwrap();
+        assert_eq!(&one, b"x");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Naming another process takes privileges; without them the message
+    /// still goes, with our own credentials.
+    #[test]
+    fn naming_another_pid_falls_back_to_our_own() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let (rx, path) = listening("other");
+        send(&path.display().to_string(), b"READY=1", Some(1), &[]).unwrap();
+        let (data, cred, _) = receive(&rx);
+        assert_eq!(data, b"READY=1");
+        assert_eq!(cred.unwrap().pid, std::process::id() as i32);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn abstract_socket() {
+        use std::os::linux::net::SocketAddrExt;
+        let name = format!("uinitconverter-notify-test-{}", std::process::id());
+        let addr = std::os::unix::net::SocketAddr::from_abstract_name(&name).unwrap();
+        let rx = std::os::unix::net::UnixDatagram::bind_addr(&addr).unwrap();
+        send(&format!("@{name}"), b"READY=1", None, &[]).unwrap();
+        let mut buf = [0u8; 64];
+        let n = rx.recv(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"READY=1");
+    }
+
+    #[test]
+    fn sending_fails_with_the_right_error() {
+        let long = format!("/tmp/{}", "x".repeat(120));
+        let e = send(&long, b"x", None, &[]).unwrap_err();
+        assert_eq!(e.raw_os_error(), Some(libc::ENAMETOOLONG));
+        let e = send("/nonexistent/socket", b"x", None, &[]).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// 512 bytes of control data: 124 fds fit and the next one doesn't.
+    #[test]
+    fn too_many_fds_are_refused() {
+        let (rx, path) = listening("many");
+        let f = std::fs::File::open("/dev/null").unwrap();
+        let sock = path.display().to_string();
+        send(&sock, b"x", None, &[f.as_fd(); 124]).unwrap();
+        let (_, _, fds) = receive(&rx);
+        assert_eq!(fds.len(), 124);
+        let e = send(&sock, b"x", None, &[f.as_fd(); 125]).unwrap_err();
+        assert_eq!(e.raw_os_error(), Some(libc::E2BIG));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_barrier_times_out_if_nobody_closes_the_pipe() {
+        let (rx, path) = listening("barrier");
+        let start = std::time::Instant::now();
+        let sock = path.display().to_string();
+        let t = std::thread::spawn(move || {
+            let held = receive(&rx);
+            std::thread::sleep(std::time::Duration::from_millis(5500));
+            drop(held);
+        });
+        assert_eq!(barrier(&sock, None).unwrap_err(), "timed out");
+        assert!(start.elapsed() >= std::time::Duration::from_millis(4900));
+        t.join().unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn bad_fds_are_refused() {
+        assert!(parse(&args(&["--fd=-1"])).is_err());
+        assert!(parse(&args(&["--fd=999999"])).is_err());
+        assert!(parse(&args(&["--fd=x"])).is_err());
+        assert_eq!(parse(&args(&["--fd=0"])).unwrap().fds, [0]);
+    }
+
+    #[test]
+    fn monotonic_time_goes_on() {
+        let a = monotonic_usec();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let b = monotonic_usec();
+        assert!(a > 0 && b >= a + 2000, "{a} {b}");
+        let uptime = std::fs::read_to_string("/proc/uptime").unwrap();
+        let up: f64 = uptime.split_whitespace().next().unwrap().parse().unwrap();
+        // CLOCK_MONOTONIC leaves out suspend and /proc/uptime doesn't, so
+        // this is the larger one, or the same.
+        assert!((b as f64 / 1e6) <= up + 5.0, "{b} {up}");
     }
 
     #[test]

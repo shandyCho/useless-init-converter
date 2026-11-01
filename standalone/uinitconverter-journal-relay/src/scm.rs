@@ -1,5 +1,9 @@
 //! Receiving a datagram together with its fds (SCM_RIGHTS) and the
 //! sender's credentials (SCM_CREDENTIALS).
+//!
+//! On libc, not rustix: the kernel reports pid 0 for a sender it has no pid
+//! for, and rustix's UCred holds a non-zero Pid, so reading that through rustix
+//! would be undefined behaviour. The sockets here are world-writable.
 
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 

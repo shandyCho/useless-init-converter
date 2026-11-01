@@ -25,6 +25,8 @@ use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use rustix::net::sockopt;
+
 /// Longest log line read from a stream (journald's LINE_MAX); longer lines
 /// are split.
 const LINE_MAX: u64 = 48 * 1024;
@@ -227,18 +229,8 @@ fn comm(pid: u32) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn set_opt(fd: RawFd, opt: libc::c_int, val: libc::c_int) {
-    unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            opt,
-            &val as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as u32,
-        );
-    }
-}
-
+/// On libc, not rustix: the kernel reports pid 0 for a peer outside our PID
+/// namespace, and rustix's UCred holds a non-zero Pid. So does scm.rs.
 fn peer_pid(s: &UnixStream) -> Option<u32> {
     let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
@@ -305,8 +297,8 @@ impl Relay {
                 .map_err(|e| format!("{}: {e}", p.display()))?;
         }
         // The sender's pid for SYSLOG_PID-less entries.
-        set_opt(dgram.as_raw_fd(), libc::SO_PASSCRED, 1);
-        set_opt(dgram.as_raw_fd(), libc::SO_RCVBUF, 8 << 20);
+        let _ = sockopt::set_socket_passcred(&dgram, true);
+        let _ = sockopt::set_socket_recv_buffer_size(&dgram, 8 << 20);
 
         let relay = Arc::new(self);
         let r = relay.clone();
@@ -421,6 +413,83 @@ fn read_from_start(mut f: std::fs::File) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole path: a client's datagram and stream reach syslog, with the
+    /// sender's pid from the credentials (SO_PASSCRED set on the socket).
+    #[test]
+    fn relays_to_syslog_with_the_senders_pid() {
+        let dir =
+            std::env::temp_dir().join(format!("uinitconverter-relay-e2e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("log");
+        let syslog = UnixDatagram::bind(&log).unwrap();
+        syslog
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        Relay::new(&dir, &log).unwrap().start().unwrap();
+        let me = std::process::id();
+        let mut buf = [0u8; 256];
+
+        let c = UnixDatagram::unbound().unwrap();
+        c.send_to(b"SYSLOG_IDENTIFIER=t\nMESSAGE=hello\n", dir.join("socket"))
+            .unwrap();
+        let n = syslog.recv(&mut buf).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&buf[..n]),
+            format!("<14>t[{me}]: hello")
+        );
+
+        use std::io::Write;
+        let mut s = UnixStream::connect(dir.join("stdout")).unwrap();
+        s.write_all(b"t2\n\n6\n0\n0\n0\n0\nline\n").unwrap();
+        let n = syslog.recv(&mut buf).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&buf[..n]),
+            format!("<14>t2[{me}]: line")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The kernel doubles what it's given; the size must get there unchanged.
+    #[test]
+    fn the_receive_buffer_size_is_set() {
+        let (a, _b) = UnixDatagram::pair().unwrap();
+        sockopt::set_socket_recv_buffer_size(&a, 4096).unwrap();
+        let (mut got, mut len) = (0 as libc::c_int, 4 as libc::socklen_t);
+        let r = unsafe {
+            libc::getsockopt(
+                a.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                &mut got as *mut _ as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        assert_eq!((r, got), (0, 8192));
+    }
+
+    #[test]
+    fn the_peers_pid() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        assert_eq!(peer_pid(&a), Some(std::process::id()));
+    }
+
+    /// The kernel reports pid 0 for a sender it has no pid for: here a
+    /// datagram sent before the receiver set SO_PASSCRED. This is why scm.rs
+    /// stays on libc: rustix's UCred holds a non-zero Pid.
+    #[test]
+    fn credentials_with_pid_zero_are_read() {
+        let (a, b) = UnixDatagram::pair().unwrap();
+        a.send(b"early").unwrap();
+        sockopt::set_socket_passcred(&b, true).unwrap();
+        a.send(b"late").unwrap();
+        let (data, _, cred) = crate::scm::recv_max(b.as_raw_fd(), 64).unwrap();
+        assert_eq!((data.as_slice(), cred.unwrap().pid), (&b"early"[..], 0));
+        let (data, _, cred) = crate::scm::recv_max(b.as_raw_fd(), 2).unwrap();
+        assert_eq!(data, b"la", "cut to the buffer");
+        assert_eq!(cred.unwrap().pid, std::process::id() as i32);
+    }
 
     #[test]
     fn memfd_from_start() {

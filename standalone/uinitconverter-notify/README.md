@@ -7,7 +7,7 @@
 서비스 관리자라면 어디서든 동작합니다(systemd, uinitconverter 등).
 
 uinitconverter 프로젝트에서 분리한 독립 도구입니다. 다른 uinitconverter 구성 요소 없이
-빌드·설치·실행됩니다. 의존성은 libc뿐입니다.
+빌드·설치·실행됩니다. 의존성은 libc와 rustix입니다.
 
 ## 빌드
 

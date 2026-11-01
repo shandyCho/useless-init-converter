@@ -5,7 +5,7 @@ edition = "2021"
 description = "Unblocks s6-rc-update and s6-svlink when they missed a new supervisor's start event"
 
 [dependencies]
-libc = "0.2"
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "param", "process"] }
 
 [profile.release]
 lto = true

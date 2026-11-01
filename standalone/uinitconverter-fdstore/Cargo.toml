@@ -6,6 +6,7 @@ description = "Holds file descriptors (systemd's FDSTORE=) for services, apart f
 
 [dependencies]
 libc = "0.2"
+rustix = { version = "1.1", default-features = false, features = ["std", "event", "fs", "net", "process"] }
 
 [profile.release]
 lto = true

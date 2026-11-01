@@ -28,6 +28,9 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::time::Duration;
 
+use rustix::fs::OFlags;
+use rustix::process::{fcntl_getlk, Flock, FlockType};
+
 const USAGE: &str = "\
 usage: uinitconverter-linkwatch [--after SECONDS] [--interval SECONDS] [--under DIR] [--once]
 
@@ -73,7 +76,7 @@ fn send_event(fd_link: &Path, fifo: &Path, uid: u32) -> std::io::Result<()> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let mut f = fs::OpenOptions::new()
         .write(true)
-        .custom_flags(libc::O_NONBLOCK)
+        .custom_flags(OFlags::NONBLOCK.bits() as i32)
         .open(fd_link)?;
     let got = f.metadata()?;
     let named = fs::metadata(fifo)?;
@@ -95,15 +98,13 @@ fn comm(proc_dir: &Path, pid: u32) -> Option<String> {
 /// Whether another process holds a lock on `path`, as skalibs'
 /// fd_islocked() asks (s6-supervise's supervise/lock, fcntl locks).
 fn lock_held(path: &Path) -> bool {
-    use std::os::fd::AsRawFd;
     let Ok(f) = fs::File::open(path) else {
         return false;
     };
-    let mut fl: libc::flock = unsafe { std::mem::zeroed() };
-    fl.l_type = libc::F_RDLCK as libc::c_short;
-    fl.l_whence = libc::SEEK_SET as libc::c_short;
-    let r = unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GETLK, &mut fl) };
-    r == 0 && fl.l_type != libc::F_UNLCK as libc::c_short
+    matches!(
+        fcntl_getlk(&f, &Flock::from(FlockType::ReadLock)),
+        Ok(Some(_))
+    )
 }
 
 /// The service directory of an s6-ftrigrd fifo: DIR/event/ftrig1:...
@@ -203,6 +204,15 @@ impl Watch {
     }
 }
 
+/// The unit of the start time in /proc/PID/stat.
+fn clock_ticks() -> f64 {
+    rustix::param::clock_ticks_per_second() as f64
+}
+
+fn effective_uid() -> u32 {
+    rustix::process::geteuid().as_raw()
+}
+
 fn main() {
     let mut after = 10.0;
     let mut interval = 2.0;
@@ -233,14 +243,12 @@ fn main() {
             o => die(&format!("unknown option {o}")),
         }
     }
-    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
-    let uid = unsafe { libc::geteuid() };
     let mut w = Watch {
         proc_dir: PathBuf::from("/proc"),
         after,
-        hz,
+        hz: clock_ticks(),
         under,
-        uid,
+        uid: effective_uid(),
         sent: HashSet::new(),
     };
     loop {
@@ -257,6 +265,49 @@ mod tests {
     use super::*;
     use std::io::{BufRead, Read};
     use std::process::{Command, Stdio};
+
+    fn make_fifo(p: &Path) {
+        use rustix::fs::{mknodat, FileType, Mode, CWD};
+        mknodat(CWD, p, FileType::Fifo, Mode::from_raw_mode(0o600), 0).unwrap();
+    }
+
+    #[test]
+    fn clock_and_uid() {
+        // USER_HZ on every Linux this runs on.
+        assert_eq!(clock_ticks(), 100.0);
+        use std::os::unix::fs::MetadataExt;
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-lw-uid-{}", std::process::id()));
+        fs::write(&tmp, "").unwrap();
+        assert_eq!(fs::metadata(&tmp).unwrap().uid(), effective_uid());
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn a_lock_only_counts_if_someone_holds_it() {
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-lw-lock-{}", std::process::id()));
+        fs::write(&tmp, "").unwrap();
+        assert!(!lock_held(&tmp), "nobody holds it");
+        assert!(!lock_held(&tmp.join("missing")), "no file");
+        let _ = fs::remove_file(&tmp);
+    }
+
+    /// A fifo nobody reads: the event fails at once instead of blocking, which
+    /// would stop the whole watch.
+    #[test]
+    fn writing_to_a_fifo_without_a_reader_doesnt_block() {
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-lw-fifo-{}", std::process::id()));
+        let _ = fs::remove_file(&tmp);
+        make_fifo(&tmp);
+        let e = send_event(&tmp, &tmp, effective_uid()).unwrap_err();
+        assert_eq!(
+            e.raw_os_error(),
+            Some(rustix::io::Errno::NXIO.raw_os_error())
+        );
+        let _ = fs::remove_file(&tmp);
+    }
 
     #[test]
     fn stat_fields() {
@@ -295,12 +346,11 @@ mod tests {
             fs::create_dir_all(tmp.join(svc).join("supervise")).unwrap();
             fs::write(tmp.join(svc).join("supervise/lock"), "").unwrap();
             let p = d.join("ftrig1:@40000000:abc");
-            let c = std::ffi::CString::new(p.to_str().unwrap()).unwrap();
-            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+            make_fifo(&p);
             p
         };
         let (up, down) = (fifo("up.service"), fifo("down.service"));
-        let me = unsafe { libc::geteuid() };
+        let me = effective_uid();
         let proc_as = |pid: u32, comm: &str, ppid: u32, start: u64, uid: u32| {
             let d = proc_dir.join(pid.to_string());
             fs::create_dir_all(d.join("fd")).unwrap();
@@ -354,7 +404,7 @@ mod tests {
         // The waiter's read end.
         let mut reader = fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NONBLOCK)
+            .custom_flags(OFlags::NONBLOCK.bits() as i32)
             .open(&up)
             .unwrap();
 

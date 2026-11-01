@@ -7,7 +7,7 @@ new supervisor's start event that came before they listened.
 
 A standalone tool split out of uinitconverter. It reads no configuration and builds,
 installs and runs without the other uinitconverter parts. Its only dependency is
-libc; what it watches is s6's.
+rustix; what it watches is s6's.
 
 ## Why
 

@@ -9,7 +9,7 @@ gives them back after the service or the service manager restarts.
 
 A standalone tool split out of uinitconverter. It reads no configuration and no
 unit files, and builds, installs and runs without the other uinitconverter parts.
-Its only dependency is libc.
+It depends on libc and rustix.
 
 ## Build
 

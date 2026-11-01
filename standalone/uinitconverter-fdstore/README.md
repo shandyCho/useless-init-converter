@@ -8,7 +8,7 @@
 돌려줍니다.
 
 uinitconverter 프로젝트에서 분리한 독립 도구입니다. 설정 파일도 유닛 파일도 읽지
-않으며, 다른 uinitconverter 구성 요소 없이 빌드·설치·실행됩니다. 의존성은 libc뿐입니다.
+않으며, 다른 uinitconverter 구성 요소 없이 빌드·설치·실행됩니다. 의존성은 libc와 rustix입니다.
 
 ## 빌드
 

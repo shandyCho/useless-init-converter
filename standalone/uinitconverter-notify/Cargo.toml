@@ -6,6 +6,7 @@ description = "systemd-notify replacement: sends sd_notify messages to $NOTIFY_S
 
 [dependencies]
 libc = "0.2"
+rustix = { version = "1.1", default-features = false, features = ["std", "event", "net", "pipe", "process", "time"] }
 
 [profile.release]
 lto = true
