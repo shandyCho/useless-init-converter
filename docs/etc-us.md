@@ -29,8 +29,8 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 **There is little measurable benefit over booting with systemd. The main gain
 is control:** you get Fedora and GNOME with s6 as PID 1, managed with s6's
 tools. If you don't specifically want s6, plain systemd is the better choice.
-The numbers and problems below are as of 2026-10-31, from one Fedora 45
-Workstation machine.
+The numbers and problems below are as of 2026-11-02, from one Fedora 45
+Workstation machine. The systemd numbers are from boots up to 2026-10-31.
 
 **Real benefits**
 
@@ -52,9 +52,9 @@ Workstation machine.
 
 | Area | Result on s6 compared with systemd |
 |---|---|
-| Memory | About the same: the median (total - available) is 1157 vs 1176 MiB (-19 MiB), within the normal 20-25 MiB variation between boots. |
-| Boot speed | Unknown: it has not been measured and compared. |
-| Security | Not better overall. PID 1 is smaller, but `uinitconverterd` and about 37 helper processes run as root, and the latest hardening comparison of 28 services shows no setting weaker on s6. It still flags bolt's seccomp filter count (9 vs 11): one filter here covers the three ABIs where systemd loads one per ABI. |
+| Memory | About the same: the median (total - available) is 1154 vs 1176 MiB (-23 MiB; 21 s6 and 6 systemd snapshots), about the normal 20-25 MiB variation between boots. |
+| Boot speed | Perhaps faster, but not shown by a controlled test: from kernel start to the login screen's session opening, the median in the logs is about 19 vs 28 s (23 s6 and 11 systemd boots, excluding firmware and boot loader). Those boots ran on different days, with different builds and initramfs images, and the session opens before the login screen appears. |
+| Security | Not better overall. PID 1 is smaller, but `uinitconverterd` and about 37 helper processes run as root, and the latest hardening comparison of 28 services shows no setting weaker on s6 (98 differ). It still flags bolt's seccomp filter count (9 vs 11): one filter here covers the three ABIs where systemd loads one per ABI. |
 | Less systemd | Only partly. udevd, logind and `systemd --user` still run (GNOME needs logind and `systemd --user`), and the `systemd` package stays installed. |
 
 **Costs compared with systemd**
@@ -66,12 +66,12 @@ Workstation machine.
 - **Limited testing:** real boots have only been checked on one machine.
 - **Known problems:** gnome-shell crashed during shutdown in 4 of 28 s6
   shutdowns (none of the 34 shutdown requests in the systemd journal). None has
-  crashed since the shutdown order changed on 2026-10-31, in at least 10
+  crashed since the shutdown order changed on 2026-10-31, in at least 14
   shutdowns, which is too few to call it fixed. One of those shutdowns had
   gnome-shell hang for 5 s until it was aborted (0 of 61 under systemd), cause
   unknown. With `JOURNAL=no`, the service logs under `/var/log/uinitconverter`
   are readable by root and the `wheel` group.
-- **More to maintain:** about 23,000 lines of Rust, much of it running as
+- **More to maintain:** about 29,000 lines of Rust, much of it running as
   root, plus the skarnet packages you have to build yourself.
 
 ## Components
