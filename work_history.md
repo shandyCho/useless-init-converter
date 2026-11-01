@@ -9684,3 +9684,87 @@ main at df2a258, ahead of origin/main (3bc583e), with the history commit on top.
 1. Owner: push main.
 2. A first-install run of README on a fresh Fedora 45 VM, the only real test of it.
 3. Part 103's step 2 and the rest as part 105.
+
+## 2026-11-01, part 107: the empty `shutdown scopes` grep read (no code change)
+
+Owner ran part 103's step 2: `sudo grep 'shutdown scopes' /var/log/messages` printed nothing.
+
+**Why: the only shutdown since the install ran the old daemon, so this says nothing about the line.** g3bc583e was installed at 20:44:35. The one shutdown after that, 21:07, ended a boot from about 20:00: the greeter stopped at login at 20:15:11 after 15 min 16 s, and packages/uinitconverterd.spec has no restart. So the daemon that shut down was g3016505, which lacks the line. This is inferred from those times; the daemon's version at 21:07 wasn't read directly. Now: the daemon started 21:08:11, after the install, and the installed binary contains the string (1 match). The line's route is fine: main.rs tees the daemon's stderr to syslog. **The line still has never run.**
+
+**21:07's order was ordinary (the order only; the shutdown wasn't: part 108 found the shell hung and was aborted there):** user@1000's shell `Consumed` 21:07:35.195, exit.target .228, 33 ms later. The other pasted exit.targets aren't shutdowns: 20:45:04 and 21:27:23 are user@0, 21:24:10 is the greeter (user@60578) at login, 10 s after its shell ended, like 20:15.
+
+### Current state
+
+As part 106; this entry uncommitted. Installed and booted: core g3bc583e, since 21:07:55. No shutdown yet with the line.
+
+### Next steps
+
+1. Owner: after the next shutdown, `sudo grep 'shutdown scopes' /var/log/messages | tail -5`, against part 79's grep. Expect two lines per shutdown, the second with an empty list. An empty result then would be a real problem; `sudo grep 'shutdown scopes' /var/log/uinitconverter/last-shutdown-console.log` then tells whether it ran at all.
+2. Rest as part 106.
+
+## 2026-11-01, part 108: the line's first run; a shell hang found at 21:07 (no code change)
+
+Owner ran part 107's step 1 after the 21:30 shutdown.
+
+**The line works.** Syslog has 21:30:57.253 `shutdown scopes [session-2.scope]: 0 not empty after 0.699 s` and .661 `[]: 0 not empty after 0.000 s`: the two lines part 107 expected, the second at s6-rc's SIGTERM. Against user@1000's log: shell `Consumed` .251, wait ends .253, exit.target .281. So the scope emptied when the shell ended, and the manager's exit followed the wait. This is an ordinary shutdown; the odd case of 19:55 hasn't recurred, so its cause is still not found. Session order odd: 1 of 11 (19:55; 21:07 and 21:30 both shell first). The other pasted exit.targets aren't shutdowns: 21:49:24 is the greeter at login, 10 s after its shell (the file names show user@60578), 21:27:23 and 21:51:23 are user@0.
+
+**Found while running part 79's crash grep, which part 107 had not run: gnome-shell hung at the 21:07 shutdown and was aborted.** user@1000: 21:07:34.068 `State 'stop-sigterm' timed out. Aborting.`, SIGABRT to gnome-shell, 35.170 `code=dumped, status=6/ABRT`, 35.195 `Failed with result 'timeout'`. The unit has TimeoutStopSec=5, so its stop began about 21:07:29.07 (inferred). Clean after it: 21:30. This is not one of part 74's SEGVs: last SEGV is still 10-31 16:57, 0 of 10 shutdowns on the new order. It is a different failure: 1 hang in those 10, and it's the only `stop-sigterm` timeout of a shell in the s6 logs. Systemd journal since 10-18: 61 shell `Consumed` lines, 0 such timeouts, so it hasn't been seen under systemd, at low numbers.
+
+Costs: about 6.4 s on that shutdown. exit.target still came 33 ms after the shell's `Consumed`, so the scope wait held through the hang; that daemon was g3016505 by part 107's inference.
+
+**Where it hung, from the core** (/var/lib/systemd/coredump/core.gnome-shell.1000.bf8da6bf....10834...zst, readable by the owner through its ACL; `coredumpctl` lists nothing on s6; `eu-stack`, no gdb here and no debuginfo, so function names only). Main thread: `meta_context_run_main_loop` → `wayland_event_source_prepare` → `wl_display_flush_clients` → `wl_client_destroy` → `xdg_wm_base_destructor` → `xdg_toplevel_destructor` → `meta_wayland_shell_surface_destroy_window` → `meta_x11_display_get_current_time_roundtrip` → `XIfEvent`. So a Wayland client's connection died, and while removing its window mutter made an X round trip to Xwayland that didn't finish in 5 s. Firefox's scope ended 28.968 and Ptyxis 28.84, just before the stop, but which client this was isn't known.
+
+The interrupted address is libX11 0xc2c77, the instruction after `_XReadEvents` in XIfEvent's empty-queue path, not inside a poll. One sample: it can't tell a spin from a blocked wait that had just woken. **Not known:** Xwayland's state then, why it didn't answer, and whether uinitconverter has anything to do with it. Nothing here points at the init side yet beyond 0 of 61 under systemd. No fix proposed; this is a mutter/Xwayland path, and only its trigger could be ours. The 643 MB decompressed copy was deleted; the core stays in place until systemd-tmpfiles ages it out.
+
+**Also seen, not explained: the greeter's shell never ran past 15 min 23 s, and 10 of the last 25 ended between 15:15 and 15:24** (10-29 to 11-01, including 20:15, 21:24, 21:49). Human logins don't land in an 8-second window that often. Each ending is a login: at 21:24 the user shell started 3 s before the greeter's ended. /etc/gdm/custom.conf has no timed login. The owner's gsettings are sleep 3600/'nothing', but the greeter's own weren't read. Part 107 took the 15 min 16 s for ordinary. Only the owner can say whether logins really happened then, or whether a login waited.
+
+Tests: none, nothing changed.
+
+### Current state
+
+As part 106; parts 107-108 uncommitted. Installed and booted: core g3bc583e, since 21:31:18. The scope line has run once, on an ordinary shutdown.
+
+### Next steps
+
+1. Owner: did the login at 21:49 (and earlier ones) happen when it was typed, or did it sit for a while? Is the machine left at the login screen about 15 min? That decides whether the greeter's 15 min is a bug.
+2. After each shutdown: `grep -hE "Shell@.*(code=dumped|timed out)" /var/log/uinitconverter/user@*/current | sort | tail -5` with the `shutdown scopes` grep. A second hang: run `eu-stack` on its core and look at Xwayland, starting with whether it's alive at shutdown.
+3. Odd exit.target: read the scope line on the next one. Rest as part 106.
+
+## 2026-11-01, part 109: part 108's login question answered; memtest to be removed (no code change)
+
+Owner: they sat waiting for the memory compare service at the login screen, and no longer need it, so asked to disable it. So logins weren't being held back, and part 108's step 1 is answered, mostly. The service is memtest-uinitconverter.service: on every boot it sleeps 600 s, then takes a snapshot, measured at the greeter. This boot it started 21:31:35 and finished 21:41:38.
+
+**Not fully explained (part 110 explains it: suspend):** the snapshot ends about 10 min in, but the greeter's shell ended at about 15:15 to 15:23, 10 of the last 25 times; this boot's login was 7.5 min after the snapshot. Waiting doesn't account for so tight a cluster. The test is the next boots without the service: the greeter's time should then just follow the login.
+
+**Decision: `sudo tests/memtest.sh uninstall`, not `systemctl disable`.** docs/etc says systemctl disable doesn't change what s6 boots once the set exists. Uninstall is the script's own removal; it keeps the snapshots in ~/uinitconverter-mem/memtest. It needs root, and this session has no sudo, so the owner runs it. Not run yet.
+
+### Current state
+
+As part 108; parts 107-109 uncommitted. memtest still installed.
+
+### Next steps
+
+1. Owner: `sudo tests/memtest.sh uninstall`, then check `s6 live status memtest-uinitconverter.service` no longer lists it, and that the next boot has no new line in /var/lib/uinitconverter-memtest/log.
+2. Greeter times on the next boots, as above.
+3. Part 108's steps 2 and 3.
+
+## 2026-11-01, part 110: memtest removed; the greeter's 15 minutes is suspend (no code change)
+
+Owner ran `sudo tests/memtest.sh uninstall`: `Removed memtest-uinitconverter.service; snapshots and reports are kept.` Checked: `s6 live status` no longer knows it (`not a valid identifier in /run/s6-rc/compiled`), the unit, its wants link and /usr/local/libexec/uinitconverter-memtest are gone, no s6-supervise for it, 28 files left in ~/uinitconverter-mem/memtest. First real root run of uninstall. Whether the next boot stays free of it isn't seen yet, though the unit's gone. TESTING's memtest section stays: the tool still exists.
+
+Owner also said they always waited over 10 minutes after boot, apart from shutting down at the login screen or logging in quickly and shutting down. That matches the short greeter runs.
+
+**Part 108's cluster explained: the machine suspends at the idle greeter, and `Consumed`'s wall clock leaves suspend out.** This boot, CLOCK_BOOTTIME minus CLOCK_MONOTONIC is 143.6 s. Greeter's manager started 21:31:35.4, its shell's `Consumed` 21:49:14.7: 1059.3 s by the clock, minus 143.6 is 915.7 s, against the 15 min 15.555 s logged. So about 15 min of idle, suspend, then the owner woke it and logged in 15 to 23 s later, which is the tight window. It also explains why nothing ran longer: the idle timer stops the count. **Measured on this boot only;** the other nine are inferred from the same number. The suspend's trigger isn't read directly, since dmesg is root-only here and the greeter's own setting wasn't read; the fit points to its idle sleep. Part 109's unexplained 7.5 min is the same thing. Not a bug. Suspend and resume at the greeter work on s6 as far as this shows.
+
+Part 108's hang isn't explained by this: 21:07's boot and 21:30's both have the 15 min greeter, and only 21:07 hung.
+
+### Current state
+
+As part 108; parts 107-110 uncommitted. memtest removed. Installed and booted: core g3bc583e, since 21:31:18.
+
+### Next steps
+
+1. After each shutdown: `grep -hE "Shell@.*(code=dumped|timed out)" /var/log/uinitconverter/user@*/current | sort | tail -5` with the `shutdown scopes` grep. A second hang: `eu-stack` on its core and Xwayland's state at shutdown.
+2. Odd exit.target: read the scope line on the next one.
+3. Rest as part 106.
+
