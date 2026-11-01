@@ -9534,3 +9534,115 @@ Branch standalone-rustix on initramfs-no-luks on rustix-fd-inotify, none merged;
 2. Part 79's login-screen shutdowns, still 0; can be the same reboots.
 3. A full s6 boot on an unencrypted root, which only a VM or a second machine can give.
 4. Rest as part 95.
+
+## 2026-11-01, part 100: committed and built (no code change)
+
+d7ff4f9 and 3016505 on standalone-rustix, not merged, not pushed. `packages/build-rpms.sh` and each `standalone/*/build-rpm.sh`, exit 0: 5 core and 4 standalone RPMs in ~/rpmbuild-uinitconverter/rpms and ~/rpmbuild-uinitconverter-standalone/rpms, all g3016505, not dirty. `rpm -U --test --nosignature` over all nine, as part 97. Not installed; the next steps stay as part 99's, from installing.
+
+**Correction to parts 97 and 99's "Built, not installed: gd0b4f75".** The owner installed the core gd0b4f75 RPMs at 18:52 and ran `uinitconverter init` at 18:53, which rebuilt the s6 initramfs images, and didn't reboot: this boot still began at 17:36:45. So at 19:45 the installed core is gd0b4f75, the standalone tools gf6f4a3d, and what booted was gf6f4a3d, with later service starts using the new runner. This machine does boot with the s6 initramfs (/etc/uinitconverter/boot-only-s6), so the next reboot exercises the rootfs change too. New since boot: 4 `core.s6-ftrigrd.1000.*` at 19:04 to 19:19, in the window of my test runs, as in part 87; cause not read.
+
+## 2026-11-01, part 101: g3016505 booted; part 79's login-screen reboots, one in the old order (no code change)
+
+Owner installed all nine g3016505 RPMs, ran `uinitconverter init` (s6 images 19:51), rebooted from the session at 19:51:39 and 3 times from the login screen, then logged in. This boot began about 19:58:58. Read without root from /var/log/uinitconverter, except that the owner ran the sudo commands.
+
+**Boot: passes.** `ausearch -m AVC -ts boot`: no matches, for this boot only. The s6 initramfs with the rootfs change unlocked LUKS and booted 4 times. `tests/linkwatch-check.sh`: all 5 ok, so part 99's rustix linkwatch is checked on a real boot. `upower -d` shows the battery; colord answers. No new core file since 19:59, including across linkwatch-check. fdstore, journal-relay and notify weren't checked one by one.
+
+**hardencompare, systemd 10-31 14:57:22 vs s6 11-01 20:17:36:** 28 services, 1 WEAKER (rtkit ns_mnt), 1 CHECK (bolt 11/9), 98 DIFF, exit 1, as part 93. Against the 17:45:47 snapshot, leaving out pid and meta rows, the only change is memtest-uinitconverter.service gone (a test leftover), so 31 services instead of 32 on s6. Rustix changed no row.
+
+**Login-screen reboots: 3 found (logind: `gnome-session-s` from user@60578), 0 shell crashes.** Last `Shell@.*code=dumped` is still 10-31 16:57. Seconds after logind's "System is rebooting":
+
+| reboot | shell Consumed | exit.target |
+|---|---|---|
+| 19:55:01 | 0.631 | **0.075** |
+| 19:56:36 | 0.627 | 0.671 |
+| 19:58:38 | 0.722 | 0.762 |
+
+**Part 74's order did not hold at 19:55:01.** exit.target came first, about when the old code had it (0.049 to 0.052 at the last 3 old-order session shutdowns, 10-31 17:59 to 21:07). All 6 session shutdowns since then, 10-31 21:20 to 11-01 19:51:39, have the shell first (exit.target at 0.537 to 1.026). So 1 of 9 on the new order's code. **Cause not found.** stop_scopes_at_shutdown waits for the scopes, then the instance stop follows, so an exit.target at 0.075 means no waiting happened or something else ended the manager. Which one needs the root-only /var/log/messages; last-shutdown-*.log now holds only 19:58. Logind's lines at 19:55:01 match the other two apart from that.
+
+**What this does to part 74's evidence.** Login screen: old order 2 crashes of 3 (10-29, 10-31, and now 19:55:01 clean), new order 0 of 2. So the old order doesn't always crash, and the login-screen path isn't the sure test part 79 hoped for; part 79 did call 2 of 2 a lead. Cause still unproven. All shutdowns on the new order: 0 crashes of 8.
+
+**gnome-session-init-worker cores: all 4 reboots, 6 each,** uids 60579-60584, with the same refused user@ starts. So part 87's chain doesn't need a user session ending: the greeter's ending does it too. 24 files of about 250 KB today, from the login screen as well as a session. Backtraces of these new ones not read (root-only). Still not fixed.
+
+Logind has `Failed to restore VT` about 0.05 s before the shell's `Consumed` on all three reboots; not read further, and not compared with earlier boots.
+
+Decision: no merge by me and no commit; merging was the owner's next step in part 99.
+
+### Current state
+
+Branch standalone-rustix at 3016505, 6 commits ahead of main, none merged; this entry and part 100 uncommitted. main at 5236481, origin/main at 48595a3. Installed and booted: g3016505, the boot-time checks of parts 97-99 passed. Published: 0.2.0 at 48595a3.
+
+### Next steps
+
+1. Owner: merge standalone-rustix into main.
+2. Why exit.target came early at 19:55:01. Owner: `sudo grep -E 'Nov  1 19:55:0[0-3] ' /var/log/messages`. If it isn't explained there, add a log line to stop_scopes_at_shutdown with the scopes found and the wait, and read it on the next odd one.
+3. gdm starting greeters during shutdown (part 87), now that the login-screen reboots are done.
+4. Owner: rtkit's ns_mnt, the last WEAKER row (part 95's step 1).
+5. A full s6 boot on an unencrypted root (part 99's step 3), and QEMU full boot (part 89).
+
+## 2026-11-01, part 102: /var/log/messages for 19:55:00-03 read (no code change)
+
+Owner ran part 101's step 2 with sudo; the output is in this session's scratchpad only. Seconds below are after logind's "System is rebooting" (19:55:01.351).
+
+**Early exit.target: still not explained.** Neither stop-instances nor stop_scopes_at_shutdown writes anything under 2 s, and `uinitconverter: shutdown starts` isn't in this window, though other kernel lines are. So the log can't say when rc.shutdown began, which scopes it found, or whether it was what ended the manager. Seen: daemon starts s6-linux-init-shutdown 0.001; gdm's conversation gone 0.029, with logind's "Session c1 logged out"; shell "No session available" 0.035 and "Shutting down GNOME Shell" 0.049; exit.target 0.075; shell's `Consumed` 0.631. **Lead, not checked against the other reboots:** user-side things were going before exit.target: pipewire or wireplumber's bluetooth endpoints unregistered 0.030 (sender only, its process not identified), oo7-portal "Received SIGTERM" 0.033. AbandonScope is only a reply in manager.rs, so logind's release doesn't touch the scope. The live session-2.scope holds gdm-session-worker, gdm-wayland-session and gnome-session-init-worker; whether one of them is what normally keeps a scope non-empty until the shell ends isn't known.
+
+**gnome-session-init-worker cores: part 87's chain is now read from the messages, not only timing.** Each new greeter's dbus-daemon fails to activate org.freedesktop.systemd1, because user@UID's start was refused; the worker logs `Failed to start unit gnome-session@gnome-login.target: ... Name "org.freedesktop.systemd1" does not exist`, then dumps core. gdm logs `Session never registered, failing` and tries again, until `GdmLocalDisplayFactory: maximum number of display failures reached. Giving up.` at 19:55:02.012. **That limit is why it's always 6.** Which line makes the worker abort wasn't read from a backtrace.
+
+### Current state
+
+As part 101; this entry uncommitted too.
+
+### Next steps
+
+1. Owner: merge standalone-rustix into main.
+2. Owner: `sudo grep -E '19:56:3[6-8]|19:58:(3[89]|40)|shutdown starts' /var/log/messages | cut -c1-220 > a file the owner can read`, to compare with 19:55. If the user-side teardown at about 0.03 s is on all three, it's normal and not the cause.
+3. A log line in stop_scopes_at_shutdown (scopes found, wait), since only that can settle it on the next odd shutdown.
+4. Rest as part 101, from its step 3. gdm's six tries now have a named limit and a named failure to work from.
+
+## 2026-11-01, part 103: the three reboots compared; a log line for the scope wait (uncommitted)
+
+Owner ran part 102's step 2. Seconds after each reboot's request (19:55:01.351, 19:56:36.795, 19:58:38.334):
+
+| | 19:55 | 19:56 | 19:58 |
+|---|---|---|---|
+| gdm's conversation gone | 0.029 | 0.012 | 0.012 |
+| bluetooth endpoints unregistered | 0.030 | 0.014 | 0.015 |
+| oo7-portal SIGTERM | 0.032 | 0.028 | 0.028 |
+| "Shutting down GNOME Shell" | 0.049 | 0.041 | 0.051 |
+| gdm gives up | 0.661 | 0.681 | 0.569 |
+| exit.target | **0.075** | 0.671 | 0.762 |
+| shell's Consumed | 0.631 | 0.627 | 0.722 |
+| chronyd exits (s6-rc's stage) | 0.880 | 0.919 | 1.005 |
+
+**Part 102's lead is dropped:** that teardown is on all three, so it's normal and not the cause. Only exit.target moved; the shell's exit and the whole shutdown took the same time. So the odd order cost nothing measurable there. **Cause still not found.** Only on 19:55: `gnome-session-ctl: Couldn't connect to session bus` at 0.639, just after the user bus ended, which reads as a result of the early exit. xdg-document-portal's `fusermount3` line is on the other two and not on 19:55; whether it was running then wasn't established.
+
+**`shutdown starts` is nowhere in /var/log/messages' matches** (0 lines, no date limit), though other kernel lines reach it. So this file can't place rc.shutdown. last-shutdown-kernel.log can, for the last shutdown only.
+
+**Correction to part 74's reasoning.** At 19:58 the shell logged `The name is not activatable` 0.076 s after the request, in the right order, without crashing; part 74 listed that error at 16:57 as a sign of the order problem. So that failed activation doesn't need exit.target first. Which name it was isn't in the line as cut.
+
+**Change.** scopes.rs, stop_scopes_at_shutdown: one line always, `uinitconverterd: shutdown scopes [NAMES]: N not empty after X s`, replacing the two lines that were written only when slow. The timer now starts before the stops, so it includes them. Read against exit.target: c1 listed and the wait ending near 0.07 means the scope emptied early; c1 not listed means it wasn't found; the wait ending near 0.6 with exit.target at 0.07 means something else ended the manager. This runs before s6-rc stops anything, so syslog should still get it, as it gets the `reboot.target requested` line. The daemon's second call at s6-rc's SIGTERM logs an empty list.
+
+Tests: `cargo test` 99 passed 0 failed, cargo fmt clean, sandbox 311/311. JOURNAL=no and FDSTORE=no not run: not touched. **The line itself has never run:** the sandbox has no writable cgroup for scopes, and it needs a real shutdown.
+
+### Current state
+
+Branch standalone-rustix at 3016505, 6 commits ahead of main. Uncommitted: scopes.rs, parts 100-103. Installed and booted: g3016505, which doesn't have the line.
+
+### Next steps
+
+1. Owner: merge standalone-rustix, or decide to carry this on top. The scopes.rs change needs committing, `packages/build-rpms.sh` and installing before it does anything.
+2. Then on ordinary shutdowns: `sudo grep 'shutdown scopes' /var/log/messages`, against part 79's first grep. One in nine so far came out odd, so it may take several.
+3. Rest as part 101, from its step 3.
+
+## 2026-11-01, part 104: committed and merged (no code change)
+
+Owner asked to commit and merge. 30a7a3b is part 103's scopes.rs change. main fast-forwarded to standalone-rustix, which brings in rustix-fd-inotify, initramfs-no-luks and standalone-rustix; the commit holding this entry is main's tip. Not pushed. The branches are kept. No tests run for the merge: a fast-forward changes no tree, and part 103's results are on this same code. No RPMs built from 30a7a3b.
+
+### Current state
+
+main, this entry's commit, ahead of origin/main (48595a3). Installed and booted: g3016505, without the log line. Published: 0.2.0 at 48595a3.
+
+### Next steps
+
+1. Owner: `packages/build-rpms.sh`, install, and shutdowns as usual. Then part 103's step 2.
+2. Owner: push main when wanted.
+3. Rest as part 101, from its step 3.
