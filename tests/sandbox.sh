@@ -245,6 +245,8 @@ t("unshare-user", lambda: os.unshare(os.CLONE_NEWUSER))
 t("procsys", lambda: open("/proc/sys/kernel/domainname", "w").write("x"))
 out.append("dev " + " ".join(sorted(os.listdir("/dev"))))
 out.append("netdevs " + " ".join(l.split(":")[0].strip() for l in open("/proc/net/dev").readlines()[2:]))
+out.append("sysnet " + " ".join(sorted(os.listdir("/sys/class/net"))))
+out.append("mntns " + os.readlink("/proc/self/ns/mnt"))
 open(sys.argv[1], "w").write("\n".join(out) + "\n")
 PYT
 # Not started: for `uinitconverter-runner confine` (as the system bus's unit).

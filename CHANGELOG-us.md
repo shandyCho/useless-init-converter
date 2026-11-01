@@ -7,6 +7,12 @@ versions. Release notes: [packages/release-notes](packages/release-notes).
 
 ## Unreleased
 
+### Fixed
+- `PrivateNetwork=` now implies `PrivateMounts=` unless that is turned off, and
+  remounts `/sys` for the new network namespace, as systemd does. Before, such a
+  service stayed in the host's mount namespace and `/sys/class/net` listed the
+  host's devices. If the remount fails, the service still starts and logs it.
+
 ### Changed
 - `.path` units' inotify and the fd store's socket handling use rustix instead
   of raw libc calls. No behaviour change intended. Received credentials

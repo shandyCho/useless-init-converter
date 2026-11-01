@@ -7,6 +7,12 @@
 
 ## 미출시
 
+### 수정
+- `PrivateNetwork=`는 이제 systemd처럼, 꺼 두지 않는 한 `PrivateMounts=`를 함께 적용하고 새 네트워크
+  네임스페이스에 맞춰 `/sys`를 다시 마운트합니다. 이전에는 이런 서비스가 호스트의 마운트 네임스페이스에
+  남았고 `/sys/class/net`에 호스트의 장치가 보였습니다. 다시 마운트하지 못하면 서비스는 그대로 시작하고
+  그 사실을 로그에 남깁니다.
+
 ### 변경
 - `.path` 유닛의 inotify와 fd 저장소의 소켓 처리를 libc 직접 호출에서 rustix로 옮겼습니다.
   의도한 동작 변경은 없습니다. 수신 자격 증명(`SCM_CREDENTIALS`, `SO_PEERCRED`)은 libc에

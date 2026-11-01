@@ -9768,3 +9768,32 @@ As part 108; parts 107-110 uncommitted. memtest removed. Installed and booted: c
 2. Odd exit.target: read the scope line on the next one.
 3. Rest as part 106.
 
+## 2026-11-01, part 111: PrivateNetwork= now gives a mount namespace and a new /sys (uncommitted)
+
+Owner asked to commit the history (a4c1cc0) and fix rtkit's WEAKER row, and plans 0.2.1 after this and "the current problem". I took that as the 21:07 shell hang (part 108); the owner didn't name it.
+
+**Correction to part 55 and parts 90-93's recommendation.** They called rtkit's ns_mnt not a weakening and suggested accepting or marking the row. It is a real gap against systemd, though small for rtkit, which chroots itself: systemd.exec(5) for systemd 262 says PrivateNetwork= implies PrivateMounts= unless explicitly disabled, and that /sys is remounted for the new network namespace. Our runner did neither, so every such unit stayed in the host's mount namespace and its /sys/class/net listed the host's devices. About 30 unit files here set it, among them polkit, accounts-daemon, hostnamed, localed, coredump, earlyoom, nm-priv-helper. So this changes more than rtkit.
+
+**Change.** sandbox.rs: `private_mounts` defaults to PrivateNetwork=; new remount_sysfs right after MS_SLAVE, and before anything binds or flags /sys.
+
+**Decisions:**
+- Mounts below /sys are kept, by holding O_PATH fds and binding /proc/self/fd/N back after the new instance covers them. SELinux-aware services need selinuxfs. Whether systemd keeps them wasn't checked: no systemd source here and the snapshots don't show them. So this may differ from systemd, on the side of changing less.
+- A failed remount doesn't stop the unit: it logs `PrivateNetwork=: /sys not remounted`, and a failure partway detaches the new /sys. The network namespace holds either way, and a boot-critical service shouldn't fail on this. Whether systemd fails there too wasn't checked.
+- Applied whenever PrivateNetwork= and a mount namespace are both present, so also with PrivateMounts=no plus e.g. PrivateTmp=.
+
+Tests: `cargo test` 102 passed 0 failed; new private_network_implies_private_mounts, sys_submounts_are_the_top_ones, private_network_remounts_sys (a real remount in a user namespace: only lo in /sys/class/net, same submounts; not skipped). Sandbox 311/311; the two new check.sh rows for `sysnet` and `mntns` are in the root-only branch, so they did not run. JOURNAL=no and FDSTORE=no not run: not touched. cargo fmt, bash -n, shellcheck clean. SELinux by sesearch only: init_t may mount sysfs and mounton sysfs_t.
+
+**Not verified: a real boot.** The real runner as root under enforcing, and all those services in their new namespaces, have not run. docs/etc's "1 of 28 (rtkit)" stays until a snapshot shows otherwise. 0.2.0's known issue stays: it's true of that release. Version not bumped.
+
+**The 21:07 hang wasn't worked on.** One occurrence, in 11 shutdowns, in a mutter/Xwayland path, cause unknown. Recommendation: don't hold 0.2.1 for it; list it as a known issue with the odd exit.target.
+
+### Current state
+
+main at a4c1cc0 plus uncommitted sandbox.rs, tests, CHANGELOG pair, this entry. Installed and booted: core g3bc583e, without this change.
+
+### Next steps
+
+1. Owner: commit, `packages/build-rpms.sh`, `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`, reboot to s6. `sudo ausearch -m AVC -ts boot`; `sudo grep 'not remounted' /var/log/messages`; `sudo tests/hardencompare.sh snap`, then report: expect 0 WEAKER and exit 0, with bolt's CHECK still printed (it doesn't affect the exit code). Log in, use sudo/polkit, hostnamectl and audio, as those units are the ones that changed.
+2. Then update docs/etc pair's security row and release 0.2.1, with the owner's call on the hang.
+3. Part 108's steps as before.
+

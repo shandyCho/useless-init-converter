@@ -200,12 +200,14 @@ impl Sandbox {
             Some(v @ ("noaccess" | "invisible" | "ptraceable")) => v.to_string(),
             _ => String::new(),
         };
+        let private_network = on("PrivateNetwork");
         Sandbox {
             private_tmp,
             private_dev: on("PrivateDevices").then(|| run_dir.join("private-dev")),
-            private_network: on("PrivateNetwork"),
+            private_network,
             private_ipc: on("PrivateIPC"),
-            private_mounts: on("PrivateMounts"),
+            // As systemd: PrivateNetwork= implies it unless it is turned off.
+            private_mounts: unit.get_bool("Service", "PrivateMounts", private_network),
             protect_hostname: crate::unit::parse_bool(&hostname).unwrap_or(hostname == "private"),
             protect_kernel_tunables: on("ProtectKernelTunables"),
             protect_kernel_modules: on("ProtectKernelModules"),
@@ -321,6 +323,13 @@ impl Sandbox {
             return Err(format!("unshare(CLONE_NEWNS): {}", errno()));
         }
         mount("none", "/", None, libc::MS_REC | libc::MS_SLAVE, None)?;
+        // Before anything binds or flags /sys. The network namespace still holds
+        // without this, so it doesn't stop the unit from starting.
+        if self.private_network {
+            if let Err(e) = remount_sysfs() {
+                eprintln!("uinitconverter: PrivateNetwork=: /sys not remounted: {e}");
+            }
+        }
 
         let mut rw: BTreeSet<String> = BTreeSet::new();
         match self.protect_system.as_str() {
@@ -606,6 +615,61 @@ fn private_dev(staging: &str) -> Result<(), String> {
     // As systemd: read-only, but not recursively, or /dev/null, /dev/shm and
     // /dev/pts would be too.
     set_mount_attr("/dev", true, 0, libc::MS_NOSUID | libc::MS_NOEXEC)
+}
+
+/// The top mounts below /sys in a /proc/self/mountinfo.
+fn sys_submounts(mountinfo: &str) -> Vec<String> {
+    let mut all: Vec<&str> = mountinfo
+        .lines()
+        .filter_map(|l| l.split(' ').nth(4))
+        .filter(|p| p.starts_with("/sys/"))
+        .collect();
+    all.sort_unstable();
+    all.dedup();
+    let mut top: Vec<String> = Vec::new();
+    for p in all {
+        if !top.iter().any(|t| Path::new(p).starts_with(t)) {
+            top.push(p.to_string());
+        }
+    }
+    top
+}
+
+/// PrivateNetwork=: a new sysfs instance on /sys, because one shows the network
+/// devices of the namespace it was mounted in. The mounts below /sys (cgroup,
+/// selinuxfs and so on) are kept: an SELinux-aware service needs selinuxfs. On an
+/// error /sys is left as it was.
+fn remount_sysfs() -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let info = fs::read_to_string("/proc/self/mountinfo")
+        .map_err(|e| format!("/proc/self/mountinfo: {e}"))?;
+    // Opened first: the new instance covers their paths.
+    let mut held = Vec::new();
+    for p in sys_submounts(&info) {
+        let f = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH)
+            .open(&p)
+            .map_err(|e| format!("{p}: {e}"))?;
+        held.push((p, f));
+    }
+    mount(
+        "sysfs",
+        "/sys",
+        Some("sysfs"),
+        libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+        None,
+    )?;
+    for (p, f) in &held {
+        let src = format!("/proc/self/fd/{}", f.as_raw_fd());
+        if let Err(e) = bind(&src, p) {
+            let c = cstr("/sys");
+            unsafe { libc::umount2(c.as_ptr(), libc::MNT_DETACH) };
+            return Err(e);
+        }
+    }
+    Ok(())
 }
 
 /// PrivateNetwork=: bring up "lo" in the new network namespace.
@@ -1126,6 +1190,88 @@ mod tests {
         assert_eq!(id_map(m, 0, Some(990)), "0 0 1\n990 990 1\n");
         assert_eq!(id_map(PrivateUsers::Identity, 0, Some(990)), "0 0 65536\n");
         assert_eq!(id_map(PrivateUsers::Full, 0, Some(990)), "0 0 4294967295\n");
+    }
+
+    #[test]
+    fn private_network_implies_private_mounts() {
+        let dir = Path::new("/nonexistent");
+        let sandbox = |text: &str| Sandbox::from_unit(&test_unit(text), dir, Vec::new());
+        assert!(sandbox("[Service]\nPrivateNetwork=yes\n").needed());
+        assert!(!sandbox("[Service]\nPrivateNetwork=yes\nPrivateMounts=no\n").needed());
+        assert!(!sandbox("[Service]\nPrivateNetwork=no\n").needed());
+        assert!(sandbox("[Service]\nPrivateMounts=yes\n").needed());
+    }
+
+    #[test]
+    fn sys_submounts_are_the_top_ones() {
+        let line = |p: &str| format!("1 2 0:1 / {p} rw - x x rw\n");
+        let info: String = [
+            "/",
+            "/sys",
+            "/sys/fs/cgroup",
+            "/sys/fs/cgroup/inner",
+            "/sys/kernel/debug",
+            "/sys/kernel/debug",
+            "/system",
+        ]
+        .iter()
+        .map(|p| line(p))
+        .collect();
+        assert_eq!(
+            sys_submounts(&info),
+            vec!["/sys/fs/cgroup", "/sys/kernel/debug"]
+        );
+    }
+
+    /// A real remount, in a user namespace: /sys shows only this namespace's lo,
+    /// and the mounts below it are still there.
+    #[test]
+    fn private_network_remounts_sys() {
+        let unit = test_unit("[Service]\nPrivateNetwork=yes\n");
+        let sandbox = Sandbox::from_unit(&unit, Path::new("/nonexistent"), Vec::new());
+        let before = sys_submounts(&fs::read_to_string("/proc/self/mountinfo").unwrap());
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let code = (|| {
+                if unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) } < 0
+                    || fs::write("/proc/self/setgroups", "deny").is_err()
+                    || fs::write("/proc/self/uid_map", format!("0 {uid} 1")).is_err()
+                    || fs::write("/proc/self/gid_map", format!("0 {gid} 1")).is_err()
+                {
+                    return 77;
+                }
+                if let Err(e) = sandbox.apply() {
+                    eprintln!("apply: {e}");
+                    return 2;
+                }
+                let devs: Vec<String> = fs::read_dir("/sys/class/net")
+                    .map(|d| {
+                        d.flatten()
+                            .map(|e| e.file_name().to_string_lossy().into_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if devs != ["lo"] {
+                    eprintln!("/sys/class/net: {devs:?}");
+                    return 3;
+                }
+                let info = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+                let after = sys_submounts(&info);
+                if after != before {
+                    eprintln!("mounts below /sys: {before:?} became {after:?}");
+                    return 4;
+                }
+                0
+            })();
+            unsafe { libc::_exit(code) };
+        }
+        let mut status = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+        match libc::WEXITSTATUS(status) {
+            77 => eprintln!("no user namespaces, skipping"),
+            code => assert_eq!(code, 0),
+        }
     }
 
     /// In a user namespace where this process is root, so the helper may write

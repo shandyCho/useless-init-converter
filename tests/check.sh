@@ -232,6 +232,8 @@ if [ "$(id -u)" = 0 ]; then
     expect_eq "ProtectKernelTunables=: /proc/sys read-only" "$(h procsys)" "EROFS"
     expect_eq "PrivateDevices=: only pseudo devices" "$(h dev)" "fd full hugepages log mqueue null ptmx pts random shm stderr stdin stdout tty urandom zero"
     expect_eq "PrivateNetwork=: only lo" "$(h netdevs)" "lo"
+    expect_eq "PrivateNetwork=: /sys remounted, only lo" "$(h sysnet)" "lo"
+    [ "$(h mntns)" != "$(readlink /proc/self/ns/mnt)" ] && ok "PrivateNetwork=: own mount namespace" || bad "PrivateNetwork=: host mount namespace"
 else
     echo "SKIP namespace and mount settings (need root)"
 fi
