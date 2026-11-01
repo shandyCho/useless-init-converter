@@ -10212,3 +10212,18 @@ main at this entry's commit, ahead of origin/main. Release commit 13050d4; asset
 
 1. Owner: `git push origin main`, then the `gh release create` line: `gh release create v0.2.2 -R shandyCho/useless-init-converter --target 13050d4e99c0ba0bd0c4b82f0e6a9ff4b25bef83 --title "uinitconverter 0.2.2" --notes-file ~/uinitconverter-release/NOTES.md ~/uinitconverter-release/assets/*`.
 2. Then fresh-install VM and QEMU full-boot test, parts 106 and 89.
+
+## 2026-11-02, part 129: 0.2.2 is released (no code change)
+
+**0.2.2 is released.** Owner published it. GitHub API read back: tag v0.2.2 at 13050d4, not a draft, published 2026-11-01T22:32:34Z, 10 assets all uploaded; each asset's digest equals the local file's sha256, and the public SHA256SUMS download is identical to the local one. origin/main at 75adfcd. Downloading and installing the RPMs wasn't tried.
+
+The owner's first "released" came before the push had landed: main was at df25380, no tag, v0.2.1 newest. Read back again after the owner's second message, as above. One download right after publishing returned 404 while the API already listed the asset; a retry moments later returned 200. Taken as propagation delay, cause not looked into.
+
+### Current state
+
+0.2.2 released, tag and target 13050d4. main at 75adfcd level with origin/main, plus this entry uncommitted. Installed and booted: 3eed142, same code, version 0.2.1; kernel 7.2.13, policy 45.23, systemd 262.1.
+
+### Next steps
+
+1. Fresh-install VM and QEMU full-boot test, parts 106 and 89.
+2. Still open from part 128: a service restart and a shutdown on a relabeled system.
