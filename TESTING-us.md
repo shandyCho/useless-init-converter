@@ -191,6 +191,28 @@ tests/confine-vm.sh /tmp/sdc-confine
 
 **Expected:** `failed: 0` and exit status 0.
 
+**All of the above at once:**
+
+```sh
+tests/container.sh build   # once; needs podman and the skarnet RPMs
+tests/all.sh               # about 10 minutes
+```
+
+`tests/all.sh` runs `cargo test`, the standalone projects' tests,
+`hardencompare-check`, `memtest-check`, `bash -n` and `shellcheck` on every shell
+script, and the sandbox suite with default settings, `SANDBOX_JOURNAL=no`,
+`SANDBOX_FDSTORE=no` and `SANDBOX_BUS=broker`, in a clean rootless podman container
+on a copy of this tree, uncommitted changes included. Then it runs
+`tests/confine-vm.sh` on the host, since that uses the host's kernel and programs.
+
+**Expected:** `Result: PASS` and exit status 0. Without podman, use
+`tests/all.sh --host`; for a part, `--no-vm` or `--vm-only`. Logs are in the directory
+it prints; those of the container's steps are in its volume (`tests/container.sh shell`,
+then `/work/logs`). `tests/container.sh clean` removes the image and the volume.
+
+This doesn't replace a real boot: SELinux enforcing, the real services and the
+hardware are still checked by hand.
+
 ## 4. Translation preview (read-only)
 
 This shows how uinitconverter would translate this machine's own units, without

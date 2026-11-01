@@ -9304,3 +9304,31 @@ Branch private-users, off main at 8f17ef1; this part and part 87 uncommitted. In
 3. `packages/github-release.sh` again, push, publish.
 4. Part 79's login-screen shutdowns; then gdm starting greeters during shutdown (part 87).
 5. Owner's decision: rustix or dinit.
+
+## 2026-11-01, part 89: RPMs built from 1fd0d8b; tests/all.sh and a podman image (uncommitted)
+
+**Merged and built.** Owner: commit, merge, build. 1fd0d8b on main, branch deleted, 13 commits ahead of origin/main, not pushed. `packages/build-rpms.sh`: exit 0, 5 core RPMs 0.2.0-1.20261101142737.g1fd0d8b in ~/rpmbuild-uinitconverter/rpms, not dirty. Not installed: needs sudo. Standalone tools unchanged, so not rebuilt. Release assets in ~/uinitconverter-release/assets are still from g6338c79: `packages/github-release.sh` after the boot check.
+
+**New.** Owner: an entry point and a podman image.
+- tests/all.sh: unprivileged steps in podman, then tests/confine-vm.sh on the host; one result, exit 0 only if all pass. `--host`, `--no-vm`, `--vm-only`. Steps: bash -n and shellcheck on every script found by its first line, cargo test, standalone tests, hardencompare-check, memtest-check, sandbox default, JOURNAL=no, FDSTORE=no, BUS=broker. linkwatch-check isn't in: it checks a running s6 boot and needs sudo.
+- tests/Containerfile, tests/container.sh (`build`, `run`, `shell`, `clean`): the Fedora release of the host, the skarnet RPMs from ~/rpmbuild-skarnet/rpms. The tree goes by rsync into a volume that also keeps build output and crates, so the host's target/ isn't touched and uncommitted changes are tested. Image 1.72 GB. Pulls from registry.fedoraproject.org; crates come over the network the first time.
+
+**Container options, each needed, found by failures:**
+- `--privileged`: podman's /sys is read-only and locked, so clearing read-only recursively fails. Rootless, this gives nothing beyond the user's own rights. The container is for a clean package set, not security.
+- No `--init`: its read-only /run/podman-init fails the sandbox's recursive /run the same way.
+- `--cgroupns=host`: memtest-check's --exclude-cgroup needs a process outside the cgroup namespace's root.
+- XDG_RUNTIME_DIR on its own tmpfs, not under /tmp: with RUN_DIR under /tmp, PrivateTmp='s bind on /tmp hides the unit's own private directories, `mount .../private/var-tmp on /var/tmp: No such file`. On a real system RUN_DIR is /run, so this only matters if someone sets RUN_DIR under /tmp. Not fixed.
+
+**Bug found, and part 80's "one unexplained result" explained.** confine-vm's plain branch powered off right after `echo VM-DONE`, without the `sleep 1` of the main branch. console-plain.log.txt: `VM-D[    0.593494] sysrq: Power Off` / `ONE`, so `grep '^VM-DONE'` missed it and the script printed "didn't finish" with `failed: 0`. Added the sleep. Seen once in 2 runs here. Correction to part 80: its failure has this cause as far as the same symptom goes; its log was deleted, so that one can't be confirmed.
+
+**Results.** `tests/all.sh`, exit 0, 9 min 24 s: shell pass, cargo 88, standalone 3+3+3+2, hardencompare-check 37, memtest-check 24, sandbox 311, JOURNAL=no 318, FDSTORE=no 299, BUS=broker 312, confine-vm 109, 0 failed. `tests/all.sh --host --no-vm`, exit 0, 8 min 8 s, same numbers. All sandbox runs have 3 SKIP, same in both: namespace and mount settings (need root; confine-vm covers much of it), transient scope and scope across a daemon restart (need a writable cgroup; **no automatic test exercises these**, including part 74's stop_scopes_at_shutdown).
+
+### Current state
+
+main at 1fd0d8b; tests/all.sh, Containerfile, container.sh, the confine-vm fix, TESTING pair and this entry uncommitted. Built, not installed: g1fd0d8b. Installed and booted: g6338c79.
+
+### Next steps
+
+1. Owner: `sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`, `sudo uinitconverter init --yes`, reboot to s6, part 88's checks.
+2. Full-boot test in QEMU (real Fedora image, SELinux enforcing), layer 3 of the plan given to the owner. It would also cover the scopes above.
+3. Rest as part 88: rtkit's ns_mnt, publish, part 79, gdm's greeters, rustix or dinit.

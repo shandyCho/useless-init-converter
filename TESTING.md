@@ -178,6 +178,25 @@ tests/confine-vm.sh /tmp/sdc-confine
 
 **기대 결과:** `failed: 0`, 종료 상태 0.
 
+**위 테스트를 한 번에:**
+
+```sh
+tests/container.sh build   # 한 번만. podman과 skarnet RPM이 필요합니다
+tests/all.sh               # 약 10분
+```
+
+`tests/all.sh`는 `cargo test`, 독립 프로젝트의 테스트, `hardencompare-check`, `memtest-check`, 모든 셸
+스크립트의 `bash -n`과 `shellcheck`, 그리고 기본 설정, `SANDBOX_JOURNAL=no`, `SANDBOX_FDSTORE=no`,
+`SANDBOX_BUS=broker`로 샌드박스 스위트를 실행합니다. 이것들은 커밋하지 않은 변경까지 포함한 이 트리의 복사본으로,
+깨끗한 rootless podman 컨테이너 안에서 실행합니다. 그다음 호스트의 커널과 프로그램을 쓰는
+`tests/confine-vm.sh`를 호스트에서 실행합니다.
+
+**기대 결과:** `Result: PASS`, 종료 상태 0. podman이 없으면 `tests/all.sh --host`를 쓰고, 일부만 실행하려면
+`--no-vm`이나 `--vm-only`를 씁니다. 로그는 출력되는 디렉터리에 있고, 컨테이너 단계의 로그는 볼륨에 있습니다
+(`tests/container.sh shell` 후 `/work/logs`). `tests/container.sh clean`은 이미지와 볼륨을 지웁니다.
+
+이것이 실제 부팅을 대신하지는 않습니다. SELinux enforcing, 실제 서비스, 하드웨어는 여전히 직접 확인합니다.
+
 ## 4. 변환 미리보기 (읽기 전용)
 
 아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 uinitconverter가 어떻게 변환할지 보여줍니다.

@@ -193,6 +193,8 @@ if grep -q uinitconverter.udev=plain /proc/cmdline; then
     is "udev=plain: root cgroup" "$(cat "/proc/$u/cgroup")" "0::/"
     is "udev=plain: OOM score" "$(cat "/proc/$u/oom_score_adj")" -1000
     echo VM-DONE
+    # The kernel's "Power Off" line can land inside the marker otherwise.
+    sleep 1
     echo o >/proc/sysrq-trigger
     sleep 60
 fi

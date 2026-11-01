@@ -1,0 +1,14 @@
+# Clean environment for tests/all.sh's unprivileged tests. Built and run by
+# tests/container.sh, with the skarnet RPMs of dist/rpm in the context, because
+# Fedora doesn't package them.
+ARG FEDORA=45
+FROM registry.fedoraproject.org/fedora:${FEDORA}
+COPY skarnet/ /rpms/
+RUN dnf -y --setopt=install_weak_deps=False install \
+        cargo rust gcc make \
+        bash coreutils findutils gawk grep sed tar procps-ng util-linux which \
+        dbus-daemon dbus-tools dbus-broker systemd python3 \
+        rsync ShellCheck \
+        /rpms/*.rpm \
+    && dnf clean all \
+    && rm -rf /rpms
