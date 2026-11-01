@@ -2,11 +2,11 @@
 
 [English](README-us.md) | **한국어**
 
-`systemd-notify` 대체입니다. `$NOTIFY_SOCKET`에 있는 소켓(경로, 또는 추상
+`systemd-notify` 대체 도구입니다. `$NOTIFY_SOCKET`에 있는 소켓(경로, 또는 추상
 이름공간이면 `@이름`)으로 sd_notify 메시지 하나를 보냅니다. 이 변수를 설정하는
 서비스 관리자라면 어디서든 동작합니다(systemd, uinitconverter 등).
 
-uinitconverter 프로젝트에서 떼어 낸 독립 도구입니다. 다른 uinitconverter 구성 요소 없이
+uinitconverter 프로젝트에서 분리한 독립 도구입니다. 다른 uinitconverter 구성 요소 없이
 빌드·설치·실행됩니다. 의존성은 libc뿐입니다.
 
 ## 빌드
@@ -22,8 +22,8 @@ sudo install -Dm0755 target/release/uinitconverter-notify /usr/libexec/uinitconv
 ```
 
 RPM: `./build-rpm.sh [OUTDIR]`가 `uinitconverter-notify.spec`을 `~/rpmbuild-uinitconverter-standalone/rpms`에
-빌드합니다(sudo 불필요. 빌드할 때마다 릴리스가 새로워져 `sudo dnf upgrade`로
-올릴 수 있습니다). 설치는 `sudo dnf install ~/rpmbuild-uinitconverter-standalone/rpms/uinitconverter-notify-*.rpm`입니다. `./build-rpm.sh --srpm`은
+빌드합니다(sudo 불필요. 빌드할 때마다 릴리스 번호가 갱신되어 `sudo dnf upgrade`로
+업그레이드할 수 있습니다). 설치는 `sudo dnf install ~/rpmbuild-uinitconverter-standalone/rpms/uinitconverter-notify-*.rpm`입니다. `./build-rpm.sh --srpm`은
 다른 곳에서 다시 빌드할(`rpmbuild --rebuild`, mock) 소스 RPM만 만듭니다.
 
 ## 실행
@@ -34,7 +34,7 @@ uinitconverter-notify --exec [옵션] [VAR=VALUE...] ";" 명령 [인자...]
 uinitconverter-notify --booted
 ```
 
-| 옵션 | 보내는 것 / 하는 일 |
+| 옵션 | 전송 내용 / 동작 |
 |---|---|
 | `--ready`, `--stopping` | `READY=1`, `STOPPING=1` |
 | `--reloading` | `RELOADING=1`과 `MONOTONIC_USEC=` |
@@ -43,11 +43,11 @@ uinitconverter-notify --booted
 | `--uid=USER` | USER로 보냄 |
 | `--fd=N`, `--fdname=NAME` | fd N을 관리자에 맡김(`FDSTORE=1`, `FDNAME=`); `--fd`는 여러 번 쓸 수 있음 |
 | `--no-block` | 관리자가 메시지를 읽을 때까지 기다리지 않음 |
-| `--exec` | 보낸 뒤 자기 자리에서 명령을 실행 |
+| `--exec` | 보낸 뒤 자신을 명령으로 대체해(exec) 실행 |
 | `--booted` | `/run/systemd/system`이 있으면 종료 코드 0, 없으면 1 |
 
-systemd-notify(254 이후)처럼 메시지는 호출한 프로세스의 이름으로 나가고(커널이
-허락하는 경우 자격 증명에 그 PID; 다른 프로세스를 지정하려면 root여야 함),
+systemd-notify(254 이후)처럼 메시지는 호출한 프로세스의 이름으로 전송되고(커널이
+허용하는 경우 자격 증명에 그 PID; 다른 프로세스를 지정하려면 root여야 함),
 이어서 `BARRIER=1`로 관리자가 읽을 때까지 기다립니다(최대 5초, 응답이 없으면
 경고만 합니다).
 
