@@ -49,6 +49,9 @@ install -d %{buildroot}%{_sharedstatedir}/uinitconverter
 %dir %{_sharedstatedir}/uinitconverter
 
 %changelog
+* Mon Nov 02 2026 uinitconverter developers
+- 0.2.1, see CHANGELOG-us.md
+
 * Sun Nov 01 2026 uinitconverter developers
 - 0.2.0, see CHANGELOG-us.md
 

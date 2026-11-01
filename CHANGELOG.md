@@ -5,7 +5,7 @@
 버전은 본체 패키지의 버전입니다. 독립 도구는 버전이 따로 있습니다.
 릴리스 노트: [packages/release-notes](packages/release-notes).
 
-## 미출시
+## 0.2.1 (2026-11-02)
 
 ### 수정
 - `PrivateNetwork=`는 이제 systemd처럼, 꺼 두지 않는 한 `PrivateMounts=`를 함께 적용하고 새 네트워크
@@ -23,6 +23,8 @@
 - s6 initramfs는 암호화된 볼륨이 없으면 `cryptsetup`이 필요하지 않고, `dm_crypt`도 LUKS를 쓸 때만
   불러옵니다. `/etc/crypttab`이나 명령줄에 암호화 볼륨이 지정되어 있는데 cryptsetup이 없으면 빌드가 실패합니다.
 - `uinitconverter init --boot-only-s6=yes`는 LVM이나 MD 위의 루트를 경고합니다. 이 initramfs는 이를 조립할 수 없습니다.
+- 종료할 때 uinitconverterd가 세션 스코프를 기다린 시간을 로그에 남깁니다.
+- README는 첫 설치만 다루고, 나머지는 [docs/etc.md](docs/etc.md)로 옮겼습니다.
 
 ## 0.2.0 (2026-11-01)
 

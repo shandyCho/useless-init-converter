@@ -5,7 +5,7 @@
 Versions apply to the core packages. The standalone tools have their own
 versions. Release notes: [packages/release-notes](packages/release-notes).
 
-## Unreleased
+## 0.2.1 (2026-11-02)
 
 ### Fixed
 - `PrivateNetwork=` now implies `PrivateMounts=` unless that is turned off, and
@@ -25,6 +25,9 @@ versions. Release notes: [packages/release-notes](packages/release-notes).
 - The s6 initramfs no longer needs `cryptsetup` when nothing is encrypted, and
   loads `dm_crypt` only for LUKS. The build fails if cryptsetup is missing while
   `/etc/crypttab` or the command line names encrypted volumes.
+- At shutdown, uinitconverterd logs how long it waited for the session scopes.
+- The README covers first installs only; everything else moved to
+  [docs/etc-us.md](docs/etc-us.md).
 - `uinitconverter init --boot-only-s6=yes` warns about a root on LVM or MD, which
   that initramfs can't assemble.
 
