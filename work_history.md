@@ -10469,3 +10469,87 @@ main at 3b65bf1 plus this entry, uncommitted. Plan reviewed, not amended.
 
 1. Owner: accept or reject the amendments; also whether a 30-50 MiB per user manager cost (to be measured) is acceptable at all.
 2. Then rewrite part 134's steps accordingly and start step 0.
+
+## 2026-11-02, part 136: rewritten user-manager plan, related projects, GNOME VM harness
+
+Owner: "commit and configure QEMU or podman testing environment. and find another packages or projects for support implement this goal. and rewrite the plan with these amendments and find packages or projects result." Part 135 committed as ad4f4c8.
+
+**Correction to part 135, finding 9:** there is no "part 89 QEMU full-boot harness". Part 89 only named a full-boot QEMU test as future work. The existing QEMU scripts (tests/confine-vm.sh, tests/initramfs.sh) boot the host's kernel with a custom initramfs, not a Fedora install. The new tests/gnome-vm.sh below is the first full-boot harness.
+
+### Test environment: tests/gnome-vm.sh (new)
+
+QEMU, not podman. GDM, logind seats, DRM and a real boot don't fit a container; podman stays for the unprivileged suite (tests/container.sh).
+- `fetch`: Fedora Cloud Base Generic qcow2. The CHECKSUM's signature is checked with gpgv against the installed fedora-gpg-keys, then the image's SHA-256. Each download is retried up to 6 times, because download.fedoraproject.org's mirrors don't all have every file (seen: one 404, then a 200; dl.fedoraproject.org gave 403).
+- `provision`: a cloud-init NoCloud seed ISO (genisoimage) sets up user `tester` with an SSH key and passwordless sudo, `@workstation-product-environment`, graphical.target, GDM autologin, and gnome-initial-setup marked done. cloud-init powers off when done, and the script then checks for /var/lib/gnome-vm-provisioned. The result is base.qcow2 (40G, overlay on the cloud image).
+- `start` (a fresh run.qcow2 overlay unless --keep), `wait` (SSH, then gnome-shell running and tester's logind state active), `check`, `ssh`, `copy`, `screenshot` (QMP screendump to PNG), `stop` (poweroff, kill after 60 s). Display: virtio-vga with VNC on 127.0.0.1. SSH forwarded from a free local port. KVM, 4 GiB, 4 CPUs (VM_MEM=, VM_CPUS=).
+- TESTING pair: a paragraph under section 3.
+
+### Related projects found (research, 2026-11-02)
+
+- **GNOME upstream (Adrian Vovk; GNOME Discourse thread, June-Sept 2025; LWN 1025560).** A non-systemd distro must replace:
+  - the systemd user units spread across packages (gnome-session, gnome-settings-daemon, localsearch, gnome-disk-utility, ...)
+  - `leader-main.c` (environment setup, then StartUnit `gnome-session-${XDG_SESSION_TYPE}@${SESSION}.target`, then shutdown)
+  - `tools/gnome-session-ctl` (called at systemd checkpoints)
+
+  Per-init leaders won't be upstreamed. A split of the leader into a generic environment part and a systemd part was planned, not done as of July 2025 (gnome-session MR !145 "Draft: Remove builtin startup"). Meaning for us: everyone else replaces the leader and ctl and patches GNOME. Our route keeps GNOME unmodified and must instead answer exactly what leader, ctl, init-worker and gnome-shell ask of org.freedesktop.systemd1, including gnome-session-ctl's sd_notify checkpoints and `--restart-dbus`.
+- **gnome-session-openrc** (github.com/swagtoy/gnome-session-openrc, GPL-2.0; Gentoo gnome-base/gnome-session-openrc 49.x). A new leader, ctl and OpenRC scripts for GNOME 49/50-51. Needs gnome-session built with -Dsystemd=false plus fork commit c17b5b56, a gnome-shell fork commit for elogind, and a fixed `gdm-greeter` user (elogind has no userdb). Its README doesn't say how session services are started. Its forks: **gnome-session-dinit**; and **gnome-session-shepherd** (Guix, reported booting July 2025). Use: reading their leader/ctl shows which checkpoints and calls ours must satisfy. Not a dependency: they patch GNOME, which we don't.
+- **turnstile** (Chimera Linux, BSD-2-Clause). A session tracker plus per-user service-manager spawner through a backend shell script (only a dinit backend exists). The backend's `run` starts in a clean environment inside a PAM session and execs the manager; `ready` waits for the initial services before login continues. It exports DBUS_SESSION_BUS_ADDRESS only if the bus socket is valid; the service that starts the bus sets the activation environment itself. It coexists with stock logind (rundir creation off). Not needed (logind already starts user@UID through our PID 1 API), but its readiness-before-login rule and bus-environment handling are the model for the launcher.
+- **s6-usertree-maker** (s6, installed here as /usr/bin/s6-usertree-maker, s6 2.15.1.1). Makes a service running s6-svscan as a user on a user-owned scandir, with s6-rc source support and the environment cleared except PATH. Use: follow its layout for the per-user tree; consider generating the user tree with it instead of inventing one. No skarnet changes needed.
+- **s6-frontend** (skarnet, 0.2.0.0 here). No user-service support yet. Laurent Bercot (skaware list, April 2026): put user service definitions in a store and configure s6-frontend through a file in the user's config directory; more support planned. That answers finding 10: per-user s6-rc repo/store plus a per-user s6-frontend config.
+- **66** (Obarun, s6-based): user trees spawned from the system tree. Reference only.
+- **notsystemd** (github.com/unmango/notsystemd): org.freedesktop.systemd1 over a socket, an early PR its own review calls high-risk. Reference only; uinitconverterd already covers far more.
+- **Context:** postmarketOS moved to systemd for GNOME (2024); Artix dropped GNOME (49). No project found runs GNOME 49+ from unmodified packages without systemd --user, so we would be first, and nobody has mapped the problems ahead of us.
+
+### The rewritten plan (replaces part 134's steps; part 135's amendments applied)
+
+**Principles:** Fedora's GNOME unmodified; uinitconverterd answers org.freedesktop.systemd1 on the user bus and on $XDG_RUNTIME_DIR/systemd/private; systemd-logind stays. USER_MANAGER=systemd stays the default until slice E passes in the VM and on the owner's machine. Every change keeps the system sandbox variants green.
+
+**Step 0, inventory (widened).** In the VM with the real systemd --user:
+- bus capture (`busctl --user monitor`, and the system bus for logind) from greeter, login, an app, a flatpak, logout
+- strace of gnome-session-ctl/init-worker
+- source reading of gnome-session 51 (leader, init-worker, ctl, service), gnome-shell 51 (libshell systemd calls, its scope naming), gnome-desktop (scopes), and systemd 262's user-manager side (oomd varlink report, private socket, notify, what logind expects of user@)
+- cross-check with gnome-session-openrc's leader/ctl
+- generator `plan` over the 192 user units and the generators' output
+- a memory baseline: systemd --user per greeter and per user
+
+Deliverable: the gap list and a memory budget. **Gate G0 (owner):** go/no-go with the measured cost.
+
+**Slice A: the skeleton, behind the flag, in the VM.**
+- USER_MANAGER= plus a kernel-command-line override.
+- The runner execs the launcher for user@UID.
+- The launcher follows s6-usertree-maker's layout and turnstile's readiness rule: READY=1 only when the initial bundle is up.
+- One user database, compiled as root when the system side regenerates, under /var/lib/uinitconverter; a per-user one only if the user has their own units. Runtime state under $XDG_RUNTIME_DIR only.
+- The daemon in user mode: private socket first, then `org.freedesktop.systemd1` on the user bus once dbus-broker (a converted user unit) is up; ActivationRequest.
+- **Surviving the bus restart is in from the start.**
+- SANDBOX_USER=yes sandbox variant.
+- Memory measured against the budget.
+- Done when a user's dbus.socket/dbus-broker plus one test unit run under s6 in the VM, and `systemctl --user` works.
+
+**Slice B: the GDM greeter** (`gnome-session@gnome-login.target` → gnome-session-basic-services.target, org.gnome.Shell@gdm.service): environment generators, SetEnvironment/UnsetAndSetEnvironment, Type=dbus/notify readiness, PartOf/Requisite/OnFailure/CollectMode/Conflicts semantics, the user cgroup layout (init.scope, session.slice, app.slice, background.slice, `Slice=-.slice`), sd_notify from units. Done when the greeter shows in the VM (screenshot) with SELinux enforcing.
+
+**Slice C: a user session.** gnome-session@gnome.target, gnome-session-ctl checkpoints, xdg-autostart units, StartTransientUnit app scopes with gnome-shell's naming, sd_pid_get_user_unit. Done when `wait` and `check` pass with USER_MANAGER=s6 and an app launched over SSH lands in its app-*.scope.
+
+**Slice D: apps and services.** The flatpak environment generator (apps in the grid), the 20 user sockets (the daemon holds their fds, since the standalone fdstore is system-side), ManagedOOM reporting to systemd-oomd, podman quadlet units, user timers (persistent state in $XDG_RUNTIME_DIR or /var/lib, not the home).
+
+**Slice E: lifecycle.**
+- Logout including `--restart-dbus`; a second user; a user switch; lingering; a user-unit package update (reload); power off.
+- **The fallback:** triggered by GNOME's own failure path (gnome-session-failed / a session-reached marker), not only by launcher crashes. It empties the delegated cgroup before starting systemd --user. Verified by breaking it on purpose in the VM.
+
+**Then:**
+1. The owner's machine, with the flag for one boot at a time.
+2. SELinux checks for a confined user (user_t/staff_t), and the s6-native admin story: per-user s6-rc store plus an s6-frontend config file as Bercot suggests, documented.
+3. Switching the default, both doc pairs, and packaging (the launcher as its own RPM if it is its own executable).
+
+**VM verified (twice, from scratch, in ~/uinitconverter-vm).** Fedora-Cloud-Base-Generic-45-1.4: the CHECKSUM's gpgv signature is good and the SHA-256 is OK. Provisioning took about 10 minutes (the 10.6 GB disk overlay holds GNOME). Then `start`, `wait` and `check` passed: kernel 7.2.11-300.fc45, PID 1 systemd, SELinux Enforcing, sessions 1 (tester, seat0, tty2, user), 2 (manager) and 5 (the ssh login). `gnome-shell --mode=user` ran under `/usr/lib/systemd/systemd --user`; `systemctl --user is-system-running` gave running, with no failed units.
+- First screenshot: the boot console, taken before GNOME had the VT. So `wait` now also requires tester's display session to be Active.
+- Second run: the GNOME overview with no dialog. Fedora's welcome tour is suppressed by a system dconf default (`welcome-dialog-last-shown-version='999'` read back through gsettings; /etc/dconf/profile/user has system-db:local).
+
+### Current state
+
+main at ad4f4c8 plus this part's commit. ~/uinitconverter-vm holds a provisioned base.qcow2 (not in the repo).
+
+### Next steps
+
+1. Owner: confirm the rewritten plan; then step 0 in the VM (it can run there without the owner's session).
+
+Sources: discourse.gnome.org/t/29411; blogs.gnome.org/adrianvovk/2025/06/10/gnome-systemd-dependencies; lwn.net/Articles/1025560; github.com/swagtoy/gnome-session-openrc; zff.dev/kev2600/gnome-session-dinit; github.com/chimera-linux/turnstile; skarnet.org/software/s6/s6-usertree-maker.html; skarnet.org/lists/skaware/2265.html; skarnet.org/lists/supervision/3140.html; github.com/unmango/notsystemd/pull/9; postmarketos.org/blog/2024/03/05/adding-systemd; ostechnix.com/artix-linux-drops-gnome-desktop-environment.

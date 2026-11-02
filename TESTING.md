@@ -201,6 +201,23 @@ tests/all.sh               # 약 10분
 
 이것이 실제 부팅을 대신하지는 않습니다. SELinux enforcing, 실제 서비스, 하드웨어는 여전히 직접 확인합니다.
 
+**실제 부팅 테스트용 GNOME VM**(root 불필요. `/dev/kvm`이 있는 QEMU, genisoimage, gpgv,
+fedora-gpg-keys가 필요하며, 모든 것은 지정한 디렉터리 안에 있습니다):
+
+```sh
+tests/gnome-vm.sh fetch ~/uinitconverter-vm       # Fedora Cloud 이미지, 서명된 체크섬 확인
+tests/gnome-vm.sh provision ~/uinitconverter-vm   # GNOME Workstation, "tester"로 GDM 자동 로그인. 오래 걸림
+tests/gnome-vm.sh start ~/uinitconverter-vm       # 매번 새 사본(--keep: 직전 것)
+tests/gnome-vm.sh wait ~/uinitconverter-vm        # tester의 GNOME 세션이 뜰 때까지
+tests/gnome-vm.sh check ~/uinitconverter-vm       # logind, 사용자 관리자, gnome-shell 상태
+tests/gnome-vm.sh screenshot ~/uinitconverter-vm shot.png
+tests/gnome-vm.sh stop ~/uinitconverter-vm
+```
+
+`ssh`와 `copy`는 `tester`(암호 없는 sudo)로 VM에 접속합니다. 화면은 127.0.0.1의 VNC
+디스플레이로도 볼 수 있습니다(포트는 `~/uinitconverter-vm/ports`). VM의 SELinux는 enforcing입니다.
+VM 부팅이 망가져도 손해가 없습니다. `start`는 매번 준비된 이미지에서 다시 시작합니다.
+
 ## 4. 변환 미리보기 (읽기 전용)
 
 아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 uinitconverter가 어떻게 변환할지 보여줍니다.

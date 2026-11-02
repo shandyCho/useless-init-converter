@@ -218,6 +218,24 @@ then `/work/logs`). `tests/container.sh clean` removes the image and the volume.
 This doesn't replace a real boot: SELinux enforcing, the real services and the
 hardware are still checked by hand.
 
+**A GNOME VM for real-boot tests** (no root; QEMU with `/dev/kvm`, genisoimage, gpgv
+and fedora-gpg-keys; everything stays in the directory you give it):
+
+```sh
+tests/gnome-vm.sh fetch ~/uinitconverter-vm       # Fedora Cloud image, signed checksum checked
+tests/gnome-vm.sh provision ~/uinitconverter-vm   # GNOME Workstation, GDM autologin as "tester"; long
+tests/gnome-vm.sh start ~/uinitconverter-vm       # a fresh copy each time (--keep: the last one)
+tests/gnome-vm.sh wait ~/uinitconverter-vm        # until tester's GNOME session is up
+tests/gnome-vm.sh check ~/uinitconverter-vm       # logind, user manager and gnome-shell state
+tests/gnome-vm.sh screenshot ~/uinitconverter-vm shot.png
+tests/gnome-vm.sh stop ~/uinitconverter-vm
+```
+
+`ssh` and `copy` reach the VM as `tester` (passwordless sudo). The screen is also
+on a VNC display on 127.0.0.1 (port in `~/uinitconverter-vm/ports`). SELinux is
+enforcing in the VM. A broken boot there costs nothing: `start` begins from the
+provisioned image again.
+
 ## 4. Translation preview (read-only)
 
 This shows how uinitconverter would translate this machine's own units, without
