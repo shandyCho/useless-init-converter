@@ -1015,6 +1015,16 @@ impl Daemon {
                 k => k.trim_start_matches("Listen").to_string(),
             };
             for v in unit.get_all("Socket", key) {
+                // A bare port is bound on all addresses: systemd shows it so.
+                let v = if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) {
+                    if std::path::Path::new("/proc/net/if_inet6").exists() {
+                        format!("[::]:{v}")
+                    } else {
+                        format!("0.0.0.0:{v}")
+                    }
+                } else {
+                    v
+                };
                 listen.push((ty.clone(), v));
             }
         }

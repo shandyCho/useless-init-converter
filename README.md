@@ -17,7 +17,7 @@ D-Bus 클라이언트가 계속 동작하므로 dnf, SELinux enforcing, GNOME도
   systemd가 더 나은 선택입니다.
 - **실제 부팅은 Fedora 45 Workstation 한 대에서만 확인했습니다.** 먼저 가상 머신에서
   시도하세요.
-- **빠진 systemd 기능이 있습니다.** TCP `Accept=yes` 소켓, 제너레이터, 자격 증명 등입니다.
+- **빠진 systemd 기능이 있습니다.** 제너레이터, 자격 증명 등입니다.
   [아직 구현되지 않은 기능](docs/etc.md#아직-구현되지-않은-기능)을 보세요.
 - **기존 systemd 부팅은 그대로 남습니다.** 설치하면 GRUB 항목이 추가될 뿐이고, 직접
   바꾸기 전까지 기본 부팅은 systemd입니다.
@@ -27,6 +27,7 @@ D-Bus 클라이언트가 계속 동작하므로 dnf, SELinux enforcing, GNOME도
 | 묶음 | 패키지 | 필요 여부 | 받는 곳 |
 |---|---|---|---|
 | s6와 관련 도구 | skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd | 필수 | 직접 빌드(2단계) |
+| TCP 슈퍼서버 | s6-dns, s6-networking | 선택: `sshd.socket` 같은 TCP `Accept=yes` 소켓에만 필요 | 2단계에서 빌드. 빼려면 `dnf install` 전에 그 `.rpm` 파일을 지우세요 |
 | 본체 | `uinitconverter`, `uinitconverterd`, `uinitconverter-gen`, `uinitconverter-runner`, `uinitconverter-timers` | 필수 | 릴리스 또는 소스(3단계) |
 | 독립 도구 | 아래 네 가지 | 선택 | 릴리스 또는 소스(3단계) |
 

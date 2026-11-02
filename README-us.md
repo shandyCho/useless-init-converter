@@ -18,8 +18,8 @@ and GNOME still work. The commands, packages and paths are all named
   want s6, plain systemd is the better choice.
 - **Real boots have only been checked on one Fedora 45 Workstation machine.**
   Try it in a virtual machine first.
-- **Some systemd features are missing**, such as `Accept=yes` TCP sockets, generators
-  and credentials. See [Not implemented](docs/etc-us.md#not-implemented-yet).
+- **Some systemd features are missing**, such as generators and
+  credentials. See [Not implemented](docs/etc-us.md#not-implemented-yet).
 - **Your normal systemd boot stays.** Installing adds a GRUB entry, and systemd
   remains the default until you change it.
 
@@ -28,6 +28,7 @@ and GNOME still work. The commands, packages and paths are all named
 | Group | Packages | Needed? | Comes from |
 |---|---|---|---|
 | s6 and related tools | skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd | Yes | You build them (step 2) |
+| TCP super-server | s6-dns, s6-networking | Optional: only for `Accept=yes` TCP sockets such as `sshd.socket` | Built in step 2; to leave them out, delete their `.rpm` files before `dnf install` |
 | Core | `uinitconverter`, `uinitconverterd`, `uinitconverter-gen`, `uinitconverter-runner`, `uinitconverter-timers` | Yes | Release or source (step 3) |
 | Standalone tools | The four below | Optional | Release or source (step 3) |
 

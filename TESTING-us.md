@@ -130,6 +130,11 @@ To check that the core works without the standalone `uinitconverter-fdstore`, ru
 holds the fds itself, so `check.sh` checks that they are gone after the daemon
 restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
+The `Accept=yes` TCP checks need `s6-tcpserverd`. Without it in `PATH`, `check.sh`
+checks that the TCP socket is skipped and prints a SKIP line. To run them, put
+`SANDBOX_S6NET_BIN=DIR` (a directory with `s6-tcpserverd`, e.g. a local build of
+s6-networking) in front of both scripts.
+
 To test the system bus with dbus-broker instead of dbus-daemon, run
 `sandbox.sh` and `check.sh` with `SANDBOX_BUS=broker` in front (needs
 `dbus-broker` and `unshare`). `dbus-broker-launch` takes its socket the systemd
@@ -314,6 +319,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | Log directory (`JOURNAL=no`) | `stat -c '%a %U:%G' /var/log/uinitconverter` | `750 root:wheel` |
 | On-demand services | `systemctl status virtlogd.service iscsid.service` and `ls -l /run/libvirt/virtlogd-sock`; then `sudo python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect("/run/libvirt/virtlogd-sock")'` and the status again | `inactive (dead)` with the socket file there; after the connection, `virtlogd` is `active (running)` |
 | Accept=yes sockets | `systemctl status polkit-agent-helper.socket`; then `pkexec true` in a terminal of the GNOME session, and the status again | `active (listening)` with `Listen: /run/polkit/agent-helper.socket (Stream)`; the password dialog works. `Accepted:` goes up only if polkit's agent uses the socket: the setuid helper is its fallback, so 0 is not an error |
+| Accept=yes TCP (optional) | With s6-networking installed: `sudo systemctl stop sshd.service`, `sudo systemctl start sshd.socket`, `ssh localhost true`, then `systemctl status sshd.socket`; afterwards `sudo systemctl stop sshd.socket` and `sudo systemctl start sshd.service` | `active (listening)` with `Listen: [::]:22 (Stream)`, the login works, `Accepted: 1` |
 | Swap (zram) | `swapon --show` and `s6-rc -a list \| grep -x zram` | `/dev/zram0` with priority `100` and the same size as on the systemd boot (`min(ram, 8 GiB)` by default); `zram` is listed |
 | Radio state (rfkill) | Turn Bluetooth off in GNOME Settings, reboot into the s6 entry, then `rfkill` and `s6-rc -a list \| grep -x rfkill` | Bluetooth still `blocked` after the reboot; `rfkill` is listed (the oneshot, not systemd-rfkill) |
 | Reload watchdog | `sudo s6-svstat /run/service/uinitconverter-linkwatch` and `sudo grep -h uinitconverter-linkwatch /run/uncaught-logs/current` | `up (pid …)`; a log line only if a reload was stuck (`… sent its start event`) |

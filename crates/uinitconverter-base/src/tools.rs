@@ -35,6 +35,21 @@ pub fn path(name: &str) -> String {
         .unwrap_or_else(|| name.to_string())
 }
 
+/// Whether NAME's program exists: TOOLS='s path, or found in PATH (and
+/// /usr/bin, /usr/sbin, where an empty or odd PATH would miss it).
+pub fn available(name: &str) -> bool {
+    let prog = path(name);
+    if prog.contains('/') {
+        return std::path::Path::new(&prog).is_file();
+    }
+    std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|d| !d.is_empty())
+        .chain(["/usr/bin", "/usr/sbin"])
+        .any(|d| std::path::Path::new(d).join(&prog).is_file())
+}
+
 /// The table is global: tests that change it take this lock.
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -54,5 +69,9 @@ mod tests {
         assert!(configure("=x").is_err());
         configure("").unwrap();
         assert_eq!(path("mount"), "mount");
+        assert!(available("sh"));
+        configure("sh=/nonexistent/sh").unwrap();
+        assert!(!available("sh"));
+        configure("").unwrap();
     }
 }

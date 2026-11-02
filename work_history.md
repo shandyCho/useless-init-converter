@@ -10284,3 +10284,39 @@ main at 7739783 plus the uncommitted parts 130-131 (code, tests, docs). Installe
 1. Owner: review and commit; on the machine, rebuild/install, `uinitconverter plan | grep -i accept`, then TESTING's "Accept=yes sockets" row (`pkexec true`) and `ausearch -m AVC -ts recent`.
 2. Phase 2 (TCP via s6-tcpserverd): first check that s6-dns 2.4.1.3 and s6-networking 2.8.0.1 build against skalibs 2.16.0.0; then package them as optional, add REMOTE_ADDR/REMOTE_PORT and the inet instance name.
 3. Earlier steps unchanged: fresh-install VM and QEMU full-boot test (parts 106, 89); service restart and shutdown on a relabeled system (part 128).
+
+## 2026-11-02, part 132: Accept=yes phase 2, TCP via s6-tcpserverd
+
+Owner: "yes commit this. and start phase 2". Phase 1 committed as 6f6ff7a.
+
+**Build check first (part 130's open risk): passes.** s6-dns 2.4.1.3 and s6-networking 2.8.0.1 (tarball sha256 equal to skarnet's published sums) build against skalibs 2.16.0.0, execline 2.10.0.0 and s6 2.15.1.1, the local tarballs (sha256 equal to skarnet.versions). Done twice in the scratchpad, never installed: once static, and once shared like the specs (`/usr` prefix, lib64, DESTDIR sysroot, --enable-shared --disable-static --enable-pkgconfig). There were no compiler warnings. Everything installed falls under the specs' %files globs (bin, lib*.so*, include/*/, pkgconfig); nothing goes to libexec. rpmbuild itself was not run (no rpm tooling here), same as the other skarnet specs.
+
+**Smoke test of s6-tcpserverd** (scratch build, socketbinder): v4 and v6 work. It sets TCPLOCALIP to the *bound* address (`::` for a wildcard socket), not the connection's, so `connection` reads getsockname/getpeername on the fd instead of the TCP* variables.
+
+**What changed:**
+- dist: `s6-dns.spec`, `s6-networking.spec` (no TLS, modelled on s6-rc.spec), both appended to skarnet.versions, so README's download loop and build-skarnet-rpms.sh pick them up. `uinitconverter-runner.spec`: `Recommends: s6-networking` (the owner's "optional").
+- base: `tools::available(name)` (TOOLS= path, else PATH plus /usr/bin, /usr/sbin). acceptspec: `Listener::{Unix, Inet}` from the one ListenStream= (`vsock:` refused), `server()` = s6-ipcserverd / s6-tcpserverd, limits clamped at 1000 / 16384. `instance_name_inet`: systemd's `<n>-<localip>:<port>-<remoteip>:<port>`, IPv6 without brackets, IPv4-mapped printed as IPv4 when both ends are. `plain_ip`. The format was **taken from memory of systemd's instance_from_socket, not re-read**.
+- gen: a TCP Accept=yes socket is skipped with "s6-tcpserverd is not installed (s6-networking)" when tools::available says so.
+- runner: `accept` execs the listener's server. "no socket bound (IPv6 not available?)" when bind_inet leaves the address out. **Bug found and fixed:** any accept failure used to exit 1, so s6 re-ran it every second. Example: binding sshd.socket while sshd.service holds port 22, since Conflicts= isn't enforced. Now it does what setup_failed does for services: START_FAILED, ready for s6, then pause. The daemon shows `failed`, and only a new start retries. `connection`: inet addresses from the fd give the instance name and REMOTE_ADDR/REMOTE_PORT.
+- daemon: a bare-port Listen value shows as `[::]:N` (`0.0.0.0:N` without IPv6), as systemd shows it. No test covers this; the sandbox's TCP sockets use explicit addresses.
+- Tests: acceptspec `inet_instance_names` and the TCP cases, tools::available, gen accept_sockets covering both branches (TOOLS=s6-tcpserverd=/bin/true) plus vsock. Sandbox fixtures and checks:
+  - `tcpacc.socket` on a free 127.0.0.1 port, and `tcp6acc.socket` on [::1] when lo has ::1; they check the reply with REMOTE_ADDR/PORT, fd 3, the instance name, and no state left.
+  - `badacc.socket` (path under /proc): failed/failed, and the same s6 pid 1.5 s apart.
+  - NFailedUnits expected 3 → 4.
+
+  `SANDBOX_S6NET_BIN=DIR` links an s6-tcpserverd into the sandbox. Without it, check.sh checks the plan's skip reason and prints SKIP.
+- Docs: README pair (TCP no longer missing; table row s6-dns/s6-networking optional), docs/etc pair (TCP, REMOTE_*, limits, bind failure), TESTING pair (SANDBOX_S6NET_BIN, optional sshd.socket row).
+
+**Tests.** cargo test 108 passed (fmt clean); standalone 10, 7, 6, 10. Sandbox with SANDBOX_S6NET_BIN pointing at the static scratch build: 342/342, SANDBOX_JOURNAL=no 349/349, SANDBOX_FDSTORE=no 330/330. Without s6-tcpserverd: 339/339, with the TCP connection checks skipped. shellcheck and bash -n clean.
+
+**Not verified:** rpmbuild of the two specs; on Fedora, init_t binding port 22 and exec'ing s6-tcpserverd, sshd@'s domain transition from the runner, `ImportCredential=` (not implemented; the empty `${CREDENTIALS_DIRECTORY}` gives sshd a nonexistent extra AuthorizedKeysFile). `proxy-server` is a generic name in /usr/bin from s6-networking; a file conflict with a Fedora package wasn't checked.
+
+### Current state
+
+main at 6f6ff7a plus this part's commit. Installed and booted: 3eed142 (0.2.1 code). 0.2.2 released.
+
+### Next steps
+
+1. Owner: download the two new tarballs (README step 2's loop does it), rebuild the skarnet RPMs and uinitconverter, install. Then `uinitconverter plan | grep -i accept`, the TESTING rows "Accept=yes sockets" (pkexec) and "Accept=yes TCP (optional)" (sshd.socket), and `ausearch -m AVC -ts recent`.
+2. Later, if wanted: connection instances visible as units (phase 3).
+3. Earlier steps unchanged: fresh-install VM and QEMU full-boot test (parts 106, 89); service restart and shutdown on a relabeled system (part 128).

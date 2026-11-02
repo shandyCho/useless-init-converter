@@ -800,18 +800,64 @@ cat > "$U/rawfd@.service" <<EOF
 Type=oneshot
 ExecStart=/usr/bin/python3 $W/rawfd.py
 EOF
-# Not supported yet: skipped, with the reason in the plan.
+# A socket that can't be bound (as sshd.socket while sshd.service holds
+# port 22): failed, and not restarted every second.
+cat > "$U/badacc.socket" <<EOF
+[Socket]
+Accept=yes
+ListenStream=/proc/uinitconverter-test/bad.sock
+[Install]
+WantedBy=sockets.target
+EOF
+cat > "$U/badacc@.service" <<EOF
+[Service]
+ExecStart=/bin/cat
+EOF
+# TCP (s6-tcpserverd, from s6-networking): on free loopback ports. Without
+# s6-tcpserverd the generator skips them; SANDBOX_S6NET_BIN=DIR supplies
+# one (e.g. a local build of s6-networking) through this sandbox's PATH.
+if [ -n "${SANDBOX_S6NET_BIN:-}" ]; then
+    ln -sf "$SANDBOX_S6NET_BIN/s6-tcpserverd" "$W/bin/s6-tcpserverd"
+fi
+freeport() { python3 -c 'import socket, sys; s = socket.socket(getattr(socket, sys.argv[1])); s.bind((sys.argv[2], 0)); print(s.getsockname()[1])' "$1" "$2"; }
+freeport AF_INET 127.0.0.1 > "$W/tcp.port"
+cat > "$W/tcp.py" <<'PYT'
+import os, stat, sys
+line = sys.stdin.readline().strip()
+print("tcp:%s addr=%s port=%s fds=%s fd3=%s inst=%s" % (
+    line, os.environ.get("REMOTE_ADDR"), os.environ.get("REMOTE_PORT"),
+    os.environ.get("LISTEN_FDS"), stat.S_ISSOCK(os.fstat(3).st_mode), sys.argv[1]), flush=True)
+PYT
 cat > "$U/tcpacc.socket" <<EOF
 [Socket]
 Accept=yes
-ListenStream=127.0.0.1:1
+ListenStream=127.0.0.1:$(cat "$W/tcp.port")
 [Install]
 WantedBy=sockets.target
 EOF
 cat > "$U/tcpacc@.service" <<EOF
 [Service]
-ExecStart=/bin/cat
+ExecStart=/usr/bin/python3 $W/tcp.py %i
+StandardInput=socket
 EOF
+# IPv6 too, when the loopback has ::1.
+TCP6=
+if grep -q '^00000000000000000000000000000001 ' /proc/net/if_inet6 2>/dev/null; then
+    TCP6=tcp6acc.socket
+    freeport AF_INET6 ::1 > "$W/tcp6.port"
+    cat > "$U/tcp6acc.socket" <<EOF
+[Socket]
+Accept=yes
+ListenStream=[::1]:$(cat "$W/tcp6.port")
+[Install]
+WantedBy=sockets.target
+EOF
+    cat > "$U/tcp6acc@.service" <<EOF
+[Service]
+ExecStart=/usr/bin/python3 $W/tcp.py %i
+StandardInput=socket
+EOF
+fi
 
 # --- path units ---
 cat > "$U/watch.service" <<EOF
@@ -851,7 +897,7 @@ disable *
 EOF
 
 C="--config $W/uinitconverter.conf"
-"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket lazy.socket lazydep.socket echo.socket rawfd.socket tcpacc.socket watch.path chg.path bad.service after-bad.service stopper.service stopcond.service >/dev/null
+"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket lazy.socket lazydep.socket echo.socket rawfd.socket badacc.socket tcpacc.socket ${TCP6:+"$TCP6"} watch.path chg.path bad.service after-bad.service stopper.service stopcond.service >/dev/null
 
 # Stand-in for journald's stdout stream socket: records each connection.
 mkdir -p "$R/journal"

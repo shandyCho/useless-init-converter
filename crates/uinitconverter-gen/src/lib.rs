@@ -659,6 +659,15 @@ pub fn plan(cfg: &Config) -> Plan {
                         plan.skipped.insert(name, why);
                         continue;
                     }
+                    // s6-networking is optional: without it, TCP sockets wait.
+                    let server = acceptspec::listener(&unit).map(|l| l.server());
+                    if let Some(server) = server.filter(|s| !tools::available(s)) {
+                        plan.skipped.insert(
+                            name,
+                            format!("Accept=yes: {server} is not installed (s6-networking)"),
+                        );
+                        continue;
+                    }
                     let (mut requires, mut wants, mut after, before) = raw_dependencies(&ld, &unit);
                     // What the template itself names (not its implicit
                     // basic.target, which sockets.target is ordered before):
@@ -1203,6 +1212,7 @@ mod tests {
             ("tcp", "ListenStream=127.0.0.1:2222"),
             ("two", "ListenStream=/run/a\nListenStream=/run/b"),
             ("note", "ListenStream=/run/note"),
+            ("vs", "ListenStream=vsock::22"),
         ];
         for (n, listen) in socks {
             write(
@@ -1242,9 +1252,23 @@ mod tests {
             w.contains("ExecStartPost= runs after ExecStart= exits"),
             "{w}"
         );
-        assert!(p.skipped["tcp.socket"].contains("TCP"));
+        if tools::available("s6-tcpserverd") {
+            assert_eq!(p.units["tcp.socket"].kind, Kind::Longrun);
+        } else {
+            assert!(
+                p.skipped["tcp.socket"].contains("s6-tcpserverd is not installed"),
+                "{}",
+                p.skipped["tcp.socket"]
+            );
+        }
         assert!(p.skipped["two.socket"].contains("only one ListenStream="));
+        assert!(p.skipped["vs.socket"].contains("only one ListenStream="));
         assert!(p.skipped["note.socket"].contains("Type=notify"));
+        // With the program there (TOOLS= here), the TCP socket is planned.
+        tools::configure("s6-tcpserverd=/bin/true").unwrap();
+        let p2 = plan(&cfg);
+        tools::configure("").unwrap();
+        assert_eq!(p2.units["tcp.socket"].kind, Kind::Longrun);
         let files = longrun_files(&cfg, "echo.socket", &echo.timings, false);
         assert!(files[0].1.contains(" accept "), "{}", files[0].1);
         assert!(files[1].1.contains(" accept-finish "), "{}", files[1].1);

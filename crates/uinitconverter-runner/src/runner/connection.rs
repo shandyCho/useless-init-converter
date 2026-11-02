@@ -1,7 +1,8 @@
-//! Accept=yes sockets: `accept` binds the socket and execs s6-ipcserverd on
-//! it; s6-ipcserverd forks `connection` for every client, which runs one
-//! instance of the socket's template (`<prefix>@<n>-<pid>-<uid>.service`)
-//! with the connection, the way systemd's socket unit does.
+//! Accept=yes sockets: `accept` binds the socket and execs s6-ipcserverd
+//! (unix) or s6-tcpserverd (TCP) on it; that forks `connection` for every
+//! client, which runs one instance of the socket's template
+//! (`<prefix>@<n>-<pid>-<uid>.service`, or with the addresses for TCP) with
+//! the connection, the way systemd's socket unit does.
 
 use super::*;
 use crate::acceptspec;
@@ -36,11 +37,23 @@ pub fn accept_main(cfg: &Config, name: &str) -> i32 {
     let st = socket_state(cfg, &id);
     st.stamp(keys::INACTIVE_EXIT);
     st.clear(keys::START_FAILED);
+    // As a service whose start failed (main.rs's setup_failed): recorded,
+    // ready for s6 and waiting, so the daemon reports it failed and s6
+    // doesn't restart it every second (a port sshd.service holds, say).
     let fail = |e: &str| -> i32 {
         log(&id, e);
         st.set(keys::RESULT, "resources");
+        st.set(keys::START_FAILED, e);
         st.stamp(keys::INACTIVE_ENTER);
-        1
+        unsafe {
+            if libc::fcntl(3, libc::F_GETFD) >= 0 {
+                libc::write(3, b"\n".as_ptr() as *const libc::c_void, 1);
+                libc::close(3);
+            }
+            loop {
+                libc::pause();
+            }
+        }
     };
     let tmpl = Loader::new(cfg).load(&acceptspec::template(&sock));
     if let Some(why) = acceptspec::unsupported(&sock, &tmpl) {
@@ -82,17 +95,22 @@ pub fn accept_main(cfg: &Config, name: &str) -> i32 {
     crate::selinux::set_socket_label(None);
     let fd = match bound {
         Ok(mut b) if b.len() == 1 => b.remove(0).fd,
+        // bind_inet leaves out an IPv6 address the kernel can't serve.
+        Ok(b) if b.is_empty() => return fail("no socket bound (IPv6 not available?)"),
         Ok(_) => return fail("expected exactly one socket"),
         Err(e) => return fail(&e),
     };
 
     let ((c, lc), _) = acceptspec::limits(&sock);
+    let server = acceptspec::listener(&sock)
+        .map(|l| l.server())
+        .unwrap_or("s6-ipcserverd");
     st.set(keys::RESULT, "success");
     st.stamp(keys::ACTIVE_ENTER);
     unsafe {
         libc::dup2(fd, 0);
         libc::close(fd);
-        // Ready: clients wait in the backlog until s6-ipcserverd accepts.
+        // Ready: clients wait in the backlog until the server accepts.
         if libc::fcntl(3, libc::F_GETFD) >= 0 {
             libc::write(3, b"\n".as_ptr() as *const libc::c_void, 1);
             libc::close(3);
@@ -100,7 +118,7 @@ pub fn accept_main(cfg: &Config, name: &str) -> i32 {
     }
     let runner = cfg.runner.display().to_string();
     let mut argv: Vec<String> = vec![
-        tools::path("s6-ipcserverd"),
+        tools::path(server),
         "-c".into(),
         c.to_string(),
         "-C".into(),
@@ -124,7 +142,7 @@ fn exec_argv(argv: &[String]) -> String {
     errno()
 }
 
-/// The finish script: s6-ipcserverd stopped (a stop) or died (s6 restarts it).
+/// The finish script: the server stopped (a stop) or died (s6 restarts it).
 pub fn accept_finish(cfg: &Config, name: &str) -> i32 {
     let Ok(sock) = load_socket(cfg, name) else {
         return 0;
@@ -152,6 +170,48 @@ fn peer_cred(fd: i32) -> Option<(i32, u32)> {
     (r == 0 && cred.pid > 0).then_some((cred.pid, cred.uid))
 }
 
+/// An AF_INET/AF_INET6 address from getsockname()/getpeername().
+fn sockaddr(fd: i32, peer: bool) -> Option<std::net::SocketAddr> {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+    let mut ss: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    let p = &mut ss as *mut _ as *mut libc::sockaddr;
+    let r = unsafe {
+        if peer {
+            libc::getpeername(fd, p, &mut len)
+        } else {
+            libc::getsockname(fd, p, &mut len)
+        }
+    };
+    if r != 0 {
+        return None;
+    }
+    match ss.ss_family as i32 {
+        libc::AF_INET => {
+            let a = unsafe { &*(p as *const libc::sockaddr_in) };
+            Some(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::from(u32::from_be(a.sin_addr.s_addr)),
+                u16::from_be(a.sin_port),
+            )))
+        }
+        libc::AF_INET6 => {
+            let a = unsafe { &*(p as *const libc::sockaddr_in6) };
+            Some(SocketAddr::V6(SocketAddrV6::new(
+                Ipv6Addr::from(a.sin6_addr.s6_addr),
+                u16::from_be(a.sin6_port),
+                a.sin6_flowinfo,
+                a.sin6_scope_id,
+            )))
+        }
+        _ => None,
+    }
+}
+
+/// Local and remote address of a TCP connection; None for a unix one.
+fn inet_addrs(fd: i32) -> Option<(std::net::SocketAddr, std::net::SocketAddr)> {
+    Some((sockaddr(fd, false)?, sockaddr(fd, true)?))
+}
+
 /// systemd's n_accepted: this connection's number, counted under a lock.
 fn next_number(st: &UnitState) -> u64 {
     let lock = fs::OpenOptions::new()
@@ -174,11 +234,11 @@ fn own_cgroup() -> Option<PathBuf> {
     Some(Path::new(cgroup::CGROUP_ROOT).join(rel.trim_start_matches('/')))
 }
 
-/// What s6-ipcserverd runs for each client: the connection is on stdin
-/// and stdout.
+/// What s6-ipcserverd or s6-tcpserverd runs for each client: the
+/// connection is on stdin and stdout.
 pub fn connection_main(cfg: &Config, name: &str) -> i32 {
     // The connection goes out of the way; stdout is the log again (the
-    // runner logs to stderr, which s6-ipcserverd inherited from s6).
+    // runner logs to stderr, which the server inherited from s6).
     let conn = unsafe { libc::fcntl(0, libc::F_DUPFD_CLOEXEC, 100) };
     unsafe {
         libc::dup2(2, 1);
@@ -201,7 +261,12 @@ pub fn connection_main(cfg: &Config, name: &str) -> i32 {
     };
     let sst = socket_state(cfg, &sock.id);
     let n = next_number(&sst);
-    let instance = acceptspec::instance_name(&acceptspec::template(&sock), n, peer_cred(conn));
+    let tmpl = acceptspec::template(&sock);
+    let inet = inet_addrs(conn);
+    let instance = match inet {
+        Some((local, remote)) => acceptspec::instance_name_inet(&tmpl, n, local, remote),
+        None => acceptspec::instance_name(&tmpl, n, peer_cred(conn)),
+    };
     let mut r = match Runner::new(cfg.clone(), &instance, true) {
         Ok(r) => r,
         Err(e) => {
@@ -209,6 +274,14 @@ pub fn connection_main(cfg: &Config, name: &str) -> i32 {
             return 1;
         }
     };
+    // As systemd sets them for IP connections (IPv4-mapped as IPv4).
+    if let Some((_, remote)) = inet {
+        r.setenv(
+            "REMOTE_ADDR",
+            &acceptspec::plain_ip(remote.ip()).to_string(),
+        );
+        r.setenv("REMOTE_PORT", &remote.port().to_string());
+    }
     let mark = sst.dir.join(acceptspec::CONNECTIONS_DIR).join(&instance);
     let _ = fs::write(&mark, std::process::id().to_string());
     r.conn = Some(conn);

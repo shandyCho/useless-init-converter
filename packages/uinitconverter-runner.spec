@@ -19,6 +19,8 @@ Requires:       s6
 Requires:       shadow-utils
 # OnFailure= and OnSuccess= units are started through uinitconverterd.
 Recommends:     uinitconverterd = %{version}-%{release}
+# s6-tcpserverd for Accept=yes TCP sockets; without it they are not generated.
+Recommends:     s6-networking
 
 %description
 Started by the s6 run and finish scripts uinitconverter-gen writes, and by

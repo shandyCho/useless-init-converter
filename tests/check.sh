@@ -240,8 +240,8 @@ fi
 
 section "system state"
 expect_eq "SystemState degraded" "$($B get-property $MGR SystemState | cut -d'"' -f2)" "degraded"
-# failing, flappy, and bad.service (fails at boot on purpose)
-expect_eq "NFailedUnits" "$($B get-property $MGR NFailedUnits | cut -d' ' -f2)" "3"
+# failing, flappy, bad.service and badacc.socket (fail at boot on purpose)
+expect_eq "NFailedUnits" "$($B get-property $MGR NFailedUnits | cut -d' ' -f2)" "4"
 
 section "reload / restart / stop"
 call ReloadUnit ss reloadable.service replace && sleep 1.5
@@ -1123,8 +1123,6 @@ me=$(id -u)
 expect_state echo.socket active/listening
 expect_state rawfd.socket active/listening
 "$(dirname "$0")/../target/debug/uinitconverter-gen" --config "$W/uinitconverter.conf" plan >"$W/accept-plan.out" 2>&1
-grep tcpacc.socket "$W/accept-plan.out" | grep -q "TCP is not supported" \
-    && ok "TCP Accept=yes socket skipped with the reason" || bad "tcpacc.socket in plan: $(grep tcpacc "$W/accept-plan.out")"
 r=$(cli "$R/echo.sock" hi)
 case $r in
     "echo:hi fds=1 names=connection fd3=True pidok=True inst=0-"*"-$me") ok "connection on stdin/stdout and fd 3, LISTEN_*, instance name ($r)" ;;
@@ -1136,6 +1134,12 @@ r=$(cli "$R/echo.sock" fail)
 case $r in echo:fail*) ok "failing instance answered" ;; *) bad "fail reply: $r" ;; esac
 wait_file "$R/echo.post" "^1-.* exit-code$" && ok "failed instance: SERVICE_RESULT=exit-code" || bad "echo.post: $(cat "$R/echo.post" 2>/dev/null)"
 expect_state echo.socket active/listening
+expect_state badacc.socket failed/failed
+p1=$(s6-svstat -p "$R/live/servicedirs/badacc.socket" 2>/dev/null)
+sleep 1.5
+p2=$(s6-svstat -p "$R/live/servicedirs/badacc.socket" 2>/dev/null)
+[ -n "$p1" ] && [ "$p1" = "$p2" ] && [ "$p1" != -1 ] && ok "a socket that can't bind waits instead of restarting" \
+    || bad "badacc.socket run pid $p1 then $p2"
 r=$(cli "$R/rawfd.sock" x)
 expect_eq "connection only on fd 3, stdin /dev/null (Type=oneshot)" "$r" "raw:x stdin=/dev/null"
 
@@ -1162,6 +1166,39 @@ sleep 0.5
 left=$(find "$R/run/units" -maxdepth 1 \( -name 'echo@*' -o -name 'rawfd@*' \) | wc -l)
 expect_eq "no instance state left behind" "$left" "0"
 expect_eq "no connection files left" "$(ls "$R/run/units/echo.socket/connections" | wc -l)" "0"
+# TCP: the reply carries REMOTE_ADDR/REMOTE_PORT and the instance name
+# systemd would give (n-LOCALIP:PORT-REMOTEIP:PORT).
+tcp_cli() {
+    timeout 10 python3 -c '
+import socket, sys
+s = socket.create_connection((sys.argv[1], int(sys.argv[2])))
+s.sendall(b"hi\n")
+print(s.makefile().readline().strip())' "$1" "$2" 2>&1
+}
+if [ -x "$W/bin/s6-tcpserverd" ] || command -v s6-tcpserverd >/dev/null; then
+    port=$(cat "$W/tcp.port")
+    expect_state tcpacc.socket active/listening
+    r=$(tcp_cli 127.0.0.1 "$port")
+    rport=$(echo "$r" | sed -n 's/.* port=\([0-9]*\) .*/\1/p')
+    expect_eq "TCP connection: REMOTE_ADDR/PORT, fd 3, instance name" "$r" \
+        "tcp:hi addr=127.0.0.1 port=$rport fds=1 fd3=True inst=0-127.0.0.1:$port-127.0.0.1:$rport"
+    if [ -e "$W/tcp6.port" ]; then
+        port6=$(cat "$W/tcp6.port")
+        r=$(tcp_cli ::1 "$port6")
+        rport=$(echo "$r" | sed -n 's/.* port=\([0-9]*\) .*/\1/p')
+        expect_eq "IPv6 connection: instance name without brackets" "$r" \
+            "tcp:hi addr=::1 port=$rport fds=1 fd3=True inst=0-::1:$port6-::1:$rport"
+    else
+        echo "SKIP IPv6 Accept=yes (no ::1 on the loopback)"
+    fi
+    tries=25
+    while [ $tries -gt 0 ] && [ "$(find "$R/run/units" -maxdepth 1 -name 'tcp*acc@*' | wc -l)" != 0 ]; do tries=$((tries - 1)); sleep 0.2; done
+    expect_eq "no TCP instance state left behind" "$(find "$R/run/units" -maxdepth 1 -name 'tcp*acc@*' | wc -l)" "0"
+else
+    grep tcpacc.socket "$W/accept-plan.out" | grep -q "s6-tcpserverd is not installed" \
+        && ok "TCP Accept=yes socket skipped without s6-tcpserverd" || bad "tcpacc.socket in plan: $(grep tcpacc "$W/accept-plan.out")"
+    echo "SKIP TCP Accept=yes connections (no s6-tcpserverd; SANDBOX_S6NET_BIN=DIR provides one)"
+fi
 if [ -n "$SR" ]; then
     st=$(SYSTEMCTL=$(dirname "$SR")/systemctl "$(dirname "$0")/systemctl.sh" status echo.socket 2>&1)
     echo "$st" | grep -q "Listen: $R/echo.sock (Stream)" && echo "$st" | grep -q "Accepted: 4; Connected: 0" \

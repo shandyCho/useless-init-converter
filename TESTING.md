@@ -128,6 +128,10 @@ uinitconverter의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-up
 `sandbox.sh`와 `check.sh`를 실행하세요. 그러면 데몬이 fd를 직접 보관하므로, 데몬을 다시 시작한
 뒤 fd가 사라졌는지를 확인합니다. 독립 도구는 `tests/sandbox.sh`가 `standalone/`에서 빌드합니다.
 
+`Accept=yes` TCP 검사에는 `s6-tcpserverd`가 필요합니다. `PATH`에 없으면 `check.sh`는 TCP 소켓을
+건너뛰었는지만 확인하고 SKIP 줄을 출력합니다. 실행하려면 두 스크립트 앞에
+`SANDBOX_S6NET_BIN=DIR`(`s6-tcpserverd`가 있는 디렉터리, 예: s6-networking을 직접 빌드한 곳)를 붙이세요.
+
 시스템 버스를 dbus-daemon 대신 dbus-broker로 테스트하려면 `SANDBOX_BUS=broker`를 앞에 붙여
 `sandbox.sh`와 `check.sh`를 실행하세요(`dbus-broker`와 `unshare`가 필요합니다).
 `dbus-broker-launch`는 소켓을 systemd 방식(`LISTEN_FDS`)으로 받고 항상
@@ -287,6 +291,7 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | 로그 디렉터리(`JOURNAL=no`) | `stat -c '%a %U:%G' /var/log/uinitconverter` | `750 root:wheel` |
 | 요청 시 서비스 | `systemctl status virtlogd.service iscsid.service`와 `ls -l /run/libvirt/virtlogd-sock`. 그다음 `sudo python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect("/run/libvirt/virtlogd-sock")'`을 실행하고 상태를 다시 봅니다 | 소켓 파일은 있고 `inactive (dead)`. 연결한 뒤 `virtlogd`는 `active (running)` |
 | Accept=yes 소켓 | `systemctl status polkit-agent-helper.socket`. 그다음 GNOME 세션의 터미널에서 `pkexec true`를 실행하고 상태를 다시 봅니다 | `Listen: /run/polkit/agent-helper.socket (Stream)`과 함께 `active (listening)`; 암호 대화상자가 동작합니다. `Accepted:`는 polkit 에이전트가 소켓을 쓸 때만 오릅니다. setuid 도우미가 대안이므로 0이어도 오류가 아닙니다 |
+| Accept=yes TCP (선택) | s6-networking을 설치한 상태에서 `sudo systemctl stop sshd.service`, `sudo systemctl start sshd.socket`, `ssh localhost true`, 그다음 `systemctl status sshd.socket`. 끝나면 `sudo systemctl stop sshd.socket`과 `sudo systemctl start sshd.service` | `Listen: [::]:22 (Stream)`과 함께 `active (listening)`, 로그인이 되고 `Accepted: 1` |
 | 스왑(zram) | `swapon --show`와 `s6-rc -a list \| grep -x zram` | 우선순위 `100`인 `/dev/zram0`, 크기는 systemd 부팅과 같음(기본 `min(ram, 8 GiB)`). `zram`이 나옵니다 |
 | 무선 상태(rfkill) | GNOME 설정에서 블루투스를 끄고 s6 항목으로 재부팅한 뒤 `rfkill`과 `s6-rc -a list \| grep -x rfkill` | 재부팅 뒤에도 블루투스가 `blocked`. `rfkill`이 나옵니다(systemd-rfkill이 아니라 oneshot) |
 | reload 감시 | `sudo s6-svstat /run/service/uinitconverter-linkwatch`와 `sudo grep -h uinitconverter-linkwatch /run/uncaught-logs/current` | `up (pid …)`. 로그 줄은 reload가 멈췄을 때만 나옵니다(`… sent its start event`) |
