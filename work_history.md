@@ -10805,3 +10805,64 @@ Slice A is done: a user's s6 manager runs under a real user@ (on a systemd boot 
   - running the greeter's user@ (gdm) with USER_MANAGER=s6 in the VM
 - **Then slices C-E** as planned (part 137), timers/paths in user mode, Accept=yes in user mode.
 - **Smaller items:** job modes (fail, replace-irreversibly) still run as replace; Requisite= is treated like Requires=; socket-waiting runners could be replaced by the daemon holding the sockets (memory).
+
+## 2026-11-03, part 142: slice B (the GDM greeter on the s6 user manager)
+
+**Result:** GDM's greeter comes up on the s6 user manager in the VM (tests/vm-user-manager.sh DIR greeter: every user@ on it, autologin off), 10/10 checks:
+- gnome-shell runs in `user@60578.service/session.slice/org.gnome.Shell@gdm.service`, as under systemd.
+- No failed units or leftover jobs.
+- gnome-session@gnome-login.target, the shell, gnome-session-manager@gnome-login and pipewire are active.
+- SELinux is enforcing with no AVC denials, and the login screen shows (screenshot).
+- The stock `systemd --user` greeter (mode `baseline`) passes the same 10.
+
+**Changes:**
+- **A user transaction** (dynamic.rs user_transaction, user mode only; the system manager's on-demand instances keep the old recursive start):
+  - The set is what the unit pulls in: Requires=, BindsTo=, Wants= and the .requires/.wants links, through units not yet up and run by this manager.
+  - Each unit's own start is dyn_start_one, in After=/Before= order within the set. An ordering cycle starts the earliest-found unit first and logs it.
+  - A failed unit fails the set's units that Require/BindsTo it.
+  - Requisite= starts nothing. It is satisfied when the unit is up, in the set, or pending in another transaction (pending_starts). In that last case it waits, up to the start timeout, and checks again.
+  - The first greeter run hung for good on `gnome-session@gnome-login.target`. Requisite= was started like Requires=, so gnome-session-pre.target (Requisite= of gnome-session-initialized.target, which Requires= it) started initialized again, under the lock initialized's own start held.
+  - The order matters too: org.gnome.Shell@gdm.service is Before= and Requisite= of gnome-session-initialized.target.
+  - The wait came from the next run: xdg-desktop-portal, D-Bus-activated while gnome-session's transaction was still bringing up graphical-session.target (its Requisite= and After=), failed its activation. Under systemd its job waits for that one.
+- **Templates in dependencies:** loader::resolve_template, as systemd's resolve_template: a template named without an instance gets the referencing unit's instance, or its prefix if it has none. Unit::deps(key) returns resolved names.
+  - Used by the transaction, relations.rs (reverse(), unmark_stopped_targets) and dyn_dependents.
+  - Also applied to .wants/.requires links of an instance (Loader::dir_deps).
+  - gnome-session@.target has `Requires=gnome-session-manager@.service`.
+- **dyn_stop recursion:** the stop recursed over dependents without a visited set. initd/pre (Requires= one way, Requisite= the other) overflowed the daemon's stack in the user sandbox. It now uses dyn_stop_seen.
+- **ConditionUser=/ConditionGroup=** were hard-wired to "the manager is root". They now compare the manager's uid (number, name, `@system` = UID <= 999) and gid/supplementary groups. pipewire.service's ConditionUser=!root failed in the greeter's manager.
+- **Type=dbus readiness** looks for BusName= on the manager's bus: BUS_ADDRESS in user mode, the system bus otherwise.
+- **RuntimeDirectory= and its family** in user mode are $XDG_RUNTIME_DIR, $XDG_STATE_HOME, $XDG_CACHE_HOME, $XDG_STATE_HOME/log and $XDG_CONFIG_HOME (environment::dirs()).
+- **User environment generators** (launcher), as systemd.environment-generator(7):
+  - They come from /run, /etc, /usr/local/lib and /usr/lib `systemd/user-environment-generators`; an earlier directory's name hides a later one, and a link to /dev/null is skipped.
+  - They run by name. Each sees the environment so far and its KEY=VALUE output updates it; a failing one's output is ignored, and each gets 5 s.
+  - The result goes into manager.env. On Fedora they are 30-systemd-environment-d-generator and 60-flatpak.
+  - UINITCONVERTER_USER_GENERATOR_PATH replaces the directories in tests.
+- **VM script:** tests/vm-user-manager.sh has modes user (part 141), greeter and baseline, with the greeter checks plus warnings and memory, and a screenshot DIR/greeter-MODE.png.
+
+**Tests:**
+- cargo test 113, new: generator order/override/failure, resolve_template, ConditionUser.
+- User sandbox 45/45, new checks:
+  - a generator's output with HOME seen
+  - SetEnvironment reaching a later unit
+  - Type=dbus on the user bus
+  - Type=notify with READY=1 from the unit
+  - a GNOME-login-shaped transaction: shell before the init target's signal oneshot, Requisite= satisfied in the set, a bare template resolved
+  - Requisite= refused when its unit is down
+  - Requisite= waiting on another transaction
+- System sandbox with SANDBOX_S6NET_BIN: 370/370, SANDBOX_JOURNAL=no 377/377, SANDBOX_FDSTORE=no 358/358.
+- VM: greeter 10/10, baseline 10/10, both release.
+
+**Greeter warnings, ours vs stock:** the same set (backlight assertion, malcontent, keybindings, USBGuard), plus one only ours:
+- gnome-shell's GetManagedObjects to gsd-smartcard arrives after the name is owned but before the ObjectManager is exported. gsd-smartcard has no D-Bus activation file, so this is a GNOME race that our one-at-a-time start makes visible; systemd starts the units in parallel. Not fixed, noted.
+
+**Memory:** the whole greeter (gnome-shell included) under user@ is 364 MiB PSS on ours and 368 MiB in the baseline. The manager's own share is as in part 141; the shell dominates.
+
+### Current state
+
+Slices A and B are done in the VM (a systemd boot opted in with the kernel flag). The default stays USER_MANAGER=systemd. Starts in user mode are serialized: no parallel starts within a transaction yet.
+
+### Next steps
+
+- **Slice C:** a user's GNOME session (log in as tester from the greeter): gnome-session@gnome.target, the leader's UnsetAndSetEnvironment and FIFO, xdg-autostart units (systemd-xdg-autostart-generator is a unit generator: user unit generators are not run yet), app scopes from gnome-shell and gnome-session (StartTransientUnit in user mode), dbus-broker's transient services, uresourced's SetUnitProperties.
+- **Then:** slices D and E; parallel starts within a transaction (startup time); the s6 boot's own system manager running the user manager.
+- **Smaller items:** job modes fail/replace-irreversibly still run as replace; OnFailure=/OnFailureJobMode=; the gsd-smartcard race above.

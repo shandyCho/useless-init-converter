@@ -255,6 +255,15 @@ again. It then starts that `user@`, checks readiness, `init.scope` and
 next to a second user with `systemd --user`, reloads and stops it. GDM and
 tester's session keep `systemd --user`.
 
+`tests/vm-user-manager.sh ~/uinitconverter-vm greeter` puts every `user@`
+on the s6 manager instead and turns autologin off, so GDM's greeter comes up
+on it. It checks the greeter's gnome-shell, its cgroup
+(`session.slice/org.gnome.Shell@gdm.service`), failed units and jobs, the
+session targets, pipewire, SELinux and AVC denials. It then prints the
+greeter's warnings and memory, and saves a screenshot as
+`~/uinitconverter-vm/greeter-greeter.png`. `baseline` runs the same checks
+on stock `systemd --user` (`greeter-baseline.png`), to compare the warnings.
+
 ## 4. Translation preview (read-only)
 
 This shows how uinitconverter would translate this machine's own units, without

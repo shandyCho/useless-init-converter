@@ -220,7 +220,13 @@ impl Daemon {
         "done"
     }
 
+    /// Start a dynamic unit. A user manager runs a transaction (see
+    /// user_transaction); the system manager's on-demand instances start
+    /// their dependencies first, one by one.
     pub(super) async fn dyn_start(&self, id: &str, unit: &Unit) -> &'static str {
+        if self.cfg.user_mode {
+            return Box::pin(self.user_transaction(id, unit)).await;
+        }
         for (dep, required) in self.start_deps(unit) {
             if dep == id {
                 continue;
@@ -231,6 +237,193 @@ impl Daemon {
                 return "dependency";
             }
         }
+        self.dyn_start_one(id, unit).await
+    }
+
+    /// systemd's start transaction, for a user manager. The set is what
+    /// `top` pulls in (Requires=, BindsTo=, Wants= and the .requires/.wants
+    /// links, through every unit that is not up yet). It is ordered by
+    /// After=/Before= within the set, and started one unit at a time.
+    /// Requisite= starts nothing: the unit must be up or in the set. GNOME's
+    /// session needs this: gnome-session-pre.target is Requisite= of
+    /// gnome-session-initialized.target, which Requires= it, and
+    /// org.gnome.Shell@gdm.service, Before= and Requisite= of
+    /// gnome-session-initialized.target, must start inside the same
+    /// transaction, before it. A failed unit fails those that require it.
+    /// `top`'s lock is the caller's.
+    async fn user_transaction(&self, top: &str, top_unit: &Unit) -> &'static str {
+        let ld = loader::Loader::new(&self.cfg);
+        // Discovery order (also the tie-break of the ordering).
+        let mut set: Vec<(String, Unit)> = vec![(top.to_string(), top_unit.clone())];
+        let mut seen: BTreeSet<String> = BTreeSet::from([top.to_string()]);
+        let mut i = 0;
+        while i < set.len() {
+            let u = set[i].1.clone();
+            i += 1;
+            let mut pulled = u.deps("Requires");
+            pulled.extend(u.deps("BindsTo"));
+            pulled.extend(u.deps("Wants"));
+            pulled.extend(ld.dir_deps(&u, "requires"));
+            pulled.extend(ld.dir_deps(&u, "wants"));
+            for d in pulled {
+                let (did, du) = self.load_unit(&d);
+                if !seen.insert(did.clone()) || !self.transaction_member(&did, &du).await {
+                    continue;
+                }
+                set.push((did, du));
+            }
+        }
+        let ids: Vec<String> = set.iter().map(|(n, _)| n.clone()).collect();
+        let names = |n: &str| -> String { self.load_unit(n).0 };
+        // before[a] holds the units of the set that must start after a.
+        let mut after_count = vec![0usize; set.len()];
+        let mut before: Vec<Vec<usize>> = vec![Vec::new(); set.len()];
+        for (a, (_, ua)) in set.iter().enumerate() {
+            for (b, (idb, ub)) in set.iter().enumerate() {
+                if a == b {
+                    continue;
+                }
+                let a_first = ua.deps("Before").iter().any(|n| names(n) == *idb)
+                    || ub.deps("After").iter().any(|n| names(n) == ids[a]);
+                if a_first && !before[a].contains(&b) {
+                    before[a].push(b);
+                    after_count[b] += 1;
+                }
+            }
+        }
+        let mut order = Vec::new();
+        let mut done = vec![false; set.len()];
+        while order.len() < set.len() {
+            let next = (0..set.len())
+                .find(|&k| !done[k] && after_count[k] == 0)
+                .or_else(|| {
+                    // An ordering cycle: systemd drops a job; here the
+                    // earliest-found unit goes first.
+                    let k = (0..set.len()).find(|&k| !done[k])?;
+                    eprintln!(
+                        "uinitconverterd: {top}: ordering cycle, starting {} first",
+                        ids[k]
+                    );
+                    Some(k)
+                });
+            let Some(k) = next else { break };
+            done[k] = true;
+            order.push(k);
+            for &b in &before[k] {
+                after_count[b] = after_count[b].saturating_sub(1);
+            }
+        }
+
+        let in_set: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
+        {
+            let mut p = self.pending_starts.lock().unwrap();
+            for id in &ids {
+                *p.entry(id.clone()).or_default() += 1;
+            }
+        }
+        let mut failed: BTreeSet<String> = BTreeSet::new();
+        let mut top_result = "done";
+        for k in order {
+            let (id, unit) = &set[k];
+            // What it needs: failed, or (Requisite=) neither up nor here.
+            let mut need = unit.deps("Requires");
+            need.extend(unit.deps("BindsTo"));
+            need.extend(ld.dir_deps(unit, "requires"));
+            let mut why = need
+                .iter()
+                .map(|d| names(d))
+                .find(|d| failed.contains(d))
+                .map(|d| format!("dependency {d} failed"));
+            if why.is_none() {
+                for d in unit.deps("Requisite") {
+                    let (did, du) = self.load_unit(&d);
+                    if in_set.contains(did.as_str()) || self.is_up(&did, &du).await {
+                        continue;
+                    }
+                    // Another transaction is starting it: systemd's job
+                    // would wait for that one (xdg-desktop-portal is
+                    // After= and Requisite= graphical-session.target, which
+                    // gnome-session's transaction starts, and is activated
+                    // over D-Bus meanwhile).
+                    if self.wait_pending(&did, unit).await && self.is_up(&did, &du).await {
+                        continue;
+                    }
+                    why = Some(format!("requisite {did} is not active"));
+                    break;
+                }
+            }
+            let r = match why {
+                Some(w) => {
+                    eprintln!("uinitconverterd: {id}: not started: {w}");
+                    "dependency"
+                }
+                None if id == top => self.dyn_start_one(id, unit).await,
+                None => {
+                    let lock = self.unit_lock(id);
+                    let _guard = lock.lock().await;
+                    if self.is_up(id, unit).await {
+                        "done"
+                    } else {
+                        let r = Box::pin(self.dyn_start_one(id, unit)).await;
+                        if r != "done" {
+                            eprintln!("uinitconverterd: {id}: start ({top}'s transaction): {r}");
+                        }
+                        r
+                    }
+                }
+            };
+            if r != "done" {
+                failed.insert(id.clone());
+            }
+            if id == top {
+                top_result = r;
+            }
+            self.unpend(id);
+        }
+        top_result
+    }
+
+    fn unpend(&self, id: &str) {
+        let mut p = self.pending_starts.lock().unwrap();
+        if let Some(n) = p.get_mut(id) {
+            *n -= 1;
+            if *n == 0 {
+                p.remove(id);
+            }
+        }
+    }
+
+    /// Wait while another transaction has `id` still to start, for at most
+    /// `unit`'s start timeout. False if it was not pending.
+    async fn wait_pending(&self, id: &str, unit: &Unit) -> bool {
+        if !self.pending_starts.lock().unwrap().contains_key(id) {
+            return false;
+        }
+        let deadline = std::time::Instant::now() + Self::start_timeout(unit);
+        while self.pending_starts.lock().unwrap().contains_key(id)
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        true
+    }
+
+    /// Whether a unit pulled into a user transaction gets a start job: a
+    /// unit this manager runs that is not up yet. Others (up, not found,
+    /// excluded, a type not run here) are taken as satisfied, as start_any
+    /// does.
+    async fn transaction_member(&self, id: &str, unit: &Unit) -> bool {
+        if self.transient.lock().unwrap().contains_key(id) {
+            return false;
+        }
+        if !(self.dynamic_kind(id).is_some() || self.can_be_dynamic(id, unit)) {
+            return false;
+        }
+        !self.is_up(id, unit).await
+    }
+
+    /// A unit's own start, its dependencies already handled.
+    async fn dyn_start_one(&self, id: &str, unit: &Unit) -> &'static str {
         self.stop_conflicts(id, unit).await;
 
         if unit.utype() == "socket" {
@@ -443,15 +636,32 @@ impl Daemon {
                 let (_, u) = self.load_unit(n);
                 ["Requires", "BindsTo", "Requisite"]
                     .iter()
-                    .any(|k| u.get_words("Unit", k).iter().any(|d| d == id))
+                    .any(|k| u.deps(k).iter().any(|d| self.load_unit(d).0 == id))
             })
             .collect()
     }
 
     pub(super) async fn dyn_stop(&self, id: &str, unit: &Unit) -> &'static str {
+        Box::pin(self.dyn_stop_seen(id, unit, &mut BTreeSet::new())).await
+    }
+
+    /// dyn_stop(), dependents first. `seen`: the units this stop has taken
+    /// on; units that need each other (gnome-session-pre.target and
+    /// gnome-session-initialized.target, Requires= one way and Requisite=
+    /// the other) recursed without it until the stack overflowed.
+    async fn dyn_stop_seen(
+        &self,
+        id: &str,
+        unit: &Unit,
+        seen: &mut BTreeSet<String>,
+    ) -> &'static str {
+        seen.insert(id.to_string());
         for dep in self.dyn_dependents(id) {
+            if seen.contains(&dep) {
+                continue;
+            }
             let (_, du) = self.load_unit(&dep);
-            Box::pin(self.dyn_stop(&dep, &du)).await;
+            Box::pin(self.dyn_stop_seen(&dep, &du, seen)).await;
         }
         let rearm = unit.utype() == "service"
             && !self.exiting.load(std::sync::atomic::Ordering::Relaxed)

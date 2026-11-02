@@ -7,7 +7,12 @@
 # GDM, the greeter and tester's GNOME session keep systemd --user. A second
 # user with systemd --user is the memory comparison.
 #
-#   tests/vm-user-manager.sh DIR     # DIR: the provisioned VM (gnome-vm.sh)
+#   tests/vm-user-manager.sh DIR [user]  # DIR: the provisioned VM (gnome-vm.sh)
+#   tests/vm-user-manager.sh DIR greeter # every user@ (GDM's greeter too) on the s6
+#                                        # manager, autologin off: the greeter must
+#                                        # show (DIR/greeter-greeter.png)
+#   tests/vm-user-manager.sh DIR baseline # the same greeter checks on stock systemd
+#                                        # --user, for comparison (DIR/greeter-baseline.png)
 #
 # Copies target/debug's uinitconverterd, -runner and -timers (cargo build
 # first) and the skalibs and s6 RPMs from SKARNET_RPMS (default
@@ -16,7 +21,9 @@ set -euo pipefail
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 VM=$TOP/tests/gnome-vm.sh
-D=${1:?usage: tests/vm-user-manager.sh DIR}
+D=${1:?usage: tests/vm-user-manager.sh DIR [user|greeter|baseline]}
+MODE=${2:-user}
+case $MODE in user | greeter | baseline) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
 RPMS=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/RPMS/x86_64}
 S=$(mktemp -d)
 # The VM goes down however this ends.
@@ -37,8 +44,16 @@ done
 cat >"$S/setup.sh" <<'EOS'
 #!/bin/bash
 # As root in the VM: install, add the users, the drop-in and the flag.
+# $1: the mode.
 set -euo pipefail
 cd ~tester/in
+if [ "$1" != user ]; then
+    # The greeter is what comes up.
+    sed -i 's/^AutomaticLoginEnable=True/AutomaticLoginEnable=False/' /etc/gdm/custom.conf
+fi
+if [ "$1" = baseline ]; then
+    exit 0
+fi
 # Built locally, so unsigned.
 rpm -Uvh --nodeps --nosignature --replacepkgs ./skalibs-*.rpm ./execline-*.rpm ./s6-*.rpm
 install -d /usr/local/libexec/uinitconverter
@@ -49,8 +64,11 @@ for u in s6test s6ref; do
     id "$u" >/dev/null 2>&1 || useradd -m "$u"
 done
 uid=$(id -u s6test)
-mkdir -p "/etc/systemd/system/user@$uid.service.d"
-cat >"/etc/systemd/system/user@$uid.service.d/90-uinitconverter.conf" <<EOF
+# greeter: every user's manager.
+dir=/etc/systemd/system/user@$uid.service.d
+[ "$1" = greeter ] && dir=/etc/systemd/system/user@.service.d
+mkdir -p "$dir"
+cat >"$dir/90-uinitconverter.conf" <<EOF
 [Service]
 ExecStart=
 ExecStart=/usr/local/libexec/uinitconverter/uinitconverterd user-manager
@@ -137,13 +155,69 @@ echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
 EOS
 
+cat >"$S/greeter.sh" <<'EOS'
+#!/bin/bash
+# As root in the VM: GDM's greeter, under whichever user manager runs it.
+set -uo pipefail
+pass=0 fail=0
+ok() { pass=$((pass + 1)); echo "PASS $*"; }
+bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+g=$(id -u gdm-greeter)
+t=0
+until pgrep -u gdm-greeter -x gnome-shell >/dev/null || [ $t -ge 120 ]; do sleep 2; t=$((t + 2)); done
+pgrep -u gdm-greeter -x gnome-shell >/dev/null && ok "the greeter's gnome-shell runs (after ${t} s)" || bad "no gnome-shell for gdm-greeter after 120 s"
+sleep 20
+main=$(systemctl show -p MainPID --value "user@$g.service")
+echo "   user@$g.service's main process: $(cat "/proc/$main/comm" 2>/dev/null)"
+cg=$(cut -d: -f3 "/proc/$(pgrep -u gdm-greeter -x gnome-shell | head -1)/cgroup" 2>/dev/null)
+case $cg in */user@$g.service/session.slice/org.gnome.Shell@gdm.service) ok "gnome-shell is in $cg" ;; *) bad "gnome-shell's cgroup: $cg" ;; esac
+as() { runuser -u gdm-greeter -- env XDG_RUNTIME_DIR="/run/user/$g" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$g/bus" "$@"; }
+f=$(as systemctl --user list-units --failed --no-legend 2>&1)
+[ -z "$f" ] && ok "no failed user units" || bad "failed: $f"
+j=$(as systemctl --user list-jobs --no-legend 2>&1)
+[ -z "$j" ] && ok "no jobs left" || bad "jobs: $j"
+for u in gnome-session@gnome-login.target org.gnome.Shell@gdm.service gnome-session-manager@gnome-login.service pipewire.service; do
+    s=$(as systemctl --user is-active "$u" 2>&1)
+    [ "$s" = active ] && ok "$u is active" || bad "$u: $s"
+done
+[ "$(getenforce)" = Enforcing ] && ok "SELinux is enforcing" || bad "SELinux: $(getenforce)"
+n=$(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep -c denied)
+[ "$n" = 0 ] && ok "no AVC denials" || bad "$n AVC denials"
+echo "-- the greeter's warnings (journal, priority <= warning):"
+journalctl -b "_UID=$g" -p warning --no-pager -o cat | sort | uniq -c | sort -rn | head -25 | cut -c1-160 | sed 's/^/   /'
+echo "-- the manager's own lines:"
+journalctl -b "_UID=$g" --no-pager -o cat | grep -E "^uinitconverter" | cut -c1-160 | sed 's/^/   /'
+echo "-- memory (PSS, KiB) under user@$g.service:"
+total=0
+# shellcheck disable=SC2046
+for p in $(cat $(find "/sys/fs/cgroup/user.slice/user-$g.slice/user@$g.service" -name cgroup.procs)); do
+    v=$(awk '/^Pss:/ {print $2}' "/proc/$p/smaps_rollup" 2>/dev/null)
+    total=$((total + ${v:-0}))
+done
+echo "   $total"
+echo
+echo "passed: $pass  failed: $fail"
+[ "$fail" -eq 0 ]
+EOS
+
 cp "$TOP/target/$BUILD/uinitconverterd" "$TOP/target/$BUILD/uinitconverter-runner" "$TOP/target/$BUILD/uinitconverter-timers" "$skalibs" "$execline" "$s6" "$S/"
 "$VM" start "$D"
 "$VM" wait "$D"
 "$VM" copy "$D" "$S"/*
-"$VM" ssh "$D" sudo bash in/setup.sh
+"$VM" ssh "$D" sudo bash in/setup.sh "$MODE"
 # The flag needs a boot; the overlay is kept.
 "$VM" stop "$D"
 "$VM" start "$D" --keep
-"$VM" wait "$D"
-"$VM" ssh "$D" sudo bash in/check.sh
+if [ "$MODE" = user ]; then
+    "$VM" wait "$D"
+    "$VM" ssh "$D" sudo bash in/check.sh
+    exit
+fi
+t=0
+until "$VM" ssh "$D" true 2>/dev/null; do
+    t=$((t + 5)); [ $t -lt 300 ] || { echo "no SSH after 5 min" >&2; exit 1; }; sleep 5
+done
+rc=0
+"$VM" ssh "$D" sudo bash in/greeter.sh || rc=$?
+"$VM" screenshot "$D" "$D/greeter-$MODE.png"
+exit $rc

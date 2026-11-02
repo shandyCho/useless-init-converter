@@ -95,6 +95,35 @@ pub fn template_of(name: &str) -> Option<String> {
     n.instance.map(|_| format!("{}@.{}", n.prefix, n.suffix))
 }
 
+/// A dependency that names a template without an instance
+/// (`Requires=gnome-session-manager@.service` in gnome-session@.target)
+/// gets the referencing unit's instance, or its name when it has none, as
+/// systemd's resolve_template() does.
+pub fn resolve_template(dep: &str, of: &str) -> String {
+    let Some(d) = parse_name(dep).filter(|d| d.is_template) else {
+        return dep.to_string();
+    };
+    let inst = match parse_name(of) {
+        Some(UnitName {
+            instance: Some(i), ..
+        }) => i.to_string(),
+        Some(o) => o.prefix.to_string(),
+        None => return dep.to_string(),
+    };
+    format!("{}@{inst}.{}", d.prefix, d.suffix)
+}
+
+impl Unit {
+    /// Dependency names under `key` in [Unit], templates resolved
+    /// (resolve_template).
+    pub fn deps(&self, key: &str) -> Vec<String> {
+        self.get_words("Unit", key)
+            .into_iter()
+            .map(|d| resolve_template(&d, &self.id))
+            .collect()
+    }
+}
+
 fn is_dev_null(p: &Path) -> bool {
     fs::read_link(p)
         .map(|t| t == Path::new("/dev/null"))
@@ -255,6 +284,15 @@ impl<'a> Loader<'a> {
                 for e in rd.flatten() {
                     let dep = e.file_name().to_string_lossy().into_owned();
                     if parse_name(&dep).is_some() && !is_dev_null(&e.path()) {
+                        // A template linked into a template's directory
+                        // (foo@.target.wants/bar@.service) is this
+                        // instance's (bar@x.service for foo@x.target).
+                        let dep = match parse_name(&unit.id) {
+                            Some(UnitName {
+                                instance: Some(_), ..
+                            }) => resolve_template(&dep, &unit.id),
+                            _ => dep,
+                        };
                         out.insert(dep);
                     }
                 }
@@ -536,6 +574,26 @@ impl Unit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn templates_in_dependencies_take_the_instance() {
+        assert_eq!(
+            resolve_template(
+                "gnome-session-manager@.service",
+                "gnome-session@gnome-login.target"
+            ),
+            "gnome-session-manager@gnome-login.service"
+        );
+        assert_eq!(
+            resolve_template("getty@.service", "foo.target"),
+            "getty@foo.service"
+        );
+        assert_eq!(resolve_template("a@x.service", "b@y.target"), "a@x.service");
+        assert_eq!(
+            resolve_template("plain.service", "b@y.target"),
+            "plain.service"
+        );
+    }
 
     #[test]
     fn start_timeouts() {

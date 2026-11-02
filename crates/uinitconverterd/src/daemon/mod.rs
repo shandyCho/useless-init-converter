@@ -95,6 +95,9 @@ pub struct Daemon {
     conn: RwLock<Option<Connection>>,
     /// The user manager is exiting: a stopped bus is not armed again.
     pub exiting: AtomicBool,
+    /// Units a user transaction is going to start (count of transactions),
+    /// until their start is done: a Requisite= on one waits for it.
+    pub pending_starts: Mutex<BTreeMap<String, usize>>,
     pub index: RwLock<Index>,
     pub jobs: Mutex<BTreeMap<u32, Job>>,
     pub next_job: AtomicU32,
@@ -518,6 +521,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         cfg,
         conn: RwLock::new(first.as_ref().map(|(c, _)| c.clone())),
         exiting: AtomicBool::new(false),
+        pending_starts: Mutex::new(BTreeMap::new()),
         jobs: Mutex::new(BTreeMap::new()),
         next_job: AtomicU32::new(0),
         s6: s6::State::default(),

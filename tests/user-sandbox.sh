@@ -123,6 +123,114 @@ Conflicts=sess@gnome.target
 StopWhenUnneeded=yes
 EOF
 
+# Slice B: an environment generator, a unit that reads the manager's
+# environment, a Type=dbus unit (its name on the user bus) and a
+# Type=notify one that says READY=1 itself.
+mkdir -p "$W/generators"
+cat >"$W/generators/50-test" <<EOF
+#!/bin/sh
+echo "GEN_SEEN=\$HOME"
+echo "FROM_GENERATOR=yes"
+EOF
+chmod +x "$W/generators/50-test"
+cat >"$U/envdump.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo "\$FROM_GENERATOR \$LATER" >$W/envdump.out'
+EOF
+cat >"$W/ownname.py" <<'EOF'
+from gi.repository import Gio, GLib
+Gio.bus_own_name(Gio.BusType.SESSION, "org.example.UserTest", 0, None, None, None)
+GLib.MainLoop().run()
+EOF
+cat >"$W/notifier.py" <<'EOF'
+import os, socket, time
+time.sleep(1)
+a = os.environ["NOTIFY_SOCKET"]
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+s.connect("\0" + a[1:] if a.startswith("@") else a)
+s.send(b"READY=1")
+time.sleep(1000)
+EOF
+cat >"$U/busname.service" <<EOF
+[Service]
+Type=dbus
+BusName=org.example.UserTest
+ExecStart=/usr/bin/python3 $W/ownname.py
+EOF
+cat >"$U/notifier.service" <<EOF
+[Service]
+Type=notify
+ExecStart=/usr/bin/python3 $W/notifier.py
+EOF
+
+# gnome-session@gnome-login.target's shape: the login target requires the
+# initialized target and the shell; initialized requires pre, which is
+# Requisite= and Before= of it; the shell is Requisite= and Before= of
+# initialized, so it starts first within the transaction; initialized is
+# Before= the signal-init oneshot. A template named without an instance
+# takes the login target's.
+cat >"$U/login@.target" <<EOF
+[Unit]
+Requires=initd.target
+Requires=shellx@%i.service
+Requires=lmgr@.service
+EOF
+cat >"$U/initd.target" <<EOF
+[Unit]
+Requires=pre.target
+After=pre.target
+Requires=siginit.service
+Before=siginit.service
+EOF
+cat >"$U/pre.target" <<EOF
+[Unit]
+Requisite=initd.target
+Before=initd.target
+EOF
+cat >"$U/shellx@.service" <<EOF
+[Unit]
+Requisite=initd.target
+Before=initd.target
+[Service]
+ExecStart=/bin/sh -c 'echo shell >>$W/order.out; exec sleep 1000'
+EOF
+cat >"$U/siginit.service" <<EOF
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'sleep 0.5; echo signal >>$W/order.out'
+EOF
+cat >"$U/lmgr@.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+
+# xdg-desktop-portal's case: Requisite= and After= a target that another
+# transaction is still bringing up.
+cat >"$U/slowpre.service" <<EOF
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sleep 2
+EOF
+cat >"$U/late.target" <<EOF
+[Unit]
+Requires=slowpre.service
+After=slowpre.service
+EOF
+cat >"$U/outer.target" <<EOF
+[Unit]
+Requires=late.target
+EOF
+cat >"$U/portalx.service" <<EOF
+[Unit]
+Requisite=late.target
+After=late.target
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+
 cat >"$W/bus.conf" <<EOF
 <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
@@ -148,6 +256,7 @@ echo $! >>"$W/pids"
 sleep 0.3
 env HOME="$W/home" XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" \
     NOTIFY_SOCKET="$R/notify" UINITCONVERTER_USER_UNIT_PATH="$U" UINITCONVERTER_USER_CGROUP=no \
+    UINITCONVERTER_USER_GENERATOR_PATH="$W/generators" \
     "$BIN/uinitconverterd" --config "$W/system.conf" user-manager >"$W/daemon.log" 2>&1 &
 MGR_PID=$!
 echo $MGR_PID >>"$W/pids"
@@ -165,6 +274,43 @@ expect_state dbus.service active/running
 out=$($B call $MGR GetUnit s base.service 2>&1) && ok "GetUnit over the user bus" || bad "GetUnit on the bus: $out"
 out=$(SC show-environment 2>&1)
 case $out in *"DBUS_SESSION_BUS_ADDRESS=unix:path=$R/bus"*) ok "the units get the bus address" ;; *) bad "manager environment: $out" ;; esac
+
+case $out in *"FROM_GENERATOR=yes"*"GEN_SEEN=$W/home"*|*"GEN_SEEN=$W/home"*"FROM_GENERATOR=yes"*) ok "the environment generator's output (it saw HOME)" ;; *) bad "generator: $out" ;; esac
+
+echo "== slice B: environment, Type=dbus, Type=notify"
+SC set-environment LATER=set-later
+SC start envdump.service
+[ "$(cat "$W/envdump.out" 2>/dev/null)" = "yes set-later" ] && ok "a unit sees the generator's and SetEnvironment's variables" \
+    || bad "envdump: $(cat "$W/envdump.out" 2>&1)"
+t0=$(date +%s)
+if SC start busname.service; then
+    out=$($B status org.example.UserTest 2>/dev/null | sed -n 's/^PID=//p')
+    [ -n "$out" ] && [ "$out" = "$(SC show -p MainPID --value busname.service)" ] \
+        && ok "Type=dbus: started once its name was on the user bus" || bad "BusName owner ${out:-none}"
+else
+    bad "busname.service did not start: $(SC status busname.service 2>&1 | tail -3)"
+fi
+SC start notifier.service && [ $(($(date +%s) - t0)) -ge 1 ] && expect_state notifier.service active/running \
+    || bad "notifier.service: $(SC status notifier.service 2>&1 | tail -3)"
+
+echo "== a transaction: Requisite=, Before=/After=, a template without instance"
+call StartUnit ss login@gdm.target fail && ok "login@gdm.target started" || bad "login@gdm.target: $(cat "$W/last-error")"
+expect_state initd.target active/active
+expect_state pre.target active/active
+expect_state shellx@gdm.service active/running
+expect_state lmgr@gdm.service active/running
+waitfor '[ "$(wc -l <"$W/order.out" 2>/dev/null)" -ge 2 ]' || true
+[ "$(tr '\n' ' ' <"$W/order.out" 2>/dev/null)" = "shell signal " ] && ok "the shell started before initd.target's signal" \
+    || bad "order: $(cat "$W/order.out" 2>&1)"
+SC stop login@gdm.target initd.target pre.target shellx@gdm.service lmgr@gdm.service siginit.service
+if SC start pre.target 2>/dev/null; then bad "pre.target started though its requisite is down"; else ok "Requisite=: pre.target refused while initd.target is down"; fi
+expect_state initd.target inactive/dead
+
+call StartUnit ss outer.target replace
+sleep 0.3
+SC start portalx.service && ok "Requisite= waited for the target another transaction was starting" \
+    || bad "portalx.service: $(SC status portalx.service 2>&1 | tail -2)"
+expect_state portalx.service active/running
 
 echo "== a session"
 call StartUnit ss sess@gnome.target fail

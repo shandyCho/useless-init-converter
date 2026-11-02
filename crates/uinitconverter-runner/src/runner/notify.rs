@@ -549,7 +549,8 @@ impl Runner {
         Ok(path_s)
     }
 
-    /// Type=dbus: ready once BusName= appears on the system bus.
+    /// Type=dbus: ready once BusName= appears on the manager's bus (the
+    /// system bus, or a user manager's BUS_ADDRESS).
     pub(super) fn start_dbus_helper(&mut self, main_pid: u32) {
         let notify = self.notify_fd;
         let tries = self
@@ -560,6 +561,7 @@ impl Runner {
             let _ = self.start_exec_helper();
             return;
         };
+        let user_bus = self.cfg.bus_address.clone().filter(|_| self.cfg.user_mode);
         let _ = double_fork(|| {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -570,8 +572,15 @@ impl Runner {
             };
             // Ok(true) ready, Ok(false) died, Err timeout/bus error.
             let outcome: Result<bool, &str> = rt.block_on(async {
-                let Ok(conn) = zbus::Connection::system().await else {
-                    return Err("no system bus");
+                let conn = match &user_bus {
+                    Some(a) => match zbus::connection::Builder::address(a.as_str()) {
+                        Ok(b) => b.build().await,
+                        Err(e) => Err(e),
+                    },
+                    None => zbus::Connection::system().await,
+                };
+                let Ok(conn) = conn else {
+                    return Err("no bus");
                 };
                 let Ok(proxy) = zbus::fdo::DBusProxy::new(&conn).await else {
                     return Err("no system bus");

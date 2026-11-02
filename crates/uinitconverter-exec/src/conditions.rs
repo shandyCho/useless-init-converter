@@ -116,13 +116,46 @@ fn check(kind: &str, p: &str) -> bool {
         "NeedsUpdate" => false,
         "ACPower" => true,
         "Capability" => true,
-        "User" => p == "root" || p == "0" || p == "@system",
-        "Group" => p == "root" || p == "0",
+        "User" => user_is(p, unsafe { libc::getuid() }),
+        "Group" => group_is(p),
         "OSRelease" => true,
         "Environment" => std::env::var(p.split('=').next().unwrap_or(p)).is_ok(),
         // Unknown conditions are treated as passing.
         _ => true,
     }
+}
+
+/// ConditionUser=: the manager's user, by number, by name, or `@system`
+/// (UIDs up to SYSTEM_UID_MAX, 999 as on Fedora). Root for the system
+/// manager; a user manager is the user's (pipewire.service has
+/// ConditionUser=!root and runs in the greeter's).
+fn user_is(p: &str, uid: u32) -> bool {
+    if p == "@system" {
+        return uid <= 999;
+    }
+    if let Ok(n) = p.parse::<u32>() {
+        return n == uid;
+    }
+    crate::util::lookup_user(p)
+        .map(|u| u.uid == uid)
+        .unwrap_or(false)
+}
+
+/// ConditionGroup=: the manager's group or one of its supplementary groups.
+fn group_is(p: &str) -> bool {
+    let Some(gid) = crate::util::lookup_group(p) else {
+        return false;
+    };
+    if unsafe { libc::getgid() } == gid {
+        return true;
+    }
+    let n = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+    if n <= 0 {
+        return false;
+    }
+    let mut groups = vec![0 as libc::gid_t; n as usize];
+    let n = unsafe { libc::getgroups(n, groups.as_mut_ptr()) };
+    n > 0 && groups[..n as usize].contains(&gid)
 }
 
 fn access(p: &str, mode: i32) -> bool {
@@ -233,5 +266,17 @@ fn virtualization(p: &str) -> bool {
             Some(b) => b == (v != "none"),
             None => other == v,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn condition_user() {
+        assert!(user_is("root", 0) && user_is("0", 0) && user_is("@system", 0));
+        assert!(!user_is("root", 60578) && !user_is("@system", 60578));
+        assert!(user_is("60578", 60578) && user_is("@system", 42));
     }
 }

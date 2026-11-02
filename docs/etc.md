@@ -475,9 +475,19 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 다시 읽고, `SIGTERM`(`user@` 정지)은 모든 유닛을 멈춥니다(버스는 마지막). `USER_EXCLUDE=`에는
 실행하지 않을 사용자 유닛의 glob을 적습니다.
 
-아직 안 된 것: GDM 그리터와 GNOME 세션(환경 생성기, `Type=dbus` 준비 완료, xdg-autostart,
-앱 scope), 타이머와 path 유닛, `Accept=yes` 소켓, systemd-oomd 보고, 제한된 사용자를 위한
-SELinux. 이것들이 끝나기 전까지는 기본값을 유지하세요.
+시작은 systemd처럼 트랜잭션입니다. 끌어들이는 유닛(`Requires=`, `BindsTo=`, `Wants=`와 링크
+디렉터리)을 `After=`/`Before=`로 정렬해 하나씩 시작합니다. `Requisite=`는 아무것도 시작하지
+않습니다. 그 유닛이 이미 올라와 있거나, 같은 트랜잭션에 있거나, 다른 트랜잭션이 시작하는 중이어야
+합니다(그 경우 기다립니다). 인스턴스 없이 적은 템플릿은 참조하는 유닛의 인스턴스를 받습니다. 사용자
+환경 생성기(`user-environment-generators/`, `environment.d`를 읽습니다)를 시작할 때 실행하고,
+`Type=dbus` 유닛은 사용자 버스에 이름이 올라오면 준비 완료이며, `RuntimeDirectory=` 계열은
+사용자의 디렉터리입니다. GDM 그리터가 이 위에서 동작합니다. 테스트 VM에서 그리터가 뜨고,
+gnome-shell은 systemd에서처럼 `session.slice/org.gnome.Shell@gdm.service`에 있으며, SELinux는
+enforcing이고 거부가 없습니다.
+
+아직 안 된 것: 사용자의 GNOME 세션(xdg-autostart, 앱 scope, 로그아웃), 타이머와 path 유닛,
+`Accept=yes` 소켓, systemd-oomd 보고, 제한된 사용자를 위한 SELinux, s6 부팅의 시스템 매니저
+아래에서 실행. 이것들이 끝나기 전까지는 기본값을 유지하세요.
 
 ## `s6` 명령 (s6-frontend)
 

@@ -233,6 +233,13 @@ VM 부팅이 망가져도 손해가 없습니다. `start`는 매번 준비된 �
 두 번째 사용자와 메모리(PSS)를 나란히 출력한 뒤 reload하고 멈춥니다. GDM과 tester의 세션은
 `systemd --user`를 그대로 씁니다.
 
+`tests/vm-user-manager.sh ~/uinitconverter-vm greeter`는 대신 모든 `user@`를 s6 매니저로 돌리고
+자동 로그인을 꺼서, GDM 그리터가 그 위에서 뜨게 합니다. 그리터의 gnome-shell, 그 cgroup
+(`session.slice/org.gnome.Shell@gdm.service`), 실패한 유닛과 작업, 세션 타깃, pipewire, SELinux와
+AVC 거부를 확인합니다. 이어서 그리터의 경고와 메모리를 출력하고 스크린숏을
+`~/uinitconverter-vm/greeter-greeter.png`로 저장합니다. `baseline`은 같은 검사를 기본
+`systemd --user`에서 실행합니다(`greeter-baseline.png`). 경고를 비교할 때 씁니다.
+
 ## 4. 변환 미리보기 (읽기 전용)
 
 아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 uinitconverter가 어떻게 변환할지 보여줍니다.

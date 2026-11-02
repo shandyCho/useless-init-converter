@@ -2,13 +2,35 @@
 
 use super::*;
 
-pub(super) const DIRS: &[(&str, &str, &str)] = &[
-    ("RuntimeDirectory", "/run", "RUNTIME_DIRECTORY"),
-    ("StateDirectory", "/var/lib", "STATE_DIRECTORY"),
-    ("CacheDirectory", "/var/cache", "CACHE_DIRECTORY"),
-    ("LogsDirectory", "/var/log", "LOGS_DIRECTORY"),
-    ("ConfigurationDirectory", "/etc", "CONFIGURATION_DIRECTORY"),
-];
+/// RuntimeDirectory= and its family: (setting, base, variable). A user
+/// manager's are the user's, as systemd.exec(5) lists them.
+pub(super) fn dirs() -> Vec<(&'static str, String, &'static str)> {
+    let (run, state, cache, logs, conf) = if crate::loader::user_mode() {
+        let u = crate::loader::UserDirs::current();
+        (
+            u.runtime.clone(),
+            u.state.clone(),
+            u.cache.clone(),
+            format!("{}/log", u.state),
+            u.config.clone(),
+        )
+    } else {
+        (
+            "/run".into(),
+            "/var/lib".into(),
+            "/var/cache".into(),
+            "/var/log".into(),
+            "/etc".into(),
+        )
+    };
+    vec![
+        ("RuntimeDirectory", run, "RUNTIME_DIRECTORY"),
+        ("StateDirectory", state, "STATE_DIRECTORY"),
+        ("CacheDirectory", cache, "CACHE_DIRECTORY"),
+        ("LogsDirectory", logs, "LOGS_DIRECTORY"),
+        ("ConfigurationDirectory", conf, "CONFIGURATION_DIRECTORY"),
+    ]
+}
 
 pub(super) fn env_set(env: &mut Vec<(String, String)>, k: &str, v: &str) {
     if let Some(e) = env.iter_mut().find(|(ek, _)| ek == k) {
@@ -44,7 +66,7 @@ impl Runner {
             self.setenv("HOME", &home);
             self.setenv("SHELL", &shell);
         }
-        for (key, base, var) in DIRS {
+        for (key, base, var) in dirs() {
             let dirs: Vec<String> = self
                 .unit
                 .get_words("Service", key)
@@ -117,7 +139,7 @@ impl Runner {
     }
 
     pub(super) fn create_directories(&mut self) -> Result<(), String> {
-        for (key, base, _) in DIRS {
+        for (key, base, _) in dirs() {
             let mode = self
                 .unit
                 .get("Service", &format!("{key}Mode"))
@@ -125,11 +147,11 @@ impl Runner {
                 .unwrap_or(0o755);
             for d in self.unit.get_words("Service", key) {
                 let d = d.split(':').next().unwrap_or(&d).to_string();
-                let path = PathBuf::from(base).join(&d);
+                let path = PathBuf::from(&base).join(&d);
                 fs::create_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
                 crate::selinux::restorecon(&path.display().to_string());
                 let _ = fs::set_permissions(&path, fs::Permissions::from_mode(mode));
-                if *key != "ConfigurationDirectory" {
+                if key != "ConfigurationDirectory" {
                     if let Some(u) = &self.user {
                         let c = cstr(&path.display().to_string());
                         unsafe { libc::chown(c.as_ptr(), u.uid, self.gid.unwrap_or(u.gid)) };
@@ -153,7 +175,7 @@ impl Runner {
         for d in self.unit.get_words("Service", "RuntimeDirectory") {
             let d = d.split(':').next().unwrap_or(&d).to_string();
             if !d.is_empty() && !d.contains("..") {
-                let _ = fs::remove_dir_all(Path::new("/run").join(d));
+                let _ = fs::remove_dir_all(Path::new(&dirs()[0].1).join(d));
             }
         }
     }

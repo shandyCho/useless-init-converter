@@ -103,7 +103,7 @@ fn quote(v: &str) -> String {
 /// The units' starting environment (systemd --user's: what user@UID.service
 /// gave it, plus MANAGERPID and the bus).
 fn manager_env(runtime: &str) -> String {
-    let mut out = String::new();
+    let mut env: Vec<(String, String)> = Vec::new();
     let keep = |k: &str| {
         matches!(
             k,
@@ -124,15 +124,129 @@ fn manager_env(runtime: &str) -> String {
     };
     for (k, v) in std::env::vars() {
         if keep(&k) {
-            out.push_str(&format!("{k}={}\n", quote(&v)));
+            env.push((k, v));
         }
     }
-    out.push_str(&format!("MANAGERPID={}\n", std::process::id()));
-    out.push_str(&format!(
-        "DBUS_SESSION_BUS_ADDRESS={}\n",
-        quote(&format!("unix:path={runtime}/bus"))
-    ));
-    out
+    set(&mut env, "MANAGERPID", &std::process::id().to_string());
+    set(
+        &mut env,
+        "DBUS_SESSION_BUS_ADDRESS",
+        &format!("unix:path={runtime}/bus"),
+    );
+    run_generators(&mut env, &generator_dirs());
+    env.iter()
+        .map(|(k, v)| format!("{k}={}\n", quote(v)))
+        .collect()
+}
+
+fn set(env: &mut Vec<(String, String)>, k: &str, v: &str) {
+    match env.iter_mut().find(|(n, _)| n == k) {
+        Some(e) => e.1 = v.to_string(),
+        None => env.push((k.to_string(), v.to_string())),
+    }
+}
+
+/// systemd.environment-generator(7)'s user directories, highest priority
+/// first. UINITCONVERTER_USER_GENERATOR_PATH (colon-separated) replaces
+/// them (tests).
+fn generator_dirs() -> Vec<PathBuf> {
+    if let Ok(p) = std::env::var("UINITCONVERTER_USER_GENERATOR_PATH") {
+        return p
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect();
+    }
+    [
+        "/run/systemd/user-environment-generators",
+        "/etc/systemd/user-environment-generators",
+        "/usr/local/lib/systemd/user-environment-generators",
+        "/usr/lib/systemd/user-environment-generators",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
+/// Environment generators, as systemd --user runs them at startup: by name,
+/// a name in an earlier directory hiding the same name later (a link to
+/// /dev/null disables it); each one sees the environment so far and prints
+/// KEY=VALUE lines that update it (30-systemd-environment-d-generator reads
+/// environment.d, 60-flatpak adds its XDG_DATA_DIRS). Each gets 5 s.
+fn run_generators(env: &mut Vec<(String, String)>, dirs: &[PathBuf]) {
+    use std::collections::BTreeMap;
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    let mut found: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for dir in dirs {
+        let Ok(rd) = fs::read_dir(dir) else { continue };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            found.entry(name).or_insert_with(|| e.path());
+        }
+    }
+    for (name, path) in found {
+        if fs::canonicalize(&path)
+            .map(|p| p == Path::new("/dev/null"))
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        let exec = fs::metadata(&path)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false);
+        if !exec {
+            continue;
+        }
+        let child = Command::new(&path)
+            .env_clear()
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .spawn();
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("uinitconverterd user-manager: generator {name}: {e}");
+                continue;
+            }
+        };
+        // Read on a thread: a generator that fills the pipe would block.
+        let mut out = child.stdout.take();
+        let reader = std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(o) = out.as_mut() {
+                let _ = o.read_to_string(&mut text);
+            }
+            text
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(st)) => break Some(st),
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+            }
+        };
+        let text = reader.join().unwrap_or_default();
+        match status {
+            Some(st) if st.success() => {
+                for (k, v) in crate::envfile::parse(&text) {
+                    set(env, &k, &v);
+                }
+            }
+            Some(st) => eprintln!(
+                "uinitconverterd user-manager: generator {name} failed ({st}), its output ignored"
+            ),
+            None => eprintln!("uinitconverterd user-manager: generator {name} timed out, killed"),
+        }
+    }
 }
 
 /// The user manager's configuration file, from the system's (`sys`): its
@@ -320,6 +434,34 @@ mod tests {
         assert!(units.contains(&"/run/user/4242/systemd/transient".to_string()));
         assert_eq!(get("PRESET_PATH").split(':').count(), 4);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generators_in_order_and_overridden() {
+        use std::os::unix::fs::PermissionsExt;
+        let top = std::env::temp_dir().join(format!("uc-gen-{}", std::process::id()));
+        let (hi, lo) = (top.join("etc"), top.join("lib"));
+        fs::create_dir_all(&hi).unwrap();
+        fs::create_dir_all(&lo).unwrap();
+        let script = |dir: &Path, name: &str, body: &str| {
+            let p = dir.join(name);
+            fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        // 10 runs first and sees the starting environment; 20 sees 10's
+        // output; lib's 20 is hidden by etc's; 30 fails and is ignored.
+        script(&lo, "10-a", "echo \"A=one\"; echo \"SEEN=$START\"");
+        script(&hi, "20-b", "echo \"B=$A-two\"");
+        script(&lo, "20-b", "echo B=hidden");
+        script(&lo, "30-c", "echo C=bad; exit 1");
+        let mut env = vec![("START".to_string(), "s".to_string())];
+        run_generators(&mut env, &[hi.clone(), lo.clone()]);
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get("A").as_deref(), Some("one"));
+        assert_eq!(get("SEEN").as_deref(), Some("s"));
+        assert_eq!(get("B").as_deref(), Some("one-two"));
+        assert_eq!(get("C"), None);
+        let _ = fs::remove_dir_all(&top);
     }
 
     #[test]

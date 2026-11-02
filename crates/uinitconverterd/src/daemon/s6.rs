@@ -905,7 +905,7 @@ impl Daemon {
         Instant::now() > deadline && st.get_u64(keys::EXTEND_UNTIL) <= util::now_monotonic_usec()
     }
 
-    fn start_timeout(unit: &Unit) -> Duration {
+    pub(super) fn start_timeout(unit: &Unit) -> Duration {
         let usec = unit.start_timeout_usec();
         if usec == u64::MAX {
             Duration::from_secs(86400 * 365)

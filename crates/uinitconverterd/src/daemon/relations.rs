@@ -39,7 +39,7 @@ impl Daemon {
             if names.contains(&uid) || !u.is_loaded() {
                 continue;
             }
-            let mut refs = u.get_words("Unit", key);
+            let mut refs = u.deps(key);
             if let Some(kind) = dir_kind(key) {
                 refs.extend(ld.dir_deps(&u, kind));
             }
@@ -65,9 +65,9 @@ impl Daemon {
             }
             let (uid, u) = self.load_unit(&n);
             self.stopped_targets.lock().unwrap().remove(&uid);
-            let mut deps = u.get_words("Unit", "Requires");
-            deps.extend(u.get_words("Unit", "Wants"));
-            deps.extend(u.get_words("Unit", "BindsTo"));
+            let mut deps = u.deps("Requires");
+            deps.extend(u.deps("Wants"));
+            deps.extend(u.deps("BindsTo"));
             deps.extend(ld.dir_deps(&u, "wants"));
             deps.extend(ld.dir_deps(&u, "requires"));
             stack.extend(deps.into_iter().map(|d| (d, depth + 1)));

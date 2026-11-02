@@ -549,10 +549,23 @@ keeps serving the private socket and returns to the bus once it is back.
 unit, the bus last. `USER_EXCLUDE=` lists globs of user units it does not
 run.
 
-Not done yet: GDM's greeter and a GNOME session (environment generators,
-`Type=dbus` readiness, xdg-autostart, app scopes), timers and paths,
-`Accept=yes` sockets, systemd-oomd reporting, SELinux for confined users.
-Keep the default until those are done.
+A start is a transaction, as in systemd: the units it pulls in
+(`Requires=`, `BindsTo=`, `Wants=` and the link directories) are ordered by
+`After=`/`Before=` and started one at a time. `Requisite=` starts nothing;
+the unit must be up, in the same transaction, or being started by another
+one (then the start waits for it). A template named without an instance
+takes the referencing unit's. The user environment generators
+(`user-environment-generators/`, which read `environment.d`) run at startup,
+`Type=dbus` units are ready when their name is on the user bus, and
+`RuntimeDirectory=` and its family are the user's directories. GDM's
+greeter runs on it: in the test VM it shows, with gnome-shell in
+`session.slice/org.gnome.Shell@gdm.service` as under systemd, SELinux
+enforcing and no denials.
+
+Not done yet: a user's GNOME session (xdg-autostart, app scopes, logout),
+timers and paths, `Accept=yes` sockets, systemd-oomd reporting, SELinux for
+confined users, and a run under the s6 boot's own system manager. Keep the
+default until those are done.
 
 ## The `s6` command (s6-frontend)
 
