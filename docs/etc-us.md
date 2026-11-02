@@ -59,7 +59,7 @@ Workstation machine. The systemd numbers are from boots up to 2026-10-31.
 
 **Costs compared with systemd**
 
-- **Missing features:** `Accept=yes` sockets, generators, real autofs
+- **Missing features:** `Accept=yes` TCP sockets, generators, real autofs
   (automounts are mounted at boot instead), watchdog, credentials,
   and encrypted volumes in `/etc/crypttab` that the initramfs
   doesn't unlock. Details: [Not implemented (yet)](#not-implemented-yet).
@@ -162,6 +162,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - `Runtime/State/Cache/Logs/ConfigurationDirectory=`.
 - `StandardInput/Output/Error=` (null, tty, file:, append:, truncate:), `TTYPath=` and `TTYVHangup=`, which are enough for `getty@.service`.
 - Socket activation for `Accept=no`: `ListenStream/Datagram/SequentialPacket/FIFO/Special`, with `LISTEN_FDS`, `LISTEN_PID` and `LISTEN_FDNAMES` set. A service that exits cleanly while it has sockets is started again on the next activity on them, as with systemd (systemd-rfkill exits when idle). Starting a `.socket` (`systemctl start`, udev's `SYSTEMD_WANTS`) starts its service with the socket.
+- `Accept=yes` on a unix path (one `ListenStream=`, e.g. `polkit-agent-helper.socket`): the socket is an s6 service of its own, where `s6-ipcserverd` accepts and starts one instance of the template per connection, named as systemd names it (`NAME@N-PID-UID.service`). The instance gets the connection on fd 3 (`LISTEN_FDS=1`, `LISTEN_FDNAMES=connection`) and, with `StandardInput=`/`StandardOutput=socket`, on stdin/stdout. It runs `ExecStartPre=`, `ExecStart=`, `ExecStartPost=`, `ExecStop=` and `ExecStopPost=` with the template's user, sandbox and cgroup. Templates may be `Type=simple`, `exec` or `oneshot`. `MaxConnections=` (default 64) and `MaxConnectionsPerSource=` become `s6-ipcserverd`'s `-c`/`-C`, at most 1000. `systemctl status` shows `Accepted:` and `Connected:`. Stopping the socket leaves running connections alone, as with systemd.
 - On-demand activation at boot: an on-demand service is `inactive` until the first activity on its sockets, as under systemd (iscsid, the libvirt daemons, cupsd, dmeventd, hostnamed). It then also starts the on-demand services it requires (`Requires=`/`BindsTo=`/`Wants=`) that are still waiting. A start by a job (`systemctl start`, a dependency, D-Bus activation, a `.path` unit) runs it at once; s6 restarting one that ran (`Restart=`, `systemctl restart`) doesn't wait either. After `systemctl stop` the sockets are closed, as before. The sockets are held by `uinitconverter-fdstore`; without it nothing can hold them before uinitconverterd is up, so the service starts at once.
 - `Restart=` (all modes), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=` (reboot/poweroff/halt).
@@ -221,7 +222,8 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 ## Not implemented (yet)
 
 - Encrypted volumes in `/etc/crypttab` that the initramfs does not unlock (systemd opens them with `systemd-cryptsetup@` units). The LUKS root disk is unlocked by the initramfs and works; `uinitconverter init` warns about the others.
-- `Accept=yes` sockets. Starting a `.socket` at run time still starts its service at once, and an on-demand service's requirements that are not on demand themselves are started at boot (s6-rc dependencies).
+- `Accept=yes` on TCP, with more than one listener or anything but `ListenStream=`, and with a `Type=notify`, `forking` or `dbus` template: the socket is skipped, and `uinitconverter plan` gives the reason. The per-connection instances don't appear in `systemctl list-units`, and the template's `Wants=` and `Requires=` are started with the socket rather than per connection.
+- `Accept=no`: starting a `.socket` at run time still starts its service at once, and an on-demand service's requirements that are not on demand themselves are started at boot (s6-rc dependencies).
 - autofs: `.automount` units mount eagerly.
 - systemd generators: none runs on the s6 boot. `/etc/fstab` is mounted by the `mount-fs` s6 service and the zram swap set up by the `zram` one; units that other generators would make (e.g. `systemd-gpt-auto-generator`'s, `rc-local`) don't exist there.
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. These timer keys are accepted without effect, so the report doesn't list them as ignored.

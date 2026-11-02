@@ -83,7 +83,7 @@ impl Runner {
             .unit
             .get("Service", "StandardInput")
             .unwrap_or_else(|| "null".into());
-        let default_out = if input.starts_with("tty") {
+        let default_out = if input.starts_with("tty") || input == "socket" {
             "inherit"
         } else {
             "journal"
@@ -169,6 +169,9 @@ impl Runner {
             s if stdio_fd(s).is_some() => unsafe {
                 libc::dup2(stdio_fd(s).unwrap(), 0);
             },
+            "socket" if self.main_conn().is_some() => unsafe {
+                libc::dup2(self.main_conn().unwrap(), 0);
+            },
             _ => place(
                 open("/dev/null", libc::O_RDONLY).map_err(|e| (EXIT_STDIN, e))?,
                 0,
@@ -186,6 +189,18 @@ impl Runner {
                 },
                 "inherit" if input.starts_with("tty") && target == 1 => unsafe {
                     libc::dup2(0, 1);
+                },
+                "inherit" if input == "socket" && target == 1 && self.main_conn().is_some() => unsafe {
+                    libc::dup2(0, 1);
+                },
+                "socket" => match self.main_conn() {
+                    Some(fd) => unsafe {
+                        libc::dup2(fd, target);
+                    },
+                    None => place(
+                        open("/dev/null", libc::O_WRONLY).map_err(|e| (code, e))?,
+                        target,
+                    ),
                 },
                 s if s.starts_with("file:") => place(
                     open(&s[5..], libc::O_WRONLY | libc::O_CREAT).map_err(|e| (code, e))?,

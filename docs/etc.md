@@ -56,7 +56,7 @@ s6를 PID 1로 두고 s6의 도구로 관리하면서 Fedora와 GNOME을 쓸 수
 
 **systemd와 비교한 비용**
 
-- **빠진 기능:** `Accept=yes` 소켓, generator, 실제 autofs(automount는 부팅 시 즉시 마운트됩니다),
+- **빠진 기능:** TCP `Accept=yes` 소켓, generator, 실제 autofs(automount는 부팅 시 즉시 마운트됩니다),
   watchdog, credential, initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨.
   자세한 내용은 [아직 구현되지 않은 기능](#아직-구현되지-않은-기능)에 있습니다.
 - **제한된 검증:** 실제 부팅은 머신 한 대에서만 확인했습니다.
@@ -151,6 +151,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - `Runtime/State/Cache/Logs/ConfigurationDirectory=`.
 - `StandardInput/Output/Error=`(null, tty, file:, append:, truncate:), `TTYPath=`, `TTYVHangup=`. `getty@.service`에 필요한 만큼 지원합니다.
 - `Accept=no` 소켓 활성화: `ListenStream/Datagram/SequentialPacket/FIFO/Special`와 `LISTEN_FDS`, `LISTEN_PID`, `LISTEN_FDNAMES`. 소켓이 있는 서비스가 정상 종료하면 systemd처럼 소켓에 다음 활동이 있을 때 다시 시작됩니다(systemd-rfkill은 할 일이 없으면 종료합니다). `.socket`을 시작하면(`systemctl start`, udev의 `SYSTEMD_WANTS`) 그 서비스가 소켓과 함께 시작됩니다.
+- 유닉스 경로의 `Accept=yes`(`ListenStream=` 하나, 예: `polkit-agent-helper.socket`): 소켓이 따로 s6 서비스가 되어 `s6-ipcserverd`가 연결을 받고, 연결마다 템플릿의 인스턴스를 systemd와 같은 이름(`NAME@N-PID-UID.service`)으로 하나씩 시작합니다. 인스턴스는 연결을 fd 3(`LISTEN_FDS=1`, `LISTEN_FDNAMES=connection`)으로 받고, `StandardInput=`/`StandardOutput=socket`이면 표준 입출력으로도 받습니다. 템플릿의 사용자, 샌드박스, cgroup으로 `ExecStartPre=`, `ExecStart=`, `ExecStartPost=`, `ExecStop=`, `ExecStopPost=`를 실행합니다. 템플릿은 `Type=simple`, `exec`, `oneshot`만 됩니다. `MaxConnections=`(기본 64)와 `MaxConnectionsPerSource=`는 `s6-ipcserverd`의 `-c`/`-C`가 되며 최대 1000입니다. `systemctl status`에 `Accepted:`와 `Connected:`가 나옵니다. 소켓을 멈춰도 systemd처럼 실행 중인 연결은 그대로 둡니다.
 - 부팅 때의 요청 시 활성화: 요청 시 서비스는 systemd에서처럼 소켓에 첫 활동이 있을 때까지 `inactive`입니다(iscsid, libvirt 데몬들, cupsd, dmeventd, hostnamed). 그때 자신이 요구하는(`Requires=`/`BindsTo=`/`Wants=`) 요청 시 서비스 중 아직 기다리는 것도 시작합니다. 작업으로 시작하면(`systemctl start`, 의존성, D-Bus 활성화, `.path` 유닛) 바로 실행되고, 한 번 실행된 서비스를 s6가 다시 시작할 때(`Restart=`, `systemctl restart`)도 기다리지 않습니다. `systemctl stop` 뒤에는 이전처럼 소켓이 닫힙니다. 소켓은 `uinitconverter-fdstore`가 보관합니다. 이것이 없으면 uinitconverterd가 시작되기 전에는 소켓을 보관할 곳이 없으므로 서비스가 바로 시작됩니다.
 - `Restart=`(모든 모드), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=`(reboot/poweroff/halt).
@@ -188,7 +189,8 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 ## 아직 구현되지 않은 기능
 
 - initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `uinitconverter init`이 경고합니다.
-- `Accept=yes` 소켓. 실행 중에 `.socket`을 시작하면 여전히 그 서비스가 바로 시작되고, 요청 시 서비스가 요구하는 유닛 중 요청 시 서비스가 아닌 것은 부팅 때 시작됩니다(s6-rc 의존성).
+- TCP, 리스너가 둘 이상이거나 `ListenStream=`이 아닌 `Accept=yes`, 그리고 템플릿이 `Type=notify`, `forking`, `dbus`인 경우: 소켓을 건너뛰며 이유는 `uinitconverter plan`에 나옵니다. 연결마다 생기는 인스턴스는 `systemctl list-units`에 나오지 않고, 템플릿의 `Wants=`와 `Requires=`는 연결마다가 아니라 소켓과 함께 시작됩니다.
+- `Accept=no`: 실행 중에 `.socket`을 시작하면 여전히 그 서비스가 바로 시작되고, 요청 시 서비스가 요구하는 유닛 중 요청 시 서비스가 아닌 것은 부팅 때 시작됩니다(s6-rc 의존성).
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
 - systemd generator: s6 부팅에서는 하나도 실행되지 않습니다. `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
 - `AccuracySec=`(타이머를 묶지 않고 정시에 실행), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. 이 타이머 키들은 허용되지만 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.

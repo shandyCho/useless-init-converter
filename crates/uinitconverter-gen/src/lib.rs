@@ -16,6 +16,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
+use uinitconverter_base::acceptspec;
 use uinitconverter_base::config::Config;
 pub use uinitconverter_base::index::{stop_atom, unit_arg, Index, Kind};
 use uinitconverter_base::loader::{self, LoadState, Loader, Unit};
@@ -192,6 +193,25 @@ const MOUNT_KEYS: &[&str] = &[
     "ReadWriteOnly",
 ];
 const SWAP_KEYS: &[&str] = &["What", "Priority", "Options", "TimeoutSec"];
+/// What an Accept=yes socket's `accept` acts on (see socket::bind_all).
+const SOCKET_KEYS: &[&str] = &[
+    "Accept",
+    "ListenStream",
+    "Service",
+    "SocketMode",
+    "SocketUser",
+    "SocketGroup",
+    "DirectoryMode",
+    "RemoveOnStop",
+    "Backlog",
+    "MaxConnections",
+    "MaxConnectionsPerSource",
+    "PassCredentials",
+    "PassSecurity",
+    "ReceiveBuffer",
+    "SendBuffer",
+    "Symlinks",
+];
 
 const SERVICE_KEYS: &[&str] = &[
     "Type",
@@ -463,6 +483,7 @@ fn ignored_settings(unit: &Unit) -> Vec<String> {
         ("Path", PATH_KEYS),
         ("Mount", MOUNT_KEYS),
         ("Swap", SWAP_KEYS),
+        ("Socket", SOCKET_KEYS),
     ] {
         for key in unit.file.keys_in(sec) {
             if !known.contains(&key) {
@@ -477,7 +498,7 @@ fn ignored_settings(unit: &Unit) -> Vec<String> {
     }
     for sec in unit.file.sections() {
         if ![
-            "Unit", "Service", "Timer", "Path", "Mount", "Swap", "Install",
+            "Unit", "Service", "Timer", "Path", "Mount", "Swap", "Socket", "Install",
         ]
         .contains(&sec)
             && !sec.starts_with("X-")
@@ -493,6 +514,30 @@ fn ignored_settings(unit: &Unit) -> Vec<String> {
         warnings.push("Type=forking without PIDFile=: main PID is guessed".into());
     }
     warnings
+}
+
+/// An Accept=yes socket: its template is never planned on its own, so its
+/// warnings go here, with what `connection` does differently.
+fn accept_warnings(ld: &Loader, sock: &Unit) -> Vec<String> {
+    let tmpl = ld.load(&acceptspec::template(sock));
+    let mut w: Vec<String> = ignored_settings(&tmpl)
+        .into_iter()
+        .map(|m| format!("{}: {m}", tmpl.id))
+        .collect();
+    let ((c, lc), clamped) = acceptspec::limits(sock);
+    if clamped {
+        w.push(format!(
+            "MaxConnections=/MaxConnectionsPerSource= limited to {c}/{lc} (s6-ipcserverd)"
+        ));
+    }
+    let ty = tmpl.get("Service", "Type").unwrap_or_default();
+    if ty != "oneshot" && !tmpl.get_all("Service", "ExecStartPost").is_empty() {
+        w.push(format!(
+            "{}: ExecStartPost= runs after ExecStart= exits",
+            tmpl.id
+        ));
+    }
+    w
 }
 
 pub fn plan(cfg: &Config) -> Plan {
@@ -606,9 +651,31 @@ pub fn plan(cfg: &Config) -> Plan {
                         format!("{stem}.service")
                     }
                 });
+                if acceptspec::is_accept(&unit) {
+                    // A longrun of its own: s6-ipcserverd starts an instance
+                    // of the template per connection (runner `accept`).
+                    let tmpl = ld.load(&acceptspec::template(&unit));
+                    if let Some(why) = acceptspec::unsupported(&unit, &tmpl) {
+                        plan.skipped.insert(name, why);
+                        continue;
+                    }
+                    let (mut requires, mut wants, mut after, before) = raw_dependencies(&ld, &unit);
+                    // What the template itself names (not its implicit
+                    // basic.target, which sockets.target is ordered before):
+                    // systemd pulls these in per connection, here once.
+                    requires.extend(tmpl.get_words("Unit", "Requires"));
+                    wants.extend(tmpl.get_words("Unit", "Wants"));
+                    after.extend(tmpl.get_words("Unit", "After"));
+                    for n in requires.iter().chain(wants.iter()) {
+                        queue.push(n.clone());
+                    }
+                    raw.insert(unit.id.clone(), (requires, wants, after, before));
+                    loaded.insert(unit.id.clone(), unit);
+                    continue;
+                }
                 if svc.contains("@.") {
                     plan.skipped
-                        .insert(name, "Accept=yes sockets are not supported yet".into());
+                        .insert(name, "socket's service is a template (Accept=no)".into());
                 } else {
                     socket_service.insert(unit.id.clone(), svc.clone());
                     queue.push(svc);
@@ -744,17 +811,20 @@ pub fn plan(cfg: &Config) -> Plan {
             Kind::Bundle
         } else if matches!(unit.utype(), "mount" | "swap") {
             Kind::Oneshot
-        } else if matches!(unit.utype(), "timer" | "path") || longrun_type(unit) {
+        } else if matches!(unit.utype(), "timer" | "path" | "socket") || longrun_type(unit) {
             Kind::Longrun
         } else {
             Kind::Oneshot
         };
 
-        let warnings = if is_target {
+        let mut warnings = if is_target {
             Vec::new()
         } else {
             ignored_settings(unit)
         };
+        if unit.utype() == "socket" {
+            warnings.extend(accept_warnings(&ld, unit));
+        }
 
         let log_atom = (kind == Kind::Longrun
             && unit.utype() == "service"
@@ -1111,6 +1181,73 @@ mod tests {
         assert!(plan.units["ev.service"].deps.contains(FDSTORE_SERVICE));
         assert!(plan.units["al.service"].deps.contains(FDSTORE_SERVICE));
         assert!(!plan.units["plain.service"].deps.contains(FDSTORE_SERVICE));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Accept=yes on a unix path: a longrun of its own running `accept`,
+    /// with the template's Wants=; TCP, two listeners and a Type=notify
+    /// template are skipped with the reason.
+    #[test]
+    fn accept_sockets() {
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-gen-accept-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let units = tmp.join("units");
+        fs::create_dir_all(units.join("sockets.target.wants")).unwrap();
+        let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
+        write("multi-user.target", "[Unit]\nWants=sockets.target\n");
+        write("sockets.target", "[Unit]\nDescription=s\n");
+        std::os::unix::fs::symlink("multi-user.target", units.join("default.target")).unwrap();
+        let socks = [
+            ("echo", "ListenStream=/run/echo.sock\nMaxConnections=5000"),
+            ("tcp", "ListenStream=127.0.0.1:2222"),
+            ("two", "ListenStream=/run/a\nListenStream=/run/b"),
+            ("note", "ListenStream=/run/note"),
+        ];
+        for (n, listen) in socks {
+            write(
+                &format!("{n}.socket"),
+                &format!("[Socket]\nAccept=yes\n{listen}\n"),
+            );
+            std::os::unix::fs::symlink(
+                format!("../{n}.socket"),
+                units.join(format!("sockets.target.wants/{n}.socket")),
+            )
+            .unwrap();
+            write(
+                &format!("{n}@.service"),
+                "[Unit]\nWants=helper.service\nAfter=helper.service\n[Service]\nExecStart=/bin/cat\nExecStartPost=/bin/true\n",
+            );
+        }
+        write(
+            "note@.service",
+            "[Service]\nType=notify\nExecStart=/bin/cat\n",
+        );
+        write(
+            "helper.service",
+            "[Service]\nType=oneshot\nExecStart=/bin/true\n",
+        );
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![units];
+
+        let p = plan(&cfg);
+        let echo = &p.units["echo.socket"];
+        assert_eq!(echo.kind, Kind::Longrun);
+        assert!(echo.deps.contains("helper.service"), "{:?}", echo.deps);
+        assert!(p.units["sockets.target"].deps.contains("echo.socket"));
+        assert!(!p.units.contains_key("echo@.service"));
+        let w = echo.warnings.join("; ");
+        assert!(w.contains("limited to 1000/1000"), "{w}");
+        assert!(
+            w.contains("ExecStartPost= runs after ExecStart= exits"),
+            "{w}"
+        );
+        assert!(p.skipped["tcp.socket"].contains("TCP"));
+        assert!(p.skipped["two.socket"].contains("only one ListenStream="));
+        assert!(p.skipped["note.socket"].contains("Type=notify"));
+        let files = longrun_files(&cfg, "echo.socket", &echo.timings, false);
+        assert!(files[0].1.contains(" accept "), "{}", files[0].1);
+        assert!(files[1].1.contains(" accept-finish "), "{}", files[1].1);
         let _ = fs::remove_dir_all(&tmp);
     }
 

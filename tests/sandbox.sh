@@ -748,6 +748,71 @@ cat > "$U/lazydep.service" <<EOF
 ExecStart=/bin/sh -c 'echo started >> $R/lazydep.out; exec sleep 1000'
 EOF
 
+# --- Accept=yes sockets: one template instance per connection ---
+# Like polkit-agent-helper.socket (StandardInput/Output=socket, a unix
+# ListenStream=). "hold" keeps the connection open until echo.release
+# exists, "fail" exits 3.
+cat > "$W/echo.py" <<'PYT'
+import os, stat, sys, time
+out, inst = sys.argv[1], sys.argv[2]
+line = sys.stdin.readline().strip()
+fd3 = stat.S_ISSOCK(os.fstat(3).st_mode)
+if line == "hold":
+    open(out + ".hold", "a").write(inst + "\n")
+    while not os.path.exists(out + ".release"):
+        time.sleep(0.1)
+print("echo:%s fds=%s names=%s fd3=%s pidok=%s inst=%s" % (
+    line, os.environ.get("LISTEN_FDS"), os.environ.get("LISTEN_FDNAMES"), fd3,
+    os.environ.get("LISTEN_PID") == str(os.getpid()), inst), flush=True)
+sys.exit(3 if line == "fail" else 0)
+PYT
+cat > "$U/echo.socket" <<EOF
+[Socket]
+Accept=yes
+ListenStream=$R/echo.sock
+RemoveOnStop=yes
+MaxConnections=8
+[Install]
+WantedBy=sockets.target
+EOF
+cat > "$U/echo@.service" <<EOF
+[Service]
+ExecStartPre=/bin/sh -c 'echo "pre %i" >> $R/echo.pre'
+ExecStart=/usr/bin/python3 $W/echo.py $R/echo %i
+ExecStopPost=/bin/sh -c 'echo "%i \$SERVICE_RESULT" >> $R/echo.post'
+StandardInput=socket
+EOF
+# The connection only on fd 3 (LISTEN_FDS), stdin /dev/null.
+cat > "$W/rawfd.py" <<'PYT'
+import os
+d = os.read(3, 100).decode().strip()
+os.write(3, ("raw:%s stdin=%s\n" % (d, os.path.realpath("/proc/self/fd/0"))).encode())
+PYT
+cat > "$U/rawfd.socket" <<EOF
+[Socket]
+Accept=yes
+ListenStream=$R/rawfd.sock
+[Install]
+WantedBy=sockets.target
+EOF
+cat > "$U/rawfd@.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 $W/rawfd.py
+EOF
+# Not supported yet: skipped, with the reason in the plan.
+cat > "$U/tcpacc.socket" <<EOF
+[Socket]
+Accept=yes
+ListenStream=127.0.0.1:1
+[Install]
+WantedBy=sockets.target
+EOF
+cat > "$U/tcpacc@.service" <<EOF
+[Service]
+ExecStart=/bin/cat
+EOF
+
 # --- path units ---
 cat > "$U/watch.service" <<EOF
 [Service]
@@ -786,7 +851,7 @@ disable *
 EOF
 
 C="--config $W/uinitconverter.conf"
-"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket lazy.socket lazydep.socket watch.path chg.path bad.service after-bad.service stopper.service stopcond.service >/dev/null
+"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket lazy.socket lazydep.socket echo.socket rawfd.socket tcpacc.socket watch.path chg.path bad.service after-bad.service stopper.service stopcond.service >/dev/null
 
 # Stand-in for journald's stdout stream socket: records each connection.
 mkdir -p "$R/journal"

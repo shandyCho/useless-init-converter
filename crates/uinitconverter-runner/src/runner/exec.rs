@@ -138,6 +138,16 @@ impl Runner {
             libc::sigprocmask(libc::SIG_SETMASK, &set, std::ptr::null_mut());
         }
 
+        // Accept=yes: the connection on fd 3 for ExecStart=, as systemd
+        // passes it (and on stdin/stdout with StandardInput=socket).
+        let mut with_conn = extra_env.to_vec();
+        if let Some(fd) = self.main_conn() {
+            unsafe { libc::dup2(fd, 3) };
+            with_conn.push(("LISTEN_FDS".into(), "1".into()));
+            with_conn.push(("LISTEN_PID".into(), std::process::id().to_string()));
+            with_conn.push(("LISTEN_FDNAMES".into(), "connection".into()));
+        }
+        let extra_env = &with_conn[..];
         if let Err(e) = self.setup_stdio(cmd) {
             return e;
         }

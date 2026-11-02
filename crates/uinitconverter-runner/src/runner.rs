@@ -25,6 +25,7 @@ use crate::supervisor;
 use crate::tools;
 use crate::util::{self, UserInfo};
 
+mod connection;
 mod environment;
 mod exec;
 mod forking;
@@ -33,6 +34,7 @@ mod sockets;
 mod status;
 mod stdio;
 
+pub use connection::{accept_finish, accept_main, connection_main};
 use environment::*;
 use exec::*;
 pub use notify::notify_helper_main;
@@ -77,6 +79,10 @@ pub struct Runner {
     /// `run --on-demand` (uinitconverter-gen): bind the sockets and wait for
     /// activity before the first start, as systemd's socket activation.
     pub on_demand: bool,
+    /// `connection` (Accept=yes): the client's socket, and whether the
+    /// command being started gets it (ExecStart= only).
+    conn: Option<i32>,
+    conn_main: std::cell::Cell<bool>,
 }
 
 fn log(unit: &str, msg: &str) {
@@ -123,6 +129,8 @@ impl Runner {
             deadline: std::cell::Cell::new(None),
             deadline_what: std::cell::Cell::new("start"),
             timed_out: std::cell::Cell::new(false),
+            conn: None,
+            conn_main: std::cell::Cell::new(false),
         };
         r.build_env()?;
         Ok(r)

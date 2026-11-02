@@ -41,6 +41,24 @@ pub fn longrun_files(
         ];
     }
     let runner = cfg.runner.display();
+    // Accept=yes: s6-ipcserverd on the bound socket, one connection
+    // instance per client. SIGTERM stops accepting; running connections
+    // go on, as systemd's instances are units of their own.
+    if id.ends_with(".socket") {
+        return vec![
+            (
+                "run",
+                format!("#!/bin/sh\nexec {runner} accept{args} {arg}\n"),
+                true,
+            ),
+            (
+                "finish",
+                format!("#!/bin/sh\nexec {runner} accept-finish{args} {arg} \"$@\"\n"),
+                true,
+            ),
+            ("notification-fd", "3\n".into(), false),
+        ];
+    }
     let lazy = if on_demand { " --on-demand" } else { "" };
     let mut out = vec![
         (

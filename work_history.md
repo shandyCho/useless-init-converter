@@ -10227,3 +10227,60 @@ The owner's first "released" came before the push had landed: main was at df2538
 
 1. Fresh-install VM and QEMU full-boot test, parts 106 and 89.
 2. Still open from part 128: a service restart and a shutdown on a relabeled system.
+
+## 2026-11-02, part 130: scope for Accept=yes with s6-ipcserverd/s6-tcpserverd (no code change)
+
+Owner asked what s6-networking could replace, then asked for a scope for `Accept=yes` built on s6-tcpserver and s6-ipcserver. Nothing is implemented yet; this records the plan and the facts it rests on.
+
+**Facts checked.** Read from the tarballs' docs: s6 2.15.1.1 (`s6-ipcserverd`) and s6-networking 2.8.0.1 (downloaded to the scratchpad, sha256 equal to skarnet's published one). Both `s6-ipcserverd` and `s6-tcpserverd` take an already-bound, listening socket on stdin, fork one `prog...` per connection with the connection on stdin/stdout, and take `-c maxconn` / `-C localmaxconn` (ipcserverd at most 1000; tcpserverd at most 16384, default 40). They set PROTO, IPCREMOTEEUID/EGID/IPCCONNNUM and TCPLOCALIP/PORT, TCPREMOTEIP/PORT/TCPCONNNUM. SIGTERM: exit, children keep running; SIGQUIT: TERM children, then exit. s6-networking needs s6-dns (2.4.1.3) at build time. Its NEWS mentions skalibs only up to 2.15.0.0, so **building against our skalibs 2.16.0.0 is unverified**. On this machine `Accept=yes` units are polkit-agent-helper.socket (unix, StandardInput/Output=socket, Type=oneshot), sshd.socket (TCP 22, `Conflicts=sshd.service`, sshd@.service with StandardInput=socket and ImportCredential=) and systemd-*.socket units, which are excluded anyway. polkit-agent-helper-1 is still mode 4755 here, so polkit works without the socket today. libpolkit-agent's fallback was not read from source.
+
+**Plan.**
+- Process tree: s6-rc longrun `foo.socket`, run script `uinitconverter-runner accept foo.socket`. The runner binds with the existing `socket::bind_all`, so there is one implementation of Backlog=/FreeBind=/ReusePort=/SocketMode=/BindIPv6Only= and no socketbinder PATH.lock (part 39's SELinux problem). It signals ready (clients wait in the backlog), puts the socket on fd 0 and execs `s6-ipcserverd -c N -C M` for a unix socket or `s6-tcpserverd` for an inet one. The `prog` is `uinitconverter-runner connection foo@.service`.
+- `connection` (new command): instance name as systemd builds it (inet `<n>-<localip>:<port>-<remoteip>:<port>`; unix `<n>-<peer pid>-<peer uid>` from SO_PEERCRED on fd 0). `<n>` is an accept counter in the socket's state dir. Runner::new on that instance, then the usual prepare_start (cgroup, User=, sandbox, PAM). The connection is dup'ed to fd 3 with LISTEN_FDS=1/LISTEN_PID/LISTEN_FDNAMES=connection; REMOTE_ADDR/REMOTE_PORT come from TCPREMOTE*. StandardInput=/StandardOutput=socket is new in runner/stdio.rs. Runs ExecStartPre/ExecStart/ExecStartPost/ExecStopPost in the foreground (Type simple/exec/oneshot), then removes the instance state.
+- gen: an Accept=yes socket becomes that longrun. The template's Requires/Wants/After become the socket longrun's dependencies (an approximation: systemd pulls them in per connection). Skipped with a reason: more than one Listen*, anything but ListenStream= (unix or inet), template Type=notify/forking/dbus, and TCP when s6-tcpserverd is not installed.
+- Limits: MaxConnections= (systemd default 64) → `-c`, clamped with a warning; MaxConnectionsPerSource= → `-C` (ipcserverd counts per uid).
+- State: the socket unit is active while listening. Connections aren't units in `list-units` (first version); `systemctl status foo.socket` gets NAccepted/NConnections.
+- Stop: SIGTERM, so running connections survive a socket stop, as in systemd where instances are separate units. At shutdown they die in the final kill without ExecStopPost=.
+- Phases: 1 = unix sockets via s6-ipcserverd, no new package. 2 = TCP: add s6-dns and s6-networking (without TLS) to dist/skarnet.versions and build-skarnet-rpms.sh; first check that they build against skalibs 2.16. 3 (optional) = connection instances visible as units.
+- Tests: sandbox unix echo units (StandardInput=socket and LISTEN_FDS variants), env and instance name, MaxConnections, a failing ExecStart leaving the socket up, a socket stop leaving a connection running; TCP on 127.0.0.1 with a high port. Unit tests for instance names. Real machine: sshd.socket. With ImportCredential= unimplemented, `${CREDENTIALS_DIRECTORY}` is empty, so sshd gets a nonexistent extra AuthorizedKeysFile, which is harmless. Docs: both README/etc pairs and TESTING pairs when implemented.
+
+**Open for the owner:** (1) the s6-networking package as Requires or optional, gen skipping TCP without it (recommended: optional); (2) connection instances visible as units now or later (recommended: later); (3) stop semantics, systemd's or SIGQUIT (recommended: systemd's).
+
+Owner chose the three recommendations (optional package, instances not shown as units, systemd's stop semantics); phase 1 is part 131.
+
+## 2026-11-02, part 131: Accept=yes phase 1, unix sockets via s6-ipcserverd (uncommitted)
+
+Owner: "go with your recommendations, start phase 1".
+
+**What changed** (not committed; no hashes yet):
+- `uinitconverter-base/src/acceptspec.rs` (new): the shared rules. Template name; supported means exactly one `ListenStream=` on a unix path, nothing else listening, and a template with Type simple/exec/oneshot and an ExecStart=. Also MaxConnections= (64) / MaxConnectionsPerSource= (defaults to MaxConnections=) clamped to s6-ipcserverd's 1000; systemd's instance name `<prefix>@<n>-<pid>-<uid>.service`; state names (`accepted`, `accepted.lock`, `connections/`).
+- gen: an Accept=yes socket that passes is a Longrun named after the socket; otherwise it is skipped with the reason ("Accept=yes on TCP is not supported yet", ...). The template's explicit Requires=/Wants=/After= are added to the socket's (its implicit After=basic.target is not, since sockets.target is before basic.target). Under the existing rule, a Wants= without an After= is dropped. `[Socket]` keys acted on are listed (SOCKET_KEYS); the template's ignored settings, clamped limits and "ExecStartPost= runs after ExecStart= exits" (non-oneshot) show up as the socket's warnings. Run script `runner accept`, finish `runner accept-finish`, notification-fd 3, no timeouts or down-signal (SIGTERM).
+- runner (`runner/connection.rs`, new):
+  - `accept`: enters the socket's cgroup, drops connection files of dead pids, and binds with `socket::bind_all`, labelled for the template's ExecStart binary as in sockets.rs. It records the result/timestamps, signals ready, then execs `s6-ipcserverd -c C -C LC -- runner connection [--config ..] -- SOCKET` with the socket on stdin.
+  - `accept-finish`: RemoveOnStop=, timestamps.
+  - `connection`: moves the client fd to >=100 (CLOEXEC), stdout back to stderr's log and stdin to /dev/null. It takes the number under flock, gets SO_PEERCRED, runs Runner::new on the instance and writes `connections/<instance>` with its pid. Then ExecStartPre=, ExecStart= with the connection, ExecStartPost=, ExecStop= on success, and cleanup() (KillMode leftovers, ExecStopPost= with SERVICE_RESULT), then OnSuccess=/OnFailure=. The client fd is closed right after ExecStart=. Last it moves back to its original cgroup, removes the instance cgroup and state dir, and the connection file.
+  - exec.rs: only while ExecStart= runs (`main_conn`), the child dup2s the connection to fd 3 and gets LISTEN_FDS=1, LISTEN_PID=own pid, LISTEN_FDNAMES=connection. stdio.rs: `StandardInput=socket`/`StandardOutput=`/`StandardError=socket`; StandardOutput= defaults to inherit with StandardInput=socket, as systemd. Other Exec*= lines get /dev/null for `socket`.
+- daemon: a `.socket` longrun that is up and ready is `active/listening` with MainPID 0. New `org.freedesktop.systemd1.Socket` interface: Listen a(ss), Accept, NAccepted, NConnections (files in connections/), NRefused 0, MaxConnections(PerSource), Result, cgroup props.
+- Tests: acceptspec 3 unit tests, gen `accept_sockets`. Sandbox:
+  - `echo.socket`/`echo@.service` (python, StandardInput=socket, ExecStartPre/StopPost, MaxConnections=8, RemoveOnStop=)
+  - `rawfd.socket`/`rawfd@.service` (oneshot, fd 3 only)
+  - `tcpacc.socket` (must be skipped)
+
+  22 checks in check.sh's new "Accept=yes sockets" section: reply on stdin/stdout and fd 3, the LISTEN_* variables, LISTEN_PID equal to the service's pid, instance `0-PID-UID`, ExecStartPre=/ExecStopPost= results success and exit-code, the socket staying up after a failing instance, the fd-3-only oneshot with stdin /dev/null, NConnections 1 / NAccepted 3 while one is held, a stop removing the socket while the held connection finishes normally, a restart continuing the numbering (3), no instance state or connection files left, and the real `/usr/bin/systemctl status echo.socket` showing `Listen: ... (Stream)` and `Accepted: 4; Connected: 0`.
+- Docs: README pair ("TCP `Accept=yes`" missing), docs/etc pair (what works, not implemented split into Accept=yes and Accept=no bullets), TESTING pair row "Accept=yes sockets" (polkit-agent-helper.socket).
+
+**Decisions.** Binding stays in uinitconverter's code (one implementation of the socket options, no socketbinder lock file); s6-ipcserverd only accepts. Connections run in the foreground of the `connection` runner, without their own s6 service, so they don't appear in list-units (owner's choice: later). ExecStop= runs after a successful run, since systemd stops a service whose main process exited on its own through service_enter_stop; this was **taken from memory of systemd's service.c, not re-read**.
+
+**Tests.** `cargo test` 107 passed (103 + 4 new), standalone 10, 7, 6, 10. Sandbox 337/337 (315 + 22), SANDBOX_JOURNAL=no 343/343, SANDBOX_FDSTORE=no 324/324; the two variants ran before the systemctl status check was added, so they have 21 new checks each. cargo fmt clean, bash -n and shellcheck -S warning clean; clippy isn't installed here.
+
+**Not verified (needs root / the real machine):** cgroup entry and removal per connection, SELinux (the socket label, init_t exec of s6-ipcserverd, the template's domain transition, the runner writing RUN_DIR state from that context), PAM/User= in a connection. **Risk:** after the next regeneration polkit-agent-helper.socket is served instead of skipped. If polkit's agent then connects and the helper fails (e.g. an AVC), it is unknown whether the agent falls back to the setuid helper; libpolkit-agent's behaviour wasn't read. Check `pkexec true` right after installing.
+
+### Current state
+
+main at 7739783 plus the uncommitted parts 130-131 (code, tests, docs). Installed and booted: 3eed142 (0.2.1 code). 0.2.2 released.
+
+### Next steps
+
+1. Owner: review and commit; on the machine, rebuild/install, `uinitconverter plan | grep -i accept`, then TESTING's "Accept=yes sockets" row (`pkexec true`) and `ausearch -m AVC -ts recent`.
+2. Phase 2 (TCP via s6-tcpserverd): first check that s6-dns 2.4.1.3 and s6-networking 2.8.0.1 build against skalibs 2.16.0.0; then package them as optional, add REMOTE_ADDR/REMOTE_PORT and the inet instance name.
+3. Earlier steps unchanged: fresh-install VM and QEMU full-boot test (parts 106, 89); service restart and shutdown on a relabeled system (part 128).

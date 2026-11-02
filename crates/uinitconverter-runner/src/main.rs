@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::exit;
 
 pub(crate) use uinitconverter_base::{
-    config, envfile, fdstore, index, loader, mountunit, state, tools, unit, util,
+    acceptspec, config, envfile, fdstore, index, loader, mountunit, state, tools, unit, util,
 };
 pub(crate) use uinitconverter_client as client;
 pub(crate) use uinitconverter_exec::{
@@ -31,6 +31,11 @@ usage: uinitconverter-runner [--config PATH] COMMAND [--config PATH] [--mainpid 
   stop-exec    ExecStop= with $MAINPID (called by uinitconverterd)
   stop-atom    `down` of UNIT.stop: ExecStop= when s6-rc stops a longrun
   reload-exec  ExecReload= with $MAINPID (called by uinitconverterd)
+  accept | accept-finish
+               `run`/`finish` of an Accept=yes .socket: bind it, exec
+               s6-ipcserverd, which runs `connection` for each client
+  connection   one instance of the socket's template for the client on
+               stdin/stdout (internal, run by s6-ipcserverd)
   confine UNIT -- COMMAND [ARGS]
                exec COMMAND with UNIT's cgroup, limits, sandbox and user (for
                what s6 starts itself, as the system bus; not stdio)
@@ -164,6 +169,13 @@ fn main() {
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
     let a = parse_internal(&args[1..]);
+    // Accept=yes sockets: UNIT is the .socket, not a service.
+    match cmd.as_str() {
+        "accept" => exit(runner::accept_main(&cfg, &a.unit)),
+        "accept-finish" => exit(runner::accept_finish(&cfg, &a.unit)),
+        "connection" => exit(runner::connection_main(&cfg, &a.unit)),
+        _ => {}
+    }
     let mut r = match runner::Runner::new(
         cfg.clone(),
         &a.unit,

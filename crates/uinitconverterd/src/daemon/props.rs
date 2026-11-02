@@ -198,6 +198,7 @@ impl Daemon {
             "swap" => "org.freedesktop.systemd1.Swap",
             "path" => "org.freedesktop.systemd1.Path",
             "slice" => "org.freedesktop.systemd1.Slice",
+            "socket" => "org.freedesktop.systemd1.Socket",
             _ => "",
         };
         let want_unit = only.is_none_or(|o| o == UNIT_IFACE);
@@ -294,6 +295,12 @@ impl Daemon {
                 let mut p = Props::new();
                 self.cgroup_props(&mut p, id, unit);
                 out.insert("org.freedesktop.systemd1.Slice".into(), p);
+            }
+            "socket" => {
+                out.insert(
+                    "org.freedesktop.systemd1.Socket".into(),
+                    self.socket_iface(id, unit),
+                );
             }
             _ => {}
         }
@@ -982,6 +989,60 @@ impl Daemon {
         p.insert(
             "NoNewPrivileges".into(),
             Value::from(unit.get_bool("Service", "NoNewPrivileges", false)),
+        );
+        self.cgroup_props(&mut p, id, unit);
+        p
+    }
+
+    /// What `systemctl status` shows of a socket: Listen=, and for
+    /// Accept=yes the connection counts kept by the runner's `connection`.
+    fn socket_iface(&self, id: &str, unit: &Unit) -> Props {
+        use crate::acceptspec;
+        let mut p = Props::new();
+        let mut listen: Vec<(String, String)> = Vec::new();
+        for key in [
+            "ListenStream",
+            "ListenDatagram",
+            "ListenSequentialPacket",
+            "ListenFIFO",
+            "ListenSpecial",
+            "ListenNetlink",
+        ] {
+            let ty = match key {
+                "ListenFIFO" => "FIFO".to_string(),
+                "ListenSpecial" => "Special".to_string(),
+                "ListenNetlink" => "Netlink".to_string(),
+                k => k.trim_start_matches("Listen").to_string(),
+            };
+            for v in unit.get_all("Socket", key) {
+                listen.push((ty.clone(), v));
+            }
+        }
+        p.insert("Listen".into(), Value::from(listen));
+        let accept = acceptspec::is_accept(unit);
+        p.insert("Accept".into(), Value::from(accept));
+        let st = state::for_unit(&self.cfg.run_dir, id);
+        let accepted = if accept {
+            st.get_u64(acceptspec::ACCEPTED) as u32
+        } else {
+            0
+        };
+        let connections = if accept {
+            std::fs::read_dir(st.dir.join(acceptspec::CONNECTIONS_DIR))
+                .map(|rd| rd.flatten().count() as u32)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        p.insert("NAccepted".into(), Value::from(accepted));
+        p.insert("NConnections".into(), Value::from(connections));
+        p.insert("NRefused".into(), Value::from(0u32));
+        let ((max, per), _) = acceptspec::limits(unit);
+        p.insert("MaxConnections".into(), Value::from(max));
+        p.insert("MaxConnectionsPerSource".into(), Value::from(per));
+        p.insert(
+            "Result".into(),
+            s(st.get(keys::RESULT).unwrap_or_else(|| "success".into())),
         );
         self.cgroup_props(&mut p, id, unit);
         p

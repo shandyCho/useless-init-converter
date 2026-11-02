@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::process::exit;
 
+pub(crate) use uinitconverter_base::acceptspec;
 pub(crate) use uinitconverter_base::pathspec as pathunit;
 pub(crate) use uinitconverter_base::timerspec as timer;
 pub(crate) use uinitconverter_base::{

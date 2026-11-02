@@ -17,7 +17,7 @@ D-Bus 클라이언트가 계속 동작하므로 dnf, SELinux enforcing, GNOME도
   systemd가 더 나은 선택입니다.
 - **실제 부팅은 Fedora 45 Workstation 한 대에서만 확인했습니다.** 먼저 가상 머신에서
   시도하세요.
-- **빠진 systemd 기능이 있습니다.** `Accept=yes` 소켓, 제너레이터, 자격 증명 등입니다.
+- **빠진 systemd 기능이 있습니다.** TCP `Accept=yes` 소켓, 제너레이터, 자격 증명 등입니다.
   [아직 구현되지 않은 기능](docs/etc.md#아직-구현되지-않은-기능)을 보세요.
 - **기존 systemd 부팅은 그대로 남습니다.** 설치하면 GRUB 항목이 추가될 뿐이고, 직접
   바꾸기 전까지 기본 부팅은 systemd입니다.

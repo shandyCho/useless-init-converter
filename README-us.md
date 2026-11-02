@@ -18,7 +18,7 @@ and GNOME still work. The commands, packages and paths are all named
   want s6, plain systemd is the better choice.
 - **Real boots have only been checked on one Fedora 45 Workstation machine.**
   Try it in a virtual machine first.
-- **Some systemd features are missing**, such as `Accept=yes` sockets, generators
+- **Some systemd features are missing**, such as `Accept=yes` TCP sockets, generators
   and credentials. See [Not implemented](docs/etc-us.md#not-implemented-yet).
 - **Your normal systemd boot stays.** Installing adds a GRUB entry, and systemd
   remains the default until you change it.

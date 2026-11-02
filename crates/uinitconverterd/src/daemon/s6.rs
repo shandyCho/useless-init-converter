@@ -536,6 +536,10 @@ impl Daemon {
                 } else if failed_result {
                     (s.active, s.sub) = ("failed", "failed");
                 }
+                // Accept=yes: s6-ipcserverd is the socket, not a main process.
+                if id.ends_with(".socket") && s.sub == "running" {
+                    (s.sub, s.main_pid) = ("listening", 0);
+                }
             }
         }
         s

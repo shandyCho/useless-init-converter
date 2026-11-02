@@ -1104,6 +1104,70 @@ s6-ftrig-wait -t 5000 "$R/lw/svc/event" s >/dev/null 2>&1 \
     || ok "other waiters are left alone"
 s6-svc -x "$R/lw/svc"
 
+section "Accept=yes sockets"
+# One line to a unix socket, the first reply line back.
+cli() {
+    timeout 10 python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+s.sendall((sys.argv[2] + "\n").encode())
+print(s.makefile().readline().strip())' "$1" "$2" 2>&1
+}
+wait_file() {
+    tries=50
+    while [ $tries -gt 0 ] && ! grep -q "$2" "$1" 2>/dev/null; do tries=$((tries - 1)); sleep 0.2; done
+    grep -q "$2" "$1" 2>/dev/null
+}
+me=$(id -u)
+expect_state echo.socket active/listening
+expect_state rawfd.socket active/listening
+"$(dirname "$0")/../target/debug/uinitconverter-gen" --config "$W/uinitconverter.conf" plan >"$W/accept-plan.out" 2>&1
+grep tcpacc.socket "$W/accept-plan.out" | grep -q "TCP is not supported" \
+    && ok "TCP Accept=yes socket skipped with the reason" || bad "tcpacc.socket in plan: $(grep tcpacc "$W/accept-plan.out")"
+r=$(cli "$R/echo.sock" hi)
+case $r in
+    "echo:hi fds=1 names=connection fd3=True pidok=True inst=0-"*"-$me") ok "connection on stdin/stdout and fd 3, LISTEN_*, instance name ($r)" ;;
+    *) bad "echo reply: $r" ;;
+esac
+wait_file "$R/echo.post" "^0-.* success$" && ok "ExecStopPost= ran with SERVICE_RESULT=success" || bad "echo.post: $(cat "$R/echo.post" 2>/dev/null)"
+grep -q "^pre 0-" "$R/echo.pre" 2>/dev/null && ok "ExecStartPre= ran for the connection" || bad "echo.pre: $(cat "$R/echo.pre" 2>/dev/null)"
+r=$(cli "$R/echo.sock" fail)
+case $r in echo:fail*) ok "failing instance answered" ;; *) bad "fail reply: $r" ;; esac
+wait_file "$R/echo.post" "^1-.* exit-code$" && ok "failed instance: SERVICE_RESULT=exit-code" || bad "echo.post: $(cat "$R/echo.post" 2>/dev/null)"
+expect_state echo.socket active/listening
+r=$(cli "$R/rawfd.sock" x)
+expect_eq "connection only on fd 3, stdin /dev/null (Type=oneshot)" "$r" "raw:x stdin=/dev/null"
+
+cli "$R/echo.sock" hold >"$W/accept-hold.out" &
+holdpid=$!
+wait_file "$R/echo.hold" "^2-" && ok "held connection running" || bad "hold instance didn't start"
+expect_eq "NConnections" "$(prop echo.socket Socket NConnections)" "1"
+expect_eq "NAccepted" "$(prop echo.socket Socket NAccepted)" "3"
+call StopUnit ss echo.socket replace
+expect_state echo.socket inactive/dead
+[ ! -e "$R/echo.sock" ] && ok "RemoveOnStop= removed the socket" || bad "$R/echo.sock still there after stop"
+touch "$R/echo.release"
+wait "$holdpid"
+case $(cat "$W/accept-hold.out") in
+    "echo:hold "*"inst=2-"*) ok "connection kept running after the socket stopped" ;;
+    *) bad "hold reply: $(cat "$W/accept-hold.out")" ;;
+esac
+wait_file "$R/echo.post" "^2-.* success$" && ok "held instance finished" || bad "echo.post: $(cat "$R/echo.post" 2>/dev/null)"
+call StartUnit ss echo.socket replace
+expect_state echo.socket active/listening
+r=$(cli "$R/echo.sock" again)
+case $r in "echo:again "*"inst=3-"*) ok "restarted socket serves, numbering goes on" ;; *) bad "reply after restart: $r" ;; esac
+sleep 0.5
+left=$(find "$R/run/units" -maxdepth 1 \( -name 'echo@*' -o -name 'rawfd@*' \) | wc -l)
+expect_eq "no instance state left behind" "$left" "0"
+expect_eq "no connection files left" "$(ls "$R/run/units/echo.socket/connections" | wc -l)" "0"
+if [ -n "$SR" ]; then
+    st=$(SYSTEMCTL=$(dirname "$SR")/systemctl "$(dirname "$0")/systemctl.sh" status echo.socket 2>&1)
+    echo "$st" | grep -q "Listen: $R/echo.sock (Stream)" && echo "$st" | grep -q "Accepted: 4; Connected: 0" \
+        && ok "systemctl status shows Listen: and the connection counts" || bad "systemctl status echo.socket: $st"
+fi
+
 section "end state"
 # A job that never finishes (logind's stop of user@0 did) holds everyone
 # waiting behind it.
