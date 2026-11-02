@@ -430,6 +430,7 @@ impl Daemon {
                     (s.active, s.sub) = ("failed", "failed");
                 }
             }
+            Some(Kind::Bundle) if self.stopped_targets.lock().unwrap().contains(id) => {}
             Some(Kind::Bundle) => {
                 let atoms = self.bundle_atoms(id).await;
                 let up = if atoms.is_empty() {
@@ -1000,6 +1001,7 @@ impl Daemon {
         started_at: u64,
     ) -> &'static str {
         self.stop_conflicts(id, unit).await;
+        self.unmark_stopped_targets(id);
         self.repair_requirements(id, unit, 0).await;
         let kind = self.kind_of(id);
         let active = self.active_atoms().await;
@@ -1007,6 +1009,7 @@ impl Daemon {
             None => "failed",
             Some(Kind::Bundle) => {
                 self.started_targets.lock().unwrap().insert(id.to_string());
+                self.stopped_targets.lock().unwrap().remove(id);
                 if !isolate && self.start_bundle_beside(id).await {
                     return "done";
                 }
@@ -1036,14 +1039,14 @@ impl Daemon {
                         }
                     }
                 }
-                match self.s6rc(&args, &names).await {
-                    Ok(()) => "done",
-                    Err(e) => {
-                        eprintln!("uinitconverterd: start {id}: {e}");
-                        // Wanted units failing does not fail a target.
-                        "done"
-                    }
+                if let Err(e) = self.s6rc(&args, &names).await {
+                    eprintln!("uinitconverterd: start {id}: {e}");
+                    // Wanted units failing does not fail a target.
                 }
+                if !isolate {
+                    self.start_inactive_members(id, unit, &active).await;
+                }
+                "done"
             }
             Some(Kind::Oneshot) => {
                 if active.contains(id) {
@@ -1211,6 +1214,7 @@ impl Daemon {
             None => "done",
             Some(Kind::Bundle) => {
                 self.started_targets.lock().unwrap().remove(id);
+                self.stopped_targets.lock().unwrap().insert(id.to_string());
                 "done"
             }
             Some(kind) => {

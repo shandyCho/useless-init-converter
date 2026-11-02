@@ -1104,6 +1104,41 @@ s6-ftrig-wait -t 5000 "$R/lw/svc/event" s >/dev/null 2>&1 \
     || ok "other waiters are left alone"
 s6-svc -x "$R/lw/svc"
 
+section "job side effects"
+call StartUnit ss cfa.service replace
+expect_state cfa.service active/running
+call StartUnit ss cfb.service replace
+expect_state cfb.service active/running
+expect_state cfa.service inactive/dead
+call StopUnit ss cfb.service replace
+call StartUnit ss pparent.service replace
+call StartUnit ss pchild.service replace
+expect_state pchild.service active/running
+before=$(prop pchild.service Service MainPID)
+call RestartUnit ss pparent.service replace
+tries=25
+while [ $tries -gt 0 ] && { a=$(prop pchild.service Service MainPID); [ "$a" = "$before" ] || [ "$a" = 0 ]; }; do tries=$((tries - 1)); sleep 0.2; done
+after=$(prop pchild.service Service MainPID)
+[ "$after" != "$before" ] && [ "$after" != 0 ] && ok "restarting the PartOf= target restarts the part ($before -> $after)" \
+    || bad "pchild MainPID $before -> $after after restarting pparent"
+call StopUnit ss pparent.service replace
+expect_state pchild.service inactive/dead
+call StartUnit ss swuuser.service replace
+expect_state swu.service active/running
+call StopUnit ss swuuser.service replace
+tries=25
+while [ $tries -gt 0 ] && [ "$(state swu.service)" != inactive/dead ]; do tries=$((tries - 1)); sleep 0.2; done
+expect_state swu.service inactive/dead
+call StartUnit ss swt.target replace
+tries=25
+while [ $tries -gt 0 ] && [ ! -s "$R/swtw.out" ]; do tries=$((tries - 1)); sleep 0.2; done
+expect_eq "the StopWhenUnneeded= target ran its Wants=" "$(cat "$R/swtw.out" 2>/dev/null)" "ran"
+expect_state swt.target inactive/dead
+call StartUnit ss swt.target replace
+tries=25
+while [ $tries -gt 0 ] && [ "$(lines "$R/swtw.out")" -lt 2 ]; do tries=$((tries - 1)); sleep 0.2; done
+expect_eq "and can be started again" "$(lines "$R/swtw.out")" "2"
+
 section "Accept=yes sockets"
 # One line to a unix socket, the first reply line back.
 cli() {

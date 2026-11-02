@@ -516,9 +516,12 @@ impl Daemon {
         }
     }
 
-    /// Stop units listed in Conflicts= before starting `id`.
+    /// Stop units listed in Conflicts= before starting `id`, and those that
+    /// list `id` in theirs (systemd's ConflictedBy=).
     pub(super) async fn stop_conflicts(&self, id: &str, unit: &Unit) {
-        for c in unit.get_words("Unit", "Conflicts") {
+        let mut names = unit.get_words("Unit", "Conflicts");
+        names.extend(self.reverse(id, "Conflicts").into_iter().map(|(n, _)| n));
+        for c in names {
             let (cid, cu) = self.load_unit(&c);
             if cid == id {
                 continue;

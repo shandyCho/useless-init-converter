@@ -118,7 +118,8 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 의존성 순환은 컴파일을 실패시키는 대신 끊고 보고합니다.
 - `DEP_MAP`은 systemd 유닛을 직접 작성한 s6 서비스에 대응시킵니다. 예: `dbus.service` → `dbus`.
 - 활성화된 `.socket`은 자신의 서비스도 함께 포함합니다. 소켓은 러너가 바인드하며, 이름 또는 `Service=`로 짝을 찾습니다. 부팅에서 소켓을 통해서만 포함되는 서비스(sockets.target이 `virtlogd.socket`을 요구하고 `virtlogd.service`를 요구하는 유닛은 없음)는 요청 시(on-demand) 서비스입니다. 러너는 소켓만 바인드하고 기다립니다(`run --on-demand`, `uinitconverter plan`의 "on demand").
-- `Conflicts=`: 두 유닛이 모두 부팅 시 시작될 경우, 충돌 대상은 타깃에서 빠집니다(예: `getty@tty1.service`보다 `gdm.service`). 실행 중에는 유닛을 시작하거나 재시작할 때 충돌하는 유닛을 멈춥니다.
+- `Conflicts=`: 두 유닛이 모두 부팅 시 시작될 경우, 충돌 대상은 타깃에서 빠집니다(예: `getty@tty1.service`보다 `gdm.service`). 실행 중에는 유닛을 시작하거나 재시작할 때 충돌하는 유닛과, 자기 `Conflicts=`에 그 유닛을 적은 유닛을 멈춥니다.
+- systemd와 같은 작업 부수 효과: 유닛을 멈추면 `PartOf=`, `BindsTo=`, `Requires=`로 그 유닛을 가리키는 실행 중인 유닛도 멈추고(데이터베이스 유닛과 요청 시 인스턴스 모두), 재시작하면 `PartOf=`로 가리키는 유닛도 재시작합니다. `StopWhenUnneeded=yes`인 실행 중 유닛은 그것을 필요로 하는(`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`) 실행 중 유닛이 없어지면 멈추며, 작업으로 직접 시작한 직후에도 마찬가지입니다. 타깃의 상태는 타깃 자신의 것입니다. 멈춘 타깃은 그것이 불러온 유닛이 아직 실행 중이어도 비활성이고, 다시 시작하면 더 이상 활성이 아닌 원하는 유닛(이미 실행된 oneshot)을 다시 시작합니다. systemd와 달리 재시작은 `Requires=`를 따라 전파되지 않습니다(dbus를 재시작하면 그것이 필요한 모든 것이 재시작되기 때문입니다).
 
 **마운트, 스왑, path 유닛**
 - `.mount`와 `.swap` 유닛은 `mount(8)`/`swapon(8)`을 실행합니다. 상태는 커널(`mountinfo`, `/proc/swaps`)에서 읽으므로, 누가 마운트했든 `systemctl status tmp.mount`가 정확합니다. `RequiresMountsFor=`는 해당 경로를 덮는 마운트 유닛에 대한 의존성이 됩니다.

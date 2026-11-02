@@ -748,6 +748,54 @@ cat > "$U/lazydep.service" <<EOF
 ExecStart=/bin/sh -c 'echo started >> $R/lazydep.out; exec sleep 1000'
 EOF
 
+# --- job side effects (relations.rs): ConflictedBy, PartOf=, StopWhenUnneeded= ---
+cat > "$U/cfa.service" <<EOF
+[Unit]
+Conflicts=cfb.service
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat > "$U/cfb.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat > "$U/pparent.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat > "$U/pchild.service" <<EOF
+[Unit]
+PartOf=pparent.service
+After=pparent.service
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat > "$U/swu.service" <<EOF
+[Unit]
+StopWhenUnneeded=yes
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat > "$U/swuuser.service" <<EOF
+[Unit]
+Wants=swu.service
+After=swu.service
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+# As gnome-session-shutdown.target: started directly, does its Wants=, then
+# goes inactive again because nothing needs it.
+cat > "$U/swt.target" <<EOF
+[Unit]
+StopWhenUnneeded=yes
+Wants=swtw.service
+EOF
+cat > "$U/swtw.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo ran >> $R/swtw.out'
+EOF
+
 # --- Accept=yes sockets: one template instance per connection ---
 # Like polkit-agent-helper.socket (StandardInput/Output=socket, a unix
 # ListenStream=). "hold" keeps the connection open until echo.release

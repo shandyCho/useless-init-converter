@@ -506,9 +506,6 @@ fn ignored_settings(unit: &Unit) -> Vec<String> {
             warnings.push(format!("[{sec}] section is ignored"));
         }
     }
-    if unit.get("Unit", "Conflicts").is_some() {
-        warnings.push("Conflicts= is not enforced".into());
-    }
     let ty = unit.get("Service", "Type").unwrap_or_default();
     if ty == "forking" && unit.get("Service", "PIDFile").is_none() {
         warnings.push("Type=forking without PIDFile=: main PID is guessed".into());

@@ -10661,3 +10661,31 @@ main at 49c9b27 plus the step 0 tools and this entry, committed with this part.
 
 1. Owner: decide G0 (i)-(iii).
 2. Independent of G0: GetUnitByPIDFD for polkitd on the system side.
+
+## 2026-11-03, part 138: transaction engine, increment 1 (ConflictedBy, PartOf, StopWhenUnneeded, target state)
+
+Owner: "go with your recommendations, start with the transaction engine", then "do implement based your recommandations all after steps". G0 as recommended: (i) the cost is accepted, to be measured in slice A; (ii) the daemon's dynamic engine for user units; (iii) the transaction engine first, on the system side.
+
+**What changed** (new `daemon/relations.rs`):
+- `reverse(id, key)`: known units whose `key=` (plus .wants/.requires links for Wants/Requires) names any of id's names.
+- `stop_conflicts` also stops units that list the starting unit in their Conflicts= (ConflictedBy). Forward Conflicts= was already enforced for every kind, so gen's "Conflicts= is not enforced" warning was stale; removed.
+- `run_job` is now a wrapper around `run_job_once`: after a successful stop, running units with PartOf=/BindsTo=/Requires= on it are stopped (recursive, cycle-safe); after a restart/try-restart, running PartOf= units are try-restarted. **Restart along Requires= is left out on purpose** (restarting dbus would restart everything that needs it; systemd does propagate it).
+- `stop_unneeded` runs in execute_job after finish_job (so a unit started by that very job counts): a running StopWhenUnneeded=yes unit without its own job and without a running Requires=/Requisite=/Wants=/BindsTo= referrer is stopped, repeated while stops free more.
+- **Target state is its own:**
+  - `stopped_targets` makes a target stopped by a job inactive, although its members still run (before, a bundle's state was "any atom active", so it could never become inactive).
+  - A start clears the mark for the targets in its Requires/Wants/BindsTo closure (`unmark_stopped_targets`).
+  - After a target's start, its direct Requires/Wants that s6-rc already had up but that aren't active are started individually (`start_inactive_members`), so a oneshot that already ran runs again on the next start (gnome-session-shutdown.target's restart-dbus at every logout). Members s6-rc brought up in this very start are skipped. The first version ran them twice; caught by the test.
+- Tests: 11 sandbox checks in section "job side effects":
+  - reverse conflict
+  - PartOf restart (new pid) and stop
+  - StopWhenUnneeded on a wanted helper
+  - a StopWhenUnneeded target started directly: ran its Wants=, inactive afterwards, runs it again on a second start
+
+  A first test race (MainPID 0 during the restart, JOURNAL=no only) was fixed in the test.
+- Docs pair: the Conflicts= paragraph and a new "job side effects" paragraph.
+
+**Tests.** cargo test 108, fmt clean. Sandbox with SANDBOX_S6NET_BIN: 363/363, SANDBOX_JOURNAL=no 370/370, SANDBOX_FDSTORE=no 351/351; without s6-tcpserverd 360/360. shellcheck clean.
+
+**Not done yet (next increments):** job modes (fail, replace-irreversibly), OnFailureJobMode=, Requisite= joined with queued starts, STOPPING=1 from Type=notify, PropertiesChanged and Unit/Job signals for state changes not caused by a job on that unit, RefuseManualStart= against dependency starts; then GetUnitByPIDFD; then slices A-E.
+
+**Not measured:** the cost of `reverse()` (it scans the known units, with readdirs for wants/requires) on a real system with ~500 units; the sandbox timing didn't change noticeably.

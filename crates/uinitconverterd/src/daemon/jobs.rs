@@ -203,7 +203,24 @@ impl Daemon {
         Ok((id, unit))
     }
 
+    /// A job and its side effects on other units (see relations.rs).
     pub(super) async fn run_job(
+        &self,
+        id: &str,
+        unit: &Unit,
+        jtype: &str,
+        mode: &str,
+    ) -> &'static str {
+        let r = self.run_job_once(id, unit, jtype, mode).await;
+        if r == "done" {
+            self.propagate(id, jtype, &mut BTreeSet::from([id.to_string()]))
+                .await;
+        }
+        r
+    }
+
+    /// The job on this unit alone.
+    pub(super) async fn run_job_once(
         &self,
         id: &str,
         unit: &Unit,
@@ -385,6 +402,9 @@ impl Daemon {
             self.run_job(id, unit, jtype, mode).await
         };
         self.finish_job(job, id, result).await;
+        drop(_guard);
+        // After the job is gone, so a unit started by it counts too.
+        self.stop_unneeded(0).await;
         result
     }
 

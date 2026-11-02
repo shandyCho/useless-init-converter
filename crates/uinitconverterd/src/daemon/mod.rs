@@ -17,6 +17,7 @@ mod jobs;
 mod manager;
 mod private;
 mod props;
+mod relations;
 mod s6;
 mod scopes;
 mod transient;
@@ -96,6 +97,10 @@ pub struct Daemon {
     /// The s6 backend's locks and caches (see s6.rs).
     pub s6: s6::State,
     pub started_targets: Mutex<BTreeSet<String>>,
+    /// Targets stopped by a job: inactive until started again, though the
+    /// units they pulled in may still run (as systemd, a target's state is
+    /// its own, not its members').
+    pub stopped_targets: Mutex<BTreeSet<String>>,
     pub transient: Mutex<BTreeMap<String, Transient>>,
     pub manager_env: Mutex<Vec<String>>,
     uid_cache: Mutex<HashMap<String, u32>>,
@@ -461,6 +466,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         next_job: AtomicU32::new(0),
         s6: s6::State::default(),
         started_targets: Mutex::new(BTreeSet::new()),
+        stopped_targets: Mutex::new(BTreeSet::new()),
         transient: Mutex::new(BTreeMap::new()),
         manager_env: Mutex::new(manager_env),
         uid_cache: Mutex::new(HashMap::new()),
