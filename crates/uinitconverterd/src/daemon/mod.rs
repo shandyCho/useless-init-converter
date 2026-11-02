@@ -545,6 +545,15 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         }
     });
 
+    // A user manager has no s6-rc boot: it starts default.target itself.
+    if daemon.cfg.user_mode {
+        let d = daemon.clone();
+        tokio::spawn(async move {
+            let r = d.start_any("default.target").await;
+            eprintln!("uinitconverterd: user mode: default.target {r}");
+        });
+    }
+
     let rec = daemon.clone();
     tokio::spawn(async move {
         loop {

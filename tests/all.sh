@@ -77,6 +77,16 @@ check_shell() {
     return "$rc"
 }
 
+# The user-mode checks (tests/user-sandbox.sh), in a directory of their own.
+user_sandbox() {
+    local w rc
+    w=$(mktemp -d "${TMPDIR:-/tmp}/sdcu.XXXXXX") || return 1
+    tests/user-sandbox.sh "$w"
+    rc=$?
+    rm -rf "$w"
+    return "$rc"
+}
+
 # A work directory of its own, under a short path for the suite's sockets.
 sandbox_suite() {
     local w rc
@@ -121,6 +131,7 @@ fast_tests() {
     step "sandbox JOURNAL=no" sandbox_with SANDBOX_JOURNAL=no
     step "sandbox FDSTORE=no" sandbox_with SANDBOX_FDSTORE=no
     step "sandbox BUS=broker" sandbox_with SANDBOX_BUS=broker
+    step "user sandbox" user_sandbox
 }
 
 vm_test() {

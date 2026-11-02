@@ -107,6 +107,10 @@ pub struct Config {
     pub udev_dir: Option<PathBuf>,
     /// Also follow udevd's netlink events (devices added after startup).
     pub udev_monitor: bool,
+    /// A user's service manager (user@UID.service) instead of the system's:
+    /// every unit runs through the daemon's dynamic engine, without an s6-rc
+    /// database (work_history parts 136-137).
+    pub user_mode: bool,
 }
 
 /// The values INIT= accepts.
@@ -252,6 +256,7 @@ impl Config {
             transient_dir: PathBuf::from("/run/systemd/transient"),
             udev_dir: Some(PathBuf::from("/run/udev")),
             udev_monitor: true,
+            user_mode: false,
         }
     }
 
@@ -332,6 +337,7 @@ impl Config {
                 "JOURNAL_STDOUT" => cfg.journal_stdout = PathBuf::from(&v),
                 "UDEV_DIR" => cfg.udev_dir = opt(&v),
                 "UDEV_MONITOR" => cfg.udev_monitor = crate::unit::parse_bool(&v).unwrap_or(true),
+                "USER_MODE" => cfg.user_mode = crate::unit::parse_bool(&v).unwrap_or(false),
                 "ALLOW_UIDS" => {
                     cfg.allow_uids = v
                         .split_whitespace()

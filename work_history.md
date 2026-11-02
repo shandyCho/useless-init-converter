@@ -10709,3 +10709,33 @@ Owner: "go with your recommendations, start with the transaction engine", then "
 - job modes (fail, replace-irreversibly) are accepted and run as replace;
 - Requisite= is started like Requires= (right inside one transaction, which is GNOME's use);
 - UnitNew/UnitRemoved/JobNew for side-effect jobs.
+
+## 2026-11-03, part 140: slice A, part 1 (USER_MODE: dynamic engine for every unit)
+
+- `USER_MODE=yes` (Config::user_mode), for a user's service manager:
+  - can_be_dynamic is true for every loaded service and target, so there is no s6-rc database.
+  - active_atoms() returns empty at once: with no s6-rc database, asking s6-rc made every property read take 3.1 s (found by timing GetUnit vs Get, then instrumenting object_props; the instrumentation was removed).
+  - Device wants (SYSTEMD_WANTS from the host's udev database) are off; the first run tried to start sound.target, bolt.service and others for the host's devices.
+  - At startup the daemon starts default.target through start_any.
+- **Dynamic targets:** dyn_start of a target starts its dependencies and records `Dynamic { kind: Bundle, active }` with no service directory. dyn_remove drops it; unit_status reports active/active; both emit PropertiesChanged.
+- **start_deps** (dynamic) now also takes .requires/.wants links. A target starts everything it wants; a service still only wanted units it is ordered after. This also applies to the system side's dynamic instances (user@, getty@ ...): their .requires/.wants links are started now. The system suites didn't change.
+- **A stop through Conflicts= propagates** like any stop (PartOf=/BindsTo=): stop_conflicts calls propagate() after a successful stop. Before, the conflict-stopped target's PartOf= units kept running; found by the user sandbox's GNOME-shaped logout.
+- New `tests/user-sandbox.sh` (15 checks, in tests/all.sh). It runs a private dbus-daemon, an s6-svscan and the daemon with USER_MODE=yes and no s6-rc database:
+  - boot: default.target, a wanted target, a .wants-linked service
+  - a session: sess@gnome.target requiring sessmgr@gnome.service, plus a PartOf= part
+  - logout: a shutdown target with Conflicts= + StopWhenUnneeded= stops session, manager and part, and goes inactive; the base service stays
+  - a second session; a stop propagating to PartOf= units
+- TESTING pair: a paragraph for the user sandbox.
+
+**Tests.** cargo test 108; user sandbox 15/15. System sandbox with SANDBOX_S6NET_BIN: 370/370, SANDBOX_JOURNAL=no 377/377, SANDBOX_FDSTORE=no 358/358; without s6-tcpserverd 367/367. fmt and shellcheck clean.
+
+**Slice A, still to do:**
+- the launcher (`user@UID.service` → per-user s6-svscan and daemon in user mode, READY=1 when default.target is up, RTMIN+25 reload, SIGTERM stop)
+- the user bus as a unit: dbus.socket/dbus-broker started by us; the daemon serving the private socket first, then taking org.freedesktop.systemd1 on the bus when it appears and again after a restart (gnome-session-ctl --restart-dbus)
+- user socket units (Accept=no) in user mode
+- cgroups under the delegated subtree with systemd's user layout
+- USER_MANAGER=systemd|s6 with the kernel flag and the fallback
+- the VM: dbus plus one unit under the real user@ with the flag
+- the memory measurement against G0's budget
+
+Then slices B-E.

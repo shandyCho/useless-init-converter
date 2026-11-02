@@ -128,6 +128,9 @@ uinitconverter의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-up
 `sandbox.sh`와 `check.sh`를 실행하세요. 그러면 데몬이 fd를 직접 보관하므로, 데몬을 다시 시작한
 뒤 fd가 사라졌는지를 확인합니다. 독립 도구는 `tests/sandbox.sh`가 `standalone/`에서 빌드합니다.
 
+사용자 모드(systemd --user 없는 사용자 서비스 관리자, 진행 중): `tests/user-sandbox.sh DIR`은 자체 검사를
+실행하고 끝나면 모두 멈춥니다(`tests/all.sh`에 포함).
+
 `Accept=yes` TCP 검사에는 `s6-tcpserverd`가 필요합니다. `PATH`에 없으면 `check.sh`는 TCP 소켓을
 건너뛰었는지만 확인하고 SKIP 줄을 출력합니다. 실행하려면 두 스크립트 앞에
 `SANDBOX_S6NET_BIN=DIR`(`s6-tcpserverd`가 있는 디렉터리, 예: s6-networking을 직접 빌드한 곳)를 붙이세요.

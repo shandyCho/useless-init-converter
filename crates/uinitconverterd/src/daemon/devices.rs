@@ -44,6 +44,11 @@ type Plugged = BTreeMap<String, Vec<String>>;
 
 impl Daemon {
     pub(super) async fn watch_devices(self: Arc<Self>) {
+        // Device wants are the system manager's (SYSTEMD_WANTS); a user
+        // manager would start system units for the host's devices.
+        if self.cfg.user_mode {
+            return;
+        }
         let Some(udev_dir) = self.cfg.udev_dir.clone() else {
             return;
         };

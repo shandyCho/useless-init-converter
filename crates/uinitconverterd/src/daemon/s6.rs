@@ -141,6 +141,10 @@ impl Daemon {
     /// Atoms that are up: s6-rc's view plus the longruns started beside an
     /// s6-rc change that s6-rc has not been told about yet.
     pub(super) async fn active_atoms(&self) -> BTreeSet<String> {
+        // A user manager has no s6-rc database (asking s6-rc for it took 3 s).
+        if self.cfg.user_mode {
+            return BTreeSet::new();
+        }
         let mut active = self.active_atoms_live().await;
         active.extend(self.s6.beside.lock().unwrap().iter().cloned());
         active
@@ -371,6 +375,10 @@ impl Daemon {
         }
 
         if let Some(kind) = self.dynamic_kind(id) {
+            if kind == Kind::Bundle {
+                (s.active, s.sub) = ("active", "active");
+                return s;
+            }
             if kind == Kind::Oneshot {
                 let up = self
                     .dynamic

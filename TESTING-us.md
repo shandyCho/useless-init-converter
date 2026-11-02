@@ -130,6 +130,10 @@ To check that the core works without the standalone `uinitconverter-fdstore`, ru
 holds the fds itself, so `check.sh` checks that they are gone after the daemon
 restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
+User mode (a user's service manager without systemd --user, in progress):
+`tests/user-sandbox.sh DIR` runs its own checks and stops everything itself
+(`tests/all.sh` includes it).
+
 The `Accept=yes` TCP checks need `s6-tcpserverd`. Without it in `PATH`, `check.sh`
 checks that the TCP socket is skipped and prints a SKIP line. To run them, put
 `SANDBOX_S6NET_BIN=DIR` (a directory with `s6-tcpserverd`, e.g. a local build of

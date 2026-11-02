@@ -53,6 +53,11 @@ impl Daemon {
             return matches!(unit.utype(), "service" | "timer" | "path")
                 && !self.cfg.is_excluded(id);
         }
+        // A user manager has no database: every service and target is run
+        // by the dynamic engine.
+        if self.cfg.user_mode {
+            return matches!(unit.utype(), "service" | "target") && !self.cfg.is_excluded(id);
+        }
         unit.utype() == "service"
             && loader::parse_name(id)
                 .map(|n| n.instance.is_some())
@@ -158,8 +163,11 @@ impl Daemon {
         Ok(dir)
     }
 
-    /// Dependencies to start before a unit: (name, required).
-    fn start_deps(unit: &Unit) -> Vec<(String, bool)> {
+    /// Dependencies to start before a unit: (name, required). Also the
+    /// .requires/.wants links. A target starts everything it wants; a
+    /// service only what it wants and is ordered after.
+    fn start_deps(&self, unit: &Unit) -> Vec<(String, bool)> {
+        let ld = loader::Loader::new(&self.cfg);
         let after: BTreeSet<String> = unit.get_words("Unit", "After").into_iter().collect();
         let mut out = Vec::new();
         for key in ["Requires", "Requisite", "BindsTo"] {
@@ -167,8 +175,13 @@ impl Daemon {
                 out.push((d, true));
             }
         }
-        for d in unit.get_words("Unit", "Wants") {
-            if after.contains(&d) {
+        for d in ld.dir_deps(unit, "requires") {
+            out.push((d, true));
+        }
+        let mut wants = unit.get_words("Unit", "Wants");
+        wants.extend(ld.dir_deps(unit, "wants"));
+        for d in wants {
+            if unit.utype() == "target" || after.contains(&d) {
                 out.push((d, false));
             }
         }
@@ -204,7 +217,7 @@ impl Daemon {
     }
 
     pub(super) async fn dyn_start(&self, id: &str, unit: &Unit) -> &'static str {
-        for (dep, required) in Self::start_deps(unit) {
+        for (dep, required) in self.start_deps(unit) {
             if dep == id {
                 continue;
             }
@@ -215,6 +228,19 @@ impl Daemon {
             }
         }
         self.stop_conflicts(id, unit).await;
+
+        // A target is its dependencies; it has no process of its own.
+        if unit.utype() == "target" {
+            self.dynamic.lock().unwrap().insert(
+                id.to_string(),
+                Dynamic {
+                    kind: Kind::Bundle,
+                    active: true,
+                },
+            );
+            self.emit_state(id).await;
+            return "done";
+        }
 
         let oneshot = unit.utype() == "service"
             && (unit.get("Service", "Type").as_deref() == Some("oneshot")
@@ -348,6 +374,11 @@ impl Daemon {
         let Some(kind) = self.dynamic_kind(id) else {
             return "done";
         };
+        if kind == Kind::Bundle {
+            self.dynamic.lock().unwrap().remove(id);
+            self.emit_state(id).await;
+            return "done";
+        }
         if kind == Kind::Oneshot {
             let active = self
                 .dynamic
@@ -530,10 +561,20 @@ impl Daemon {
             let st = self.unit_status(&cid, &active, &cu).await;
             if matches!(st.active, "active" | "activating" | "reloading") {
                 eprintln!("uinitconverterd: stopping {cid} (conflicts with {id})");
-                if self.dynamic_kind(&cid).is_some() {
-                    Box::pin(self.dyn_stop(&cid, &cu)).await;
+                let r = if self.dynamic_kind(&cid).is_some() {
+                    Box::pin(self.dyn_stop(&cid, &cu)).await
                 } else {
-                    Box::pin(self.do_stop(&cid, &cu)).await;
+                    Box::pin(self.do_stop(&cid, &cu)).await
+                };
+                // A stop like any other: PartOf=/BindsTo= units follow (the
+                // GNOME session's logout is exactly this).
+                if r == "done" {
+                    Box::pin(self.propagate(
+                        &cid,
+                        "stop",
+                        &mut std::collections::BTreeSet::from([cid.clone(), id.to_string()]),
+                    ))
+                    .await;
                 }
             }
         }
