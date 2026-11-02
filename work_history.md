@@ -10432,3 +10432,40 @@ main at 4af52d9 plus this entry, uncommitted. Plan only.
 
 1. Owner: confirm the plan, then step 0. It needs the owner's GNOME session for the busctl monitor; a script that collects it can be written first.
 2. Earlier steps unchanged: fresh-install VM and QEMU full-boot test (parts 106, 89); service restart and shutdown on a relabeled system (part 128); part 132's on-machine checks of the Accept=yes work.
+
+## 2026-11-02, part 135: hostile review of part 134's plan (no code)
+
+Owner: "commit it and hostile review your plan". Part 134 committed as 3b65bf1. Findings, checked on this machine where marked, most serious first. The plan is not changed yet; the amendments wait for the owner.
+
+1. **The control channel is on a bus GNOME restarts.** `gnome-session-restart-dbus.service` (Type=notify, `Slice=-.slice`, DefaultDependencies=no) runs `gnome-session-ctl --restart-dbus` at session shutdown. The plan has the daemon take `org.freedesktop.systemd1` on the user bus "when it appears", but not survive the bus going away and coming back while it supervises that very bus. Needed: reconnect and re-register, with jobs and state kept across the gap; StopUnit calls during logout must not be lost.
+2. **Step 0 can't measure what it claims.** `busctl --user monitor` sees only bus traffic. It misses: the private socket (`systemctl --user`), sd_notify, sd_pid_get_user_unit (a cgroup read), environment generators, the user manager's report of ManagedOOM cgroups to systemd-oomd (a varlink call, from memory of systemd, not checked), and anything logind expects of the user manager. Step 0 also needs source reading of gnome-session/gnome-shell 51 and systemd 262's user-manager side, and strace of a login.
+3. **Missing features, checked here:**
+   - User environment generators: `30-systemd-environment-d-generator` (~/.config/environment.d) and `60-flatpak` (`flatpak --print-updated-env`, which puts flatpak exports into XDG_DATA_DIRS). Without them flatpak apps would likely vanish from the app grid.
+   - `slice.d/10-oomd-per-slice-defaults.conf` (ManagedOOMMemoryPressure=kill on every user slice). The loader reads type-wide drop-ins, but without reporting to oomd the protection is silently lost.
+   - 20 user socket units (dbus, pipewire, pipewire-pulse, gpg-agent ×4, ssh-agent, gcr-ssh-agent, p11-kit, keyboxd, podman, ...). On-demand activation needs someone holding the fds; the system side uses the standalone fdstore, and the user side has nothing.
+   - `Slice=-.slice` (the user tree's root).
+   - `gnome-session@gnome-login.target.d` (the greeter's session: Requires gnome-session-basic-services.target and org.gnome.Shell@gdm.service). This confirms the greeter goes through the same machinery.
+4. **Cost, estimated from the 2026-10-21 memcompare session's measurements** (system side: 258 s6-supervise 32.5 MiB PSS, ~126 KiB each; 26 runners 31.9 MiB, 12 of them ~1.9 MiB anon; daemon 7.4 MiB; ~140 KiB kernel per extra process). The current session has 54 running user services and 6 listening sockets, and `systemd --user` is 16.4 MiB RSS / 4.4 MiB anon. That gives roughly 30-50 MiB per s6 user manager, an estimate, not measured. Every greeter user manager costs the same (six were seen in one boot, see "greeter user managers"). Type=dbus is 57 units: a helper process per running one adds up. The plan has no memory budget and no measurement step.
+5. **Login latency and where state lives.** Generating and compiling 192 units plus the generators' output on every login is on the login path. "~/.local/state, decide in step 4" is wrong for greeter users (dynamic userdb users, no real home) and fragile for homed/NFS homes. Better: one user database compiled as root when the system side regenerates (daemon-reload already runs on package updates), shared by all users, and a per-user database only when ~/.config/systemd/user or /etc/systemd/user drop-ins differ. Runtime state only under $XDG_RUNTIME_DIR.
+6. **The fallback misses the likely failure.** "N failed starts" catches a launcher that crashes, but the launcher sends READY=1 early. A session that comes up broken (gnome-shell fails, black screen) looks fine to user@. Falling back after the s6 stack has run also needs the delegated cgroup emptied first, or systemd --user starts among leftovers. Needed: a trigger on GNOME's own failure path (gnome-session-failed / OnFailure=) or a session-reached marker, plus a clean teardown before the switch.
+7. **Waterfall order.** Selection and fallback come at step 7 and the first real boot at step 9, so there's no end-to-end signal for most of the work. Better vertical slices, each on a real boot behind the flag:
+   - A: launcher, user bus, one unit
+   - B: GDM greeter (gnome-login)
+   - C: a user session
+   - D: apps, flatpak, oomd, sockets
+   - E: logout, bus restart, package updates, a second user, user switch
+8. **The refactor is bigger than "a user mode".** The system cgroup root is assumed in 7 files (18 places: cgroup, bpf, sandbox, connection, notify, scopes, props), and fixed system paths in 18 more places. The daemon's access model (polkit, root) and its PID 1 duties (logind's StartTransientUnit) don't apply as they are. Every change risks the working system path. Needed: a `SANDBOX_USER=yes` sandbox variant from the first commit, with the existing variants kept green.
+9. **The only GNOME machine is the owner's daily one.** A bad iteration means no login. The default stays systemd, which helps, but GNOME testing should go to a Fedora 45 Workstation VM through part 89's QEMU full-boot harness first.
+10. **The s6-native goal isn't served yet.** The plan is systemctl-centric. How a user drives their own tree with s6 tools (`s6-rc -l $XDG_RUNTIME_DIR/...`, s6-frontend if it fits) should be designed and documented, or the change gains little for that goal.
+11. **Smaller:** lingering users (user@ at boot, no session environment); podman-user-generator (quadlet) units and podman.socket; persistent user timers' state location.
+
+**Proposed amendments** (not applied): step 0 widened by finding 2; a cost measurement and budget (4); a shared, root-compiled user database (5); a GNOME-level fallback trigger with cgroup teardown (6); slices A-E replacing steps 4-9's order (7); SANDBOX_USER from the start (8); QEMU VM before the owner's machine (9); a user-side s6 admin story (10); bus-restart survival as an explicit requirement (1).
+
+### Current state
+
+main at 3b65bf1 plus this entry, uncommitted. Plan reviewed, not amended.
+
+### Next steps
+
+1. Owner: accept or reject the amendments; also whether a 30-50 MiB per user manager cost (to be measured) is acceptable at all.
+2. Then rewrite part 134's steps accordingly and start step 0.
