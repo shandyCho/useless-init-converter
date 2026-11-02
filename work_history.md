@@ -10553,3 +10553,111 @@ main at ad4f4c8 plus this part's commit. ~/uinitconverter-vm holds a provisioned
 1. Owner: confirm the rewritten plan; then step 0 in the VM (it can run there without the owner's session).
 
 Sources: discourse.gnome.org/t/29411; blogs.gnome.org/adrianvovk/2025/06/10/gnome-systemd-dependencies; lwn.net/Articles/1025560; github.com/swagtoy/gnome-session-openrc; zff.dev/kev2600/gnome-session-dinit; github.com/chimera-linux/turnstile; skarnet.org/software/s6/s6-usertree-maker.html; skarnet.org/lists/skaware/2265.html; skarnet.org/lists/supervision/3140.html; github.com/unmango/notsystemd/pull/9; postmarketos.org/blog/2024/03/05/adding-systemd; ostechnix.com/artix-linux-drops-gnome-desktop-environment.
+
+## 2026-11-03, part 137: step 0 results (inventory of what GNOME needs from the user manager)
+
+Owner confirmed part 136's plan. Step 0 ran in the VM (Fedora 45: gnome-session 51.0, gnome-shell 51.1, mutter 51.1, gnome-desktop 51.0, systemd 262-3, dbus-broker 37, glib 2.90). No code change; new test tools only.
+
+**New tools.**
+- `tests/inventory/dbus-capture.py`: a Gio bus monitor that writes JSON lines of every message, resolving senders to command lines on the main loop.
+- `tests/user-inventory.sh`: installs the monitor as a global user unit (so the greeter's bus is covered too) and as a system service, reboots, records a session, launches Calculator from GNOME Shell with QMP keys, logs out to the greeter, and takes memory snapshots.
+- `tests/inventory/summarize.py`: keeps only traffic to or from the manager, by its well-known or its unique name.
+- `gnome-vm.sh key`/`type` (QMP send-key).
+
+**Bugs found while running it:**
+1. The monitor's filter swallowed the reply to its own BecomeMonitor, so the call timed out and the monitor exited.
+2. The match rules didn't limit what the monitor saw (it got the whole bus), so the summary filters by itself.
+3. GDBusProxy talks to the unique name, which the summary first missed.
+4. Name lookups from the filter thread timed out ("?" callers).
+5. `ausearch` read the ssh stdin and hung for 50 minutes; it now has `--input-logs </dev/null`.
+6. The session starts in the overview, so Super closed it; the script now presses Esc first.
+
+app.txt's cgroup line is the ssh shell's (pgrep -f matched the command itself), not Calculator's. The scope is confirmed by list-units and the screenshot instead.
+
+### (a) Calls, from the capture (third run, callers resolved)
+
+**User bus (tester's session):**
+- dbus-broker-launch: LoadUnit 40, StartUnit 20, SetEnvironment 5, Subscribe 1, and StartTransientUnit 20. Those are transient services `dbus-:N.N-<name>@N.service` with ExecStart, KillMode and CollectMode: every D-Bus service without SystemdService= is started as a transient service.
+- gnome-session-init-worker: GetUnit 2, Properties.GetAll (Unit) 2, ResetFailed 1, StartUnit 1.
+- gnome-session-service: SetEnvironment 4; StartTransientUnit 4 (autostart app scopes `app-gnome-*-PID.scope`: PIDs, CollectMode, Description).
+- gnome-shell: StartTransientUnit 1 (Calculator's app scope), GetUnit 1, StartUnit 1, StopUnit 1 (gnome-session-x11-services.target).
+- The leader: UnsetAndSetEnvironment 1 (DISPLAY, XAUTHORITY, WAYLAND_DISPLAY, ...).
+- gnome-session-ctl --restart-dbus: StopUnit dbus.service at logout.
+- gsd-sharing: StopUnit 4 (rygel, gnome-user-share-webdav; ENXIO errors). gsd-a11y-settings: StopUnit orca.service and DisableUnitFilesWithFlags. uresourced: SetUnitProperties (CPUWeight, IOWeight) on app scopes. gsd-housekeeping and localsearch-3: Subscribe; localsearch-3: GetAll Manager.
+- Signals from the manager: PropertiesChanged on Unit 1232, Service 545, Mount 149, Job 72, Socket 61, Scope 16, Manager 2; UnitNew 260, UnitRemoved 226, JobNew 167, JobRemoved 165.
+
+**Greeter bus (gdm-greeter, uid 60578):** the same set, minus the leader, ResetFailed and app launches.
+
+**System bus:**
+- logind: StartUnit 6, StartTransientUnit 9, Scope.Abandon 7, StopUnit 1, Properties.Get 73 (Job.State, Unit.ActiveState, LoadState).
+- polkitd: GetUnitByPIDFD 40, then Get Service.NoNewPrivileges 40.
+- dbus-broker-launch: StartUnit/LoadUnit 17.
+- uresourced: SetUnitProperties 15. gsd-power: Get 2 (Virtualization). timedated: GetAll 2.
+
+uinitconverterd implements every method seen **except GetUnitByPIDFD**. That is a gap on today's system side: polkitd falls back to something on s6 boots, and what it falls back to wasn't checked.
+
+### (b) Source reading (gnome-session 51.0, gnome-shell 51.1, gnome-desktop 51.0, systemd 262)
+
+- gnome-session 51 has `leader-main.c` + `leader-systemd.c`: the leader split GNOME planned in 2025 is in 51.
+  - The leader: UnsetAndSetEnvironment; `GetUnit graphical-session.target` (NoSuchUnit counts as not running; otherwise ActiveState through a GDBusProxy); ResetFailed; `StartUnit gnome-session@SESSION.target fail`.
+  - A FIFO `$XDG_RUNTIME_DIR/gnome-session-leader-fifo` shared with gnome-session-monitor.service (`gnome-session-ctl --monitor`, Type=notify), which answers a byte or a hangup with **sd_notify STOPPING=1**.
+  - SIGTERM → `StartUnit gnome-session-shutdown.target replace-irreversibly`.
+  - Then it waits for graphical-session-pre.target to go inactive, via **PropertiesChanged on the unit object**.
+- gnome-session-ctl: `--signal-init` (Initialized on gnome-session's own D-Bus API), `--restart-dbus` (StopUnit dbus.service fail), `--shutdown`, `--monitor`.
+- The session units are built on systemd's **transaction engine**:
+  - They are RefuseManualStart targets chained with `Requisite=` + `Before=`, startable only inside the leader's one transaction (Requisite joined with a queued start).
+  - Logout is `gnome-session-shutdown.target`, which **Conflicts=** the session targets and has StopWhenUnneeded= and Wants= gnome-session-restart-dbus.service.
+  - Teardown and crashes go through `BindsTo=` (gnome-session.target to the monitor) and `PartOf=` chains, plus `OnFailure=gnome-session-shutdown.target` with `OnFailureJobMode=replace-irreversibly`.
+  - The session itself is template instances: gnome-session@gnome.target, gnome-session-manager@gnome.service, org.gnome.Shell@user.service.
+- gnome-shell: `sd_pid_get_user_unit(getpid())` must give a unit starting with `org.gnome.Shell`, or systemd integration is off ("Not systemd managed"). That reads only /proc/self/cgroup, so **systemd's user cgroup layout is required exactly**. It also uses StartUnit/StopUnit/GetUnit with JobRemoved watching.
+- gnome-desktop: app scopes are `app-gnome-<app>-<pid>.scope`, mode fail, PIDs (not PIDFDs), CollectMode=inactive-or-failed, created only if `sd_pid_get_user_unit` of the launcher succeeds.
+- systemd 262: the user manager connects to systemd-oomd's user varlink socket and sends `io.systemd.oom.ReportManagedOOMCGroups`, reconnecting when oomd restarts.
+  - It also serves `io.systemd.Manager` varlink in $XDG_RUNTIME_DIR/systemd; no systemd client uses it (systemctl doesn't).
+  - logind starts user-runtime-dir@ then user@UID through the system manager (already served).
+
+### (c) Generator report over the user units
+
+UNIT_PATH /etc/systemd/user, the session's generator.late, /usr/lib/systemd/user:
+- Translated: 88 longrun, 13 oneshot, 40 bundle; 18 skipped (sockets bound by their service, .slice, units not found).
+- **22 dependency cycles had to be broken** for s6-rc: gnome-session-pre ↔ initialized ↔ gnome-session.target, each org.gnome.SettingsDaemon.X service ↔ target pair, and the x11-services targets. They are legal in systemd (Requisite/PartOf/Before within one transaction) and impossible in a static s6-rc graph.
+- Warnings:
+  - TimeoutStopFailureMode= ignored ×95
+  - CollectMode= ×19
+  - Conflicts= not enforced ×7
+  - XAttr*/FileDescriptorName= on sockets ×3
+  - ExitType= ×2 (the xdg-autostart units)
+  - IOSchedulingClass= and ImportCredential= ×1 each
+- Two xdg-autostart units exist (geoclue demo agent, DiskUtilityNotify).
+
+### (d) Memory baseline
+
+| | systemd --user (tester) | systemd --user (gdm-greeter) |
+|---|---|---|
+| Rss | 16.1 MB | 15.9 MB |
+| Pss | 6.1 MB | 5.3 MB |
+| Anon | 4.1 MB | 3.8 MB |
+| user@ cgroup | 75 processes, 56 unit cgroups | 44 processes, 30 unit cgroups |
+
+Estimate for the s6 version from the 2026-10-21 system measurements: about 126 KiB PSS per s6-supervise, ~7.4 MiB daemon, runners 0.2-1.9 MiB, ~140 KiB kernel per extra process. For the session (56 units) that is roughly 25-45 MiB, against 6 MiB PSS today, and about half that per greeter. An estimate, to be measured in slice A.
+
+### (e) Gap list and what it changes in the plan
+
+1. **The transaction engine is the core of the work, not "semantics".** Needed: Requisite joined with queued starts, Conflicts= (stop on start), PartOf= and BindsTo= stop propagation, StopWhenUnneeded=, OnFailure= with OnFailureJobMode=, job modes fail/replace/replace-irreversibly, RefuseManualStart against dependency starts, STOPPING=1 from Type=notify. Today only dynamic instances stop their Conflicts= before starting; the rest is accepted, not acted on. This also helps the system side, which ignores the same settings.
+2. **s6-rc's static database doesn't fit the session graph** (22 broken cycles, template instances started at runtime, teardown by Conflicts). Proposed: in user mode the daemon's dynamic engine owns all units, and s6-svscan only supervises processes; s6-rc only if a static base set is worth it. This weakens "s6-rc as the admin interface" for user units, so it is the owner's decision at G0.
+3. **Bus:** StopUnit dbus.service on the bus the manager is reached through (logout); signals UnitNew/UnitRemoved/JobNew/JobRemoved and PropertiesChanged on Unit/Service/Job objects. The leader's shutdown waits on them.
+4. **Transient services from dbus-broker** (20 per session): ExecStart/KillMode/CollectMode. systemd-run's transient services exist on the system side and need checking against these.
+5. **cgroup layout exactly as systemd's** (gnome-shell's own unit name, app scopes, uresourced's SetUnitProperties).
+6. **Unit file operations for user units** (DisableUnitFilesWithFlags).
+7. **Not on the bus:** sd_notify STOPPING=1 and STATUS=, the leader FIFO (files only, nothing to do), environment generators, xdg-autostart units, the oomd varlink report.
+8. **System side, separate:** GetUnitByPIDFD (polkitd).
+
+**Gate G0 (owner):** (i) is a cost of roughly +20-40 MiB per user manager, greeter users included (estimated, measured in slice A), acceptable; (ii) the daemon's dynamic engine for user units instead of an s6-rc database (finding 2); (iii) do the transaction engine (finding 1) first on the system side, where it is testable with the existing suites, before slice A.
+
+### Current state
+
+main at 49c9b27 plus the step 0 tools and this entry, committed with this part.
+
+### Next steps
+
+1. Owner: decide G0 (i)-(iii).
+2. Independent of G0: GetUnitByPIDFD for polkitd on the system side.

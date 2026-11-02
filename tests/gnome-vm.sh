@@ -11,6 +11,8 @@
 #   tests/gnome-vm.sh ssh DIR [CMD...]   # as tester, who has passwordless sudo
 #   tests/gnome-vm.sh copy DIR FILE...   # into ~tester/in/
 #   tests/gnome-vm.sh screenshot DIR PNG # the screen, through QMP
+#   tests/gnome-vm.sh key DIR COMBO...   # keys as QEMU qcodes: meta_l, ret, ctrl-alt-t
+#   tests/gnome-vm.sh type DIR TEXT      # letters, digits, space, - . /
 #   tests/gnome-vm.sh stop DIR           # power off (kill after 60 s)
 #
 # Needs qemu-system-x86_64 and qemu-img, /dev/kvm, genisoimage, gpgv,
@@ -27,7 +29,7 @@ MEM=${VM_MEM:-4096}
 CPUS=${VM_CPUS:-4}
 
 usage() {
-    sed -n '2,23s/^# \{0,1\}//p' "$0" >&2
+    sed -n '2,25s/^# \{0,1\}//p' "$0" >&2
     exit 2
 }
 die() { echo "gnome-vm: $*" >&2; exit 1; }
@@ -218,27 +220,58 @@ XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user is-system-running
 XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user --failed --no-legend' 2>&1
 }
 
-screenshot() {
-    local out=${1:?screenshot needs a file name}
-    out=$(cd "$(dirname "$out")" && pwd)/$(basename "$out")
-    python3 - "$D/qmp.sock" "$out" <<'PY'
+# QMP commands, one JSON object per argument; fails on an error reply.
+qmp() {
+    python3 - "$D/qmp.sock" "$@" <<'PY2'
 import json, socket, sys
 s = socket.socket(socket.AF_UNIX)
 s.connect(sys.argv[1])
 f = s.makefile("rw")
-def cmd(c, **a):
-    f.write(json.dumps({"execute": c, "arguments": a} if a else {"execute": c}) + "\n"); f.flush()
+def send(c):
+    f.write(json.dumps(c) + "\n"); f.flush()
     while True:
         r = json.loads(f.readline())
         if "return" in r or "error" in r:
             return r
 json.loads(f.readline())  # greeting
-cmd("qmp_capabilities")
-r = cmd("screendump", filename=sys.argv[2], format="png")
-if "error" in r:
-    sys.exit("screendump: %s" % r["error"])
-PY
+send({"execute": "qmp_capabilities"})
+for a in sys.argv[2:]:
+    r = send(json.loads(a))
+    if "error" in r:
+        sys.exit("qmp: %s: %s" % (a, r["error"]))
+PY2
+}
+
+screenshot() {
+    local out=${1:?screenshot needs a file name}
+    out=$(cd "$(dirname "$out")" && pwd)/$(basename "$out")
+    qmp "{\"execute\": \"screendump\", \"arguments\": {\"filename\": \"$out\", \"format\": \"png\"}}"
     echo "gnome-vm: $out"
+}
+
+# Key combinations as QEMU qcodes joined by "-": meta_l, ret, ctrl-alt-t.
+key() {
+    local combo keys
+    for combo in "$@"; do
+        keys=$(echo "$combo" | tr '-' '\n' | sed 's/.*/{"type": "qcode", "data": "&"}/' | paste -sd,)
+        qmp "{\"execute\": \"send-key\", \"arguments\": {\"keys\": [$keys]}}"
+        sleep 0.1
+    done
+}
+
+# Text: letters, digits, space, - . / only.
+typetext() {
+    local text=$1 c q i
+    for ((i = 0; i < ${#text}; i++)); do
+        c=${text:i:1}
+        case $c in
+            [a-z0-9]) q=$c ;;
+            [A-Z]) q="shift-$(echo "$c" | tr 'A-Z' 'a-z')" ;;
+            ' ') q=spc ;; '-') q=minus ;; '.') q="dot" ;; '/') q=slash ;;
+            *) die "typetext: can't type '$c'" ;;
+        esac
+        key "$q"
+    done
 }
 
 stop() {
@@ -266,6 +299,8 @@ case $CMD in
         scp $(sshopts | sed 's/-p /-P /') "$@" tester@127.0.0.1:in/
         ;;
     screenshot) screenshot "$@" ;;
+    key) key "$@" ;;
+    type) typetext "$*" ;;
     stop) stop ;;
     *) usage ;;
 esac
