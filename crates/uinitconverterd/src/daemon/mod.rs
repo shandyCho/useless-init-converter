@@ -537,9 +537,11 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     let watcher = daemon.clone();
     tokio::spawn(async move {
         let mut last = HashMap::new();
+        let mut mtimes = HashMap::new();
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             watcher.watch_dynamic(&mut last).await;
+            watcher.watch_states(&mut mtimes, &mut last).await;
         }
     });
 

@@ -1105,11 +1105,33 @@ s6-ftrig-wait -t 5000 "$R/lw/svc/event" s >/dev/null 2>&1 \
 s6-svc -x "$R/lw/svc"
 
 section "job side effects"
+# ActiveState values from PropertiesChanged on a unit's object, for a while
+# (the GNOME session leader waits on these for a target stopped by Conflicts=).
+watch_state() {
+    timeout "$2" python3 -c '
+import sys
+from gi.repository import Gio, GLib
+c = Gio.DBusConnection.new_for_address_sync(sys.argv[1], Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+def cb(conn, sender, path, iface, member, params):
+    v = params.unpack()[1].get("ActiveState")
+    if v:
+        print(v, flush=True)
+c.signal_subscribe(None, "org.freedesktop.DBus.Properties", "PropertiesChanged", sys.argv[2], None, 0, cb)
+print("ready", flush=True)
+GLib.MainLoop().run()' "unix:path=$R/bus" "$(upath "$1")" >"$3" 2>&1 &
+    tries=25
+    while [ $tries -gt 0 ] && ! grep -q ready "$3" 2>/dev/null; do tries=$((tries - 1)); sleep 0.2; done
+}
 call StartUnit ss cfa.service replace
 expect_state cfa.service active/running
+watch_state cfa.service 6 "$W/cfa-signals.out"
 call StartUnit ss cfb.service replace
 expect_state cfb.service active/running
 expect_state cfa.service inactive/dead
+tries=30
+while [ $tries -gt 0 ] && ! grep -qx inactive "$W/cfa-signals.out"; do tries=$((tries - 1)); sleep 0.2; done
+grep -qx inactive "$W/cfa-signals.out" && ok "PropertiesChanged ActiveState=inactive for the unit stopped by Conflicts=" \
+    || bad "no inactive PropertiesChanged for cfa: $(tr '\n' ' ' < "$W/cfa-signals.out")"
 call StopUnit ss cfb.service replace
 call StartUnit ss pparent.service replace
 call StartUnit ss pchild.service replace
@@ -1129,15 +1151,47 @@ call StopUnit ss swuuser.service replace
 tries=25
 while [ $tries -gt 0 ] && [ "$(state swu.service)" != inactive/dead ]; do tries=$((tries - 1)); sleep 0.2; done
 expect_state swu.service inactive/dead
+watch_state swt.target 8 "$W/swt-signals.out"
 call StartUnit ss swt.target replace
 tries=25
 while [ $tries -gt 0 ] && [ ! -s "$R/swtw.out" ]; do tries=$((tries - 1)); sleep 0.2; done
 expect_eq "the StopWhenUnneeded= target ran its Wants=" "$(cat "$R/swtw.out" 2>/dev/null)" "ran"
 expect_state swt.target inactive/dead
+tries=30
+while [ $tries -gt 0 ] && ! grep -qx inactive "$W/swt-signals.out"; do tries=$((tries - 1)); sleep 0.2; done
+expect_eq "the target's PropertiesChanged: active, then inactive" "$(grep -x 'active\|inactive' "$W/swt-signals.out" | uniq | tr '\n' ' ')" "active inactive "
 call StartUnit ss swt.target replace
 tries=25
 while [ $tries -gt 0 ] && [ "$(lines "$R/swtw.out")" -lt 2 ]; do tries=$((tries - 1)); sleep 0.2; done
 expect_eq "and can be started again" "$(lines "$R/swtw.out")" "2"
+
+call StartUnit ss nbound.service replace
+expect_state nstop.service active/running
+expect_state nbound.service active/running
+touch "$R/nstop.go"
+tries=50
+while [ $tries -gt 0 ] && [ "$(state nbound.service)" != inactive/dead ]; do tries=$((tries - 1)); sleep 0.2; done
+expect_state nstop.service inactive/dead
+expect_state nbound.service inactive/dead
+
+# polkitd's question for every caller (GetUnitByPIDFD), here for hello's main process.
+hp=$(prop hello.service Service MainPID)
+r=$(python3 -c '
+import os, sys
+from gi.repository import Gio, GLib
+c = Gio.DBusConnection.new_for_address_sync(sys.argv[1], Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+fds = Gio.UnixFDList.new()
+fds.append(os.pidfd_open(int(sys.argv[2])))
+r, _ = c.call_with_unix_fd_list_sync("org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "GetUnitByPIDFD", GLib.Variant("(h)", (0,)), None, 0, -1, fds, None)
+o, name, inv = r.unpack()
+print(o, name)' "unix:path=$R/bus" "$hp" 2>&1)
+# Unprivileged, the sandbox's services share the caller's cgroup, so the
+# unit is the host's; the answer must be GetUnitByPID's (as root, hello's).
+byp=$($B call $MGR GetUnitByPID u "$hp" | cut -d'"' -f2)
+case $r in
+    "$byp "*.service) ok "GetUnitByPIDFD answers as GetUnitByPID ($r)" ;;
+    *) bad "GetUnitByPIDFD: $r (GetUnitByPID: $byp)" ;;
+esac
 
 section "Accept=yes sockets"
 # One line to a unix socket, the first reply line back.

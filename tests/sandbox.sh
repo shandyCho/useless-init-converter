@@ -796,6 +796,22 @@ Type=oneshot
 ExecStart=/bin/sh -c 'echo ran >> $R/swtw.out'
 EOF
 
+# As gnome-session-monitor.service: a Type=notify service that sends
+# STOPPING=1, and a unit bound to it (gnome-session.target BindsTo= it).
+cat > "$U/nstop.service" <<EOF
+[Service]
+Type=notify
+NotifyAccess=all
+ExecStart=/bin/sh -c 'systemd-notify --ready; while [ ! -e $R/nstop.go ]; do sleep 0.2; done; systemd-notify STOPPING=1; exec sleep 1000'
+EOF
+cat > "$U/nbound.service" <<EOF
+[Unit]
+BindsTo=nstop.service
+After=nstop.service
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+
 # --- Accept=yes sockets: one template instance per connection ---
 # Like polkit-agent-helper.socket (StandardInput/Output=socket, a unix
 # ListenStream=). "hold" keeps the connection open until echo.release

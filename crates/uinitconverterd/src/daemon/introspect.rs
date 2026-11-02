@@ -4,6 +4,7 @@ pub const MANAGER: &str = r#"
  <interface name="org.freedesktop.systemd1.Manager">
   <method name="GetUnit"><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
   <method name="GetUnitByPID"><arg type="u" direction="in"/><arg type="o" direction="out"/></method>
+  <method name="GetUnitByPIDFD"><arg type="h" direction="in"/><arg type="o" direction="out"/><arg type="s" direction="out"/><arg type="ay" direction="out"/></method>
   <method name="LoadUnit"><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
   <method name="StartUnit"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
   <method name="StopUnit"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="o" direction="out"/></method>

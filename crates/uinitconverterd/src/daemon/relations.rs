@@ -5,7 +5,10 @@
 //! StopWhenUnneeded=. The GNOME session's start and teardown rely on these
 //! (work_history part 137).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::time::SystemTime;
+
+use zbus::zvariant::Value;
 
 use super::Daemon;
 use crate::loader::{Loader, Unit};
@@ -182,6 +185,83 @@ impl Daemon {
         // What a stop made unneeded in turn.
         if stopped {
             Box::pin(self.stop_unneeded(depth + 1)).await;
+        }
+    }
+
+    /// PropertiesChanged (ActiveState, SubState) for a unit now. Targets
+    /// call it from their start and stop; units with a runner are found by
+    /// watch_states().
+    pub(super) async fn emit_state(&self, id: &str) {
+        let (_, unit) = self.load_unit(id);
+        let active = self.active_atoms().await;
+        let st = self.unit_status(id, &active, &unit).await;
+        let mut changed: HashMap<String, Value<'static>> = HashMap::new();
+        changed.insert("ActiveState".into(), Value::from(st.active.to_string()));
+        changed.insert("SubState".into(), Value::from(st.sub.to_string()));
+        self.emit(
+            &super::unit_path(id),
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            &(
+                "org.freedesktop.systemd1.Unit",
+                changed,
+                Vec::<String>::new(),
+            ),
+        )
+        .await;
+    }
+
+    /// State changes not caused by a job on that unit (a service that
+    /// exited, a stop by Conflicts= or PartOf=): the runner's state files
+    /// are replaced by rename, so a unit's directory mtime moves at every
+    /// change. Each tick, the units whose directory changed get their state
+    /// recomputed and, if it differs from the last one sent (`last`, shared
+    /// with watch_dynamic), a PropertiesChanged. The leader of a GNOME
+    /// session waits on exactly that for graphical-session-pre.target.
+    pub(super) async fn watch_states(
+        &self,
+        mtimes: &mut HashMap<String, SystemTime>,
+        last: &mut HashMap<String, (String, String)>,
+    ) {
+        let Ok(rd) = std::fs::read_dir(self.cfg.run_dir.join("units")) else {
+            return;
+        };
+        let first = mtimes.is_empty();
+        let mut changed = Vec::new();
+        for e in rd.flatten() {
+            let Ok(m) = e.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            let name = e.file_name().to_string_lossy().into_owned();
+            if mtimes.insert(name.clone(), m) != Some(m) && !first {
+                changed.push(name);
+            }
+        }
+        if changed.is_empty() {
+            return;
+        }
+        let mut active = self.active_atoms().await;
+        for name in changed {
+            let (id, unit) = self.load_unit(&name);
+            if !unit.is_loaded() || self.dynamic_kind(&id).is_some() {
+                continue; // watch_dynamic reports those
+            }
+            if crate::state::for_unit(&self.cfg.run_dir, &id).take(crate::state::keys::STOPPING)
+                && self.is_up(&id, &unit).await
+            {
+                eprintln!("uinitconverterd: {id} sent STOPPING=1, stopping it");
+                let lock = self.unit_lock(&id);
+                let _guard = lock.lock().await;
+                Box::pin(self.run_job(&id, &unit, "stop", "replace")).await;
+                active = self.active_atoms().await;
+            }
+            let st = self.unit_status(&id, &active, &unit).await;
+            let cur = (st.active.to_string(), st.sub.to_string());
+            if last.get(&id) == Some(&cur) {
+                continue;
+            }
+            last.insert(id.clone(), cur);
+            self.emit_state(&id).await;
         }
     }
 }

@@ -1011,6 +1011,7 @@ impl Daemon {
                 self.started_targets.lock().unwrap().insert(id.to_string());
                 self.stopped_targets.lock().unwrap().remove(id);
                 if !isolate && self.start_bundle_beside(id).await {
+                    self.emit_state(id).await;
                     return "done";
                 }
                 let mut names = vec![id.to_string()];
@@ -1046,6 +1047,7 @@ impl Daemon {
                 if !isolate {
                     self.start_inactive_members(id, unit, &active).await;
                 }
+                self.emit_state(id).await;
                 "done"
             }
             Some(Kind::Oneshot) => {
@@ -1215,6 +1217,7 @@ impl Daemon {
             Some(Kind::Bundle) => {
                 self.started_targets.lock().unwrap().remove(id);
                 self.stopped_targets.lock().unwrap().insert(id.to_string());
+                self.emit_state(id).await;
                 "done"
             }
             Some(kind) => {

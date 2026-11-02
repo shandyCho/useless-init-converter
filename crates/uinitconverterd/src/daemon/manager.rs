@@ -189,6 +189,38 @@ impl Daemon {
                     )),
                 }
             }
+            // polkitd asks this for every caller, then reads the unit's
+            // NoNewPrivileges.
+            "GetUnitByPIDFD" => {
+                use std::os::fd::AsRawFd;
+                let (fd,): (zbus::zvariant::OwnedFd,) = Self::args(msg)?;
+                let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))
+                    .unwrap_or_default();
+                let pid = info
+                    .lines()
+                    .find_map(|l| l.strip_prefix("Pid:"))
+                    .and_then(|p| p.trim().parse::<i64>().ok())
+                    .filter(|&p| p > 0)
+                    .ok_or_else(|| err(E_NO_UNIT_FOR_PID, "Not a pidfd of a running process."))?
+                    as u32;
+                match util::proc_cgroup(pid).and_then(|cg| unit_of_cgroup(&cg)) {
+                    Some(u) => {
+                        self.mac_unit(c, msg, &u, "status").await?;
+                        let inv = state::for_unit(&self.cfg.run_dir, &u)
+                            .get(keys::INVOCATION)
+                            .unwrap_or_default();
+                        let bytes: Vec<u8> = (0..inv.len() / 2)
+                            .filter_map(|i| u8::from_str_radix(inv.get(i * 2..i * 2 + 2)?, 16).ok())
+                            .collect();
+                        self.reply(c, msg, &(op(unit_path(&u)), u.clone(), bytes))
+                            .await
+                    }
+                    None => Err(err(
+                        E_NO_UNIT_FOR_PID,
+                        format!("PID {pid} does not belong to any loaded unit."),
+                    )),
+                }
+            }
             "StartUnit"
             | "StopUnit"
             | "ReloadUnit"

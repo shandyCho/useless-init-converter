@@ -10689,3 +10689,23 @@ Owner: "go with your recommendations, start with the transaction engine", then "
 **Not done yet (next increments):** job modes (fail, replace-irreversibly), OnFailureJobMode=, Requisite= joined with queued starts, STOPPING=1 from Type=notify, PropertiesChanged and Unit/Job signals for state changes not caused by a job on that unit, RefuseManualStart= against dependency starts; then GetUnitByPIDFD; then slices A-E.
 
 **Not measured:** the cost of `reverse()` (it scans the known units, with readdirs for wants/requires) on a real system with ~500 units; the sandbox timing didn't change noticeably.
+
+## 2026-11-03, part 139: transaction engine, increment 2 (state signals, STOPPING=1, GetUnitByPIDFD)
+
+- **PropertiesChanged for every state change** (`watch_states`, relations.rs). The runner's state files are written by rename, so a unit directory's mtime moves at every change. In the existing 1 s watcher loop, the units whose RUN_DIR/units/<unit> mtime changed are re-read and get `PropertiesChanged(Unit: ActiveState, SubState)` if the state differs. The last-sent map is shared with watch_dynamic, so nothing is sent twice. Targets emit from their own start and stop (`emit_state`; there's no runner). Before, only a job's own unit got the signal, and the GNOME leader waits for graphical-session-pre.target's inactive, which comes from a Conflicts= stop.
+- **STOPPING=1** from a Type=notify service: the notify helper sets the `stopping-requested` state key; watch_states sees the change, takes the key and runs a stop job under the unit's lock (with increment 1's propagation). This is how gnome-session-monitor.service ends a session (gnome-session.target BindsTo= it).
+- **GetUnitByPIDFD** on the Manager: pid from /proc/self/fdinfo, unit from its cgroup as GetUnitByPID, reply (o, s, ay invocation id); added to the introspection data. polkitd calls it 40 times per login (part 137).
+- Tests (6 new):
+  - PropertiesChanged inactive for a unit stopped by Conflicts= (a Gio subscriber in check.sh)
+  - a StopWhenUnneeded target's signals: active, then inactive
+  - STOPPING=1 stopping nstop.service and the nbound.service bound to it
+  - GetUnitByPIDFD answering as GetUnitByPID. Unprivileged, the sandbox's services share the caller's cgroup, so both name the host's user@1000.service; the per-unit answer needs a root boot.
+- Docs pair: GetUnitByPIDFD and PropertiesChanged in the query list; STOPPING=1 in the job side effects paragraph.
+
+**Tests.** cargo test 108, fmt clean. Sandbox with SANDBOX_S6NET_BIN: 370/370, SANDBOX_JOURNAL=no 377/377, SANDBOX_FDSTORE=no 358/358; without s6-tcpserverd 367/367.
+
+**Left for the user-mode slices** (they matter there, not on the system side):
+- dynamic instances' start_deps don't read .wants/.requires links (gnome-session.target.wants);
+- job modes (fail, replace-irreversibly) are accepted and run as replace;
+- Requisite= is started like Requires= (right inside one transaction, which is GNOME's use);
+- UnitNew/UnitRemoved/JobNew for side-effect jobs.

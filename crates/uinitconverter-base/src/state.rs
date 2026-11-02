@@ -87,6 +87,9 @@ pub mod keys {
     pub const NOTIFY_SOCKET: &str = "notify";
     /// Count of RELOADING=1 ... READY=1 cycles seen by the notify helper
     /// (Type=notify-reload); a reload waits for it to go up.
+    /// STOPPING=1 from a Type=notify service: the daemon stops the unit
+    /// (and what is bound to it) as systemd does; set by the notify helper.
+    pub const STOPPING: &str = "stopping-requested";
     pub const RELOADS_DONE: &str = "reloads-done";
     /// The start failed (s6-rc was still told "ready" so wanted-by units go on).
     pub const START_FAILED: &str = "start-failed";

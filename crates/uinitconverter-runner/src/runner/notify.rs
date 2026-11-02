@@ -235,6 +235,11 @@ impl NotifyHelper {
                             keys::RELOADS_DONE,
                             &(st.get_u64(keys::RELOADS_DONE) + 1).to_string(),
                         );
+                    } else if line == "STOPPING=1" {
+                        // The daemon sees the state change and stops the
+                        // unit; BindsTo=/PartOf= units follow (gnome-session
+                        // monitor's logout).
+                        st.set(keys::STOPPING, "1");
                     } else if let Some(s) = line.strip_prefix("STATUS=") {
                         st.set(keys::STATUS_TEXT, s);
                     } else if let (Some(n), false) =
