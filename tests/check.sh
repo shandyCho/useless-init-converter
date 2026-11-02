@@ -1162,6 +1162,31 @@ call StartUnit ss echo.socket replace
 expect_state echo.socket active/listening
 r=$(cli "$R/echo.sock" again)
 case $r in "echo:again "*"inst=3-"*) ok "restarted socket serves, numbering goes on" ;; *) bad "reply after restart: $r" ;; esac
+# Connection instances as units: listed, with their state and main
+# process while they run, and stopped by `systemctl stop`.
+rm -f "$R/echo.release"
+cli "$R/echo.sock" hold >"$W/accept-hold2.out" &
+holdpid=$!
+wait_file "$R/echo.hold" "^4-" && ok "second held connection running" || bad "hold instance 4 didn't start"
+inst=echo@$(grep '^4-' "$R/echo.hold").service
+expect_state "$inst" active/running
+mainpid=$(prop "$inst" Service MainPID)
+grep -q "echo.py" "/proc/$mainpid/cmdline" 2>/dev/null && ok "MainPID is the connection's ExecStart= process" \
+    || bad "$inst MainPID $mainpid: $(tr '\0' ' ' < "/proc/$mainpid/cmdline" 2>/dev/null)"
+$B call $MGR ListUnits | grep -q "\"$inst\"" && ok "ListUnits lists the running connection" || bad "$inst not in ListUnits"
+if [ -n "$SR" ]; then
+    scl() { SYSTEMCTL=$(dirname "$SR")/systemctl "$(dirname "$0")/systemctl.sh" "$@" 2>&1; }
+    scl list-units 'echo@*' --plain --legend=no | grep -q "^$inst *loaded *active *running" \
+        && ok "systemctl list-units shows the connection" || bad "list-units echo@*: $(scl list-units 'echo@*' --plain --legend=no)"
+    scl status "$inst" | grep -q "Main PID: $mainpid" \
+        && ok "systemctl status shows its main PID" || bad "status $inst: $(scl status "$inst")"
+fi
+call StopUnit ss "$inst" replace
+wait "$holdpid"
+expect_state "$inst" inactive/dead
+wait_file "$R/echo.post" "^4-.* success$" && ok "stopped connection: ExecStopPost= ran, SERVICE_RESULT=success" || bad "echo.post: $(cat "$R/echo.post" 2>/dev/null)"
+$B call $MGR ListUnits | grep -q "\"$inst\"" && bad "$inst still listed after it ended" || ok "an ended connection is no longer listed"
+expect_eq "NConnections after the stop" "$(prop echo.socket Socket NConnections)" "0"
 sleep 0.5
 left=$(find "$R/run/units" -maxdepth 1 \( -name 'echo@*' -o -name 'rawfd@*' \) | wc -l)
 expect_eq "no instance state left behind" "$left" "0"
@@ -1201,7 +1226,7 @@ else
 fi
 if [ -n "$SR" ]; then
     st=$(SYSTEMCTL=$(dirname "$SR")/systemctl "$(dirname "$0")/systemctl.sh" status echo.socket 2>&1)
-    echo "$st" | grep -q "Listen: $R/echo.sock (Stream)" && echo "$st" | grep -q "Accepted: 4; Connected: 0" \
+    echo "$st" | grep -q "Listen: $R/echo.sock (Stream)" && echo "$st" | grep -q "Accepted: 5; Connected: 0" \
         && ok "systemctl status shows Listen: and the connection counts" || bad "systemctl status echo.socket: $st"
 fi
 

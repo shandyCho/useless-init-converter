@@ -10320,3 +10320,33 @@ main at 6f6ff7a plus this part's commit. Installed and booted: 3eed142 (0.2.1 co
 1. Owner: download the two new tarballs (README step 2's loop does it), rebuild the skarnet RPMs and uinitconverter, install. Then `uinitconverter plan | grep -i accept`, the TESTING rows "Accept=yes sockets" (pkexec) and "Accept=yes TCP (optional)" (sshd.socket), and `ausearch -m AVC -ts recent`.
 2. Later, if wanted: connection instances visible as units (phase 3).
 3. Earlier steps unchanged: fresh-install VM and QEMU full-boot test (parts 106, 89); service restart and shutdown on a relabeled system (part 128).
+
+## 2026-11-02, part 133: Accept=yes phase 3, connection instances as units
+
+Owner: "could you start phase 3?" (part 130's phase 3: instances visible as units).
+
+**What changed:**
+- daemon, new `daemon/accept.rs`:
+  - `connections()`: for each `.socket` in the index, the files in its `connections/` dir whose runner pid is alive (kill 0, EPERM counts as alive).
+  - `connection(id)`, `connection_status()`: active/running with MainPID while MAIN_PID is set; deactivating/stop-post once EXEC_MAIN_EXIT is stamped; activating/start before.
+  - `stop_connection()`: KillSignal= to MAIN_PID, or to the runner's children (/proc/PID/task/*/children) before ExecStart=. Waits for the connection file to go, SIGKILL after TimeoutStopSec= (at least 1 s); result "timeout" 10 s after that. Emits UnitRemoved.
+- Wiring: known_units adds running connections (ListUnits, list-units). unit_status checks for a connection before the dynamic-instance branch. run_job handles a connection before the dynamic branch, because can_be_dynamic() is true for any template instance, so a stop would otherwise have gone to dyn_stop, an s6 service that doesn't exist. stop → stop_connection; start/try-restart/reload-or-try-restart → done; restart/reload → failed.
+- runner: spawn_wait records MAIN_PID and stamps ACTIVE_ENTER for the ExecStart= child of a connection. run_connection clears MAIN_PID and stamps EXEC_MAIN_EXIT right after ExecStart=. An ExecStart= ended by SIGTERM/SIGHUP/SIGINT/SIGPIPE is clean (Runner::is_clean, as for services), so a stopped connection's SERVICE_RESULT is success.
+- Tests: 10 sandbox checks (systemctl ones only with SR) on a fifth echo connection: state active/running; MainPID is echo.py; ListUnits lists it; real systemctl list-units and status (Main PID); StopUnit gives inactive/dead and SERVICE_RESULT=success in ExecStopPost=; not listed afterwards; NConnections 0. The socket status check now expects Accepted: 5.
+- Docs: docs/etc pair (instances as units, stop, clean signals; not implemented: finished/failed instances aren't kept, restart/reload of a connection fail), TESTING pair (sshd row: list-units with a session open).
+
+**Decision:** an instance disappears when its connection ends, even a failed one. systemd keeps failed Accept=yes instances until reset-failed (that is how failed sshd@ units pile up on systemd), so `systemctl --failed` differs. Keeping them would need the instance state kept and reset-failed support; not done, documented.
+
+**Tests.** cargo test 108 (no new unit tests; the daemon parts need the sandbox), fmt clean; standalone 10, 7, 6, 10. Sandbox with SANDBOX_S6NET_BIN: 352/352, SANDBOX_JOURNAL=no 359/359, SANDBOX_FDSTORE=no 340/340. Without s6-tcpserverd: 349/349. shellcheck and bash -n clean.
+
+**Not verified (root/real machine):** stop of a connection whose processes switched user (KillSignal= from the root daemon should reach them); KillMode= for a stop (only the main process is signalled; the runner's cleanup then kills the cgroup's leftovers as root).
+
+### Current state
+
+main at 66b5df2 plus this part's commit. Installed and booted: 3eed142 (0.2.1 code). 0.2.2 released.
+
+### Next steps
+
+1. Owner: review and commit; then part 132's step 1 on the machine (RPMs, plan, the two TESTING rows, AVCs), with `systemctl list-units 'sshd@*'` during an ssh session.
+2. Only if wanted: keep failed connection instances until reset-failed.
+3. Earlier steps unchanged: fresh-install VM and QEMU full-boot test (parts 106, 89); service restart and shutdown on a relabeled system (part 128).

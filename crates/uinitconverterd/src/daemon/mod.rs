@@ -5,6 +5,7 @@
 //! Dispatch is done by hand (no zbus ObjectServer) because systemd clients
 //! rely on details such as Properties.GetAll("") returning every interface.
 
+mod accept;
 mod access;
 mod caller;
 mod devices;

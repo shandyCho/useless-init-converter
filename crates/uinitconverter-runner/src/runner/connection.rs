@@ -340,10 +340,14 @@ impl Runner {
             self.conn_main.set(true);
             let r = self.run_list("ExecStart", &[]);
             self.conn_main.set(false);
+            self.st.clear(keys::MAIN_PID);
+            self.st.stamp(keys::EXEC_MAIN_EXIT);
             // The client sees the end of the connection now, not after
             // ExecStopPost=.
             self.close_conn();
-            if let Err(st) = r {
+            // As for a service's main process: SIGTERM (a stop), SIGHUP,
+            // SIGINT and SIGPIPE are clean.
+            if let Err(st) = r.or_else(|st| if self.is_clean(st) { Ok(()) } else { Err(st) }) {
                 failed = Some(st);
             }
         }
@@ -354,7 +358,9 @@ impl Runner {
             }
         }
         self.close_conn();
-        self.st.stamp(keys::EXEC_MAIN_EXIT);
+        if !self.st.has(keys::EXEC_MAIN_EXIT) {
+            self.st.stamp(keys::EXEC_MAIN_EXIT);
+        }
         let (result, status) = match failed {
             None => {
                 let _ = self.run_list("ExecStop", &[]);

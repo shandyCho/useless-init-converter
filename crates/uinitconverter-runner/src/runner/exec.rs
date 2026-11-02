@@ -479,6 +479,12 @@ impl Runner {
             log(self.id(), &format!("fork: {}", errno()));
             return Status::Exited(EXIT_EXEC);
         }
+        // A connection's ExecStart= process is its main process (the daemon
+        // shows it, and `systemctl stop` signals it).
+        if self.main_conn().is_some() {
+            self.st.set(keys::MAIN_PID, &pid.to_string());
+            self.st.stamp(keys::ACTIVE_ENTER);
+        }
         let Some(deadline) = self.deadline.get() else {
             return Status::from_wait(wait_pid(pid));
         };

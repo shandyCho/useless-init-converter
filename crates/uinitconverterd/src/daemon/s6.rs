@@ -365,6 +365,11 @@ impl Daemon {
             }
         }
 
+        if self.connection(id).is_some() {
+            self.connection_status(id, &mut s);
+            return s;
+        }
+
         if let Some(kind) = self.dynamic_kind(id) {
             if kind == Kind::Oneshot {
                 let up = self

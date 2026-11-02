@@ -1215,6 +1215,8 @@ impl Daemon {
         let mut v: Vec<String> = self.index.read().unwrap().units.keys().cloned().collect();
         v.extend(self.transient.lock().unwrap().keys().cloned());
         v.extend(self.dynamic.lock().unwrap().keys().cloned());
+        // Accept=yes connections, while they run.
+        v.extend(self.connections().into_iter().map(|(i, _, _)| i));
         v
     }
 }

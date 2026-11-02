@@ -232,6 +232,15 @@ impl Daemon {
                 return "done";
             }
         }
+        // A running Accept=yes connection: not an s6 service, and it can't
+        // be started again without its client.
+        if self.connection(id).is_some() {
+            return match jtype {
+                "stop" => self.stop_connection(id, unit).await,
+                "start" | "try-restart" | "reload-or-try-restart" => "done",
+                _ => "failed",
+            };
+        }
         if self.dynamic_kind(id).is_some() || self.can_be_dynamic(id, unit) {
             // Not unit_status(): it reports this very job as "activating", so
             // try-restart would start an inactive instance (user@UID after
