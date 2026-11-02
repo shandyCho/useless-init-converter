@@ -10350,3 +10350,85 @@ main at 66b5df2 plus this part's commit. Installed and booted: 3eed142 (0.2.1 co
 1. Owner: review and commit; then part 132's step 1 on the machine (RPMs, plan, the two TESTING rows, AVCs), with `systemctl list-units 'sshd@*'` during an ssh session.
 2. Only if wanted: keep failed connection instances until reset-failed.
 3. Earlier steps unchanged: fresh-install VM and QEMU full-boot test (parts 106, 89); service restart and shutdown on a relabeled system (part 128).
+
+## 2026-11-02, part 134: plan, a GNOME session without `systemd --user` (no code)
+
+**Decision changed by the owner:** "let's change GNOME session without systemd --user". This reverses decision 3 at the top of this file (real `systemd --user` in `user@UID.service`); it fits the s6-native goal. systemd-logind stays (elogind gains nothing here). Fedora's packages stay unmodified; no GNOME patches.
+
+**Facts this plan rests on** (from this session's review of a plan the owner discussed with another AI; GNOME 51.0, gnome-shell 51.1, systemd 262.1 on this machine):
+- GNOME's calls into the user manager:
+  - gnome-session-init-worker: GetUnit, StartUnit, UnsetAndSetEnvironment
+  - gnome-session-service: SetEnvironment, sd_notify
+  - gnome-session-ctl: StartUnit, StopUnit, sd_notify
+  - libshell-51: GetUnit, StartUnit, StopUnit, JobRemoved, sd_pid_get_user_unit
+  - libmutter-51: sd_pid_get_user_unit
+  - libgnome-desktop-3/4 and flatpak: StartTransientUnit (app scopes)
+
+  uinitconverterd already implements all of these for the system manager, plus dbus-broker's ActivationRequest.
+- /usr/lib/systemd/user: 192 units, of which 57 are Type=dbus, 12 Type=notify, 1 Type=notify-reload. GNOME units use PartOf= 49, Requisite= 45, CollectMode= 35, RefuseManualStart= 26, Slice= 19, ExecStopPost= 19, OnFailure= 8, Conflicts= 5, BindsTo= 5, ConditionEnvironment= 2.
+- The user bus is dbus-broker (`dbus.socket` + `dbus-broker.service` user units). 37 of the 87 session D-Bus services use SystemdService=, so activation needs the user manager.
+- User generators: systemd-xdg-autostart-generator (GNOME's autostart .desktop files become units) and podman-user-generator.
+- user@.service: User=%i, PAMName=systemd-user, Type=notify-reload, ReloadSignal=RTMIN+25, Delegate=pids memory cpu, DelegateSubgroup=init.scope, KillMode=mixed, TimeoutStopSec=60s.
+- SELinux: uinitconverter's binaries are init_exec_t like systemd's. "unconfined_t + init_exec_t stays unconfined_t" (computed when the s6 tree was moved into init_t, see that entry), so a user-mode stack exec'd in the user's domain stays there. Confined users and the greeter's domain are not checked.
+- GDM's greeter users (gdm-greeter-N, dynamic userdb users) each get user@.service. So the greeter is in the first milestone, not later.
+
+**Shape:** a user mode of the existing stack, not new projects. `user@UID.service` runs a launcher. The launcher starts a per-user s6-svscan and s6-rc compiled from the user unit directories, then runs uinitconverterd in user mode, which owns `org.freedesktop.systemd1` on the user bus and `$XDG_RUNTIME_DIR/systemd/private`. The runner runs user units, and user timers go through uinitconverter-timers. Selection is `USER_MANAGER=systemd|s6` with a kernel-command-line override and an automatic fallback to the real `systemd --user`, as for dbus-broker in part 39: a broken user manager would mean no login at all.
+
+### Steps
+
+0. **Measure before building.**
+   - With the real `systemd --user`: `busctl --user monitor org.freedesktop.systemd1` and `--match` on the user bus from greeter, login, launching an app and a flatpak, logout. That gives every method, property and signal GNOME uses. Same for logind's calls into the user manager, if any.
+   - Run the generator's `plan` over the user unit path (192 units plus generator output). That gives every setting and its support status.
+   - Output: a gap list (supported / missing / not needed). Done when each GNOME call and setting is classified.
+1. **User-scope configuration.** Config defaults for a user instance:
+   - unit path ~/.config/systemd/user, /etc/systemd/user, $XDG_RUNTIME_DIR/systemd/user, /run/systemd/user, /usr/lib/systemd/user, plus the generator output dirs
+   - RUN_DIR, live dir and scandir under $XDG_RUNTIME_DIR/uinitconverter; repo/state under ~/.local/state/uinitconverter (or a cache under /var/lib per UID; decide in step 4)
+   - no EXCLUDE of system services; user preset path; `default.target` resolution
+
+   Unit tests.
+2. **Generator in user mode.** Translate user units: user DefaultDependencies (basic.target, no sysinit), `Slice=` inside the user tree, the user `sockets.target`/`timers.target`/`paths.target`. Run the user generators (xdg-autostart, podman) into $XDG_RUNTIME_DIR first, as systemd does at start and on daemon-reload. Check against the 192 real units: `plan` with no unexplained skips for GNOME's units.
+3. **GNOME's unit semantics** (from step 0's gap list; today some keys are only accepted):
+   - PartOf= (stop and restart propagate)
+   - Requisite= (fail if not active, don't start)
+   - OnFailure= (gnome-session-failed)
+   - CollectMode=
+   - Conflicts= (enforced at least for user units)
+   - ConditionEnvironment=
+   - Type=dbus readiness on the user bus
+   - RefuseManualStart=
+
+   Sandbox tests with copies of GNOME's units and stub programs.
+4. **Launcher `uinitconverter-user`** (a new core executable, so its own RPM, or a subcommand of an existing one; decide here):
+   - Start: from user@'s environment (PAM env, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS), run the generators, compile or reuse the per-user database, then s6-svscan, s6-rc init, uinitconverterd --user, and start `default.target`'s bundle. Send READY=1 to the system manager (user@ is notify-reload).
+   - Reload: RTMIN+25 → RELOADING=1, regenerate, s6-rc-update, READY=1. The system side's `systemctl reload user@*.service` on package updates already waits for this.
+   - Stop: SIGTERM → stop everything in s6-rc order within TimeoutStopSec=60s, kill leftovers in the delegated cgroup, exit.
+5. **Runner in user mode.**
+   - Not root: no User=/PAMName=/sandbox namespaces that need root (what systemd --user can't do either: user namespaces where allowed).
+   - cgroups under the delegated `user@UID.service` subtree, read from /proc/self/cgroup, not from `/sys/fs/cgroup/system.slice`. Layout as systemd: app.slice, session.slice, background.slice, `init.scope` for the manager itself, so sd_pid_get_user_unit and systemd-oomd see the usual names.
+   - Journal stream as the user.
+6. **Daemon in user mode.**
+   - Bus: dbus-broker is one of the user units, so the daemon starts before the bus, serves the private socket at once, and takes `org.freedesktop.systemd1` on the user bus when it appears. It answers ActivationRequest; SystemdService= units start through s6-rc.
+   - Manager environment: SetEnvironment/UnsetAndSetEnvironment/UnsetEnvironment feed what later units get, as systemd's manager environment.
+   - Transient scopes and slices in the user tree, with PIDFDs (app scopes, flatpak).
+   - Access: the owning user (and root), not polkit.
+   - Unit and Job objects, JobRemoved, and GetUnit by PID (from the cgroup path).
+7. **Selection and fallback.**
+   - `USER_MANAGER=systemd|s6` in uinitconverter.conf (default systemd until step 10 passes), set by `uinitconverter init --user-manager=`, plus `uinitconverter.user_manager=` on the kernel command line for one boot.
+   - The runner, when it starts user@UID.service, execs the launcher instead of `/usr/lib/systemd/systemd --user`.
+   - Fallback to the real one after N failed starts per UID in this boot, with the reason in the log (part 39's pattern).
+8. **SELinux.** Check the domain of the launcher, s6-svscan and the daemon after user@'s exec: unconfined_t, the greeter user's domain, and a confined user (user_t/staff_t). Check the labels of what they create in $XDG_RUNTIME_DIR. Fix in dist/selinux/uinitconverter.cil if needed (no skarnet changes).
+9. **Tests.**
+   - Sandbox: a user-mode instance. The sandbox already runs unprivileged, so it is close to a user manager. Cover the bus bootstrap, ActivationRequest, SetEnvironment, transient app scopes, reload and stop.
+   - Then real-boot rows in the TESTING pair: greeter, login, gnome-shell up, launch an app (check its app-*.scope), a flatpak, `systemctl --user` / `systemd-run --user`, autostart entries, a user-unit package update (reload), logout, a second user and a user switch, power off from the menu, and the fallback (break the launcher on purpose).
+10. **Switch the default and document.** After step 9 on this machine: USER_MANAGER=s6 as the default for new installs; docs pairs (README "systemd --user still runs" lines, docs/etc's "GNOME and the user manager" section); packaging (new RPM and Requires if the launcher is its own executable).
+
+**Risks:** GNOME calls or semantics not seen in step 0 (rare paths: crash handling, gnome-session-failed); a broken user manager locks every user out (hence the fallback, and default systemd until step 10); systemd-oomd and other tools expecting systemd's user cgroup names; podman/toolbox using `systemd --user` features (linger, `systemd-run --user --scope`).
+
+### Current state
+
+main at 4af52d9 plus this entry, uncommitted. Plan only.
+
+### Next steps
+
+1. Owner: confirm the plan, then step 0. It needs the owner's GNOME session for the busctl monitor; a script that collects it can be written first.
+2. Earlier steps unchanged: fresh-install VM and QEMU full-boot test (parts 106, 89); service restart and shutdown on a relabeled system (part 128); part 132's on-machine checks of the Accept=yes work.
