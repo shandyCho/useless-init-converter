@@ -111,6 +111,23 @@ pub struct Config {
     /// every unit runs through the daemon's dynamic engine, without an s6-rc
     /// database (work_history parts 136-137).
     pub user_mode: bool,
+    /// The cgroup units go under (CGROUP_BASE=): a user manager's delegated
+    /// user@UID.service. None: the cgroup2 root, as the system manager.
+    pub cgroup_base: Option<PathBuf>,
+    /// What user@UID.service runs (`uinitconverterd user-manager`):
+    /// "systemd" (`systemd --user`) or "s6" (uinitconverter's user mode).
+    /// The kernel command line's uinitconverter.user_manager= overrides it.
+    pub user_manager: String,
+    /// Globs of user units the s6 user manager does not run.
+    pub user_exclude: Vec<String>,
+}
+
+static CGROUP_BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Config::cgroup_base of this process's configuration (the cgroup code
+/// has no Config at hand).
+pub fn cgroup_base() -> Option<&'static Path> {
+    CGROUP_BASE.get().map(PathBuf::as_path)
 }
 
 /// The values INIT= accepts.
@@ -257,6 +274,9 @@ impl Config {
             udev_dir: Some(PathBuf::from("/run/udev")),
             udev_monitor: true,
             user_mode: false,
+            cgroup_base: None,
+            user_manager: "systemd".into(),
+            user_exclude: Vec::new(),
         }
     }
 
@@ -302,6 +322,18 @@ impl Config {
                 "RUN_DIR" => cfg.run_dir = PathBuf::from(&v),
                 "LOG_DIR" => cfg.log_dir = opt(&v),
                 "EXCLUDE" => cfg.exclude = v.split_whitespace().map(String::from).collect(),
+                "USER_MANAGER" => match v.as_str() {
+                    "systemd" | "s6" => cfg.user_manager = v.clone(),
+                    o => {
+                        return Err(format!(
+                            "{}: USER_MANAGER={o}: systemd or s6",
+                            path.display()
+                        ))
+                    }
+                },
+                "USER_EXCLUDE" => {
+                    cfg.user_exclude = v.split_whitespace().map(String::from).collect()
+                }
                 "EXCLUDE_ADD" => cfg.exclude.extend(v.split_whitespace().map(String::from)),
                 "INCLUDE" => cfg.include = v.split_whitespace().map(String::from).collect(),
                 "DEP_MAP" | "DEP_MAP_ADD" => {
@@ -337,7 +369,16 @@ impl Config {
                 "JOURNAL_STDOUT" => cfg.journal_stdout = PathBuf::from(&v),
                 "UDEV_DIR" => cfg.udev_dir = opt(&v),
                 "UDEV_MONITOR" => cfg.udev_monitor = crate::unit::parse_bool(&v).unwrap_or(true),
-                "USER_MODE" => cfg.user_mode = crate::unit::parse_bool(&v).unwrap_or(false),
+                "CGROUP_BASE" => {
+                    cfg.cgroup_base = opt(&v);
+                    if let Some(b) = &cfg.cgroup_base {
+                        let _ = CGROUP_BASE.set(b.clone());
+                    }
+                }
+                "USER_MODE" => {
+                    cfg.user_mode = crate::unit::parse_bool(&v).unwrap_or(false);
+                    crate::loader::set_user_mode(cfg.user_mode);
+                }
                 "ALLOW_UIDS" => {
                     cfg.allow_uids = v
                         .split_whitespace()
@@ -443,6 +484,17 @@ impl Config {
         } else {
             format!(" --config {}", self.config_path.display())
         }
+    }
+
+    /// USER_MANAGER= as it applies on this boot: the kernel command line's
+    /// uinitconverter.user_manager= wins.
+    pub fn user_manager_now(&self, cmdline: &str) -> String {
+        cmdline
+            .split_whitespace()
+            .find_map(|w| w.strip_prefix("uinitconverter.user_manager="))
+            .filter(|v| matches!(*v, "systemd" | "s6"))
+            .map(str::to_string)
+            .unwrap_or_else(|| self.user_manager.clone())
     }
 
     pub fn is_excluded(&self, unit: &str) -> bool {

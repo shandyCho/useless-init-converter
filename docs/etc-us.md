@@ -522,6 +522,38 @@ machines are untested, so try it in a VM first. If login fails, check `journalct
 systemd-logind` and `journalctl -u user@1000.service` (or `uinitconverter
 log UNIT`, which also works with `JOURNAL=no`).
 
+### The s6 user manager (in progress)
+
+Work is under way to replace `systemd --user` too (the plan is in
+`work_history.md`, parts 136-141). `USER_MANAGER=s6` in
+`uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
+command line, makes the runner start `uinitconverterd user-manager` for
+`user@UID.service` instead of `systemd --user`; the unit file is not changed.
+`USER_MANAGER=systemd` (the default) or `uinitconverter.user_manager=systemd`
+keeps `systemd --user`. On a systemd boot the command always hands over to
+`systemd --user`, unless the kernel command line names `s6`.
+
+The user manager makes `$XDG_RUNTIME_DIR/uinitconverter` (its own
+`s6-svscan`, a configuration in user mode, the units' state), serves
+`$XDG_RUNTIME_DIR/systemd/private` at once (where `systemctl --user` looks
+first), starts `default.target` and tells `user@` it is ready. Units run
+from the user's search path (`~/.config/systemd/user`, `/etc/systemd/user`,
+`/usr/lib/systemd/user`, ...) with the user's specifiers (`%t`, `%h`, `%S`,
+...), under `user@UID.service/app.slice` (the manager itself is in
+`init.scope`). Sockets with `Accept=no` are units: `dbus.socket` listens,
+its service (dbus-broker) starts on the first client, and the manager goes on
+the user bus as `org.freedesktop.systemd1`. When the bus is stopped
+(`gnome-session-ctl --restart-dbus`), the socket listens again, the manager
+keeps serving the private socket and returns to the bus once it is back.
+`SIGHUP` rereads the unit files; `SIGTERM` (the stop of `user@`) stops every
+unit, the bus last. `USER_EXCLUDE=` lists globs of user units it does not
+run.
+
+Not done yet: GDM's greeter and a GNOME session (environment generators,
+`Type=dbus` readiness, xdg-autostart, app scopes), timers and paths,
+`Accept=yes` sockets, systemd-oomd reporting, SELinux for confined users.
+Keep the default until those are done.
+
 ## The `s6` command (s6-frontend)
 
 The system is managed with s6's own tools.
@@ -628,6 +660,7 @@ and defaults). The most important keys:
 - `INIT`: the init system units are translated for. Only `s6` exists yet; any other value stops every tool with a configuration error.
 - `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `uinitconverter init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. The shell scripts and s6 service definitions in `dist/` still run them by name.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
+- `USER_MANAGER`, `USER_EXCLUDE`: what `user@UID.service` runs, `systemd` (default) or `s6` (see [the s6 user manager](#the-s6-user-manager-in-progress); `uinitconverter.user_manager=` on the kernel command line wins), and the user units the s6 one leaves out.
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
 - `INCLUDE`: by default lets through the systemd services that work under uinitconverter: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight (screen/keyboard brightness kept across boots) and the sleep services. The radio state (rfkill) is kept by the `rfkill` s6 oneshot instead of systemd-rfkill: util-linux `rfkill` restores each device's soft block at boot and the state is saved at shutdown, in systemd-rfkill's own files (`/var/lib/systemd/rfkill/ID_PATH:TYPE`), so the systemd boot entry shares it. Unlike systemd-rfkill it saves only at a clean shutdown, and a device that appears after the boot's udev settle keeps its state.
 

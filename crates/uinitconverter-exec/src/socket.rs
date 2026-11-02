@@ -324,6 +324,11 @@ pub fn bind_all(sock: &Unit) -> Result<Vec<BoundSocket>, String> {
                 continue;
             }
             let _ = fs::remove_file(&link);
+            // Its directory too, as systemd's mkdir_parents_label (a user
+            // manager's $XDG_RUNTIME_DIR/varlink/registry is not there yet).
+            if let Some(dir) = Path::new(&link).parent() {
+                let _ = fs::create_dir_all(dir);
+            }
             if let Err(e) = std::os::unix::fs::symlink(&target, &link) {
                 eprintln!("uinitconverter: {}: symlink {link}: {e}", sock.id);
             }
@@ -353,6 +358,13 @@ pub fn mark_requested(run_dir: &Path, name: &str) -> std::io::Result<()> {
         fs::create_dir_all(d)?;
     }
     fs::write(p, "")
+}
+
+pub fn unmark_requested(run_dir: &Path, name: &str) -> std::io::Result<()> {
+    match fs::remove_file(requested_marker(run_dir, name)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
 }
 
 pub fn is_requested(run_dir: &Path, name: &str) -> bool {

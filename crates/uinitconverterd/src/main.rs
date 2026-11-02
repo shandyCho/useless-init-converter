@@ -15,6 +15,7 @@ pub(crate) use uinitconverter_gen as gen;
 pub(crate) use uinitconverter_install as install;
 
 mod daemon;
+mod user;
 
 use config::Config;
 
@@ -32,6 +33,10 @@ usage: uinitconverterd [--config PATH] [COMMAND] [ARGS]
                 at shutdown (the shutting-down marker exists): ask the
                 daemon to stop the on-demand instances (user@UID, ...) now,
                 before s6-rc stops the services they are ordered after
+  user-manager  what user@UID.service runs: the user's service manager
+                (s6-svscan and this daemon in user mode, under
+                $XDG_RUNTIME_DIR/uinitconverter), or `systemd --user` with
+                USER_MANAGER=systemd / uinitconverter.user_manager=systemd
   log UNIT [-f] show (or follow) a service's log: journalctl -u, or its
                 s6-log directory with JOURNAL=no
 ";
@@ -194,6 +199,7 @@ fn main() {
         o if o.starts_with("--") => serve(cfg, &args),
         "start" | "stop" | "restart" => client(&cfg, &cmd, rest),
         "stop-instances" => stop_instances(&cfg),
+        "user-manager" => user::main(&cfg, rest),
         "log" => log(&cfg, rest),
         other => die(&format!(
             "unknown command {other} (see uinitconverterd help)"

@@ -90,7 +90,11 @@ pub struct Transient {
 
 pub struct Daemon {
     pub cfg: Config,
-    conn: Connection,
+    /// The bus. A user manager runs before its bus exists and outlives a
+    /// bus restart (gnome-session-ctl --restart-dbus): None meanwhile.
+    conn: RwLock<Option<Connection>>,
+    /// The user manager is exiting: a stopped bus is not armed again.
+    pub exiting: AtomicBool,
     pub index: RwLock<Index>,
     pub jobs: Mutex<BTreeMap<u32, Job>>,
     pub next_job: AtomicU32,
@@ -260,12 +264,14 @@ impl Daemon {
         member: &str,
         body: &(impl serde::Serialize + zbus::zvariant::DynamicType),
     ) {
-        if let Err(e) = self
-            .conn
-            .emit_signal(None::<&str>, path, iface, member, body)
-            .await
-        {
-            eprintln!("uinitconverterd: emit {member}: {e}");
+        let bus = self.bus();
+        if let Some(conn) = bus {
+            if let Err(e) = conn
+                .emit_signal(None::<&str>, path, iface, member, body)
+                .await
+            {
+                eprintln!("uinitconverterd: emit {member}: {e}");
+            }
         }
         let peers: Vec<(u64, Connection)> = self.private.lock().unwrap().clone();
         for (id, p) in peers {
@@ -288,9 +294,31 @@ impl Daemon {
         }
     }
 
+    /// user@.service is Type=notify-reload: the reload is announced and
+    /// its end told with READY=1, as systemd --user does.
+    async fn user_reload(&self) {
+        util::sd_notify(&format!(
+            "RELOADING=1\nMONOTONIC_USEC={}",
+            util::now_monotonic_usec()
+        ));
+        let _ = self.reload_db().await;
+        util::sd_notify("READY=1");
+    }
+
+    pub(super) fn bus(&self) -> Option<Connection> {
+        self.conn.read().unwrap().clone()
+    }
+
     async fn reload_db(&self) -> Result<(), String> {
         self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(true,))
             .await;
+        // A user manager has no database: a reload rereads the unit files.
+        if self.cfg.user_mode {
+            self.invalidate_caches();
+            self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(false,))
+                .await;
+            return Ok(());
+        }
         let cfg = self.cfg.clone();
         let (plan, moving) = tokio::task::spawn_blocking(move || {
             let plan = gen::plan(&cfg);
@@ -395,8 +423,8 @@ impl Daemon {
         };
         if let Err(e) = res {
             eprintln!("uinitconverterd: activation of {name} failed: {}", e.msg);
-            let r = self
-                .conn
+            let Some(conn) = self.bus() else { return };
+            let r = conn
                 .emit_signal(
                     Some("org.freedesktop.DBus"),
                     "/org/freedesktop/DBus",
@@ -426,8 +454,10 @@ pub enum Bus {
     Address(String),
 }
 
-pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), String> {
-    let builder = match &bus {
+/// Connect, watch ActivationRequest and own BUS_NAME. The stream is made
+/// before the name is owned, so no call to it is missed.
+async fn connect_bus(bus: &Bus) -> Result<(Connection, MessageStream), String> {
+    let builder = match bus {
         Bus::System => zbus::connection::Builder::system(),
         Bus::Session => zbus::connection::Builder::session(),
         Bus::Address(a) => zbus::connection::Builder::address(a.as_str()),
@@ -437,7 +467,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         .build()
         .await
         .map_err(|e| format!("connecting to D-Bus: {e}"))?;
-    let mut stream = MessageStream::from(&conn);
+    let stream = MessageStream::from(&conn);
 
     let dbus = zbus::fdo::DBusProxy::new(&conn)
         .await
@@ -454,6 +484,31 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     conn.request_name(BUS_NAME)
         .await
         .map_err(|e| format!("cannot own {BUS_NAME}: {e}"))?;
+    Ok((conn, stream))
+}
+
+/// The user bus's socket, for an address of the form unix:path=P.
+fn bus_socket(bus: &Bus) -> Option<PathBuf> {
+    let Bus::Address(a) = bus else { return None };
+    a.split(';')
+        .next()?
+        .strip_prefix("unix:")?
+        .split(',')
+        .find_map(|kv| kv.strip_prefix("path="))
+        .map(PathBuf::from)
+}
+
+pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), String> {
+    // The system manager needs its bus to start. A user manager starts the
+    // bus itself (dbus.socket, then dbus.service), so it connects once the
+    // bus is there, and again after the bus restarts.
+    let (bus_tx, mut bus_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(Connection, MessageStream)>();
+    let first = if cfg.user_mode {
+        None
+    } else {
+        Some(connect_bus(&bus).await?)
+    };
 
     let manager_env = crate::envfile::load(&cfg.run_dir.join("manager.env"))
         .map(|v| v.into_iter().map(|(k, v)| format!("{k}={v}")).collect())
@@ -461,7 +516,8 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     let daemon = Arc::new(Daemon {
         index: RwLock::new(Index::load(&cfg)),
         cfg,
-        conn,
+        conn: RwLock::new(first.as_ref().map(|(c, _)| c.clone())),
+        exiting: AtomicBool::new(false),
         jobs: Mutex::new(BTreeMap::new()),
         next_job: AtomicU32::new(0),
         s6: s6::State::default(),
@@ -496,7 +552,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     if let Some(def) = daemon.index.read().unwrap().default_target.clone() {
         daemon.started_targets.lock().unwrap().insert(def);
     }
-    if daemon.index.read().unwrap().units.is_empty() {
+    if daemon.index.read().unwrap().units.is_empty() && !daemon.cfg.user_mode {
         eprintln!(
             "uinitconverterd: no generated database in {} (run `uinitconverter-gen reload`)",
             daemon.cfg.state_dir.display()
@@ -545,12 +601,42 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         }
     });
 
-    // A user manager has no s6-rc boot: it starts default.target itself.
+    let mut current: Option<(Connection, MessageStream)> = first;
+    // A user manager has no s6-rc boot: it starts default.target itself,
+    // and tells user@UID.service it is ready once that is done.
     if daemon.cfg.user_mode {
         let d = daemon.clone();
         tokio::spawn(async move {
             let r = d.start_any("default.target").await;
             eprintln!("uinitconverterd: user mode: default.target {r}");
+            util::sd_notify("READY=1\nSTATUS=Startup finished.");
+        });
+        let d = daemon.clone();
+        let tx = bus_tx.clone();
+        let sock = bus_socket(&bus);
+        tokio::spawn(async move {
+            let mut said = false;
+            loop {
+                let present = sock.as_ref().map(|p| p.exists()).unwrap_or(true);
+                if d.bus().is_none() && present && !d.exiting.load(Ordering::Relaxed) {
+                    match connect_bus(&bus).await {
+                        Ok((c, s)) => {
+                            eprintln!("uinitconverterd: user mode: on the bus, serving {BUS_NAME}");
+                            *d.conn.write().unwrap() = Some(c.clone());
+                            said = false;
+                            if tx.send((c, s)).is_err() {
+                                return;
+                            }
+                        }
+                        Err(e) if !said => {
+                            eprintln!("uinitconverterd: user mode: {e} (trying again)");
+                            said = true;
+                        }
+                        Err(_) => {}
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
         });
     }
 
@@ -575,11 +661,34 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
 
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|e| e.to_string())?;
+    // systemd --user reloads on SIGHUP and re-executes on SIGRTMIN+25
+    // (user@.service's ExecReload=): both reread the unit files here.
+    let mut hup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .map_err(|e| e.to_string())?;
+    let mut rtmin25 = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(
+        libc::SIGRTMIN() + 25,
+    ))
+    .map_err(|e| e.to_string())?;
     let mut stopping: Option<tokio::task::JoinHandle<()>> = None;
     let mut stopped = false;
     loop {
         tokio::select! {
+            _ = hup.recv(), if daemon.cfg.user_mode => daemon.user_reload().await,
+            _ = rtmin25.recv(), if daemon.cfg.user_mode => daemon.user_reload().await,
+            c = bus_rx.recv() => {
+                if let Some(c) = c {
+                    current = Some(c);
+                }
+            }
             _ = term.recv(), if stopping.is_none() => {
+                if daemon.cfg.user_mode {
+                    // The user's session ends: stop every unit, as systemd
+                    // --user does before it exits.
+                    daemon.exiting.store(true, Ordering::Relaxed);
+                    let d = daemon.clone();
+                    stopping = Some(tokio::spawn(async move { d.stop_all_user().await }));
+                    continue;
+                }
                 if !daemon.cfg.run_dir.join("shutting-down").exists() {
                     break;
                 }
@@ -594,13 +703,24 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
                 stopped = true;
                 break;
             }
-            m = stream.next() => {
-                let Some(m) = m else { break };
+            m = async { current.as_mut().unwrap().1.next().await }, if current.is_some() => {
+                let Some(m) = m else {
+                    if !daemon.cfg.user_mode {
+                        break;
+                    }
+                    // The bus stopped (a restart, or it failed): serve the
+                    // private socket meanwhile, connect again when it is back.
+                    eprintln!("uinitconverterd: user mode: the bus went away");
+                    *daemon.conn.write().unwrap() = None;
+                    current = None;
+                    continue;
+                };
                 let Ok(msg) = m else { continue };
                 match msg.message_type() {
                     MsgType::MethodCall => {
                         let d = daemon.clone();
-                        let peer = Peer { conn: d.conn.clone(), uid: None, pid: None, label: None };
+                        let conn = current.as_ref().unwrap().0.clone();
+                        let peer = Peer { conn, uid: None, pid: None, label: None };
                         tokio::spawn(d.handle_call(peer, msg));
                     }
                     MsgType::Signal => {
@@ -630,7 +750,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
             let _ = h.await;
         }
         Some(_) => {}
-        None if daemon.cfg.run_dir.join("shutting-down").exists() => {
+        None if daemon.cfg.run_dir.join("shutting-down").exists() && !daemon.cfg.user_mode => {
             daemon.stop_dynamic_at_shutdown().await
         }
         None => {}

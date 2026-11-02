@@ -310,10 +310,40 @@ impl Runner {
                 lines.len()
             ));
         }
-        execcmd::parse(&lines[0])?
+        let cmd = execcmd::parse(&lines[0])?
             .into_iter()
             .next()
-            .ok_or_else(|| "empty ExecStart=".into())
+            .ok_or_else(|| "empty ExecStart=".to_string())?;
+        Ok(self.user_manager_command(cmd))
+    }
+
+    /// USER_MANAGER=s6: user@UID.service runs uinitconverter's user manager
+    /// instead of `systemd --user` (work_history part 141). The unit file
+    /// stays as it is, so a systemd boot is not touched.
+    fn user_manager_command(&self, cmd: ExecCommand) -> ExecCommand {
+        let is_systemd_user = Path::new(&cmd.path).file_name() == Some("systemd".as_ref())
+            && cmd.argv.iter().any(|a| a == "--user");
+        if !self.unit.id.starts_with("user@") || !is_systemd_user {
+            return cmd;
+        }
+        let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
+        if self.cfg.user_manager_now(&cmdline) != "s6" {
+            return cmd;
+        }
+        let daemon = crate::config::tool_path("uinitconverterd")
+            .display()
+            .to_string();
+        let mut argv = vec![daemon.clone()];
+        if self.cfg.config_path != Path::new(crate::config::DEFAULT_CONFIG) {
+            argv.push("--config".into());
+            argv.push(self.cfg.config_path.display().to_string());
+        }
+        argv.push("user-manager".into());
+        ExecCommand {
+            path: daemon,
+            argv,
+            ..cmd
+        }
     }
 
     // ---- subcommands ----

@@ -55,8 +55,12 @@ impl Daemon {
         }
         // A user manager has no database: every service and target is run
         // by the dynamic engine.
+        // Accept=no sockets too: their service's runner holds them (see
+        // dyn_start_socket).
         if self.cfg.user_mode {
-            return matches!(unit.utype(), "service" | "target") && !self.cfg.is_excluded(id);
+            let socket = unit.utype() == "socket" && !unit.get_bool("Socket", "Accept", false);
+            return (socket || matches!(unit.utype(), "service" | "target"))
+                && !self.cfg.is_excluded(id);
         }
         unit.utype() == "service"
             && loader::parse_name(id)
@@ -132,7 +136,7 @@ impl Daemon {
         self.cfg.run_dir.join("dyn").join(id)
     }
 
-    fn write_servicedir(&self, id: &str, unit: &Unit) -> Result<PathBuf, String> {
+    fn write_servicedir(&self, id: &str, unit: &Unit, on_demand: bool) -> Result<PathBuf, String> {
         let dir = self.dyn_dir(id);
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -140,7 +144,7 @@ impl Daemon {
         // The same scripts and timings as the database's longruns (gen);
         // `down`: s6-svlink -d links it down, dyn_start brings it up.
         for (name, text, exec) in
-            crate::gen::longrun_files(&self.cfg, id, &crate::gen::Timings::of(unit), false)
+            crate::gen::longrun_files(&self.cfg, id, &crate::gen::Timings::of(unit), on_demand)
         {
             write(dir.join(name), &text, exec).map_err(e)?;
         }
@@ -229,6 +233,10 @@ impl Daemon {
         }
         self.stop_conflicts(id, unit).await;
 
+        if unit.utype() == "socket" {
+            return self.dyn_start_socket(id, unit).await;
+        }
+
         // A target is its dependencies; it has no process of its own.
         if unit.utype() == "target" {
             self.dynamic.lock().unwrap().insert(
@@ -271,9 +279,81 @@ impl Daemon {
             return if ok { "done" } else { "failed" };
         }
 
+        self.dyn_start_longrun(id, unit, false).await
+    }
+
+    /// A user manager's Accept=no socket (dbus.socket): as systemd's socket
+    /// unit in front of an inactive service, its service's runner binds it
+    /// (the fd store keeps it) and waits for the first client, then starts
+    /// the service. Recorded as active; a stop of the service arms it again
+    /// (dyn_stop), so the bus comes back after gnome-session-ctl
+    /// --restart-dbus stops it.
+    async fn dyn_start_socket(&self, id: &str, unit: &Unit) -> &'static str {
+        let Some(svc) = super::socket_service(id, unit) else {
+            return "done";
+        };
+        if let Err(e) = crate::socket::mark_requested(&self.cfg.run_dir, id) {
+            eprintln!("uinitconverterd: {id}: {e}");
+        }
+        self.dynamic.lock().unwrap().insert(
+            id.to_string(),
+            Dynamic {
+                kind: Kind::Bundle,
+                active: true,
+            },
+        );
+        let (sid, su) = self.load_unit(&svc);
+        let r = self.arm_socket_service(&sid, &su).await;
+        self.emit_state(id).await;
+        r
+    }
+
+    /// The service of an active socket, waiting for activity. Not while a
+    /// job holds it: a start of the service itself starts this socket
+    /// first (Requires=dbus.socket), and that start binds it.
+    async fn arm_socket_service(&self, sid: &str, su: &Unit) -> &'static str {
+        if !su.is_loaded() || self.dynamic.lock().unwrap().contains_key(sid) {
+            return "done";
+        }
+        if self.jobs.lock().unwrap().values().any(|j| j.unit == sid) {
+            return "done";
+        }
+        let lock = self.unit_lock(sid);
+        let Ok(_guard) = lock.try_lock() else {
+            return "done";
+        };
+        // A run before this one: it waits again.
+        let st = crate::state::for_unit(&self.cfg.run_dir, sid);
+        st.clear(crate::state::keys::ACTIVATED);
+        st.clear(crate::state::keys::START_REQUESTED);
+        self.dyn_start_longrun(sid, su, true).await
+    }
+
+    /// The active sockets whose service is `id`.
+    fn sockets_of(&self, id: &str) -> Vec<String> {
+        let names: Vec<String> = self
+            .dynamic
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(n, d)| d.kind == Kind::Bundle && n.ends_with(".socket"))
+            .map(|(n, _)| n.clone())
+            .collect();
+        names
+            .into_iter()
+            .filter(|n| {
+                let (_, u) = self.load_unit(n);
+                super::socket_service(n, &u)
+                    .map(|s| self.load_unit(&s).0 == id)
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    async fn dyn_start_longrun(&self, id: &str, unit: &Unit, on_demand: bool) -> &'static str {
         let already = self.dynamic.lock().unwrap().contains_key(id);
         if !already {
-            let dir = match self.write_servicedir(id, unit) {
+            let dir = match self.write_servicedir(id, unit, on_demand) {
                 Ok(d) => d,
                 Err(e) => {
                     eprintln!("uinitconverterd: {id}: {e}");
@@ -324,6 +404,13 @@ impl Daemon {
                 let r = self.restart_longrun(id, unit, sv.pid).await;
                 return self.job_outcome(id, started_at, r);
             }
+            // Waiting for its socket's first client: start it now.
+            if sv.up && st.take(crate::state::keys::SOCKET_WAIT) {
+                let started_at = crate::util::now_realtime_usec();
+                self.wake_socket_wait(id).await;
+                let r = self.wait_woken(id, unit, started_at).await;
+                return self.job_outcome(id, started_at, r);
+            }
         }
         // `s6-svlink -d` also writes log/down: the s6-log of a JOURNAL=no
         // install would never run, and the service would write into a pipe
@@ -366,7 +453,19 @@ impl Daemon {
             let (_, du) = self.load_unit(&dep);
             Box::pin(self.dyn_stop(&dep, &du)).await;
         }
-        self.dyn_remove(id, unit).await
+        let rearm = unit.utype() == "service"
+            && !self.exiting.load(std::sync::atomic::Ordering::Relaxed)
+            && !self.sockets_of(id).is_empty();
+        let r = self.dyn_remove(id, unit).await;
+        if rearm {
+            // Its socket still listens (the fd store kept it).
+            eprintln!("uinitconverterd: {id}: stopped, its socket listens again");
+            let st = crate::state::for_unit(&self.cfg.run_dir, id);
+            st.clear(crate::state::keys::ACTIVATED);
+            st.clear(crate::state::keys::START_REQUESTED);
+            Box::pin(self.dyn_start_longrun(id, unit, true)).await;
+        }
+        r
     }
 
     /// dyn_stop() of `id` alone: its dependents stay.
@@ -376,6 +475,17 @@ impl Daemon {
         };
         if kind == Kind::Bundle {
             self.dynamic.lock().unwrap().remove(id);
+            // A socket's service that only waits for it goes too, and the
+            // socket is closed.
+            if let Some(svc) = super::socket_service(id, unit) {
+                let (sid, su) = self.load_unit(&svc);
+                let waiting = crate::state::for_unit(&self.cfg.run_dir, &sid)
+                    .has(crate::state::keys::SOCKET_WAIT);
+                if waiting && self.sockets_of(&sid).is_empty() {
+                    Box::pin(self.dyn_remove(&sid, &su)).await;
+                }
+                let _ = crate::socket::unmark_requested(&self.cfg.run_dir, id);
+            }
             self.emit_state(id).await;
             return "done";
         }
@@ -439,7 +549,13 @@ impl Daemon {
                     .await;
             }
         }
-        self.drop_stored_fds(id);
+        if self.exiting.load(std::sync::atomic::Ordering::Relaxed) || self.sockets_of(id).is_empty()
+        {
+            self.drop_stored_fds(id);
+        } else {
+            // Its sockets stay with the store for the next run.
+            crate::fdstore::del(&self.cfg.run_dir.join("fdstore"), id, None);
+        }
         // Give s6-supervise a moment to exit before removing its directory.
         tokio::time::sleep(Duration::from_millis(200)).await;
         let dir = self.dyn_dir(id);
@@ -522,6 +638,25 @@ impl Daemon {
                 );
             }
         }
+    }
+
+    /// A user manager's exit (SIGTERM from user@UID.service's stop): every
+    /// unit stops, dependents first (dyn_stop), the bus last so the units
+    /// can still call it while they stop.
+    pub(super) async fn stop_all_user(&self) {
+        let bus_units = ["dbus.service", "dbus.socket"].map(|n| self.load_unit(n).0);
+        let mut ids: Vec<String> = self.dynamic.lock().unwrap().keys().cloned().collect();
+        ids.sort_by_key(|id| bus_units.contains(id));
+        for id in ids {
+            if self.dynamic_kind(&id).is_none() {
+                continue;
+            }
+            let (_, unit) = self.load_unit(&id);
+            let lock = self.unit_lock(&id);
+            let _guard = lock.lock().await;
+            self.dyn_stop(&id, &unit).await;
+        }
+        self.stop_scopes_at_shutdown().await;
     }
 
     pub(super) async fn dyn_restart(&self, id: &str, unit: &Unit) -> &'static str {

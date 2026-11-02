@@ -454,6 +454,31 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 `journalctl -u systemd-logind`와 `journalctl -u user@1000.service`(또는 `JOURNAL=no`에서도
 동작하는 `uinitconverter log UNIT`)를 확인하세요.
 
+### s6 사용자 매니저 (진행 중)
+
+`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-141부).
+`uinitconverter.conf`의 `USER_MANAGER=s6` 또는 커널 명령줄의 `uinitconverter.user_manager=s6`이
+있으면 러너가 `user@UID.service`에 `systemd --user` 대신 `uinitconverterd user-manager`를
+실행합니다. 유닛 파일은 바꾸지 않습니다. `USER_MANAGER=systemd`(기본값)나
+`uinitconverter.user_manager=systemd`이면 `systemd --user`를 그대로 씁니다. systemd로 부팅했을
+때는 커널 명령줄에 `s6`이 없는 한 언제나 `systemd --user`에 넘깁니다.
+
+사용자 매니저는 `$XDG_RUNTIME_DIR/uinitconverter`(자체 `s6-svscan`, 사용자 모드 설정, 유닛
+상태)를 만들고, `$XDG_RUNTIME_DIR/systemd/private`(`systemctl --user`가 먼저 찾는 곳)를 바로
+제공하며, `default.target`을 시작한 뒤 `user@`에 준비 완료를 알립니다. 유닛은 사용자의 검색
+경로(`~/.config/systemd/user`, `/etc/systemd/user`, `/usr/lib/systemd/user`, ...)에서 사용자
+지정자(`%t`, `%h`, `%S`, ...)로 읽고, `user@UID.service/app.slice` 아래에서 실행합니다(매니저
+자신은 `init.scope`). `Accept=no` 소켓은 유닛입니다. `dbus.socket`이 대기하다가 첫 클라이언트가
+오면 서비스(dbus-broker)가 시작되고, 매니저가 사용자 버스에 `org.freedesktop.systemd1`로
+올라갑니다. 버스가 멈추면(`gnome-session-ctl --restart-dbus`) 소켓이 다시 대기하고, 매니저는
+그동안 private 소켓을 계속 제공하다가 버스가 돌아오면 다시 올라갑니다. `SIGHUP`은 유닛 파일을
+다시 읽고, `SIGTERM`(`user@` 정지)은 모든 유닛을 멈춥니다(버스는 마지막). `USER_EXCLUDE=`에는
+실행하지 않을 사용자 유닛의 glob을 적습니다.
+
+아직 안 된 것: GDM 그리터와 GNOME 세션(환경 생성기, `Type=dbus` 준비 완료, xdg-autostart,
+앱 scope), 타이머와 path 유닛, `Accept=yes` 소켓, systemd-oomd 보고, 제한된 사용자를 위한
+SELinux. 이것들이 끝나기 전까지는 기본값을 유지하세요.
+
 ## `s6` 명령 (s6-frontend)
 
 시스템은 s6 자체의 도구로 관리합니다. `s6` 명령은
@@ -547,6 +572,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `INIT`: 유닛을 변환할 대상 init 시스템. 지금은 `s6`만 있고, 다른 값이면 모든 도구가 설정 오류로 멈춥니다.
 - `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `uinitconverter init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
+- `USER_MANAGER`, `USER_EXCLUDE`: `user@UID.service`가 실행할 것, `systemd`(기본값) 또는 `s6`([s6 사용자 매니저](#s6-사용자-매니저-진행-중) 참고. 커널 명령줄의 `uinitconverter.user_manager=`가 우선), 그리고 s6 쪽이 실행하지 않을 사용자 유닛.
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 요청하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
 - `INCLUDE`: 기본값으로 uinitconverter에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight(화면·키보드 밝기를 부팅 사이에 유지), 절전 서비스)를 포함합니다. 무선 상태(rfkill)는 systemd-rfkill 대신 `rfkill` s6 oneshot이 유지합니다. 부팅 때 util-linux `rfkill`로 장치마다 soft block을 복원하고, 종료할 때 상태를 systemd-rfkill 자신의 파일(`/var/lib/systemd/rfkill/ID_PATH:TYPE`)에 저장하므로 systemd 부팅 항목과 상태를 공유합니다. systemd-rfkill과 달리 정상 종료할 때만 저장하며, 부팅 중 udev settle 뒤에 나타난 장치는 상태를 그대로 둡니다.
 

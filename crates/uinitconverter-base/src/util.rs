@@ -102,6 +102,14 @@ unsafe fn passwd_to_info(pw: *mut libc::passwd) -> Option<UserInfo> {
     })
 }
 
+pub fn group_name(gid: u32) -> Option<String> {
+    unsafe {
+        let gr = libc::getgrgid(gid);
+        (!gr.is_null() && !(*gr).gr_name.is_null())
+            .then(|| CStr::from_ptr((*gr).gr_name).to_string_lossy().into_owned())
+    }
+}
+
 pub fn lookup_group(name: &str) -> Option<u32> {
     if let Ok(gid) = name.parse::<u32>() {
         return Some(gid);
@@ -452,4 +460,23 @@ pub fn tee_stderr_to_syslog(ident: &'static CStr) {
             unsafe { libc::syslog(libc::LOG_NOTICE, c"%s".as_ptr(), c.as_ptr()) };
         }
     });
+}
+
+/// sd_notify(3): send `msg` to $NOTIFY_SOCKET (a path, or @ for the
+/// abstract namespace). Nothing when it is unset; errors are ignored.
+pub fn sd_notify(msg: &str) {
+    use std::os::linux::net::SocketAddrExt;
+    use std::os::unix::net::{SocketAddr, UnixDatagram};
+    let Some(path) = std::env::var_os("NOTIFY_SOCKET") else {
+        return;
+    };
+    let path = path.to_string_lossy().into_owned();
+    let addr = match path.strip_prefix('@') {
+        Some(name) => SocketAddr::from_abstract_name(name.as_bytes()),
+        None => SocketAddr::from_pathname(&path),
+    };
+    let (Ok(addr), Ok(sock)) = (addr, UnixDatagram::unbound()) else {
+        return;
+    };
+    let _ = sock.send_to_addr(msg.as_bytes(), &addr);
 }

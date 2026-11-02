@@ -1,9 +1,12 @@
 #!/bin/bash
-# User mode (USER_MODE=yes, work_history parts 136-140), unprivileged: a
-# private bus, an s6-svscan and the daemon as a user's service manager would
-# run them, with no s6-rc database. Every unit goes through the dynamic
-# engine. Checks targets, services, .wants links, PartOf=/Conflicts= as the
-# GNOME session uses them, and stopping.
+# The user manager (`uinitconverterd user-manager`, work_history parts
+# 136-141), unprivileged: the launcher as user@UID.service runs it, with
+# XDG_RUNTIME_DIR in a sandbox directory. It makes its own s6-svscan and
+# configuration, serves the private socket at once, starts the user bus
+# itself (dbus.socket, then dbus.service on the first client) and goes on
+# the bus. Checks targets, services, .wants links, PartOf=/Conflicts= as the
+# GNOME session uses them, a bus restart (gnome-session-ctl --restart-dbus)
+# and the stop on SIGTERM. Every unit goes through the dynamic engine.
 #
 #   tests/user-sandbox.sh WORKDIR       # runs the checks, then stops everything
 set -euo pipefail
@@ -14,74 +17,85 @@ W=${1:?usage: tests/user-sandbox.sh WORKDIR}
 R=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sdc-user-test
 U=$W/units
 rm -rf "$W" "$R"
-mkdir -p "$W" "$U" "$R/scan" "$R/live" "$R/run" "$W/state" "$W/logs"
-ln -s "$R/scan" "$R/live/scandir"
+mkdir -p "$W" "$U" "$R" "$W/home"
 W=$(cd "$W" && pwd)
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
 bad() { fail=$((fail + 1)); echo "FAIL $*"; }
 B="busctl --address=unix:path=$R/bus"
 MGR="org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager"
-upath() { $B call $MGR GetUnit s "$1" 2>/dev/null | cut -d'"' -f2; }
+# systemctl --user finds the manager at $XDG_RUNTIME_DIR/systemd/private;
+# the bus address points into the sandbox too, so it never reaches the
+# host's own user manager.
+SC() { env XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" systemctl --user "$@"; }
 state() {
-    local p
-    p=$(upath "$1")
-    [ -n "$p" ] || { echo "inactive/dead"; return; }
-    echo "$($B get-property org.freedesktop.systemd1 "$p" org.freedesktop.systemd1.Unit ActiveState | cut -d'"' -f2)/$($B get-property org.freedesktop.systemd1 "$p" org.freedesktop.systemd1.Unit SubState | cut -d'"' -f2)"
+    echo "$(SC show -p ActiveState --value "$1" 2>/dev/null)/$(SC show -p SubState --value "$1" 2>/dev/null)"
 }
 expect_state() {
     local t=25 s
     while [ $t -gt 0 ]; do s=$(state "$1"); [ "$s" = "$2" ] && break; t=$((t - 1)); sleep 0.2; done
     [ "$s" = "$2" ] && ok "$1 is $2" || bad "$1: expected $2, got $s"
 }
+waitfor() {
+    local t=50
+    while [ $t -gt 0 ]; do eval "$1" && return 0; t=$((t - 1)); sleep 0.2; done
+    return 1
+}
+# Through the bus, as GNOME's callers do.
 call() { $B call $MGR "$@" >/dev/null 2>"$W/last-error" || { cat "$W/last-error"; return 1; }; }
 cleanup() {
     # shellcheck disable=SC2046 # one pid per word
     [ -s "$W/pids" ] && kill $(cat "$W/pids") 2>/dev/null
-    # s6-svscan's children (supervisors, services) go with -t.
-    [ -d "$R/scan/.s6-svscan" ] && s6-svscanctl -t "$R/scan" 2>/dev/null
+    sleep 1
+    # s6-svscan's children (supervisors, services) go with -t, if the
+    # launcher did not end it.
+    [ -d "$R/uinitconverter/scan/.s6-svscan" ] && s6-svscanctl -t "$R/uinitconverter/scan" 2>/dev/null
     sleep 0.5
     true
 }
 trap cleanup EXIT
 
-cat >"$W/uinitconverter.conf" <<EOF
-USER_MODE=yes
-UNIT_PATH=$U
-RUNTIME_UNIT_DIR=$R/units
-PRESET_PATH=
-EXTRA_SOURCE=
-STATE_DIR=$W/state
-REPO_DIR=$W/repo
-LIVE_DIR=$R/live
-RUN_DIR=$R/run
-LOG_DIR=$W/logs
-BOOTED_FLAG=
-PRIVATE_SOCKET=$R/private
-BUS_ADDRESS=unix:path=$R/bus
-ALLOW_UIDS=$(id -u)
+# The system configuration the launcher reads: tools and logging. It
+# writes the user manager's own under $R/uinitconverter.
+cat >"$W/system.conf" <<EOF
+USER_MANAGER=s6
 RUNNER=$BIN/uinitconverter-runner
 TIMER_RUNNER=$BIN/uinitconverter-timers
 JOURNAL=no
-TRANSIENT_DIR=$R/transient
-UDEV_MONITOR=no
-EXCLUDE=
 EOF
 
-# default.target wants base.service through a .wants link and a target.
+# default.target wants base.service through a .wants link and a target,
+# and the bus through sockets.target, as on Fedora.
 cat >"$U/default.target" <<EOF
 [Unit]
-Wants=basic.target
+Wants=basic.target sockets.target
 EOF
 cat >"$U/basic.target" <<EOF
 [Unit]
 EOF
-mkdir -p "$U/default.target.wants"
+cat >"$U/sockets.target" <<EOF
+[Unit]
+EOF
+mkdir -p "$U/default.target.wants" "$U/sockets.target.wants"
 cat >"$U/base.service" <<EOF
 [Service]
 ExecStart=/bin/sleep 1000
 EOF
 ln -s ../base.service "$U/default.target.wants/base.service"
+cat >"$U/dbus.socket" <<EOF
+[Socket]
+ListenStream=%t/bus
+EOF
+ln -s ../dbus.socket "$U/sockets.target.wants/dbus.socket"
+cat >"$U/dbus-test.service" <<EOF
+[Unit]
+Requires=dbus.socket
+After=dbus.socket
+[Service]
+Sockets=dbus.socket
+ExecStart=/usr/bin/dbus-daemon --config-file=$W/bus.conf --nofork --nopidfile
+EOF
+ln -s dbus-test.service "$U/dbus.service"
 # The GNOME session's shape, small: a session target that requires a
 # manager service, a part that is PartOf= the session, and a shutdown
 # target that conflicts with the session.
@@ -114,7 +128,7 @@ cat >"$W/bus.conf" <<EOF
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
   <type>session</type>
-  <listen>unix:path=$R/bus</listen>
+  <listen>systemd:</listen>
   <policy context="default">
     <allow send_destination="*" eavesdrop="true"/>
     <allow eavesdrop="true"/>
@@ -122,19 +136,35 @@ cat >"$W/bus.conf" <<EOF
   </policy>
 </busconfig>
 EOF
-dbus-daemon --config-file="$W/bus.conf" --nofork --nopidfile >"$W/dbus.log" 2>&1 &
+
+# READY=1 from the launcher arrives here.
+python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+s.bind(sys.argv[1])
+open(sys.argv[2], "a").write(s.recv(4096).decode() + "\n")
+' "$R/notify" "$W/notified" &
 echo $! >>"$W/pids"
-s6-svscan "$R/scan" >"$W/svscan.log" 2>&1 &
-echo $! >>"$W/pids"
-sleep 0.5
-"$BIN/uinitconverterd" --config "$W/uinitconverter.conf" daemon --address "unix:path=$R/bus" >"$W/daemon.log" 2>&1 &
-echo $! >>"$W/pids"
+sleep 0.3
+env HOME="$W/home" XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" \
+    NOTIFY_SOCKET="$R/notify" UINITCONVERTER_USER_UNIT_PATH="$U" UINITCONVERTER_USER_CGROUP=no \
+    "$BIN/uinitconverterd" --config "$W/system.conf" user-manager >"$W/daemon.log" 2>&1 &
+MGR_PID=$!
+echo $MGR_PID >>"$W/pids"
 
 echo "== boot"
+waitfor '[ -S "$R/systemd/private" ]' && ok "the private socket is served" || bad "no $R/systemd/private: $(tail -3 "$W/daemon.log")"
+waitfor 'grep -q "default.target done" "$W/daemon.log"' && ok "the daemon started default.target itself" || bad "daemon.log: $(tail -3 "$W/daemon.log")"
+waitfor 'grep -q READY=1 "$W/notified" 2>/dev/null' && ok "READY=1 sent to user@" || bad "no READY=1"
+waitfor 'grep -q "on the bus" "$W/daemon.log"' && ok "the daemon is on the bus it started" || bad "daemon.log: $(tail -3 "$W/daemon.log")"
 expect_state default.target active/active
 expect_state basic.target active/active
 expect_state base.service active/running
-grep -q "default.target done" "$W/daemon.log" && ok "the daemon started default.target itself" || bad "daemon.log: $(tail -3 "$W/daemon.log")"
+expect_state dbus.socket active/running
+expect_state dbus.service active/running
+out=$($B call $MGR GetUnit s base.service 2>&1) && ok "GetUnit over the user bus" || bad "GetUnit on the bus: $out"
+out=$(SC show-environment 2>&1)
+case $out in *"DBUS_SESSION_BUS_ADDRESS=unix:path=$R/bus"*) ok "the units get the bus address" ;; *) bad "manager environment: $out" ;; esac
 
 echo "== a session"
 call StartUnit ss sess@gnome.target fail
@@ -158,6 +188,29 @@ echo "== stopping a target stops its PartOf= units"
 call StopUnit ss sess@gnome.target replace
 expect_state sessmgr@gnome.service inactive/dead
 expect_state sesspart.service inactive/dead
+
+echo "== the bus restarts (gnome-session-ctl --restart-dbus stops it)"
+old=$(SC show -p MainPID --value dbus.service)
+SC stop dbus.service || true
+waitfor 'grep -q "the bus went away" "$W/daemon.log"' && ok "the daemon saw the bus go" || bad "daemon.log: $(tail -3 "$W/daemon.log")"
+out=$(SC is-active base.service 2>&1) || true
+[ "$out" = active ] && ok "systemctl --user works without the bus" || bad "systemctl --user without the bus: $out"
+waitfor '[ "$(grep -c "on the bus" "$W/daemon.log")" -ge 2 ]' && ok "back on the bus: its socket started it again" || bad "daemon.log: $(tail -5 "$W/daemon.log")"
+new=$(SC show -p MainPID --value dbus.service)
+[ -n "$new" ] && [ "$new" != 0 ] && [ "$new" != "$old" ] && ok "a new bus ($old -> $new)" || bad "dbus.service MainPID $old -> $new"
+out=$($B call $MGR GetUnit s base.service 2>&1) && ok "GetUnit over the new bus" || bad "GetUnit on the new bus: $out"
+
+echo "== SIGTERM (user@ stops): every unit stops, then s6-svscan"
+base_pid=$(SC show -p MainPID --value base.service)
+kill -TERM "$MGR_PID"
+waitfor '! kill -0 "$MGR_PID" 2>/dev/null' && ok "the user manager exited" || bad "the user manager still runs"
+if kill -0 "$base_pid" 2>/dev/null; then bad "base.service PID $base_pid still runs"; else ok "base.service's process is gone"; fi
+if s6-svscanctl -z "$R/uinitconverter/scan" 2>/dev/null; then bad "s6-svscan still runs"; else ok "s6-svscan ended"; fi
+if [ "$(grep -c "stopped, its socket listens again" "$W/daemon.log")" -gt 1 ]; then
+    bad "the bus was armed again while exiting"
+else
+    ok "the bus was not armed again while exiting"
+fi
 
 echo
 echo "passed: $pass  failed: $fail"

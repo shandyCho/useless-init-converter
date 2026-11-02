@@ -10,6 +10,20 @@ use crate::loader::Unit;
 
 pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 
+/// Where units' slices and cgroups are: the root, or a user manager's
+/// delegated subtree (CGROUP_BASE=), as systemd --user puts its units
+/// under user@UID.service.
+pub fn base() -> PathBuf {
+    uinitconverter_base::config::cgroup_base()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(CGROUP_ROOT))
+}
+
+/// A slice's cgroup.
+pub fn slice_dir(slice: &str) -> PathBuf {
+    base().join(slice_path(slice))
+}
+
 pub fn available() -> bool {
     Path::new(CGROUP_ROOT).join("cgroup.controllers").exists()
 }
@@ -44,24 +58,31 @@ pub fn parent_slice(slice: &str) -> String {
 pub fn slice_of(unit: &Unit) -> String {
     unit.get("Service", "Slice")
         .or_else(|| unit.get("Scope", "Slice"))
-        .unwrap_or_else(|| "system.slice".into())
+        .unwrap_or_else(|| {
+            // systemd --user's default slice.
+            if crate::loader::user_mode() {
+                "app.slice".into()
+            } else {
+                "system.slice".into()
+            }
+        })
 }
 
 /// Relative cgroup path as systemd reports it in ControlGroup (leading '/').
 pub fn unit_cgroup_rel(unit_id: &str, slice: &str) -> String {
-    format!("/{}", slice_path(slice).join(unit_id).display())
+    let base = base();
+    let rel = base.strip_prefix(CGROUP_ROOT).unwrap_or(Path::new(""));
+    format!("/{}", rel.join(slice_path(slice)).join(unit_id).display())
 }
 
 pub fn unit_cgroup_dir(unit_id: &str, slice: &str) -> PathBuf {
-    Path::new(CGROUP_ROOT)
-        .join(slice_path(slice))
-        .join(&*crate::util::path_component(unit_id))
+    slice_dir(slice).join(&*crate::util::path_component(unit_id))
 }
 
 /// Enable the controllers we may need along the path from the root.
 fn enable_controllers(dir: &Path) {
-    let root = Path::new(CGROUP_ROOT);
-    let Ok(rel) = dir.strip_prefix(root) else {
+    let root = base();
+    let Ok(rel) = dir.strip_prefix(&root) else {
         return;
     };
     let mut cur = root.to_path_buf();

@@ -377,6 +377,22 @@ impl Daemon {
         if let Some(kind) = self.dynamic_kind(id) {
             if kind == Kind::Bundle {
                 (s.active, s.sub) = ("active", "active");
+                // A user manager's socket: listening, or running while its
+                // service runs.
+                if let Some(svc) = super::socket_service(id, unit) {
+                    let svc = self.load_unit(&svc).0;
+                    let waiting = state::for_unit(&self.cfg.run_dir, &svc).has(keys::SOCKET_WAIT);
+                    let up = self
+                        .svstat_cached(&svc)
+                        .await
+                        .map(|v| v.up)
+                        .unwrap_or(false);
+                    s.sub = if up && !waiting {
+                        "running"
+                    } else {
+                        "listening"
+                    };
+                }
                 return s;
             }
             if kind == Kind::Oneshot {
@@ -903,7 +919,7 @@ impl Daemon {
     /// whatever process runs, so not one that started under a second ago
     /// (it may not block SIGUSR1 yet). Down (s6 restarting it): the next run
     /// sees no SOCKET_WAIT and starts the service.
-    async fn wake_socket_wait(&self, id: &str) {
+    pub(super) async fn wake_socket_wait(&self, id: &str) {
         for _ in 0..20 {
             let out = Command::new(tools::path("s6-svstat"))
                 .args(["-o", "up,updownfor"])
@@ -930,7 +946,7 @@ impl Daemon {
 
     /// wait_ready() for a service woken from its socket wait: its run process
     /// told s6 it was ready when the wait began, so go by the unit state.
-    async fn wait_woken(&self, id: &str, unit: &Unit, started_at: u64) -> &'static str {
+    pub(super) async fn wait_woken(&self, id: &str, unit: &Unit, started_at: u64) -> &'static str {
         let deadline = Instant::now() + Self::start_timeout(unit);
         let st = state::for_unit(&self.cfg.run_dir, id);
         loop {

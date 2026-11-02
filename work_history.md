@@ -10739,3 +10739,69 @@ Owner: "go with your recommendations, start with the transaction engine", then "
 - the memory measurement against G0's budget
 
 Then slices B-E.
+
+## 2026-11-03, part 141: slice A, part 2 (the launcher, the user bus, sockets, cgroups, the switch, the VM)
+
+- **`uinitconverterd user-manager`** (crates/uinitconverterd/src/user.rs): what user@UID.service runs instead of `systemd --user`.
+  - It recreates `$XDG_RUNTIME_DIR/uinitconverter/{scan,live,run}` and writes a user-mode configuration there from the system's (tools, JOURNAL, USER_EXCLUDE). It also writes the units' starting environment (run/manager.env: HOME, USER, PATH, LANG/LC_*, XDG_*, MANAGERPID, DBUS_SESSION_BUS_ADDRESS).
+  - It starts s6-svscan as its child and runs the daemon in-process.
+  - Unit path: systemd.unit(5)'s user search path, `~/.config/systemd/user` first because enable writes there. `UINITCONVERTER_USER_UNIT_PATH` replaces it in tests.
+  - Directories: PRIVATE_SOCKET is `$XDG_RUNTIME_DIR/systemd/private`, where systemctl --user looks first. STATE_DIR and LOG_DIR are under `$XDG_STATE_HOME/uinitconverter`.
+  - Readiness and signals: READY=1 (util::sd_notify, new) once default.target is up. SIGHUP and SIGRTMIN+25 reread the unit files, announced with RELOADING=1/MONOTONIC_USEC and then READY=1, because Fedora's user@.service is Type=notify-reload. SIGTERM sets `exiting`, runs stop_all_user (every dynamic unit, dependents first, the bus last), then ends s6-svscan.
+- **The bus is optional:** Daemon::conn is now `RwLock<Option<Connection>>`.
+  - The system manager connects first, as before.
+  - In user mode a connector task waits for the bus socket, then connects. It makes the MessageStream before RequestName so no call is missed, and hands the stream to the main loop.
+  - When the stream ends, user mode drops the connection and goes on serving the private socket, and the connector connects again. The system manager still exits.
+  - Bus-caller lookups (uid, pid, label, polkit) use the caller's Peer connection. Signals go to the bus only while it is connected.
+  - Reload in user mode only clears the caches, since there is no database.
+- **User sockets (Accept=no) as units:** can_be_dynamic in user mode now also takes such sockets.
+  - dyn_start_socket marks the socket requested, records it as `Dynamic Bundle`, and arms its service. The service gets a dynamic longrun with `--on-demand`, so its runner binds the socket into the fd store and waits for the first client.
+  - Arming is skipped while a job or lock holds the service, to avoid a deadlock: `Requires=dbus.socket` starts the socket from inside the service's own start, and that start binds it.
+  - A start of a waiting service wakes it (wake_socket_wait/wait_woken, now pub(super)).
+  - A stop of a service whose socket is active keeps the `#sockets` fds and arms it again. That is how the bus comes back after `gnome-session-ctl --restart-dbus`. Not while exiting.
+  - A stop of the socket removes a service that only waits, and unmarks the socket.
+  - The socket's state is active/listening, or active/running while its service runs.
+  - check_job no longer redirects a socket start to its service in user mode.
+- **User specifiers:** loader::set_user_mode, which Config::load sets for USER_MODE=yes. %t %S %C %L %E %h %u %U %g %G become the user's (UserDirs, read once), so `ListenStream=%t/bus` works.
+- **cgroups:** `CGROUP_BASE=` (Config, plus a process-wide config::cgroup_base()) roots the units' slices and cgroups (cgroup::base(), slice_dir()).
+  - In user mode the default slice is app.slice, and ControlGroup keeps the full path from the cgroup2 root.
+  - The launcher sets CGROUP_BASE to its own writable cgroup (user@UID.service; init.scope is stripped when DelegateSubgroup= already put it there) and moves itself into init.scope. `UINITCONVERTER_USER_CGROUP=no` turns this off for tests, which run inside the host's own user@1000.
+  - StopUnit refuses the base cgroup like the root.
+- **The switch:** `USER_MANAGER=systemd|s6` (default systemd) and `USER_EXCLUDE=` in uinitconverter.conf. `uinitconverter.user_manager=` on the kernel command line wins (Config::user_manager_now).
+  - The runner replaces user@*'s `systemd --user` ExecStart with `uinitconverterd [--config] user-manager` when the choice is s6. Nothing is written under /etc/systemd, and the unit stays as it is, so a systemd boot is untouched.
+  - The launcher itself execs systemd --user when the choice is systemd, or on a systemd boot (PID 1's comm), unless the kernel command line explicitly says s6.
+- Socket Symlinks= now creates the link's parent directories, as systemd's mkdir_parents_label does. The user's `$XDG_RUNTIME_DIR/varlink/registry` didn't exist (systemd-importd/machined user sockets).
+- **Tests:**
+  - tests/user-sandbox.sh rewritten around the launcher, 31 checks: private socket, default.target, READY=1, dbus.socket→dbus-daemon on the first client, the daemon on its own bus, `systemctl --user` (private socket), the session/logout checks, a bus restart (old→new PID, the name taken again, systemctl working meanwhile), and SIGTERM (all units gone, s6-svscan gone, the bus not re-armed).
+  - New tests/vm-user-manager.sh (15 checks) in the GNOME VM, which boots systemd. It installs the binaries (BUILD=debug|release) and the skalibs/execline/s6 RPMs (unsigned: --nosignature). User s6test gets a user@ drop-in, user s6ref keeps systemd --user. It sets the kernel flag, reboots, and checks READY=1, the main PID, init.scope, the targets, dbus.socket, a unit in app.slice/hello.service, org.freedesktop.systemd1 on the user bus owned by our daemon, dbus-broker active, a bus client, reload and a clean stop. The VM goes down however the script ends.
+  - A new cargo test for the written path lists.
+- **Bugs found on the way:**
+  - dbus-daemon needs `<listen>systemd:</listen>` in its config even with --address=systemd: (a test fixture problem).
+  - The launcher joined UNIT_PATH/PRESET_PATH with blanks while Config splits on ":". The whole list became one missing directory and nothing loaded. The sandbox passes one directory, so only the VM showed it.
+  - `[ -s cgroup.procs ]` is always false on cgroupfs (a test bug).
+  - s6-svlisten needs libexecline (the VM lacked the RPM).
+  - The first VM run left the VM running when setup failed; the script now traps.
+- **Memory (G0):** release build, s6test right after start, PSS. Our tree is 12.1 MiB in 17 processes; systemd --user is 6.5 MiB in 2 processes (manager plus sd-pam; its bus wasn't started because no client came).
+  - Ours includes the bus (dbus-broker plus launcher, 0.9 MiB), the daemon 4.8 MiB, s6-svscan 0.5 MiB, and per supervised service about 0.18 MiB of s6-supervise.
+  - The four socket-waiting services (pipewire, pipewire-pulse, systemd-importd, systemd-machined) each also hold an idle runner of about 0.65 MiB. Holding the sockets in the daemon instead would save about 2.6 MiB; noted, not done.
+  - This is within G0's 25-45 MiB per-session estimate.
+
+**Tests.** cargo test 110; user sandbox 31/31; VM 15/15 (release; debug 14/15 before the cgroup.procs test fix). System sandbox with SANDBOX_S6NET_BIN: 370/370, SANDBOX_JOURNAL=no 377/377, SANDBOX_FDSTORE=no 358/358. fmt and shellcheck clean; clippy is not installed here.
+
+**Docs.** etc pair: "The s6 user manager (in progress)" and the USER_MANAGER keys. TESTING pair: the user sandbox paragraph and vm-user-manager.sh. dist/uinitconverter.conf: USER_MANAGER and USER_EXCLUDE.
+
+### Current state
+
+Slice A is done: a user's s6 manager runs under a real user@ (on a systemd boot in the VM, opted in by the kernel flag) with its own bus, sockets, cgroups, reload and stop. The default stays systemd --user. Not yet seen under the s6 boot's own system manager, where our runner execs it; that goes with slice B on the owner's machine or a VM booted with uinitconverter.
+
+### Next steps
+
+- **Slice B (the GDM greeter):**
+  - user environment generators (30-systemd-environment-d-generator, 60-flatpak) into manager.env
+  - SetEnvironment/UnsetAndSetEnvironment reaching later units
+  - Type=dbus readiness for user units (BusName= on the user bus)
+  - sd_notify from user units
+  - the user DIRS (RuntimeDirectory= etc. under $XDG_RUNTIME_DIR/~/.local) in the runner
+  - running the greeter's user@ (gdm) with USER_MANAGER=s6 in the VM
+- **Then slices C-E** as planned (part 137), timers/paths in user mode, Accept=yes in user mode.
+- **Smaller items:** job modes (fail, replace-irreversibly) still run as replace; Requisite= is treated like Requires=; socket-waiting runners could be replaced by the daemon holding the sockets (memory).

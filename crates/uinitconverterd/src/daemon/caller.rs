@@ -28,7 +28,7 @@ impl Daemon {
         if let Some(u) = self.uid_cache.lock().unwrap().get(&sender) {
             return Some(*u);
         }
-        let proxy = zbus::fdo::DBusProxy::new(&self.conn).await.ok()?;
+        let proxy = zbus::fdo::DBusProxy::new(&c.conn).await.ok()?;
         let name = zbus::names::BusName::try_from(sender.clone()).ok()?;
         let uid = proxy.get_connection_unix_user(name).await.ok()?;
         let mut cache = self.uid_cache.lock().unwrap();
@@ -46,7 +46,7 @@ impl Daemon {
         }
         let hdr = msg.header();
         let sender = hdr.sender()?.to_string();
-        let proxy = zbus::fdo::DBusProxy::new(&self.conn).await.ok()?;
+        let proxy = zbus::fdo::DBusProxy::new(&c.conn).await.ok()?;
         let name = zbus::names::BusName::try_from(sender).ok()?;
         proxy.get_connection_unix_process_id(name).await.ok()
     }
@@ -119,7 +119,7 @@ impl Daemon {
         let mut subject_details: HashMap<String, Value<'static>> = HashMap::new();
         subject_details.insert("name".into(), Value::from(sender));
         let subject = ("system-bus-name".to_string(), subject_details);
-        let reply = self
+        let reply = c
             .conn
             .call_method(
                 Some("org.freedesktop.PolicyKit1"),

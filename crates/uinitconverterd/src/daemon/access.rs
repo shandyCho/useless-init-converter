@@ -87,7 +87,7 @@ impl Daemon {
         if let Some(l) = self.label_cache.lock().unwrap().get(&sender) {
             return Some(l.clone());
         }
-        let proxy = zbus::fdo::DBusProxy::new(&self.conn).await.ok()?;
+        let proxy = zbus::fdo::DBusProxy::new(&c.conn).await.ok()?;
         let name = zbus::names::BusName::try_from(sender.clone()).ok()?;
         let creds = proxy.get_connection_credentials(name).await.ok()?;
         let label = creds.linux_security_label()?;

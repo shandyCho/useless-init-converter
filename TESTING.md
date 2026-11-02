@@ -128,8 +128,11 @@ uinitconverter의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-up
 `sandbox.sh`와 `check.sh`를 실행하세요. 그러면 데몬이 fd를 직접 보관하므로, 데몬을 다시 시작한
 뒤 fd가 사라졌는지를 확인합니다. 독립 도구는 `tests/sandbox.sh`가 `standalone/`에서 빌드합니다.
 
-사용자 모드(systemd --user 없는 사용자 서비스 관리자, 진행 중): `tests/user-sandbox.sh DIR`은 자체 검사를
-실행하고 끝나면 모두 멈춥니다(`tests/all.sh`에 포함).
+사용자 모드(systemd --user 없는 사용자 서비스 관리자, 진행 중): `tests/user-sandbox.sh DIR`은
+`uinitconverterd user-manager`를 `user@`처럼 실행하되 `XDG_RUNTIME_DIR`을 샌드박스 디렉터리로
+둡니다. private 소켓, `default.target`, `READY=1`, `dbus.socket`에서 시작되는 버스(여기서는
+dbus-daemon), `systemctl --user`, GNOME 모양의 세션과 로그아웃, 버스 재시작, `SIGTERM`에 의한
+정지를 확인합니다. 자체 검사를 실행하고 끝나면 모두 멈춥니다(`tests/all.sh`에 포함).
 
 `Accept=yes` TCP 검사에는 `s6-tcpserverd`가 필요합니다. `PATH`에 없으면 `check.sh`는 TCP 소켓을
 건너뛰었는지만 확인하고 SKIP 줄을 출력합니다. 실행하려면 두 스크립트 앞에
@@ -220,6 +223,15 @@ tests/gnome-vm.sh stop ~/uinitconverter-vm
 `ssh`와 `copy`는 `tester`(암호 없는 sudo)로 VM에 접속합니다. 화면은 127.0.0.1의 VNC
 디스플레이로도 볼 수 있습니다(포트는 `~/uinitconverter-vm/ports`). VM의 SELinux는 enforcing입니다.
 VM 부팅이 망가져도 손해가 없습니다. `start`는 매번 준비된 이미지에서 다시 시작합니다.
+
+`tests/vm-user-manager.sh ~/uinitconverter-vm`은 그 VM에서 실제 `user@UID.service` 아래로 s6
+사용자 매니저를 실행합니다(`cargo build` 뒤에). VM은 systemd로 부팅합니다. 스크립트가 디버그
+바이너리와 skalibs, s6 RPM(`SKARNET_RPMS=`, 기본값 `~/rpmbuild-skarnet/RPMS/x86_64`)을 설치하고,
+`user@`에 `uinitconverterd user-manager` drop-in이 붙는 사용자 `s6test`를 만들고, 커널 명령줄에
+`uinitconverter.user_manager=s6`을 넣은 뒤 다시 부팅합니다. 그런 다음 그 `user@`를 시작해 준비 완료,
+`init.scope`와 `app.slice`, 사용자 버스와 `systemctl --user`를 확인하고, `systemd --user`를 쓰는
+두 번째 사용자와 메모리(PSS)를 나란히 출력한 뒤 reload하고 멈춥니다. GDM과 tester의 세션은
+`systemd --user`를 그대로 씁니다.
 
 ## 4. 변환 미리보기 (읽기 전용)
 

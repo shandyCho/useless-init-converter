@@ -120,7 +120,7 @@ impl Daemon {
         else {
             return;
         };
-        if dir == std::path::Path::new(crate::cgroup::CGROUP_ROOT) {
+        if dir == std::path::Path::new(crate::cgroup::CGROUP_ROOT) || dir == crate::cgroup::base() {
             eprintln!("uinitconverterd: refusing to stop {id}: it is the root cgroup");
             return;
         }
@@ -265,7 +265,7 @@ impl Daemon {
             }
         }
         let dir = if kind == "slice" {
-            std::path::Path::new(crate::cgroup::CGROUP_ROOT).join(crate::cgroup::slice_path(&name))
+            crate::cgroup::slice_dir(&name)
         } else {
             if pids.is_empty() {
                 if let Some(p) = self.caller_pid(c, msg).await {
@@ -475,7 +475,7 @@ impl Daemon {
     /// Bounded: stop_transient sends SIGKILL after 10 s.
     pub(super) async fn stop_scopes_at_shutdown(&self) {
         self.stop_display_manager_at_shutdown().await;
-        let root = std::path::Path::new(crate::cgroup::CGROUP_ROOT);
+        let root = crate::cgroup::base();
         let scopes: Vec<(String, PathBuf)> = self
             .transient
             .lock()

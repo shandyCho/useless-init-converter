@@ -131,7 +131,11 @@ holds the fds itself, so `check.sh` checks that they are gone after the daemon
 restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
 User mode (a user's service manager without systemd --user, in progress):
-`tests/user-sandbox.sh DIR` runs its own checks and stops everything itself
+`tests/user-sandbox.sh DIR` runs `uinitconverterd user-manager` as `user@`
+would, with `XDG_RUNTIME_DIR` in a sandbox directory: the private socket,
+`default.target`, `READY=1`, the bus started from `dbus.socket` (dbus-daemon
+here), `systemctl --user`, a GNOME-shaped session and logout, a bus restart
+and the stop on `SIGTERM`. It runs its own checks and stops everything itself
 (`tests/all.sh` includes it).
 
 The `Accept=yes` TCP checks need `s6-tcpserverd`. Without it in `PATH`, `check.sh`
@@ -239,6 +243,17 @@ tests/gnome-vm.sh stop ~/uinitconverter-vm
 on a VNC display on 127.0.0.1 (port in `~/uinitconverter-vm/ports`). SELinux is
 enforcing in the VM. A broken boot there costs nothing: `start` begins from the
 provisioned image again.
+
+`tests/vm-user-manager.sh ~/uinitconverter-vm` runs the s6 user manager under
+a real `user@UID.service` in that VM (after `cargo build`). The VM boots
+systemd; the script installs the debug binaries and the skalibs and s6 RPMs
+(`SKARNET_RPMS=`, default `~/rpmbuild-skarnet/RPMS/x86_64`), adds a user
+`s6test` whose `user@` gets a drop-in for `uinitconverterd user-manager`,
+sets `uinitconverter.user_manager=s6` on the kernel command line and boots
+again. It then starts that `user@`, checks readiness, `init.scope` and
+`app.slice`, the user bus and `systemctl --user`, prints the memory (PSS)
+next to a second user with `systemd --user`, reloads and stops it. GDM and
+tester's session keep `systemd --user`.
 
 ## 4. Translation preview (read-only)
 

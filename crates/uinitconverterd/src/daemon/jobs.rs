@@ -125,7 +125,12 @@ impl Daemon {
                 ),
             ));
         }
-        if starts && self.kind_of(&id).is_none() && !self.cfg.is_excluded(&id) {
+        // (A user manager runs its sockets as units: dyn_start_socket.)
+        if starts
+            && self.kind_of(&id).is_none()
+            && !self.cfg.is_excluded(&id)
+            && !self.cfg.user_mode
+        {
             if let Some(svc) = socket_service(&id, &unit) {
                 // Sockets are bound by their service's runner: record this
                 // one so the runner binds it too, then start the service.
