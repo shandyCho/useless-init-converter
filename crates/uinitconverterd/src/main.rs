@@ -1,7 +1,7 @@
 //! uinitconverterd: serves org.freedesktop.systemd1 on top of s6-rc, so systemctl,
 //! libsystemd and logind keep working; also a minimal client for it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 
 pub(crate) use uinitconverter_base::acceptspec;
@@ -36,7 +36,9 @@ usage: uinitconverterd [--config PATH] [COMMAND] [ARGS]
   user-manager  what user@UID.service runs: the user's service manager
                 (s6-svscan and this daemon in user mode, under
                 $XDG_RUNTIME_DIR/uinitconverter), or `systemd --user` with
-                USER_MANAGER=systemd / uinitconverter.user_manager=systemd
+                USER_MANAGER=systemd / uinitconverter.user_manager=systemd.
+                The uinitconverter-user package runs it as
+                uinitconverter-user-manager (a link to this program).
   log UNIT [-f] show (or follow) a service's log: journalctl -u, or its
                 s6-log directory with JOURNAL=no
 ";
@@ -164,8 +166,17 @@ fn log(cfg: &Config, rest: &[String]) -> ! {
     die(&format!("tail {}: {err}", file.display()))
 }
 
+/// The user manager's own name: the uinitconverter-user package installs
+/// it as a link to uinitconverterd, and user@UID.service runs it.
+pub const USER_MANAGER_NAME: &str = "uinitconverter-user-manager";
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // Started as uinitconverter-user-manager: `uinitconverterd user-manager`.
+    let argv0 = std::env::args().next().unwrap_or_default();
+    if Path::new(&argv0).file_name() == Some(USER_MANAGER_NAME.as_ref()) {
+        args.insert(0, "user-manager".into());
+    }
     // --config PATH before or after the command (generated scripts and the
     // uinitconverter front end put it after), up to a "--".
     let mut config_path: Option<PathBuf> = None;

@@ -528,10 +528,14 @@ log UNIT`, which also works with `JOURNAL=no`).
 ### The s6 user manager (in progress)
 
 Work is under way to replace `systemd --user` too (the plan is in
-`work_history.md`, parts 136-145). `USER_MANAGER=s6` in
+`work_history.md`, parts 136-150). It is the `uinitconverter-user` package
+(`dnf install uinitconverter-user`). With it, `USER_MANAGER=s6` in
 `uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
-command line, makes the runner start `uinitconverterd user-manager` for
-`user@UID.service` instead of `systemd --user`; the unit file is not changed.
+command line, makes the runner start `uinitconverter-user-manager` (a link to
+`uinitconverterd`, which runs as the user manager under that name; also
+`uinitconverterd user-manager`) for `user@UID.service` instead of
+`systemd --user`; the unit file is not changed. Without the package, `user@`
+keeps `systemd --user` and the runner logs why.
 `USER_MANAGER=systemd` (the default) or `uinitconverter.user_manager=systemd`
 keeps `systemd --user`. On a systemd boot the command always hands over to
 `systemd --user`, unless the kernel command line names `s6`.
@@ -621,8 +625,8 @@ when a start job of such a unit fails (the GNOME leader's
 `gnome-session@NAME.target`), when its daemon exits with an error or
 panics, or when the user's previous s6 manager of this boot ended without
 stopping (a crash). The reason is recorded in
-`/run/uinitconverter-user/UID` (a sticky directory from the package's
-tmpfiles.d; only the user's own file counts), and the user's later managers
+`/run/uinitconverter-user/UID` (a sticky directory from
+`uinitconverter-user`'s tmpfiles.d entry; only the user's own file counts), and the user's later managers
 in this boot run `systemd --user` at once. The next boot tries the s6
 manager again. `UINITCONVERTER_LOG_JOBS=1` in `user@.service`'s environment
 logs every job request with the caller's process name.

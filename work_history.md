@@ -11219,3 +11219,32 @@ Owner: "yes add them to CLAUDE.md". The build-and-test item now also names:
 - SANDBOX_S6NET_BIN (the sysroot after build-skarnet-rpms.sh)
 - tests/user-sandbox.sh for user-manager work
 - the GNOME VM harness: tests/gnome-vm.sh, and tests/vm-user-manager.sh with BUILD=release, SKARNET_RPMS, its modes and their stock baselines, and VM_KEEP
+
+## 2026-11-03, part 150: package split
+
+Owner: "could you split our project that executable standalone and must need another uinitconverter* packages?", answered "Both": the user manager as its own package, and a review of all executables.
+
+**Review: no core executable can be standalone.**
+- Every core executable links uinitconverter-base, and most also link -exec, -install and -client. Standalone projects may share no code, so moving one would mean duplicating the library code.
+- They also need each other at run time: gen → runner and timers; timers → daemon; daemon → runner; uinitconverter → all.
+- The four standalone tools stay as they are. Nothing moved.
+
+**New package uinitconverter-user (noarch, packages/uinitconverter-user.spec):**
+- **Contents:** /usr/libexec/uinitconverter/uinitconverter-user-manager, a link to uinitconverterd, and the tmpfiles.d entry for /run/uinitconverter-user, moved out of uinitconverterd.
+- **Requires:** uinitconverterd and uinitconverter-runner (same version-release), s6, systemd.
+- **Why a link and not a binary of its own:** the user manager is the daemon in user mode (user.rs runs crate::serve in-process). A separate binary would be a second copy of uinitconverterd (about 6 MB) built from the same code.
+- **Code changes:**
+  - uinitconverterd started as uinitconverter-user-manager means `uinitconverterd user-manager`; that subcommand stays.
+  - The runner switches user@ to the user manager only when that link exists; otherwise it logs "install uinitconverter-user" and keeps systemd --user.
+  - uinitconverterd and uinitconverter suggest the package. build-rpms.sh builds six packages.
+- **Found while doing it:** started through the link, the manager's comm is "uinitconverter-" (cut to 15 characters). The launcher's crash detection (stale_running) compared comm with "uinitconverterd", so a running manager would have looked crashed. It now reads /proc/PID/exe ("(deleted)" stripped, for a package update under a running manager), with either comm as a fallback. The VM checks read exe too.
+- **Tests and docs:**
+  - The sandbox and the VM test start the manager through the link.
+  - Docs: the packages README pair (table, six packages, dnf remove), the etc pair (user manager section, fallback directory), the CHANGELOG pair, the TESTING pair, CLAUDE.md's packaging item, the build-rpms.sh and github-release.sh comments.
+
+**Tests.**
+- cargo test 117, fmt clean; user sandbox 92/92.
+- packages/build-rpms.sh built all six packages. rpm -qlp shows the noarch package's link and tmpfiles.d file, and its Requires; uinitconverterd lost the tmpfiles entry and suggests uinitconverter-user.
+- VM, with user@ started through the link: lifecycle 18 + 53 (the managers' executable checked by /proc/PID/exe), fallback 18/18 (the SIGKILL crash still detected through the exe check).
+- **Not tested:** the runner's path (the s6 boot's own system manager switching user@), with or without the package. The VM boots systemd, where a drop-in runs the link directly.
+- tests/vm-user-manager.sh's inner check.sh has shellcheck SC2046 warnings (deliberate word splitting, from part 141). Left as is.

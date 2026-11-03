@@ -17,7 +17,7 @@
   `PropertiesChanged`.
 - **s6 사용자 매니저(선택).** `uinitconverter.conf`의 `USER_MANAGER=s6`이나 커널 명령줄의
   `uinitconverter.user_manager=s6`이 있으면 `user@UID.service`에 `systemd --user` 대신
-  `uinitconverterd user-manager`를 실행합니다. 기본값은 계속 `systemd`입니다. 테스트 VM에서 GDM 그리터와
+  `uinitconverter-user-manager`(`uinitconverter-user` 패키지)를 실행합니다. 기본값은 계속 `systemd`입니다. 테스트 VM에서 GDM 그리터와
   GNOME 세션을 수정 없이 실행합니다. 로그아웃, 다시 로그인, 사용자 전환, linger 사용자, RPM 업데이트
   도우미, 재부팅, 타이머와 path 유닛, 소켓(`Accept=yes` 포함), systemd-oomd 보고, podman quadlet 유닛,
   flatpak 앱이 동작합니다. 트랜잭션의 유닛은 병렬로 시작합니다. 사용자를 제대로 받지 못하면(GNOME의 실패
@@ -35,8 +35,9 @@
   유닛), 러너는 알려진 프로세스를 따라갑니다.
 - `AttachProcessesToUnit`은 권한 없는 호출자에 대해 systemd의 규칙을 따르고, 컨트롤러 목록을 적은
   `Delegate=`도 위임으로 봅니다.
-- `uinitconverterd` 패키지가 `/run/uinitconverter-user`(사용자 매니저의 대체 기록)용 tmpfiles.d 항목을
-  설치합니다.
+- 새 패키지 `uinitconverter-user`(noarch): s6 사용자 매니저의 진입점 `uinitconverter-user-manager`
+  (`uinitconverterd`로의 링크)와 `/run/uinitconverter-user`(대체 기록)용 tmpfiles.d 항목. 이 패키지가
+  없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
 - `Accept=yes` 인스턴스의 `LISTEN_FDNAMES=`는 소켓의 `FileDescriptorName=`을 따릅니다(이전에는 항상

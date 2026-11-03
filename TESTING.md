@@ -129,7 +129,8 @@ uinitconverter의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-up
 뒤 fd가 사라졌는지를 확인합니다. 독립 도구는 `tests/sandbox.sh`가 `standalone/`에서 빌드합니다.
 
 사용자 모드(systemd --user 없는 사용자 서비스 관리자, 진행 중): `tests/user-sandbox.sh DIR`은
-`uinitconverterd user-manager`를 `user@`처럼 실행하되 `XDG_RUNTIME_DIR`을 샌드박스 디렉터리로
+사용자 매니저를 `user@`처럼(`uinitconverter-user` 패키지가 설치하는 `uinitconverterd`로의 링크
+`uinitconverter-user-manager`로) 실행하되 `XDG_RUNTIME_DIR`을 샌드박스 디렉터리로
 둡니다. private 소켓, `default.target`, `READY=1`, `dbus.socket`에서 시작되는 버스(여기서는
 dbus-daemon), `systemctl --user`, GNOME 모양의 세션과 로그아웃, 버스 재시작, `SIGTERM`에 의한
 정지를 확인합니다. 이어서 이후 단계의 검사가 있습니다. 환경 generator와 유닛 generator, 트랜잭션(순서,
@@ -231,7 +232,8 @@ VM 부팅이 망가져도 손해가 없습니다. `start`는 매번 준비된 �
 `tests/vm-user-manager.sh ~/uinitconverter-vm`은 그 VM에서 실제 `user@UID.service` 아래로 s6
 사용자 매니저를 실행합니다(`cargo build` 뒤에). VM은 systemd로 부팅합니다. 스크립트가 디버그
 바이너리와 skalibs, s6 RPM(`SKARNET_RPMS=`, 기본값 `~/rpmbuild-skarnet/RPMS/x86_64`)을 설치하고,
-`user@`에 `uinitconverterd user-manager` drop-in이 붙는 사용자 `s6test`를 만들고, 커널 명령줄에
+`user@`에 `uinitconverter-user-manager`(`uinitconverter-user` 패키지처럼 `uinitconverterd`로의 링크)
+drop-in이 붙는 사용자 `s6test`를 만들고, 커널 명령줄에
 `uinitconverter.user_manager=s6`을 넣은 뒤 다시 부팅합니다. 그런 다음 그 `user@`를 시작해 준비 완료,
 `init.scope`와 `app.slice`, 사용자 버스와 `systemctl --user`를 확인하고, `systemd --user`를 쓰는
 두 번째 사용자와 메모리(PSS)를 나란히 출력한 뒤 reload하고 멈춥니다. GDM과 tester의 세션은
@@ -613,7 +615,7 @@ sudo uinitconverter init --boot-only-s6=yes
 
 ```sh
 sudo uinitconverter init --uninstall
-sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd \
+sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd uinitconverter-user \
     uinitconverter-fdstore uinitconverter-notify uinitconverter-journal-relay uinitconverter-linkwatch
 sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd \
     skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel

@@ -457,10 +457,13 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 
 ### s6 사용자 매니저 (진행 중)
 
-`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-145부).
+`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-150부). 이것은
+`uinitconverter-user` 패키지입니다(`dnf install uinitconverter-user`). 이 패키지가 있으면
 `uinitconverter.conf`의 `USER_MANAGER=s6` 또는 커널 명령줄의 `uinitconverter.user_manager=s6`이
-있으면 러너가 `user@UID.service`에 `systemd --user` 대신 `uinitconverterd user-manager`를
-실행합니다. 유닛 파일은 바꾸지 않습니다. `USER_MANAGER=systemd`(기본값)나
+있을 때 러너가 `user@UID.service`에 `systemd --user` 대신 `uinitconverter-user-manager`(`uinitconverterd`로의
+링크. 이 이름으로 실행되면 사용자 매니저로 동작하며, `uinitconverterd user-manager`와 같습니다)를
+실행합니다. 유닛 파일은 바꾸지 않습니다. 패키지가 없으면 `user@`는 `systemd --user`를 그대로 쓰고
+러너가 그 이유를 로그에 남깁니다. `USER_MANAGER=systemd`(기본값)나
 `uinitconverter.user_manager=systemd`이면 `systemd --user`를 그대로 씁니다. systemd로 부팅했을
 때는 커널 명령줄에 `s6`이 없는 한 언제나 `systemd --user`에 넘깁니다.
 
@@ -526,7 +529,7 @@ systemd-oomd에 알리고(`io.systemd.oom.ReportManagedOOMCGroups`, `systemd --u
 이어질 때(GNOME 51의 세션 유닛은 `gnome-session-shutdown.target`으로 이어집니다. 로그아웃이 이미 그것을
 시작했다면 아님), 그런 유닛의 시작 작업이 실패할 때(GNOME 리더의 `gnome-session@NAME.target`), 데몬이
 오류로 끝나거나 panic할 때, 이번 부팅에서 그 사용자의 이전 s6 매니저가 멈추지 않고 끝났을 때(충돌).
-이유는 `/run/uinitconverter-user/UID`(패키지의 tmpfiles.d가 만드는 sticky 디렉터리. 사용자 자신의
+이유는 `/run/uinitconverter-user/UID`(`uinitconverter-user`의 tmpfiles.d 항목이 만드는 sticky 디렉터리. 사용자 자신의
 파일만 인정)에 기록되고, 이번 부팅 동안 그 사용자의 다음 매니저는 바로 `systemd --user`를 실행합니다.
 다음 부팅에는 다시 s6 매니저를 시도합니다. `user@.service` 환경에 `UINITCONVERTER_LOG_JOBS=1`을 두면
 모든 작업 요청을 호출자의 프로세스 이름과 함께 기록합니다.

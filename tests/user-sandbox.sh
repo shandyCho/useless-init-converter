@@ -1,5 +1,6 @@
 #!/bin/bash
-# The user manager (`uinitconverterd user-manager`, work_history parts
+# The user manager (`uinitconverter-user-manager`, a link to uinitconverterd as
+# the uinitconverter-user package installs it; work_history parts
 # 136-141), unprivileged: the launcher as user@UID.service runs it, with
 # XDG_RUNTIME_DIR in a sandbox directory. It makes its own s6-svscan and
 # configuration, serves the private socket at once, starts the user bus
@@ -456,13 +457,15 @@ open(sys.argv[2], "a").write(s.recv(4096).decode() + "\n")
 ' "$R/notify" "$W/notified" &
 echo $! >>"$W/pids"
 sleep 0.3
-# start_mgr LOG: the launcher, as user@UID.service runs it.
+# start_mgr LOG: the launcher, as user@UID.service runs it: by the name the
+# uinitconverter-user package gives it (a link to uinitconverterd).
+ln -sf "$BIN/uinitconverterd" "$W/uinitconverter-user-manager"
 start_mgr() {
     env HOME="$W/home" XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" \
         NOTIFY_SOCKET="$R/notify" UINITCONVERTER_USER_UNIT_PATH="$U:$R/systemd/generator.late" UINITCONVERTER_USER_CGROUP=no \
         UINITCONVERTER_USER_GENERATOR_PATH="$W/generators" UINITCONVERTER_USER_UNIT_GENERATOR_PATH="$W/unitgens" \
         UINITCONVERTER_SYSTEMD_USER="$W/fake-systemd" UINITCONVERTER_USER_FALLBACK_DIR="$W/fb" \
-        "$BIN/uinitconverterd" --config "$W/system.conf" user-manager >"$1" 2>&1 &
+        "$W/uinitconverter-user-manager" --config "$W/system.conf" >"$1" 2>&1 &
     MGR_PID=$!
     echo $MGR_PID >>"$W/pids"
 }

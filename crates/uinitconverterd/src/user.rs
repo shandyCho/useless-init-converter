@@ -635,10 +635,7 @@ impl Fallback {
             .trim()
             .parse()
             .ok()?;
-        let alive = fs::read_to_string(format!("/proc/{pid}/comm"))
-            .map(|c| c.trim() == "uinitconverterd")
-            .unwrap_or(false);
-        (!alive && pid != std::process::id()).then_some(pid)
+        (!manager_alive(pid) && pid != std::process::id()).then_some(pid)
     }
 
     fn set_running(&self) {
@@ -651,6 +648,22 @@ impl Fallback {
     fn clear_running(&self) {
         self.remove(&format!("{}.running", self.uid));
     }
+}
+
+/// Whether `pid` is a running uinitconverterd, under whichever name it was
+/// started (uinitconverter-user-manager's comm is cut to "uinitconverter-"):
+/// its executable, " (deleted)" after a package update replaced it.
+fn manager_alive(pid: u32) -> bool {
+    if let Ok(exe) = fs::read_link(format!("/proc/{pid}/exe")) {
+        let name = exe
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        return name.trim_end_matches(" (deleted)") == "uinitconverterd";
+    }
+    fs::read_to_string(format!("/proc/{pid}/comm"))
+        .map(|c| matches!(c.trim(), "uinitconverterd" | "uinitconverter-"))
+        .unwrap_or(false)
 }
 
 /// Empty the delegated cgroup but for init.scope (where this process is):

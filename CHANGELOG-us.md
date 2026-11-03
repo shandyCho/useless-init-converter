@@ -18,7 +18,8 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-147.
   `PropertiesChanged` for every state change, not only a job's own unit.
 - **The s6 user manager, opt-in.** `USER_MANAGER=s6` in
   `uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
-  command line, runs `uinitconverterd user-manager` for `user@UID.service`
+  command line, runs `uinitconverter-user-manager` (package
+  `uinitconverter-user`) for `user@UID.service`
   instead of `systemd --user`; the default stays `systemd`. In the test VM it
   runs GDM's greeter and GNOME sessions unmodified: logout, a new login, a
   user switch, lingering users, the RPM update helper, a reboot, timers and
@@ -43,8 +44,10 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-147.
   announced process.
 - `AttachProcessesToUnit` follows systemd's rule for unprivileged callers, and
   `Delegate=` with a controller list counts as delegation.
-- The `uinitconverterd` package installs a tmpfiles.d entry for
-  `/run/uinitconverter-user` (the user manager's fallback record).
+- New package `uinitconverter-user` (noarch): the s6 user manager's entry point
+  `uinitconverter-user-manager` (a link to `uinitconverterd`) and the
+  tmpfiles.d entry for `/run/uinitconverter-user` (its fallback record).
+  Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
 - An `Accept=yes` instance gets `LISTEN_FDNAMES=` from the socket's

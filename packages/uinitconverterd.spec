@@ -22,6 +22,9 @@ Requires:       dbus-daemon
 Requires:       uinitconverter-runner = %{version}-%{release}
 # Transient timers (systemd-run --on-calendar) run it.
 Recommends:     uinitconverter-timers = %{version}-%{release}
+# The s6 user manager (USER_MANAGER=s6) is that package; the default is
+# systemd --user.
+Suggests:       uinitconverter-user = %{version}-%{release}
 
 %description
 Serves the org.freedesktop.systemd1 D-Bus API on the system bus and on
@@ -45,17 +48,11 @@ cargo test --release --offline -p uinitconverterd -p uinitconverter-base -p uini
 %install
 install -Dm0755 target/release/uinitconverterd %{buildroot}%{_libexecdir}/uinitconverter/uinitconverterd
 install -Dm0644 dist/dbus/uinitconverter.conf %{buildroot}%{_datadir}/dbus-1/system.d/uinitconverter.conf
-install -Dm0644 dist/tmpfiles.d/uinitconverter-user.conf %{buildroot}%{_prefix}/lib/tmpfiles.d/uinitconverter-user.conf
-
-%post
-# The user manager's fallback record directory, now as at each boot.
-systemd-tmpfiles --create %{_prefix}/lib/tmpfiles.d/uinitconverter-user.conf >/dev/null 2>&1 || :
 
 %files
 %dir %{_libexecdir}/uinitconverter
 %{_libexecdir}/uinitconverter/uinitconverterd
 %{_datadir}/dbus-1/system.d/uinitconverter.conf
-%{_prefix}/lib/tmpfiles.d/uinitconverter-user.conf
 
 %changelog
 * Mon Nov 02 2026 uinitconverter developers

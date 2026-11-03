@@ -334,17 +334,27 @@ impl Runner {
         if self.cfg.user_manager_now(&cmdline) != "s6" {
             return cmd;
         }
-        let daemon = crate::config::tool_path("uinitconverterd")
-            .display()
-            .to_string();
-        let mut argv = vec![daemon.clone()];
+        // The s6 user manager is the uinitconverter-user package: without
+        // it, user@ keeps systemd --user.
+        let manager = crate::config::tool_path("uinitconverter-user-manager");
+        if !manager.exists() {
+            log(
+                self.id(),
+                &format!(
+                    "USER_MANAGER=s6, but {} is missing (install uinitconverter-user): running systemd --user",
+                    manager.display()
+                ),
+            );
+            return cmd;
+        }
+        let manager = manager.display().to_string();
+        let mut argv = vec![manager.clone()];
         if self.cfg.config_path != Path::new(crate::config::DEFAULT_CONFIG) {
             argv.push("--config".into());
             argv.push(self.cfg.config_path.display().to_string());
         }
-        argv.push("user-manager".into());
         ExecCommand {
-            path: daemon,
+            path: manager,
             argv,
             ..cmd
         }

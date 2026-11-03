@@ -1,7 +1,8 @@
 #!/bin/bash
 # The s6 user manager under a real user@UID.service (slice A, work_history
 # part 141), in the GNOME VM of tests/gnome-vm.sh. The VM boots systemd; a
-# drop-in makes one test user's user@ run `uinitconverterd user-manager`,
+# drop-in makes one test user's user@ run `uinitconverter-user-manager` (the
+# uinitconverter-user package's link to uinitconverterd),
 # and uinitconverter.user_manager=s6 on the kernel command line lets it
 # (the launcher hands over to systemd --user on a systemd boot otherwise).
 # GDM, the greeter and tester's GNOME session keep systemd --user. A second
@@ -92,6 +93,8 @@ case $1 in *baseline) exit 0 ;; esac
 rpm -Uvh --nodeps --nosignature --replacepkgs ./skalibs-*.rpm ./execline-*.rpm ./s6-*.rpm
 install -d /usr/local/libexec/uinitconverter
 install -m 0755 uinitconverterd uinitconverter-runner uinitconverter-timers /usr/local/libexec/uinitconverter/
+# As the uinitconverter-user package installs it.
+ln -sf uinitconverterd /usr/local/libexec/uinitconverter/uinitconverter-user-manager
 # The fallback's record directory, as the package's tmpfiles.d makes it.
 install -Dm0644 uinitconverter-user.conf /etc/tmpfiles.d/uinitconverter-user.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/uinitconverter-user.conf
@@ -108,7 +111,7 @@ mkdir -p "$dir"
 cat >"$dir/90-uinitconverter.conf" <<EOF
 [Service]
 ExecStart=
-ExecStart=/usr/local/libexec/uinitconverter/uinitconverterd user-manager
+ExecStart=/usr/local/libexec/uinitconverter/uinitconverter-user-manager
 EOF
 if [ "$1" = fallback ]; then
     # Broken for the s6 manager only: a unit path that only it reads (the
@@ -157,7 +160,9 @@ systemctl start "user@$uid.service" && ok "user@$uid.service started (READY=1 ar
 echo "   start took $(( ($(date +%s%N) - t0) / 1000000 )) ms"
 systemctl start "user@$ref.service"
 main=$(systemctl show -p MainPID --value "user@$uid.service")
-[ "$(cat "/proc/$main/comm" 2>/dev/null)" = uinitconverterd ] && ok "its main process is uinitconverterd" || bad "main PID $main is $(cat "/proc/$main/comm" 2>/dev/null)"
+# By its executable: started as uinitconverter-user-manager, comm is cut.
+exe=$(basename "$(readlink "/proc/$main/exe")")
+[ "$exe" = uinitconverterd ] && ok "its main process is uinitconverterd ($(cat "/proc/$main/comm"))" || bad "main PID $main is $exe"
 grep -qx "$main" "$cg/init.scope/cgroup.procs" && ok "the manager is in init.scope" || bad "init.scope: $(cat "$cg/init.scope/cgroup.procs" 2>&1)"
 sleep 3
 for u in default.target sockets.target dbus.socket hello.service; do
@@ -218,7 +223,7 @@ until pgrep -u gdm-greeter -x gnome-shell >/dev/null || [ $t -ge 120 ]; do sleep
 pgrep -u gdm-greeter -x gnome-shell >/dev/null && ok "the greeter's gnome-shell runs (after ${t} s)" || bad "no gnome-shell for gdm-greeter after 120 s"
 sleep 20
 main=$(systemctl show -p MainPID --value "user@$g.service")
-echo "   user@$g.service's main process: $(cat "/proc/$main/comm" 2>/dev/null)"
+echo "   user@$g.service's main process: $(basename "$(readlink "/proc/$main/exe")")"
 cg=$(cut -d: -f3 "/proc/$(pgrep -u gdm-greeter -x gnome-shell | head -1)/cgroup" 2>/dev/null)
 case $cg in */user@$g.service/session.slice/org.gnome.Shell@gdm.service) ok "gnome-shell is in $cg" ;; *) bad "gnome-shell's cgroup: $cg" ;; esac
 as() { runuser -u gdm-greeter -- env XDG_RUNTIME_DIR="/run/user/$g" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$g/bus" "$@"; }
@@ -279,7 +284,7 @@ if [ "${1:-}" = app ]; then
     exit
 fi
 main=$(systemctl show -p MainPID --value "user@$u.service")
-echo "   user@$u.service's main process: $(cat "/proc/$main/comm" 2>/dev/null)"
+echo "   user@$u.service's main process: $(basename "$(readlink "/proc/$main/exe")")"
 p=$(pgrep -u tester -x gnome-shell | head -1)
 cg=$(cut -d: -f3 "/proc/$p/cgroup" 2>/dev/null)
 case $cg in */user@$u.service/session.slice/org.gnome.Shell@user.service) ok "gnome-shell is in $cg" ;; *) bad "gnome-shell's cgroup: $cg" ;; esac
@@ -445,7 +450,7 @@ EOS
 cat >"$S/life.sh" <<'EOS'
 #!/bin/bash
 # As root in the VM: slice E's steps. life.sh STEP MANAGER, MANAGER being
-# the comm of the user managers expected (uinitconverterd or systemd).
+# the executable of the user managers expected (uinitconverterd or systemd).
 set -uo pipefail
 step=$1 want=${2:-uinitconverterd}
 pass=0 fail=0
@@ -459,7 +464,8 @@ as() {
     runuser -u "$u" -- env HOME="/home/$u" XDG_RUNTIME_DIR="/run/user/$id" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$id/bus" "$@"
 }
 seat_session() { loginctl list-sessions --no-legend | awk -v u="$1" '$3 == u && $4 == "seat0" {print $1}' | head -1; }
-mgr_comm() { cat "/proc/$(systemctl show -p MainPID --value "user@$(id -u "$1").service")/comm" 2>/dev/null; }
+# The manager's executable (comm is cut for uinitconverter-user-manager).
+mgr_comm() { basename "$(readlink "/proc/$(systemctl show -p MainPID --value "user@$(id -u "$1").service")/exe")" 2>/dev/null; }
 greeter_up() { pgrep -f -u "$(getent passwd | awk -F: '/^gdm-greeter/ {print $1}' | paste -sd,)" '^/usr/bin/gnome-shell' >/dev/null 2>&1; }
 no_fallback() {
     [ "$want" = uinitconverterd ] || return 0
@@ -584,7 +590,7 @@ pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
 bad() { fail=$((fail + 1)); echo "FAIL $*"; }
 until_ok() { local t=0; until eval "$1"; do t=$((t + 1)); [ $t -ge "$2" ] && return 1; sleep 1; done; }
-mgr_comm() { cat "/proc/$(systemctl show -p MainPID --value "user@$1.service")/comm" 2>/dev/null; }
+mgr_comm() { basename "$(readlink "/proc/$(systemctl show -p MainPID --value "user@$1.service")/exe")" 2>/dev/null; }
 case $step in
     broken)
         until_ok '[ -e /run/uinitconverter-user/1000 ]' 120 && ok "tester's s6 manager fell back: $(cat /run/uinitconverter-user/1000)" || bad "no fallback record after 120 s"

@@ -24,6 +24,9 @@ if they turned out to be wrong.
 - Packaging: each core executable is its own RPM (`packages/NAME.spec`, all
   built from one workspace tarball by `packages/build-rpms.sh`), and they
   depend on each other with `Requires`; the library crates are not packaged.
+  `uinitconverter-user` (noarch) is the s6 user manager: the link
+  `uinitconverter-user-manager` into `uinitconverterd` and its tmpfiles.d
+  entry; without it `user@` keeps `systemd --user`.
   The `uinitconverter` package holds the boot setup (`dist/`) and requires the tools.
   The version is `[workspace.package] version` in Cargo.toml and the release
   is generated per build; the specs carry neither, so build them only with

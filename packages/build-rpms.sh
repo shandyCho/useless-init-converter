@@ -1,12 +1,12 @@
 #!/bin/bash
 # Build the uinitconverter RPMs (uinitconverter, uinitconverter-gen, uinitconverter-runner,
-# uinitconverter-timers, uinitconverterd) from the core workspace. They share one source
+# uinitconverter-timers, uinitconverterd, uinitconverter-user) from the core workspace. They share one source
 # tarball with the crates vendored, so rpmbuild needs no network.
 #
 #   packages/build-rpms.sh [OUTDIR]          # default: ~/rpmbuild-uinitconverter
 #   packages/build-rpms.sh --srpm [OUTDIR]   # source RPMs only
 #
-# With --srpm the five source RPMs go to OUTDIR/srpms, each with the version
+# With --srpm the six source RPMs go to OUTDIR/srpms, each with the version
 # and release in its spec and the vendored tarball inside, so they rebuild
 # offline as they are (rpmbuild --rebuild, mock). packages/github-release.sh
 # builds the binary RPMs with the other packages' for a GitHub release.
@@ -30,7 +30,7 @@ if [ "${1:-}" = --srpm ]; then
     shift
 fi
 OUT=${1:-$HOME/rpmbuild-uinitconverter}
-PACKAGES=(uinitconverter-runner uinitconverterd uinitconverter-timers uinitconverter-gen uinitconverter)
+PACKAGES=(uinitconverter-runner uinitconverterd uinitconverter-user uinitconverter-timers uinitconverter-gen uinitconverter)
 
 die() { echo "error: $*" >&2; exit 1; }
 command -v rpmbuild >/dev/null || die "rpmbuild missing: sudo dnf install rpm-build"
@@ -75,7 +75,7 @@ for p in "${PACKAGES[@]}"; do
 done
 
 if [ "$SRPM" = 1 ]; then
-    # Only this build's source RPMs in srpms/: the five go to the builder
+    # Only this build's source RPMs in srpms/: the six go to the builder
     # together (they require each other's version-release).
     rm -f "$OUT"/srpms/*.src.rpm
     for p in "${PACKAGES[@]}"; do
@@ -95,7 +95,7 @@ for p in "${PACKAGES[@]}"; do
         || die "$p failed, see $OUT/$p.log"
 done
 # Only this build's RPMs in rpms/, so `dnf upgrade rpms/*.rpm` gets one set
-# (the five are tied to one version-release); debuginfo and debugsource
+# (the six are tied to one version-release); debuginfo and debugsource
 # stay in RPMS/.
 rm -f "$OUT"/rpms/*.rpm
 find "$OUT/RPMS" -name "*-$VERSION-$RELEASE.*.rpm" ! -name '*-debuginfo-*' ! -name '*-debugsource-*' \

@@ -2,19 +2,21 @@
 
 [한국어](README.md)
 
-Each executable of the core (`crates/`) is its own RPM package. The source
-stays in the one Cargo workspace, and all five packages build from the same
-source tarball. The library crates (`uinitconverter-base`, `uinitconverter-install`,
+Each executable of the core (`crates/`) is its own RPM package, and the s6
+user manager has one of its own (`uinitconverter-user`, an entry point into
+`uinitconverterd`). The source stays in the one Cargo workspace, and all six
+packages build from the same source tarball. The library crates (`uinitconverter-base`, `uinitconverter-install`,
 `uinitconverter-exec`, `uinitconverter-client`) are linked statically into the
 executables, so they are used only to build and are not packaged.
 
 | Package | Contains | Needs at run time (`Requires`) |
 |---|---|---|
 | `uinitconverter-runner` | `uinitconverter-runner` | s6, shadow-utils. Recommends `uinitconverterd` (`OnFailure=`/`OnSuccess=` units are started through the daemon) |
-| `uinitconverterd` | `uinitconverterd` (also the s6 user manager, `uinitconverterd user-manager`), the D-Bus policy (`uinitconverter.conf`), the tmpfiles.d entry for `/run/uinitconverter-user` (the user manager's fallback record) | s6, s6-rc, dbus-daemon, `uinitconverter-runner`. Recommends `uinitconverter-timers` (`systemd-run --on-calendar`) |
+| `uinitconverterd` | `uinitconverterd`, the D-Bus policy (`uinitconverter.conf`) | s6, s6-rc, dbus-daemon, `uinitconverter-runner`. Recommends `uinitconverter-timers` (`systemd-run --on-calendar`); suggests `uinitconverter-user` |
+| `uinitconverter-user` (noarch) | `uinitconverter-user-manager` (a link to `uinitconverterd`, which runs as the user manager under that name), the tmpfiles.d entry for `/run/uinitconverter-user` (the fallback record) | `uinitconverterd`, `uinitconverter-runner`, s6, systemd (`systemd --user` is the default and the fallback). Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says |
 | `uinitconverter-timers` | `uinitconverter-timers` | `uinitconverterd` (timers start units through the daemon) |
 | `uinitconverter-gen` | `uinitconverter-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (the generated services run them) |
-| `uinitconverter` | the `uinitconverter` command (with `uinitconverter init`, the boot setup), `early`, configuration, s6 services, s6-linux-init skeleton, SELinux module, kernel-install plugin, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, and the four packages above |
+| `uinitconverter` | the `uinitconverter` command (with `uinitconverter init`, the boot setup), `early`, configuration, s6 services, s6-linux-init skeleton, SELinux module, kernel-install plugin, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, and the four tool packages above; suggests `uinitconverter-user` |
 
 - `dnf install uinitconverter` installs everything. The boot configuration and the
   SELinux module are in the `uinitconverter` package, so booting with s6 needs it.
@@ -50,8 +52,8 @@ this script (plain `rpmbuild` fails for lack of a version).
   `uinitconverter-gen-0.1.0-1.20261021071849.g0023111.fc45`. The build time comes
   first, so when only the Rust code changed and the version did not, dnf
   still sees the new build as an upgrade.
-- The five packages are tied to one version-release, and the script always
-  builds all five together. `rpms/` holds only the last build's five.
+- The six packages are tied to one version-release, and the script always
+  builds all six together. `rpms/` holds only the last build's six.
 - The tools built as RPMs print the package's version-release for
   `--version` (e.g. `uinitconverter-gen 0.1.0-1.20261021073517.gc8aabf8.fc45`);
   built from source they print the commit, like `0.1.0 (git c8aabf8)`.
@@ -77,7 +79,7 @@ packages/github-release.sh DIR         # somewhere else
 It needs a committed tree, then runs `packages/build-rpms.sh` and
 `standalone/*/build-rpm.sh` in a fresh `DIR/work` and collects:
 
-- `DIR/assets/`: the binary RPMs (the five core packages and the standalone
+- `DIR/assets/`: the binary RPMs (the six core packages and the standalone
   tools; no debuginfo packages) and `SHA256SUMS`. The skarnet.org packages
   are not in a release: each user builds them with
   `dist/rpm/build-skarnet-rpms.sh`.
@@ -190,4 +192,4 @@ into `/etc/uinitconverter` (the file names are the same except
 `sdcompat.conf` → `uinitconverter.conf`).
 
 To remove: `sudo uinitconverter init --uninstall`, then
-`dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd`.
+`dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd uinitconverter-user`.

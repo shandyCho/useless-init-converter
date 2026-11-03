@@ -131,8 +131,9 @@ holds the fds itself, so `check.sh` checks that they are gone after the daemon
 restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
 User mode (a user's service manager without systemd --user, in progress):
-`tests/user-sandbox.sh DIR` runs `uinitconverterd user-manager` as `user@`
-would, with `XDG_RUNTIME_DIR` in a sandbox directory: the private socket,
+`tests/user-sandbox.sh DIR` runs the user manager as `user@` would (as
+`uinitconverter-user-manager`, the `uinitconverter-user` package's link to
+`uinitconverterd`), with `XDG_RUNTIME_DIR` in a sandbox directory: the private socket,
 `default.target`, `READY=1`, the bus started from `dbus.socket` (dbus-daemon
 here), `systemctl --user`, a GNOME-shaped session and logout, a bus restart
 and the stop on `SIGTERM`; then the later slices' checks: environment and
@@ -253,7 +254,8 @@ provisioned image again.
 a real `user@UID.service` in that VM (after `cargo build`). The VM boots
 systemd; the script installs the debug binaries and the skalibs and s6 RPMs
 (`SKARNET_RPMS=`, default `~/rpmbuild-skarnet/RPMS/x86_64`), adds a user
-`s6test` whose `user@` gets a drop-in for `uinitconverterd user-manager`,
+`s6test` whose `user@` gets a drop-in for `uinitconverter-user-manager` (a link
+to `uinitconverterd`, as the `uinitconverter-user` package installs it),
 sets `uinitconverter.user_manager=s6` on the kernel command line and boots
 again. It then starts that `user@`, checks readiness, `init.scope` and
 `app.slice`, the user bus and `systemctl --user`, prints the memory (PSS)
@@ -678,7 +680,7 @@ Boot the normal Fedora entry, then:
 
 ```sh
 sudo uinitconverter init --uninstall
-sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd \
+sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd uinitconverter-user \
     uinitconverter-fdstore uinitconverter-notify uinitconverter-journal-relay uinitconverter-linkwatch
 sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd \
     skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel
