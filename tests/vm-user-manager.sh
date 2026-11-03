@@ -472,7 +472,14 @@ session_up() {
     s=$(seat_session "$u")
     until_ok '[ "$(loginctl show-session '"$s"' -p Active --value)" = yes ]' 30 && ok "$u's session $s is active" || bad "$u's session $s is not active"
     [ "$(mgr_comm "$u")" = "$want" ] && ok "$u's user manager is $want" || bad "$u's user manager: $(mgr_comm "$u")"
-    sleep 5
+    # The session's transaction goes on after gnome-shell is up (ours
+    # starts its units one at a time, about 6 s; systemd in parallel):
+    # wait for the target, and say how long it took.
+    t=0
+    until [ "$(as "$u" systemctl --user is-active gnome-session@gnome.target 2>&1)" = active ] || [ $t -ge 30 ]; do
+        sleep 1; t=$((t + 1))
+    done
+    echo "   $u: gnome-session@gnome.target active ${t} s after gnome-shell was up"
     for x in gnome-session@gnome.target org.gnome.Shell@user.service gnome-session-manager@gnome.service; do
         st=$(as "$u" systemctl --user is-active "$x" 2>&1)
         [ "$st" = active ] && ok "$u: $x is active" || bad "$u: $x: $st"

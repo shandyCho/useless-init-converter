@@ -11132,3 +11132,19 @@ Smaller items:
 - job modes; OnFailureJobMode=
 - the socket-waiting runners (memory)
 - GetAll property order
+
+## 2026-11-03, part 146: the lifecycle test again, after the merge fix
+
+Owner: "run the lifecycle test in the VM again" (twice). On e0e030a (with the start_seq merge fix):
+- **Runs 1 and 2:** 18 + 52/53. Both failed the same check: "alice: gnome-session@gnome.target: activating".
+- **Cause, from the job log (UINITCONVERTER_LOG_JOBS=1 in the kept VM):** no job was stuck. The leader's start of gnome-session@gnome.target is a transaction of about 6 s here: tester 10.66 → 17.45 s, alice 71.08 → 76.91 s. Our transaction starts its units one at a time, and gnome-shell is up partway through it. The test checked a fixed 5 s after gnome-shell appeared, so it raced the end of the transaction; the earlier passes (part 145) were timing luck.
+- **Test change** (tests/vm-user-manager.sh, life.sh session_up): wait up to 30 s for gnome-session@gnome.target and print how long it took, so the gap stays visible.
+- **Run 3:** 18 + 53, rc 0.
+  - tester's target was active 5 s after gnome-shell was up, alice's 6 s.
+  - At the reboot, user@ stops took 0.69-2.73 s, the greeter after alice's logout being the slowest.
+
+This is a real difference from systemd --user, which starts these units in parallel and has the target active about when the shell is. It remains on the list as "parallel starts within a transaction".
+
+### Current state
+
+As in part 145; this part's test change and entry are committed together.
