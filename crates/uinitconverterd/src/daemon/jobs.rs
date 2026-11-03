@@ -125,6 +125,18 @@ impl Daemon {
                 ),
             ));
         }
+        // A user manager that is exiting starts nothing more, as systemd
+        // --user (its exit job is irreversible): the GNOME leader's
+        // gnome-session-shutdown.target on SIGTERM, or an OnFailure= of a
+        // unit going down, would otherwise run after the bus is gone.
+        if starts && self.cfg.user_mode && self.exiting.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(err(
+                E_DESTRUCTIVE,
+                format!(
+                    "Transaction for {id}/{jtype} is destructive (the user manager is exiting)."
+                ),
+            ));
+        }
         // (A user manager runs its sockets as units: dyn_start_socket.)
         if starts
             && self.kind_of(&id).is_none()

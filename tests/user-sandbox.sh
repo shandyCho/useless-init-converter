@@ -102,8 +102,22 @@ ln -s dbus-test.service "$U/dbus.service"
 cat >"$U/sess@.target" <<EOF
 [Unit]
 Requires=sessmgr@%i.service
-Wants=sesspart.service
+Wants=sesspart.service sessreq.service sessmon.service
 Conflicts=sessdown.target
+EOF
+# gnome-session-monitor.service's shape: PartOf= a unit that Requires= the
+# session (stopped with it, so its PartOf= unit must go too).
+cat >"$U/sessreq.service" <<EOF
+[Unit]
+Requires=sess@gnome.target
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat >"$U/sessmon.service" <<EOF
+[Unit]
+PartOf=sessreq.service
+[Service]
+ExecStart=/bin/sleep 1000
 EOF
 cat >"$U/sessmgr@.service" <<EOF
 [Unit]
@@ -527,6 +541,8 @@ call StartUnit ss sessdown.target replace-irreversibly
 expect_state sess@gnome.target inactive/dead
 expect_state sessmgr@gnome.service inactive/dead
 expect_state sesspart.service inactive/dead
+expect_state sessreq.service inactive/dead
+expect_state sessmon.service inactive/dead
 expect_state sessdown.target inactive/dead
 expect_state base.service active/running
 

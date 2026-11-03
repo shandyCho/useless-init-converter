@@ -426,6 +426,14 @@ impl Daemon {
 
     /// A unit's own start, its dependencies already handled.
     async fn dyn_start_one(&self, id: &str, unit: &Unit) -> &'static str {
+        // An exiting user manager starts nothing more, also inside a
+        // transaction already running: GDM ends the greeter's session as
+        // user@ stops, and the leader's gnome-session-shutdown.target went
+        // on to start gnome-session-restart-dbus, so the bus went while
+        // gnome-session-monitor still needed it (5 s to its stop timeout).
+        if self.cfg.user_mode && self.exiting.load(std::sync::atomic::Ordering::Relaxed) {
+            return "canceled";
+        }
         self.stop_conflicts(id, unit).await;
 
         if unit.utype() == "socket" && unit.get_bool("Socket", "Accept", false) {
@@ -647,7 +655,19 @@ impl Daemon {
     }
 
     pub(super) async fn dyn_stop(&self, id: &str, unit: &Unit) -> &'static str {
-        Box::pin(self.dyn_stop_seen(id, unit, &mut BTreeSet::new())).await
+        let t = std::time::Instant::now();
+        let r = if self.cfg.user_mode {
+            Box::pin(self.user_stop_transaction(id, unit)).await
+        } else {
+            Box::pin(self.dyn_stop_seen(id, unit, &mut BTreeSet::new())).await
+        };
+        if t.elapsed() >= std::time::Duration::from_secs(1) {
+            eprintln!(
+                "uinitconverterd: stopping {id} took {:.1} s",
+                t.elapsed().as_secs_f64()
+            );
+        }
+        r
     }
 
     /// dyn_stop(), dependents first. `seen`: the units this stop has taken
@@ -668,6 +688,12 @@ impl Daemon {
             let (_, du) = self.load_unit(&dep);
             Box::pin(self.dyn_stop_seen(&dep, &du, seen)).await;
         }
+        self.dyn_stop_alone(id, unit).await
+    }
+
+    /// Stop `id` itself: its dependents are the caller's. A service whose
+    /// socket still listens is armed again (not while exiting).
+    pub(super) async fn dyn_stop_alone(&self, id: &str, unit: &Unit) -> &'static str {
         let rearm = unit.utype() == "service"
             && !self.exiting.load(std::sync::atomic::Ordering::Relaxed)
             && !self.sockets_of(id).is_empty();
@@ -860,16 +886,38 @@ impl Daemon {
     /// can still call it while they stop.
     pub(super) async fn stop_all_user(&self) {
         let bus_units = ["dbus.service", "dbus.socket"].map(|n| self.load_unit(n).0);
-        let mut ids: Vec<String> = self.dynamic.lock().unwrap().keys().cloned().collect();
-        ids.sort_by_key(|id| bus_units.contains(id));
-        for id in ids {
+        let rest: Vec<String> = self
+            .dynamic
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|id| !bus_units.contains(id))
+            .cloned()
+            .collect();
+        // Everything but the bus as one set, in waves by After=/Before=
+        // (each wave at once, as systemd stops a whole transaction; one at
+        // a time, a greeter's 40 units took 12 s at a reboot, systemd
+        // --user 0.1 s). One set, not a transaction per unit: overlapping
+        // ones stopped a socket under its service's own stop, which then
+        // waited 5 s. No unit locks: the manager is exiting, so nothing
+        // starts any more (check_job, dyn_start_one), and taking them all
+        // could deadlock with a transaction holding its top unit's.
+        let set: Vec<(String, Unit)> = rest
+            .iter()
+            .filter(|id| self.dynamic_kind(id).is_some())
+            .map(|id| (id.clone(), self.load_unit(id).1))
+            .collect();
+        self.stop_in_waves(set, None).await;
+        // Then the bus, which the units' ExecStop= may still use: the
+        // service, then its socket.
+        for id in bus_units {
             if self.dynamic_kind(&id).is_none() {
                 continue;
             }
             let (_, unit) = self.load_unit(&id);
             let lock = self.unit_lock(&id);
             let _guard = lock.lock().await;
-            self.dyn_stop(&id, &unit).await;
+            self.dyn_stop_alone(&id, &unit).await;
         }
         self.stop_scopes_at_shutdown().await;
     }
