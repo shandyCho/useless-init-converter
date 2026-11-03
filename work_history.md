@@ -10866,3 +10866,65 @@ Slices A and B are done in the VM (a systemd boot opted in with the kernel flag)
 - **Slice C:** a user's GNOME session (log in as tester from the greeter): gnome-session@gnome.target, the leader's UnsetAndSetEnvironment and FIFO, xdg-autostart units (systemd-xdg-autostart-generator is a unit generator: user unit generators are not run yet), app scopes from gnome-shell and gnome-session (StartTransientUnit in user mode), dbus-broker's transient services, uresourced's SetUnitProperties.
 - **Then:** slices D and E; parallel starts within a transaction (startup time); the s6 boot's own system manager running the user manager.
 - **Smaller items:** job modes fail/replace-irreversibly still run as replace; OnFailure=/OnFailureJobMode=; the gsd-smartcard race above.
+
+## 2026-11-03, part 143: slice C (a user's GNOME session on the s6 user manager), skarnet RPMs rebuilt (uncommitted)
+
+Owner: "could you do slice C?", then mid-way "could you download skarnet's sources and build them what we need?".
+
+**Result:** tester's GNOME session (GDM autologin) runs on the s6 user manager in the VM, with every user@ on it. The new mode `tests/vm-user-manager.sh DIR session` passes 18/18, plus 2/2 for an app:
+- gnome-vm.sh `wait` and `check` pass.
+- gnome-shell runs in `session.slice/org.gnome.Shell@user.service`, with no ambient capabilities, and the background loads.
+- No failed units or jobs; is-system-running says running.
+- gnome-session@gnome.target, initialized, graphical-session, the shell, the session manager and monitor, gsd Power and pipewire are active.
+- The leader's UnsetAndSetEnvironment reached the manager (WAYLAND_DISPLAY in show-environment), and gnome-session's autostart app scope exists.
+- SELinux is enforcing with no AVC denials.
+- Calculator, opened from GNOME Shell with QMP keys, runs in `app-gnome-org.gnome.Calculator-PID.scope`, which is active (screenshot session-session.png).
+
+`session-baseline` (stock systemd --user) also passes 18/18 + 2/2.
+
+**Changes:**
+- **User unit generators** (user.rs run_unit_generators), per systemd.generator(7):
+  - They come from /run, /etc, /usr/local/lib and /usr/lib `systemd/user-generators`; an earlier name hides a later one, and a /dev/null link disables it.
+  - Each gets `$XDG_RUNTIME_DIR/systemd/generator`, `generator.early` and `generator.late`, made empty first, with the manager.env environment plus SYSTEMD_SCOPE=user, for at most 5 s.
+  - They run at startup (after manager.env) and at each reload (reload_db in user mode, before the caches are cleared). On Fedora these are systemd-xdg-autostart-generator and podman-user-generator.
+  - UINITCONVERTER_USER_UNIT_GENERATOR_PATH replaces the directories in tests. The environment generators share `executables()` and `wait_limited()` with them.
+- **The user unit path follows systemd.unit(5):** transient, generator.early, ~/.config, /etc/xdg, /etc, $XDG_RUNTIME_DIR/systemd/user, /run, generator, ~/.local/share, /usr/local/share, /usr/share, /usr/local/lib, /usr/lib, generator.late. Before, transient came after ~/.config, and /etc/xdg, the share directories and the generator directories were missing.
+- **Transient scopes default to app.slice in user mode** (they used system.slice). gnome-session's autostart scopes name no slice and failed to move their PIDs into a system.slice under user@.
+- **No ambient capabilities for the units.** Bug found by the screenshot: the desktop was plain blue, and GNOME Shell logged "Failed to load background: Gly.LoaderError: Loader process exited early". Cause:
+  - systemd gives user@ CAP_WAKE_ALARM as an ambient capability. systemd --user keeps it to itself.
+  - Our launcher passed it through s6-svscan and the runner to every unit, since ambient capabilities survive exec.
+  - bwrap ("Unexpected capabilities but not setuid") then refused to run glycin's sandboxed loader. Flatpak would hit the same.
+
+  The launcher now clears the ambient set (PR_CAP_AMBIENT_CLEAR_ALL) once it has decided not to exec systemd --user, which keeps it. WakeSystem= isn't implemented, so nothing of ours needed it.
+- **StartTransientUnit with a PID that is gone** now answers `org.freedesktop.DBus.Error.UnixProcessIdUnknown`, as systemd does (ESRCH), and removes the scope's empty cgroup. Before, it was Failed and the directory stayed. vboxclient and vmware-user autostart entries exit at once off their hypervisors, so gnome-session hits this at every login, on stock too.
+- tests/vm-user-manager.sh:
+  - modes `session` and `session-baseline`
+  - `VM_KEEP=yes` leaves the VM running
+  - a test bug fixed: `pgrep -x gnome-calculator` never matches, since comm is cut to 15 characters
+
+**Compared with stock (same VM, same checks):**
+- xdg-desktop-autostart.target is inactive on both. Nothing in the stock units pulls it in, because gnome-session 51 starts autostart apps itself (app-gnome-*.scope "launched by gnome-session-service"). The generator's units therefore exist but aren't started, as on systemd. It is reported, not checked.
+- evolution-alarm-notify.service (Type=dbus, `--autostart`) exits 0 without taking its name and is inactive on both. Ours logs "start (... transaction): failed" for it; the unit isn't left failed.
+- The warning lists differ only in the gsd-smartcard race already noted in part 142 (with its JS stack trace), plus systemd's own "Failed to adjust cpu/io pressure threshold" on stock.
+- Memory (PSS of everything under user@1000, gnome-shell included): stock 719,933 KiB; ours 721,564 and 742,755 KiB in two runs. Run-to-run variance is of the same order as the difference.
+
+**skarnet RPMs.** s6-dns and s6-networking had never been built here: no s6-tcpserverd, so the sandbox's three TCP Accept=yes checks skipped. The two tarballs were downloaded from skarnet.org into ~/skarnet-sources; the other seven came from ~/rpmbuild-skarnet/SOURCES. All nine matched dist/skarnet.versions' SHA-256. Then `dist/rpm/build-skarnet-rpms.sh` built all nine into ~/rpmbuild-skarnet/rpms (release 1.202611030942, rpmbuild with the sysroot; nothing installed). `SANDBOX_S6NET_BIN=~/rpmbuild-skarnet/sysroot/usr/bin` works on this host (it links the host's libskarnet.so.2.16). The last VM run used these RPMs (`SKARNET_RPMS=~/rpmbuild-skarnet/rpms`).
+
+**Tests.**
+- cargo test 114 (new: unit generators with fresh directories, SYSTEMD_SCOPE, a /dev/null override); fmt clean. Standalone 10, 7, 6, 10.
+- User sandbox 49/49. New: a unit generator gets the three directories, its generated unit starts through a .wants link in generator.late, and a reload reruns it and drops the old output.
+- System sandbox with SANDBOX_S6NET_BIN 370/370. Without it: 367/367; SANDBOX_JOURNAL=no 374/374; SANDBOX_FDSTORE=no 355/355 (each without the 3 TCP checks).
+- VM: session 18/18 + 2/2 (three runs after the fixes; the first two failed on the capability and the test's pgrep), session-baseline 18/18 + 2/2. shellcheck and bash -n clean.
+
+**Not tested:** the transient-scope changes in the sandbox (moving PIDs needs a writable cgroup; unprivileged, the user sandbox has none). They are covered by the VM only. dbus-broker's transient services and uresourced's SetUnitProperties ran in every session without errors, but no check targets them directly.
+
+### Current state
+
+Slices A, B and C pass in the VM (a systemd boot opted in with the kernel flag). The default stays USER_MANAGER=systemd. This part is uncommitted.
+
+### Next steps
+
+- **Slice D:** flatpak (bwrap now runs; the flatpak environment generator's XDG_DATA_DIRS is already in manager.env), the user sockets held by the daemon, ManagedOOM reporting to systemd-oomd, podman quadlet units (the generator now runs; untested), user timers.
+- **Slice E:** logout (gnome-session-shutdown.target, `--restart-dbus`), a second user, a user switch, lingering, a package update (reload), power off, and the fallback.
+- **Smaller items:** parallel starts within a transaction; job modes fail/replace-irreversibly; OnFailure=/OnFailureJobMode=; the gsd-smartcard race; whether a Type=dbus unit that exits 0 before its name should be logged as a failure (systemd's result there wasn't checked).
+- vm-user-manager.sh's SKARNET_RPMS default (~/rpmbuild-skarnet/RPMS/x86_64) holds the older 2026-10-26 build of the same versions. The new build is in ~/rpmbuild-skarnet/rpms, which is where build-skarnet-rpms.sh writes; the default could point there.

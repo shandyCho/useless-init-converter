@@ -525,7 +525,7 @@ log UNIT`, which also works with `JOURNAL=no`).
 ### The s6 user manager (in progress)
 
 Work is under way to replace `systemd --user` too (the plan is in
-`work_history.md`, parts 136-141). `USER_MANAGER=s6` in
+`work_history.md`, parts 136-143). `USER_MANAGER=s6` in
 `uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
 command line, makes the runner start `uinitconverterd user-manager` for
 `user@UID.service` instead of `systemd --user`; the unit file is not changed.
@@ -562,10 +562,24 @@ greeter runs on it: in the test VM it shows, with gnome-shell in
 `session.slice/org.gnome.Shell@gdm.service` as under systemd, SELinux
 enforcing and no denials.
 
-Not done yet: a user's GNOME session (xdg-autostart, app scopes, logout),
-timers and paths, `Accept=yes` sockets, systemd-oomd reporting, SELinux for
-confined users, and a run under the s6 boot's own system manager. Keep the
-default until those are done.
+The user unit generators (`user-generators/`: systemd-xdg-autostart-generator,
+podman's quadlet generator) run at startup and at each reload, with
+`$XDG_RUNTIME_DIR/systemd/generator`, `generator.early` and `generator.late`
+as their output, and those directories are in the unit path where systemd
+puts them. Transient scopes (`StartTransientUnit`, which gnome-shell and
+gnome-session use for each app) go into `app.slice` unless they name a
+slice. The units get no ambient capabilities: `user@` has `CAP_WAKE_ALARM`
+from systemd, which `systemd --user` keeps to itself, and bwrap (GNOME's
+image loaders, flatpak) refuses to run with it. A user's GNOME session runs
+on it in the test VM: GDM's autologin, the session targets, gnome-shell in
+`session.slice/org.gnome.Shell@user.service`, an app from the shell in its
+`app-gnome-*.scope`, SELinux enforcing and no denials, as with
+`systemd --user`.
+
+Not done yet: logout and a second user, timers and paths, `Accept=yes`
+sockets, flatpak and systemd-oomd reporting, SELinux for confined users, and
+a run under the s6 boot's own system manager. Keep the default until those
+are done.
 
 ## The `s6` command (s6-frontend)
 

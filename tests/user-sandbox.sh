@@ -231,6 +231,25 @@ After=late.target
 ExecStart=/bin/sleep 1000
 EOF
 
+# Slice C: a unit generator, as systemd-xdg-autostart-generator: it writes
+# a unit and a .wants link into its third directory (generator.late). It
+# names the unit after $W/genname, so a reload shows it ran again.
+mkdir -p "$W/unitgens"
+echo first >"$W/genname"
+cat >"$W/unitgens/test-generator" <<EOF
+#!/bin/sh
+[ "\$SYSTEMD_SCOPE" = user ] || exit 1
+n=\$(cat $W/genname)
+mkdir -p "\$3/autostartx.target.wants"
+printf '[Service]\nExecStart=/bin/sleep 1000\n' >"\$3/app-\$n@autostart.service"
+ln -s "../app-\$n@autostart.service" "\$3/autostartx.target.wants/app-\$n@autostart.service"
+echo "\$1 \$2" >$W/genargs
+EOF
+chmod +x "$W/unitgens/test-generator"
+cat >"$U/autostartx.target" <<EOF
+[Unit]
+EOF
+
 cat >"$W/bus.conf" <<EOF
 <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
@@ -255,8 +274,8 @@ open(sys.argv[2], "a").write(s.recv(4096).decode() + "\n")
 echo $! >>"$W/pids"
 sleep 0.3
 env HOME="$W/home" XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" \
-    NOTIFY_SOCKET="$R/notify" UINITCONVERTER_USER_UNIT_PATH="$U" UINITCONVERTER_USER_CGROUP=no \
-    UINITCONVERTER_USER_GENERATOR_PATH="$W/generators" \
+    NOTIFY_SOCKET="$R/notify" UINITCONVERTER_USER_UNIT_PATH="$U:$R/systemd/generator.late" UINITCONVERTER_USER_CGROUP=no \
+    UINITCONVERTER_USER_GENERATOR_PATH="$W/generators" UINITCONVERTER_USER_UNIT_GENERATOR_PATH="$W/unitgens" \
     "$BIN/uinitconverterd" --config "$W/system.conf" user-manager >"$W/daemon.log" 2>&1 &
 MGR_PID=$!
 echo $MGR_PID >>"$W/pids"
@@ -311,6 +330,20 @@ sleep 0.3
 SC start portalx.service && ok "Requisite= waited for the target another transaction was starting" \
     || bad "portalx.service: $(SC status portalx.service 2>&1 | tail -2)"
 expect_state portalx.service active/running
+
+echo "== slice C: unit generators"
+[ "$(cat "$W/genargs" 2>/dev/null)" = "$R/systemd/generator $R/systemd/generator.early" ] \
+    && ok "the unit generator ran with the three directories" || bad "genargs: $(cat "$W/genargs" 2>&1)"
+SC start autostartx.target
+expect_state app-first@autostart.service active/running
+echo second >"$W/genname"
+SC stop autostartx.target app-first@autostart.service
+SC daemon-reload
+SC start autostartx.target
+expect_state app-second@autostart.service active/running
+out=$(SC show -p LoadState --value app-first@autostart.service 2>&1)
+[ "$out" = not-found ] && ok "after a reload the generator's old output is gone" || bad "app-first@autostart.service: $out"
+SC stop autostartx.target app-second@autostart.service
 
 echo "== a session"
 call StartUnit ss sess@gnome.target fail

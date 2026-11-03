@@ -456,7 +456,7 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 
 ### s6 사용자 매니저 (진행 중)
 
-`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-141부).
+`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-143부).
 `uinitconverter.conf`의 `USER_MANAGER=s6` 또는 커널 명령줄의 `uinitconverter.user_manager=s6`이
 있으면 러너가 `user@UID.service`에 `systemd --user` 대신 `uinitconverterd user-manager`를
 실행합니다. 유닛 파일은 바꾸지 않습니다. `USER_MANAGER=systemd`(기본값)나
@@ -485,9 +485,20 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 gnome-shell은 systemd에서처럼 `session.slice/org.gnome.Shell@gdm.service`에 있으며, SELinux는
 enforcing이고 거부가 없습니다.
 
-아직 안 된 것: 사용자의 GNOME 세션(xdg-autostart, 앱 scope, 로그아웃), 타이머와 path 유닛,
-`Accept=yes` 소켓, systemd-oomd 보고, 제한된 사용자를 위한 SELinux, s6 부팅의 시스템 매니저
-아래에서 실행. 이것들이 끝나기 전까지는 기본값을 유지하세요.
+사용자 유닛 생성기(`user-generators/`: systemd-xdg-autostart-generator, podman의 quadlet 생성기)는
+시작할 때와 reload할 때마다 실행합니다. 출력은 `$XDG_RUNTIME_DIR/systemd/generator`,
+`generator.early`, `generator.late`이고, 이 디렉터리들은 systemd와 같은 자리에서 유닛 경로에
+들어갑니다. 임시 scope(`StartTransientUnit`, gnome-shell과 gnome-session이 앱마다 씁니다)는
+slice를 지정하지 않으면 `app.slice`에 들어갑니다. 유닛은 ambient capability를 받지 않습니다.
+`user@`는 systemd에게서 `CAP_WAKE_ALARM`을 받는데, `systemd --user`는 이것을 자신만 갖고 있고,
+bwrap(GNOME의 이미지 로더, flatpak)은 이것이 있으면 실행을 거부합니다. 사용자의 GNOME 세션이 테스트
+VM에서 이 위에서 동작합니다. GDM 자동 로그인, 세션 타깃, `session.slice/org.gnome.Shell@user.service`의
+gnome-shell, 셸에서 연 앱이 자기 `app-gnome-*.scope`에 들어가는 것, SELinux enforcing에 거부 없음까지
+`systemd --user`와 같습니다.
+
+아직 안 된 것: 로그아웃과 두 번째 사용자, 타이머와 path 유닛, `Accept=yes` 소켓, flatpak과
+systemd-oomd 보고, 제한된 사용자를 위한 SELinux, s6 부팅의 시스템 매니저 아래에서 실행. 이것들이
+끝나기 전까지는 기본값을 유지하세요.
 
 ## `s6` 명령 (s6-frontend)
 

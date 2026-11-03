@@ -228,7 +228,11 @@ impl Daemon {
             ));
         }
         let mut pids: Vec<u32> = Vec::new();
-        let mut slice = if kind == "scope" {
+        // A user manager's units default to app.slice (gnome-desktop's app
+        // scopes name none).
+        let mut slice = if kind == "scope" && self.cfg.user_mode {
+            "app.slice".to_string()
+        } else if kind == "scope" {
             "system.slice".to_string()
         } else {
             String::new()
@@ -278,8 +282,20 @@ impl Daemon {
             .map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
         for p in &pids {
             if let Err(e) = std::fs::write(dir.join("cgroup.procs"), p.to_string()) {
+                // The scope never existed: its empty cgroup goes (rmdir
+                // fails, harmlessly, if an earlier PID was moved in). A
+                // process that is gone already (an autostart program that
+                // exits at once) is systemd's UnixProcessIdUnknown.
+                if kind == "scope" {
+                    let _ = std::fs::remove_dir(&dir);
+                }
+                let name = if e.raw_os_error() == Some(libc::ESRCH) {
+                    E_PID_UNKNOWN
+                } else {
+                    E_FAILED
+                };
                 return Err(err(
-                    E_FAILED,
+                    name,
                     format!("cannot move PID {p} into {}: {e}", dir.display()),
                 ));
             }

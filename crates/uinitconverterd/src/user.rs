@@ -46,15 +46,24 @@ pub fn unit_path(home: &str, runtime: &str) -> Vec<String> {
     }
     let config = env_dir("XDG_CONFIG_HOME").unwrap_or_else(|| format!("{home}/.config"));
     let data = env_dir("XDG_DATA_HOME").unwrap_or_else(|| format!("{home}/.local/share"));
+    // The generators' three directories sit where systemd puts them:
+    // generator.early before the configuration, generator after /run,
+    // generator.late last (systemd-xdg-autostart-generator writes there).
     vec![
-        format!("{config}/systemd/user"),
         format!("{runtime}/systemd/transient"),
+        format!("{runtime}/systemd/generator.early"),
+        format!("{config}/systemd/user"),
+        "/etc/xdg/systemd/user".into(),
         "/etc/systemd/user".into(),
         format!("{runtime}/systemd/user"),
         "/run/systemd/user".into(),
+        format!("{runtime}/systemd/generator"),
         format!("{data}/systemd/user"),
+        "/usr/local/share/systemd/user".into(),
+        "/usr/share/systemd/user".into(),
         "/usr/local/lib/systemd/user".into(),
         "/usr/lib/systemd/user".into(),
+        format!("{runtime}/systemd/generator.late"),
     ]
 }
 
@@ -174,30 +183,8 @@ fn generator_dirs() -> Vec<PathBuf> {
 /// KEY=VALUE lines that update it (30-systemd-environment-d-generator reads
 /// environment.d, 60-flatpak adds its XDG_DATA_DIRS). Each gets 5 s.
 fn run_generators(env: &mut Vec<(String, String)>, dirs: &[PathBuf]) {
-    use std::collections::BTreeMap;
     use std::io::Read;
-    use std::os::unix::fs::PermissionsExt;
-    let mut found: BTreeMap<String, PathBuf> = BTreeMap::new();
-    for dir in dirs {
-        let Ok(rd) = fs::read_dir(dir) else { continue };
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            found.entry(name).or_insert_with(|| e.path());
-        }
-    }
-    for (name, path) in found {
-        if fs::canonicalize(&path)
-            .map(|p| p == Path::new("/dev/null"))
-            .unwrap_or(true)
-        {
-            continue;
-        }
-        let exec = fs::metadata(&path)
-            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false);
-        if !exec {
-            continue;
-        }
+    for (name, path) in executables(dirs) {
         let child = Command::new(&path)
             .env_clear()
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
@@ -220,20 +207,7 @@ fn run_generators(env: &mut Vec<(String, String)>, dirs: &[PathBuf]) {
             }
             text
         });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(st)) => break Some(st),
-                Ok(None) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(std::time::Duration::from_millis(20))
-                }
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break None;
-                }
-            }
-        };
+        let status = wait_limited(&mut child, std::time::Duration::from_secs(5));
         let text = reader.join().unwrap_or_default();
         match status {
             Some(st) if st.success() => {
@@ -245,6 +219,125 @@ fn run_generators(env: &mut Vec<(String, String)>, dirs: &[PathBuf]) {
                 "uinitconverterd user-manager: generator {name} failed ({st}), its output ignored"
             ),
             None => eprintln!("uinitconverterd user-manager: generator {name} timed out, killed"),
+        }
+    }
+}
+
+/// systemd.generator(7)'s user directories, highest priority first.
+/// UINITCONVERTER_USER_UNIT_GENERATOR_PATH (colon-separated) replaces them
+/// (tests).
+fn unit_generator_dirs() -> Vec<PathBuf> {
+    if let Ok(p) = std::env::var("UINITCONVERTER_USER_UNIT_GENERATOR_PATH") {
+        return p
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect();
+    }
+    [
+        "/run/systemd/user-generators",
+        "/etc/systemd/user-generators",
+        "/usr/local/lib/systemd/user-generators",
+        "/usr/lib/systemd/user-generators",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
+/// The generators that may run: by name, an earlier directory's name hiding
+/// a later one, links to /dev/null and non-executables left out.
+fn executables(dirs: &[PathBuf]) -> Vec<(String, PathBuf)> {
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::PermissionsExt;
+    let mut found: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for dir in dirs {
+        let Ok(rd) = fs::read_dir(dir) else { continue };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            found.entry(name).or_insert_with(|| e.path());
+        }
+    }
+    found
+        .into_iter()
+        .filter(|(_, path)| {
+            !fs::canonicalize(path)
+                .map(|p| p == Path::new("/dev/null"))
+                .unwrap_or(true)
+                && fs::metadata(path)
+                    .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                    .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Unit generators, as systemd --user runs them at startup and at each
+/// reload (systemd.generator(7)): the three output directories are made
+/// empty, then each generator runs with them as arguments, in the units'
+/// starting environment plus SYSTEMD_SCOPE=user, for at most 5 s.
+/// systemd-xdg-autostart-generator makes the app-*@autostart.service
+/// units xdg-desktop-autostart.target wants; podman-user-generator makes
+/// the quadlet units.
+pub fn run_unit_generators(runtime: &str, env: &[(String, String)]) {
+    run_unit_generators_from(&unit_generator_dirs(), runtime, env)
+}
+
+fn run_unit_generators_from(gens: &[PathBuf], runtime: &str, env: &[(String, String)]) {
+    let out = PathBuf::from(runtime).join("systemd");
+    let dirs = ["generator", "generator.early", "generator.late"].map(|d| out.join(d));
+    for d in &dirs {
+        let _ = fs::remove_dir_all(d);
+        if let Err(e) = fs::create_dir_all(d) {
+            eprintln!("uinitconverterd user-manager: {}: {e}", d.display());
+            return;
+        }
+    }
+    for (name, path) in executables(gens) {
+        let child = Command::new(&path)
+            .args(&dirs)
+            .env_clear()
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .env("SYSTEMD_SCOPE", "user")
+            .stdin(std::process::Stdio::null())
+            .spawn();
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("uinitconverterd user-manager: generator {name}: {e}");
+                continue;
+            }
+        };
+        match wait_limited(&mut child, std::time::Duration::from_secs(5)) {
+            Some(st) if st.success() => {}
+            Some(st) => eprintln!("uinitconverterd user-manager: generator {name} failed ({st})"),
+            None => eprintln!("uinitconverterd user-manager: generator {name} timed out, killed"),
+        }
+    }
+}
+
+/// The units' starting environment as the launcher wrote it.
+pub fn written_env(run_dir: &Path) -> Vec<(String, String)> {
+    fs::read_to_string(run_dir.join("manager.env"))
+        .map(|t| crate::envfile::parse(&t))
+        .unwrap_or_default()
+}
+
+fn wait_limited(
+    child: &mut std::process::Child,
+    limit: std::time::Duration,
+) -> Option<std::process::ExitStatus> {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(st)) => return Some(st),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
     }
 }
@@ -325,6 +418,21 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
         let err = Command::new(SYSTEMD_USER).arg("--user").args(args).exec();
         eprintln!("uinitconverterd user-manager: {SYSTEMD_USER}: {err}; running the s6 user manager instead");
     }
+    // systemd gives user@ CAP_WAKE_ALARM as an ambient capability (for
+    // systemd --user's WakeSystem= timers, kept by the exec above), and
+    // systemd --user does not pass it to its units. Ambient capabilities
+    // survive exec, so here every unit would carry it, and bwrap refuses to
+    // run with capabilities it did not expect: GNOME Shell's glycin image
+    // loaders failed, and the background with them.
+    unsafe {
+        libc::prctl(
+            libc::PR_CAP_AMBIENT,
+            libc::PR_CAP_AMBIENT_CLEAR_ALL as libc::c_ulong,
+            0,
+            0,
+            0,
+        );
+    }
     let uid = unsafe { libc::getuid() };
     let runtime = env_dir("XDG_RUNTIME_DIR").unwrap_or_else(|| format!("/run/user/{uid}"));
     if !Path::new(&runtime).is_dir() {
@@ -374,6 +482,7 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
         &base.join("run/manager.env"),
         manager_env(&runtime).as_bytes(),
     );
+    run_unit_generators(&runtime, &written_env(&base.join("run")));
     let cfg = match Config::load(Some(&conf)) {
         Ok(c) => c,
         Err(e) => {
@@ -407,6 +516,45 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Unit generators get the three directories, made empty first (a
+    /// reload drops the last run's output), and SYSTEMD_SCOPE=user; a
+    /// generator hidden by a /dev/null link of the same name earlier does
+    /// not run.
+    #[test]
+    fn unit_generators_run_with_fresh_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let top = std::env::temp_dir().join(format!("uc-unitgen-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&top);
+        let (hi, lo, rt) = (top.join("hi"), top.join("lo"), top.join("rt"));
+        for d in [&hi, &lo, &rt] {
+            fs::create_dir_all(d).unwrap();
+        }
+        let script = |p: &Path, body: &str| {
+            fs::write(p, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(p, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        script(
+            &lo.join("a"),
+            "echo \"$SYSTEMD_SCOPE $FOO\" >\"$3/a.out\"; touch \"$1/n\" \"$2/e\"",
+        );
+        script(&lo.join("b"), "touch \"$3/b.out\"");
+        std::os::unix::fs::symlink("/dev/null", hi.join("b")).unwrap();
+        let late = rt.join("systemd/generator.late");
+        fs::create_dir_all(&late).unwrap();
+        fs::write(late.join("stale.service"), "").unwrap();
+        let env = vec![("FOO".to_string(), "bar".to_string())];
+        run_unit_generators_from(&[hi, lo], rt.to_str().unwrap(), &env);
+        assert_eq!(
+            fs::read_to_string(late.join("a.out")).unwrap(),
+            "user bar\n"
+        );
+        assert!(rt.join("systemd/generator/n").exists());
+        assert!(rt.join("systemd/generator.early/e").exists());
+        assert!(!late.join("stale.service").exists());
+        assert!(!late.join("b.out").exists());
+        let _ = fs::remove_dir_all(&top);
+    }
 
     /// The path lists are written as Config::load splits them (":"):
     /// joined with blanks, the whole list was one directory that does not

@@ -13,7 +13,12 @@
 #                                        # show (DIR/greeter-greeter.png)
 #   tests/vm-user-manager.sh DIR baseline # the same greeter checks on stock systemd
 #                                        # --user, for comparison (DIR/greeter-baseline.png)
-#
+#   tests/vm-user-manager.sh DIR session # every user@ on the s6 manager, GDM autologin
+#                                        # as tester: gnome-vm.sh wait/check pass, the
+#                                        # session's units run, and an app started from
+#                                        # GNOME Shell lands in its app-*.scope
+#                                        # (DIR/session-session.png)
+#   tests/vm-user-manager.sh DIR session-baseline # the same on systemd --user
 # Copies target/debug's uinitconverterd, -runner and -timers (cargo build
 # first) and the skalibs and s6 RPMs from SKARNET_RPMS (default
 # ~/rpmbuild-skarnet/RPMS/x86_64, the newest of each) into a fresh overlay.
@@ -21,13 +26,18 @@ set -euo pipefail
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 VM=$TOP/tests/gnome-vm.sh
-D=${1:?usage: tests/vm-user-manager.sh DIR [user|greeter|baseline]}
+D=${1:?usage: tests/vm-user-manager.sh DIR [user|greeter|baseline|session|session-baseline]}
 MODE=${2:-user}
-case $MODE in user | greeter | baseline) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
+case $MODE in user | greeter | baseline | session | session-baseline) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
 RPMS=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/RPMS/x86_64}
 S=$(mktemp -d)
-# The VM goes down however this ends.
-trap '"$VM" stop "$D" >/dev/null 2>&1; rm -rf "$S"' EXIT
+# The VM goes down however this ends (VM_KEEP=yes: it stays up, for
+# `gnome-vm.sh ssh DIR`).
+if [ "${VM_KEEP:-no}" = yes ]; then
+    trap 'rm -rf "$S"' EXIT
+else
+    trap '"$VM" stop "$D" >/dev/null 2>&1; rm -rf "$S"' EXIT
+fi
 
 pick() { find "$RPMS" -maxdepth 1 -name "$1-[0-9]*.x86_64.rpm" | sort | tail -1; }
 skalibs=$(pick skalibs)
@@ -47,11 +57,11 @@ cat >"$S/setup.sh" <<'EOS'
 # $1: the mode.
 set -euo pipefail
 cd ~tester/in
-if [ "$1" != user ]; then
+if [ "$1" = greeter ] || [ "$1" = baseline ]; then
     # The greeter is what comes up.
     sed -i 's/^AutomaticLoginEnable=True/AutomaticLoginEnable=False/' /etc/gdm/custom.conf
 fi
-if [ "$1" = baseline ]; then
+if [ "$1" = baseline ] || [ "$1" = session-baseline ]; then
     exit 0
 fi
 # Built locally, so unsigned.
@@ -66,7 +76,7 @@ done
 uid=$(id -u s6test)
 # greeter: every user's manager.
 dir=/etc/systemd/system/user@$uid.service.d
-[ "$1" = greeter ] && dir=/etc/systemd/system/user@.service.d
+[ "$1" = greeter ] || [ "$1" = session ] && dir=/etc/systemd/system/user@.service.d
 mkdir -p "$dir"
 cat >"$dir/90-uinitconverter.conf" <<EOF
 [Service]
@@ -200,6 +210,88 @@ echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
 EOS
 
+cat >"$S/session.sh" <<'EOS'
+#!/bin/bash
+# As root in the VM: tester's GNOME session (GDM autologin), under
+# whichever user manager runs it. $1: app (after the app launch) or empty.
+set -uo pipefail
+pass=0 fail=0
+ok() { pass=$((pass + 1)); echo "PASS $*"; }
+bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+u=$(id -u tester)
+as() { runuser -u tester -- env XDG_RUNTIME_DIR="/run/user/$u" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$u/bus" "$@"; }
+if [ "${1:-}" = app ]; then
+    t=0
+    until p=$(pgrep -n -u tester -f gnome-calculator) || [ $t -ge 30 ]; do sleep 1; t=$((t + 1)); done
+    if [ -n "${p:-}" ]; then
+        cg=$(cut -d: -f3 "/proc/$p/cgroup")
+        case $cg in */user@$u.service/app.slice/app-*gnome-calculator*.scope | */user@$u.service/app.slice/app-*Calculator*.scope) ok "gnome-calculator runs in ${cg##*/}" ;; *) bad "gnome-calculator's cgroup: $cg" ;; esac
+        sc=${cg##*/}
+        s=$(as systemctl --user is-active "$sc" 2>&1)
+        [ "$s" = active ] && ok "$sc is active" || bad "$sc: $s"
+    else
+        bad "no gnome-calculator after 30 s"
+    fi
+    echo "-- app scopes:"
+    as systemctl --user list-units --no-legend 'app-*' 2>&1 | cut -c1-140 | sed 's/^/   /'
+    echo "passed: $pass  failed: $fail"
+    [ "$fail" -eq 0 ]
+    exit
+fi
+main=$(systemctl show -p MainPID --value "user@$u.service")
+echo "   user@$u.service's main process: $(cat "/proc/$main/comm" 2>/dev/null)"
+p=$(pgrep -u tester -x gnome-shell | head -1)
+cg=$(cut -d: -f3 "/proc/$p/cgroup" 2>/dev/null)
+case $cg in */user@$u.service/session.slice/org.gnome.Shell@user.service) ok "gnome-shell is in $cg" ;; *) bad "gnome-shell's cgroup: $cg" ;; esac
+# systemd --user gives its units no ambient capabilities (user@ itself
+# has CAP_WAKE_ALARM); with one, bwrap refuses to run (glycin, flatpak).
+a=$(sed -n 's/^CapAmb:\t*//p' "/proc/$p/status")
+[ "$a" = 0000000000000000 ] && ok "gnome-shell has no ambient capabilities" || bad "gnome-shell's CapAmb: $a"
+if journalctl -b "_UID=$u" --no-pager -o cat | grep -q "Failed to load background"; then
+    bad "the background did not load (glycin)"
+else
+    ok "the background loaded"
+fi
+f=$(as systemctl --user list-units --failed --no-legend 2>&1)
+[ -z "$f" ] && ok "no failed user units" || bad "failed: $f"
+j=$(as systemctl --user list-jobs --no-legend 2>&1)
+[ -z "$j" ] && ok "no jobs left" || bad "jobs: $j"
+for x in gnome-session@gnome.target gnome-session-initialized.target graphical-session.target org.gnome.Shell@user.service gnome-session-manager@gnome.service gnome-session-monitor.service org.gnome.SettingsDaemon.Power.service pipewire.service; do
+    s=$(as systemctl --user is-active "$x" 2>&1)
+    [ "$s" = active ] && ok "$x is active" || bad "$x: $s"
+done
+echo "   xdg-desktop-autostart.target: $(as systemctl --user is-active xdg-desktop-autostart.target 2>&1)"
+echo "   evolution-alarm-notify.service: $(as systemctl --user is-active evolution-alarm-notify.service 2>&1)"
+s=$(as systemctl --user is-system-running 2>&1)
+[ "$s" = running ] && ok "is-system-running: running" || bad "is-system-running: $s"
+e=$(as systemctl --user show-environment 2>&1)
+echo "$e" | grep -q '^WAYLAND_DISPLAY=' && ok "the leader's environment reached the manager (WAYLAND_DISPLAY)" || bad "no WAYLAND_DISPLAY in show-environment"
+# gnome-session's autostart apps get scopes (app-gnome-NAME-PID.scope).
+n=$(as systemctl --user list-units --no-legend 'app-gnome-*.scope' 2>/dev/null | wc -l)
+[ "$n" -gt 0 ] && ok "$n autostart app scopes" || bad "no app-gnome-*.scope"
+[ "$(getenforce)" = Enforcing ] && ok "SELinux is enforcing" || bad "SELinux: $(getenforce)"
+n=$(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep -c denied)
+[ "$n" = 0 ] && ok "no AVC denials" || bad "$n AVC denials"
+echo "-- active user units:"
+as systemctl --user list-units --no-legend --state=active 2>&1 | awk '{print $1}' | tr '\n' ' ' | fold -w 110 | sed 's/^/   /'
+echo
+echo "-- tester's warnings (journal, priority <= warning):"
+journalctl -b "_UID=$u" -p warning --no-pager -o cat | sort | uniq -c | sort -rn | head -30 | cut -c1-160 | sed 's/^/   /'
+echo "-- the manager's own lines:"
+journalctl -b "_UID=$u" --no-pager -o cat | grep -E "^uinitconverter" | cut -c1-160 | tail -40 | sed 's/^/   /'
+echo "-- memory (PSS, KiB) under user@$u.service:"
+total=0
+# shellcheck disable=SC2046
+for q in $(cat $(find "/sys/fs/cgroup/user.slice/user-$u.slice/user@$u.service" -name cgroup.procs)); do
+    v=$(awk '/^Pss:/ {print $2}' "/proc/$q/smaps_rollup" 2>/dev/null)
+    total=$((total + ${v:-0}))
+done
+echo "   $total"
+echo
+echo "passed: $pass  failed: $fail"
+[ "$fail" -eq 0 ]
+EOS
+
 cp "$TOP/target/$BUILD/uinitconverterd" "$TOP/target/$BUILD/uinitconverter-runner" "$TOP/target/$BUILD/uinitconverter-timers" "$skalibs" "$execline" "$s6" "$S/"
 "$VM" start "$D"
 "$VM" wait "$D"
@@ -213,6 +305,26 @@ if [ "$MODE" = user ]; then
     "$VM" ssh "$D" sudo bash in/check.sh
     exit
 fi
+case $MODE in
+    session | session-baseline)
+        rc=0
+        "$VM" wait "$D" || rc=$?
+        "$VM" check "$D" || rc=$?
+        sleep 20
+        "$VM" ssh "$D" sudo bash in/session.sh || rc=$?
+        # An app from GNOME Shell: the overview is open at login.
+        "$VM" key "$D" esc
+        sleep 1
+        "$VM" key "$D" meta_l
+        sleep 2
+        "$VM" type "$D" calculator
+        sleep 2
+        "$VM" key "$D" ret
+        "$VM" ssh "$D" sudo bash in/session.sh app || rc=$?
+        "$VM" screenshot "$D" "$D/session-$MODE.png"
+        exit $rc
+        ;;
+esac
 t=0
 until "$VM" ssh "$D" true 2>/dev/null; do
     t=$((t + 5)); [ $t -lt 300 ] || { echo "no SSH after 5 min" >&2; exit 1; }; sleep 5

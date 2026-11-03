@@ -16,6 +16,7 @@ pub(super) const E_UNKNOWN_PROPERTY: &str = "org.freedesktop.DBus.Error.UnknownP
 pub(super) const E_INVALID_ARGS: &str = "org.freedesktop.DBus.Error.InvalidArgs";
 pub(super) const E_READ_ONLY: &str = "org.freedesktop.DBus.Error.PropertyReadOnly";
 pub(super) const E_NOT_SUPPORTED: &str = "org.freedesktop.DBus.Error.NotSupported";
+pub(super) const E_PID_UNKNOWN: &str = "org.freedesktop.DBus.Error.UnixProcessIdUnknown";
 pub(super) const E_FAILED: &str = "org.freedesktop.DBus.Error.Failed";
 
 pub(super) struct DErr {

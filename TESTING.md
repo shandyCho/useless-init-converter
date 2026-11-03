@@ -240,6 +240,16 @@ AVC 거부를 확인합니다. 이어서 그리터의 경고와 메모리를 출
 `~/uinitconverter-vm/greeter-greeter.png`로 저장합니다. `baseline`은 같은 검사를 기본
 `systemd --user`에서 실행합니다(`greeter-baseline.png`). 경고를 비교할 때 씁니다.
 
+`tests/vm-user-manager.sh ~/uinitconverter-vm session`도 모든 `user@`를 s6 매니저로 돌리지만
+GDM 자동 로그인은 그대로 두어서, tester의 GNOME 세션이 그 위에서 뜨게 합니다. `gnome-vm.sh wait`와
+`check`를 실행한 뒤, gnome-shell의 cgroup(`session.slice/org.gnome.Shell@user.service`)과 ambient
+capability, 배경(bwrap 샌드박스 안에서 도는 GNOME 이미지 로더), 실패한 유닛과 작업, 세션 타깃과
+서비스, `is-system-running`, 리더의 환경, 자동 시작 앱 scope, SELinux와 AVC 거부를 확인합니다.
+이어서 QMP 키로 GNOME Shell에서 계산기를 열어 자기 `app-gnome-*.scope`에서 도는지 확인하고
+`~/uinitconverter-vm/session-session.png`를 저장합니다. `session-baseline`은 같은 것을 기본
+`systemd --user`에서 실행합니다. `VM_KEEP=yes`이면 끝난 뒤에도 VM을 켜 두어
+`gnome-vm.sh ssh`로 들어갈 수 있습니다.
+
 ## 4. 변환 미리보기 (읽기 전용)
 
 아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 uinitconverter가 어떻게 변환할지 보여줍니다.

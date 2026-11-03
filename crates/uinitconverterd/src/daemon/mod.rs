@@ -317,6 +317,14 @@ impl Daemon {
             .await;
         // A user manager has no database: a reload rereads the unit files.
         if self.cfg.user_mode {
+            let run = self.cfg.run_dir.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
+                if runtime.starts_with('/') {
+                    crate::user::run_unit_generators(&runtime, &crate::user::written_env(&run));
+                }
+            })
+            .await;
             self.invalidate_caches();
             self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(false,))
                 .await;

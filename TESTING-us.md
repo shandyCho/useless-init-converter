@@ -264,6 +264,19 @@ greeter's warnings and memory, and saves a screenshot as
 `~/uinitconverter-vm/greeter-greeter.png`. `baseline` runs the same checks
 on stock `systemd --user` (`greeter-baseline.png`), to compare the warnings.
 
+`tests/vm-user-manager.sh ~/uinitconverter-vm session` also puts every
+`user@` on the s6 manager but keeps GDM's autologin, so tester's GNOME
+session comes up on it. It runs `gnome-vm.sh wait` and `check`, then checks
+gnome-shell's cgroup (`session.slice/org.gnome.Shell@user.service`) and
+ambient capabilities, the background (GNOME's bwrap-sandboxed image loader),
+failed units and jobs, the session targets and services,
+`is-system-running`, the leader's environment, the autostart app scopes,
+SELinux and AVC denials. It then opens Calculator from GNOME Shell with QMP
+keys and checks it runs in its `app-gnome-*.scope`, and saves
+`~/uinitconverter-vm/session-session.png`. `session-baseline` runs the same
+on stock `systemd --user`. `VM_KEEP=yes` leaves the VM running afterwards,
+for `gnome-vm.sh ssh`.
+
 ## 4. Translation preview (read-only)
 
 This shows how uinitconverter would translate this machine's own units, without
