@@ -7,6 +7,9 @@
 # the bus. Checks targets, services, .wants links, PartOf=/Conflicts= as the
 # GNOME session uses them, a bus restart (gnome-session-ctl --restart-dbus)
 # and the stop on SIGTERM. Every unit goes through the dynamic engine.
+# Slices C-E: unit generators, timers and paths, Accept=yes, MAINPID=,
+# job merging, stop transactions, CollectMode=, systemctl --user exit and
+# the fallback to systemd --user (a fake one records that it ran).
 #
 #   tests/user-sandbox.sh WORKDIR       # runs the checks, then stops everything
 set -euo pipefail
@@ -59,6 +62,7 @@ trap cleanup EXIT
 # writes the user manager's own under $R/uinitconverter.
 cat >"$W/system.conf" <<EOF
 USER_MANAGER=s6
+USER_FALLBACK_ON=fbdown.target fbsess@*.target
 RUNNER=$BIN/uinitconverter-runner
 TIMER_RUNNER=$BIN/uinitconverter-timers
 JOURNAL=no
@@ -352,6 +356,46 @@ NotifyAccess=all
 ExecStart=/usr/bin/python3 $W/handover.py $W/handover.pid
 EOF
 
+# Slice E: systemctl --user exit (exit.target, SuccessAction=exit-force,
+# as systemd's), and the fallback's triggers: a unit failing into
+# USER_FALLBACK_ON= (GNOME's OnFailure=gnome-session-shutdown.target), a
+# failed start of a fallback target. systemd --user is a fake that
+# records its PID and arguments.
+cat >"$U/exit.target" <<EOF
+[Unit]
+Requires=systemd-exit.service
+After=systemd-exit.service
+EOF
+cat >"$U/systemd-exit.service" <<EOF
+[Unit]
+SuccessAction=exit-force
+EOF
+cat >"$U/sessfail.service" <<EOF
+[Unit]
+OnFailure=fbdown.target
+[Service]
+ExecStart=/bin/sh -c 'sleep 0.5; exit 3'
+EOF
+printf '[Unit]\n' >"$U/fbdown.target"
+cat >"$U/fbsess@.target" <<EOF
+[Unit]
+Requires=broken.service
+After=broken.service
+EOF
+cat >"$U/broken.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/false
+EOF
+cat >"$W/fake-systemd" <<EOF
+#!/bin/sh
+echo "\$\$ \$*" >$W/fake-systemd.out
+exec sleep 1000
+EOF
+chmod +x "$W/fake-systemd"
+mkdir -p "$W/fb"
+chmod 1777 "$W/fb"
+
 # Job merging: gnome-session-shutdown.target's shape (StopWhenUnneeded=,
 # a wanted oneshot), started three times at once.
 cat >"$U/mergetgt.target" <<EOF
@@ -389,12 +433,17 @@ open(sys.argv[2], "a").write(s.recv(4096).decode() + "\n")
 ' "$R/notify" "$W/notified" &
 echo $! >>"$W/pids"
 sleep 0.3
-env HOME="$W/home" XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" \
-    NOTIFY_SOCKET="$R/notify" UINITCONVERTER_USER_UNIT_PATH="$U:$R/systemd/generator.late" UINITCONVERTER_USER_CGROUP=no \
-    UINITCONVERTER_USER_GENERATOR_PATH="$W/generators" UINITCONVERTER_USER_UNIT_GENERATOR_PATH="$W/unitgens" \
-    "$BIN/uinitconverterd" --config "$W/system.conf" user-manager >"$W/daemon.log" 2>&1 &
-MGR_PID=$!
-echo $MGR_PID >>"$W/pids"
+# start_mgr LOG: the launcher, as user@UID.service runs it.
+start_mgr() {
+    env HOME="$W/home" XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" \
+        NOTIFY_SOCKET="$R/notify" UINITCONVERTER_USER_UNIT_PATH="$U:$R/systemd/generator.late" UINITCONVERTER_USER_CGROUP=no \
+        UINITCONVERTER_USER_GENERATOR_PATH="$W/generators" UINITCONVERTER_USER_UNIT_GENERATOR_PATH="$W/unitgens" \
+        UINITCONVERTER_SYSTEMD_USER="$W/fake-systemd" UINITCONVERTER_USER_FALLBACK_DIR="$W/fb" \
+        "$BIN/uinitconverterd" --config "$W/system.conf" user-manager >"$1" 2>&1 &
+    MGR_PID=$!
+    echo $MGR_PID >>"$W/pids"
+}
+start_mgr "$W/daemon.log"
 
 echo "== boot"
 waitfor '[ -S "$R/systemd/private" ]' && ok "the private socket is served" || bad "no $R/systemd/private: $(tail -3 "$W/daemon.log")"
@@ -578,6 +627,60 @@ else
     ok "the bus was not armed again while exiting"
 fi
 
+uid=$(id -u)
+[ ! -e "$W/fb/$uid" ] && [ ! -e "$W/fb/$uid.running" ] && ok "a clean stop leaves no fallback record" || bad "fallback dir: $(ls -la "$W/fb")"
+
+echo "== slice E: systemctl --user exit"
+start_mgr "$W/daemon2.log"
+waitfor 'grep -q "default.target done" "$W/daemon2.log"' || bad "second start: $(tail -3 "$W/daemon2.log")"
+[ "$(cat "$W/fb/$uid.running" 2>/dev/null)" = "$MGR_PID" ] && ok "the running stamp holds the manager's PID" || bad "running stamp: $(cat "$W/fb/$uid.running" 2>&1)"
+SC exit 2>/dev/null || true
+waitfor '! kill -0 "$MGR_PID" 2>/dev/null' && ok "systemctl --user exit ended the manager" || bad "still running after exit: $(tail -3 "$W/daemon2.log")"
+rc=0; wait "$MGR_PID" 2>/dev/null || rc=$?
+[ "$rc" = 0 ] && [ ! -e "$W/fb/$uid" ] && [ ! -e "$W/fake-systemd.out" ] && ok "a clean exit (0), no fallback" || bad "exit: rc $rc, $(ls "$W/fb") $(cat "$W/fake-systemd.out" 2>&1)"
+
+echo "== slice E: a unit fails into USER_FALLBACK_ON=: systemd --user takes over in place"
+start_mgr "$W/daemon3.log"
+waitfor 'grep -q "default.target done" "$W/daemon3.log"' || bad "third start: $(tail -3 "$W/daemon3.log")"
+base_pid=$(SC show -p MainPID --value base.service)
+SC start sessfail.service
+waitfor '[ -s "$W/fake-systemd.out" ]' && ok "systemd --user was started" || bad "no fallback: $(tail -5 "$W/daemon3.log")"
+[ "$(cut -d' ' -f1 "$W/fake-systemd.out" 2>/dev/null)" = "$MGR_PID" ] && ok "in the manager's own process (user@ goes on)" || bad "fake systemd: $(cat "$W/fake-systemd.out" 2>&1), manager $MGR_PID"
+[ "$(cut -d' ' -f2 "$W/fake-systemd.out" 2>/dev/null)" = "--user" ] && ok "as systemd --user" || bad "arguments: $(cat "$W/fake-systemd.out" 2>&1)"
+case $(cat "$W/fb/$uid" 2>/dev/null) in *"sessfail.service failed (OnFailure=fbdown.target)"*) ok "the reason is recorded: $(cat "$W/fb/$uid")" ;; *) bad "record: $(cat "$W/fb/$uid" 2>&1)" ;; esac
+if kill -0 "$base_pid" 2>/dev/null; then bad "base.service PID $base_pid still runs"; else ok "the s6 units were stopped first"; fi
+if s6-svscanctl -z "$R/uinitconverter/scan" 2>/dev/null; then bad "s6-svscan still runs"; else ok "s6-svscan ended"; fi
+[ ! -e "$W/fb/$uid.running" ] && ok "no running stamp is left" || bad "running stamp left"
+kill "$MGR_PID" 2>/dev/null; wait "$MGR_PID" 2>/dev/null || true
+
+echo "== slice E: a later start in this boot goes straight to systemd --user"
+rm -f "$W/fake-systemd.out"
+start_mgr "$W/daemon4.log"
+waitfor '[ -s "$W/fake-systemd.out" ]' && [ "$(cut -d' ' -f1 "$W/fake-systemd.out")" = "$MGR_PID" ] && ok "handed over at once" || bad "no hand-over: $(tail -3 "$W/daemon4.log")"
+grep -q "fell back earlier in this boot" "$W/daemon4.log" && ok "and says why" || bad "daemon4.log: $(tail -3 "$W/daemon4.log")"
+kill "$MGR_PID" 2>/dev/null; wait "$MGR_PID" 2>/dev/null || true
+
+echo "== slice E: a crash (a stale running stamp) and a failed start of a fallback target"
+rm -f "$W/fake-systemd.out" "$W/fb/$uid"
+echo 999999 >"$W/fb/$uid.running"
+start_mgr "$W/daemon5.log"
+waitfor '[ -s "$W/fake-systemd.out" ]' && ok "a stale running stamp: systemd --user" || bad "no hand-over: $(tail -3 "$W/daemon5.log")"
+case $(cat "$W/fb/$uid" 2>/dev/null) in *"PID 999999"*"ended without stopping"*) ok "recorded as a crash" ;; *) bad "record: $(cat "$W/fb/$uid" 2>&1)" ;; esac
+kill "$MGR_PID" 2>/dev/null; wait "$MGR_PID" 2>/dev/null || true
+rm -f "$W/fake-systemd.out" "$W/fb/$uid" "$W/fb/$uid.running"
+start_mgr "$W/daemon6.log"
+waitfor 'grep -q "default.target done" "$W/daemon6.log"' && [ ! -e "$W/fake-systemd.out" ] && ok "without a record the s6 manager runs again" || bad "daemon6.log: $(tail -3 "$W/daemon6.log")"
+# A logout under way (the OnFailure= target is up already): no fallback.
+SC start fbdown.target
+SC start sessfail.service 2>/dev/null || true
+waitfor 'grep -q "is under way: no fallback" "$W/daemon6.log"' && [ ! -e "$W/fake-systemd.out" ] \
+    && ok "a failure into a target already up (a logout) is no fallback" || bad "daemon6.log: $(tail -3 "$W/daemon6.log"), fallback: $(cat "$W/fake-systemd.out" 2>&1)"
+SC stop fbdown.target
+SC reset-failed sessfail.service 2>/dev/null || true
+SC start fbsess@x.target 2>/dev/null || true
+waitfor '[ -s "$W/fake-systemd.out" ]' && ok "a failed start of fbsess@x.target: systemd --user" || bad "no hand-over: $(tail -5 "$W/daemon6.log")"
+case $(cat "$W/fb/$uid" 2>/dev/null) in *"fbsess@x.target ended"*) ok "recorded: $(cat "$W/fb/$uid")" ;; *) bad "record: $(cat "$W/fb/$uid" 2>&1)" ;; esac
+kill "$MGR_PID" 2>/dev/null; wait "$MGR_PID" 2>/dev/null || true
 
 echo
 echo "passed: $pass  failed: $fail"

@@ -510,6 +510,24 @@ impl Runner {
         });
     }
 
+    /// A unit's ActiveState from the manager (None if it can't be asked).
+    fn unit_active_state(&self, name: &str) -> Option<String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        rt.block_on(async {
+            let conn = crate::client::connect(&self.cfg).await.ok()?;
+            tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                crate::client::unit_active_state(&conn, name),
+            )
+            .await
+            .ok()?
+            .ok()
+        })
+    }
+
     /// A Manager method without arguments, detached like
     /// start_units_detached.
     fn call_manager_detached(&self, method: &'static str) {
@@ -571,6 +589,33 @@ impl Runner {
             .into_iter()
             .map(|u| u.replace("%n", &self.unit.id))
             .collect();
+        // A user manager's session failing into USER_FALLBACK_ON= (GNOME's
+        // session units: OnFailure=gnome-session-shutdown.target): the
+        // daemon hands the user over to systemd --user (it reads this
+        // request in its watcher loop).
+        // Not when that unit is up or on its way already: a logout under
+        // way (gnome-session-shutdown.target's Conflicts= stopping units,
+        // which may fail into it). Asked before this OnFailure= starts it.
+        if !success {
+            if let Some(u) = units.iter().find(|u| self.cfg.is_fallback_unit(u)) {
+                let state = self.unit_active_state(u);
+                if matches!(
+                    state.as_deref(),
+                    Some("active" | "activating" | "deactivating")
+                ) {
+                    log(
+                        self.id(),
+                        &format!("failed while {u} is under way: no fallback"),
+                    );
+                } else {
+                    let text = format!("{u}\n{} failed (OnFailure={u})", self.unit.id);
+                    let _ = util::write_atomic(
+                        &self.cfg.run_dir.join(crate::state::FALLBACK_REQUEST),
+                        text.as_bytes(),
+                    );
+                }
+            }
+        }
         self.start_units_detached(units_key, units);
         if let Some(action) = self.unit.get("Unit", action_key) {
             // A user manager may only exit (systemd allows none, exit and

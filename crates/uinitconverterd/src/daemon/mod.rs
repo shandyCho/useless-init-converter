@@ -89,6 +89,14 @@ pub struct Transient {
     pub description: String,
 }
 
+/// Why the user manager falls back to systemd --user, once it does.
+static FALLBACK: Mutex<Option<String>> = Mutex::new(None);
+
+/// The fallback reason, for the launcher after the daemon returned.
+pub fn fallback_reason() -> Option<String> {
+    FALLBACK.lock().unwrap().clone()
+}
+
 pub struct Daemon {
     pub cfg: Config,
     /// The bus. A user manager runs before its bus exists and outlives a
@@ -310,6 +318,34 @@ impl Daemon {
     /// the main loop stops every unit and returns.
     pub(super) fn request_exit(&self) {
         self.exit_request.notify_one();
+    }
+
+    /// A user manager hands its user over to systemd --user (the launcher
+    /// does it once the daemon has returned; see user.rs). The first
+    /// reason wins.
+    pub(super) fn request_fallback(&self, reason: &str) {
+        if !self.cfg.user_mode {
+            return;
+        }
+        {
+            let mut f = FALLBACK.lock().unwrap();
+            if f.is_some() {
+                return;
+            }
+            *f = Some(reason.to_string());
+        }
+        eprintln!("uinitconverterd: user mode: {reason}: handing over to systemd --user");
+        self.request_exit();
+    }
+
+    /// A runner's request: a unit failed into a USER_FALLBACK_ON= unit
+    /// (the runner checked that no logout was under way). Not while the
+    /// manager is exiting: units fail as they go down.
+    fn fallback_on_failure(&self, reason: &str) {
+        if self.exiting.load(Ordering::Relaxed) {
+            return;
+        }
+        self.request_fallback(reason);
     }
 
     /// user@.service is Type=notify-reload: the reload is announced and
@@ -633,6 +669,14 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             watcher.watch_dynamic(&mut last).await;
             watcher.watch_states(&mut mtimes, &mut last).await;
+            if watcher.cfg.user_mode {
+                let req = watcher.cfg.run_dir.join(crate::state::FALLBACK_REQUEST);
+                if let Ok(text) = std::fs::read_to_string(&req) {
+                    let _ = std::fs::remove_file(&req);
+                    let reason = text.split_once('\n').map(|(_, r)| r).unwrap_or(&text);
+                    watcher.fallback_on_failure(reason.trim());
+                }
+            }
             tick = tick.wrapping_add(1);
             if let Some(r) = oomd.as_mut().filter(|_| tick % 5 == 0) {
                 let (cfg, r) = (watcher.cfg.clone(), r.clone());

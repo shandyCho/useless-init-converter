@@ -22,6 +22,8 @@ use crate::config::Config;
 use crate::util;
 
 const SYSTEMD_USER: &str = "/usr/lib/systemd/systemd";
+/// capability.h's CAP_WAKE_ALARM (libc has no constant for it).
+const CAP_WAKE_ALARM: libc::c_ulong = 35;
 
 /// USER_MANAGER=: the system configuration's, overridden by the kernel
 /// command line's uinitconverter.user_manager=.
@@ -395,6 +397,7 @@ fn write_config(
     // its units (USER_EXCLUDE= in the system configuration: globs it
     // leaves out).
     kv("EXCLUDE", &sys.user_exclude.join(" "));
+    kv("USER_FALLBACK_ON", &sys.user_fallback_on.join(" "));
     kv("INCLUDE", "");
     kv(
         "CGROUP_BASE",
@@ -418,6 +421,21 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
         let err = Command::new(SYSTEMD_USER).arg("--user").args(args).exec();
         eprintln!("uinitconverterd user-manager: {SYSTEMD_USER}: {err}; running the s6 user manager instead");
     }
+    // This boot already fell back for this user, or the last s6 manager of
+    // this boot ended without cleaning up (a crash): systemd --user.
+    let uid = unsafe { libc::getuid() };
+    let fb = Fallback::new(uid);
+    if let Some(reason) = fb.marked() {
+        eprintln!("uinitconverterd user-manager: fell back earlier in this boot ({reason}); running systemd --user");
+        hand_over(delegated_cgroup().as_deref(), args);
+    }
+    if let Some(pid) = fb.stale_running() {
+        let reason = format!("the s6 user manager of this boot (PID {pid}) ended without stopping");
+        fb.mark(&reason);
+        eprintln!("uinitconverterd user-manager: {reason}; running systemd --user");
+        hand_over(delegated_cgroup().as_deref(), args);
+    }
+    fb.set_running();
     // systemd gives user@ CAP_WAKE_ALARM as an ambient capability (for
     // systemd --user's WakeSystem= timers, kept by the exec above), and
     // systemd --user does not pass it to its units. Ambient capabilities
@@ -433,11 +451,10 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
             0,
         );
     }
-    let uid = unsafe { libc::getuid() };
     let runtime = env_dir("XDG_RUNTIME_DIR").unwrap_or_else(|| format!("/run/user/{uid}"));
     if !Path::new(&runtime).is_dir() {
         eprintln!("uinitconverterd user-manager: no runtime directory {runtime}");
-        return 1;
+        setup_failed(&fb, args);
     }
     // XDG_RUNTIME_DIR is set for the units even when user@ did not.
     std::env::set_var("XDG_RUNTIME_DIR", &runtime);
@@ -451,13 +468,13 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
                 "uinitconverterd user-manager: {}: {e}",
                 base.join(d).display()
             );
-            return 1;
+            setup_failed(&fb, args);
         }
     }
     let _ = fs::create_dir_all(PathBuf::from(&runtime).join("systemd"));
     if let Err(e) = std::os::unix::fs::symlink(base.join("scan"), base.join("live/scandir")) {
         eprintln!("uinitconverterd user-manager: {e}");
-        return 1;
+        setup_failed(&fb, args);
     }
 
     // systemd's user layout: the manager in init.scope, the units in
@@ -476,7 +493,7 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
     let conf = base.join("uinitconverter.conf");
     if let Err(e) = write_config(sys, &conf, &base, &runtime, cgroup.as_deref()) {
         eprintln!("uinitconverterd user-manager: {e}");
-        return 1;
+        setup_failed(&fb, args);
     }
     let _ = util::write_atomic(
         &base.join("run/manager.env"),
@@ -487,7 +504,7 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
         Ok(c) => c,
         Err(e) => {
             eprintln!("uinitconverterd user-manager: {e}");
-            return 1;
+            setup_failed(&fb, args);
         }
     };
 
@@ -498,11 +515,13 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
         Ok(c) => c,
         Err(e) => {
             eprintln!("uinitconverterd user-manager: s6-svscan: {e}");
-            return 1;
+            setup_failed(&fb, args);
         }
     };
     let addr = cfg.bus_address.clone().unwrap_or_default();
-    let code = crate::serve(cfg, &["--address".into(), addr]);
+    let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::serve(cfg, &["--address".into(), addr])
+    }));
     // The units are stopped (or the daemon failed): end s6-svscan, which
     // ends what is left under it.
     let _ = Command::new(crate::tools::path("s6-svscanctl"))
@@ -510,12 +529,254 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
         .arg(base.join("scan"))
         .status();
     let _ = svscan.wait();
-    code
+    let reason = match served {
+        Err(_) => Some("the daemon panicked".to_string()),
+        Ok(0) => crate::daemon::fallback_reason(),
+        Ok(code) => Some(format!("the daemon exited with {code}")),
+    };
+    if let Some(reason) = reason {
+        fb.mark(&reason);
+        fb.clear_running();
+        eprintln!("uinitconverterd user-manager: {reason}; handing over to systemd --user");
+        hand_over(cgroup.as_deref(), args);
+    }
+    fb.clear_running();
+    0
+}
+
+/// The fallback's record, for this boot: `<uid>` (the reason) and
+/// `<uid>.running` (the PID of the s6 manager running now) in
+/// FALLBACK_DIR, sticky and writable by all (tmpfiles.d), as only files
+/// of the user's own count there; in $XDG_RUNTIME_DIR when that
+/// directory is missing or the name is taken by another user's file (the
+/// fallback then lasts until the user's last session ends).
+pub const FALLBACK_DIR: &str = "/run/uinitconverter-user";
+
+struct Fallback {
+    uid: u32,
+    dirs: Vec<PathBuf>,
+}
+
+impl Fallback {
+    fn new(uid: u32) -> Self {
+        let mut dirs = Vec::new();
+        if let Ok(d) = std::env::var("UINITCONVERTER_USER_FALLBACK_DIR") {
+            dirs.push(PathBuf::from(d));
+        } else {
+            dirs.push(PathBuf::from(FALLBACK_DIR));
+        }
+        let runtime = env_dir("XDG_RUNTIME_DIR").unwrap_or_else(|| format!("/run/user/{uid}"));
+        dirs.push(PathBuf::from(runtime).join("uinitconverter-fallback"));
+        Fallback { uid, dirs }
+    }
+
+    /// The user's own file `name` in the first directory that has one.
+    fn read(&self, name: &str) -> Option<String> {
+        use std::os::unix::fs::MetadataExt;
+        self.dirs.iter().find_map(|d| {
+            let p = d.join(name);
+            let m = fs::symlink_metadata(&p).ok()?;
+            (m.is_file() && m.uid() == self.uid)
+                .then(|| fs::read_to_string(&p).ok())
+                .flatten()
+        })
+    }
+
+    fn write(&self, name: &str, text: &str) {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        for (i, d) in self.dirs.iter().enumerate() {
+            if i > 0 {
+                let _ = fs::create_dir_all(d);
+            }
+            let p = d.join(name);
+            // Our own file is replaced; another user's is not ours to touch.
+            let _ = fs::remove_file(&p);
+            let r = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o644)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&p)
+                .and_then(|mut f| f.write_all(text.as_bytes()));
+            if r.is_ok() {
+                return;
+            }
+        }
+        eprintln!("uinitconverterd user-manager: could not record {name} for the fallback");
+    }
+
+    fn remove(&self, name: &str) {
+        use std::os::unix::fs::MetadataExt;
+        for d in &self.dirs {
+            let p = d.join(name);
+            if fs::symlink_metadata(&p)
+                .map(|m| m.uid() == self.uid)
+                .unwrap_or(false)
+            {
+                let _ = fs::remove_file(&p);
+            }
+        }
+    }
+
+    fn marked(&self) -> Option<String> {
+        self.read(&self.uid.to_string())
+            .map(|r| r.trim().to_string())
+    }
+
+    fn mark(&self, reason: &str) {
+        self.write(&self.uid.to_string(), reason);
+    }
+
+    /// The PID in a running stamp left by an s6 manager that is gone.
+    fn stale_running(&self) -> Option<u32> {
+        let pid: u32 = self
+            .read(&format!("{}.running", self.uid))?
+            .trim()
+            .parse()
+            .ok()?;
+        let alive = fs::read_to_string(format!("/proc/{pid}/comm"))
+            .map(|c| c.trim() == "uinitconverterd")
+            .unwrap_or(false);
+        (!alive && pid != std::process::id()).then_some(pid)
+    }
+
+    fn set_running(&self) {
+        self.write(
+            &format!("{}.running", self.uid),
+            &std::process::id().to_string(),
+        );
+    }
+
+    fn clear_running(&self) {
+        self.remove(&format!("{}.running", self.uid));
+    }
+}
+
+/// Empty the delegated cgroup but for init.scope (where this process is):
+/// what an s6 manager left must not run beside systemd --user, which also
+/// wants the tree to itself. cgroup.kill, then the empty cgroups go,
+/// deepest first; other processes in init.scope are killed.
+fn empty_cgroup(base: &Path) {
+    fn subdirs(d: &Path) -> Vec<PathBuf> {
+        fs::read_dir(d)
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                    .map(|e| e.path())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    fn remove_tree(d: &Path) {
+        for s in subdirs(d) {
+            remove_tree(&s);
+        }
+        let _ = fs::remove_dir(d);
+    }
+    let me = std::process::id().to_string();
+    if let Ok(procs) = fs::read_to_string(base.join("init.scope/cgroup.procs")) {
+        for p in procs.lines().filter(|p| *p != me) {
+            if let Ok(pid) = p.parse::<i32>() {
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
+    }
+    let children: Vec<PathBuf> = subdirs(base)
+        .into_iter()
+        .filter(|d| !d.ends_with("init.scope"))
+        .collect();
+    for d in &children {
+        let _ = fs::write(d.join("cgroup.kill"), "1");
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    for d in &children {
+        while fs::read_to_string(d.join("cgroup.events"))
+            .map(|e| e.lines().any(|l| l == "populated 1"))
+            .unwrap_or(false)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        remove_tree(d);
+    }
+}
+
+/// The s6 manager could not even be set up (its message is out already):
+/// systemd --user instead, for the rest of this boot.
+fn setup_failed(fb: &Fallback, args: &[String]) -> ! {
+    fb.mark("the s6 user manager could not be set up");
+    fb.clear_running();
+    hand_over(delegated_cgroup().as_deref(), args)
+}
+
+/// The fallback itself: an empty cgroup, CAP_WAKE_ALARM back in the
+/// ambient set as systemd gave it (cleared for our units above), then
+/// systemd --user in this process, so user@UID.service goes on.
+fn hand_over(cgroup: Option<&Path>, args: &[String]) -> ! {
+    if let Some(base) = cgroup {
+        empty_cgroup(base);
+    }
+    unsafe {
+        libc::prctl(
+            libc::PR_CAP_AMBIENT,
+            libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,
+            CAP_WAKE_ALARM,
+            0,
+            0,
+        );
+    }
+    let systemd =
+        std::env::var("UINITCONVERTER_SYSTEMD_USER").unwrap_or_else(|_| SYSTEMD_USER.into());
+    let err = Command::new(&systemd).arg("--user").args(args).exec();
+    eprintln!("uinitconverterd user-manager: {systemd}: {err}");
+    std::process::exit(1)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fallback record: the reason and the running stamp, read back;
+    /// a stamp naming a process that is gone is stale;
+    /// clear_running removes only the stamp; a name taken in the shared
+    /// directory falls through to the second one.
+    #[test]
+    fn fallback_record() {
+        let top = std::env::temp_dir().join(format!("uc-fallback-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&top);
+        let (shared, own) = (top.join("shared"), top.join("own"));
+        fs::create_dir_all(&shared).unwrap();
+        let uid = unsafe { libc::getuid() };
+        let fb = Fallback {
+            uid,
+            dirs: vec![shared.clone(), own.clone()],
+        };
+        assert_eq!(fb.marked(), None);
+        assert_eq!(fb.stale_running(), None);
+        fb.mark("broken on purpose");
+        assert_eq!(fb.marked().as_deref(), Some("broken on purpose"));
+        assert!(shared.join(uid.to_string()).exists());
+        // The stamp naming this very process is not stale (the manager
+        // reading its own); a dead PID is.
+        fb.set_running();
+        assert_eq!(fb.stale_running(), None);
+        fs::write(shared.join(format!("{uid}.running")), "999999999").unwrap();
+        assert_eq!(fb.stale_running(), Some(999999999));
+        fb.clear_running();
+        assert!(!shared.join(format!("{uid}.running")).exists());
+        assert!(shared.join(uid.to_string()).exists());
+        // A directory where the name cannot be created: the second one.
+        fs::remove_file(shared.join(uid.to_string())).unwrap();
+        fs::create_dir(shared.join(uid.to_string())).unwrap();
+        fb.mark("elsewhere");
+        assert_eq!(
+            fs::read_to_string(own.join(uid.to_string())).unwrap(),
+            "elsewhere"
+        );
+        assert_eq!(fb.marked().as_deref(), Some("elsewhere"));
+        let _ = fs::remove_dir_all(&top);
+    }
 
     /// Unit generators get the three directories, made empty first (a
     /// reload drops the last run's output), and SYSTEMD_SCOPE=user; a

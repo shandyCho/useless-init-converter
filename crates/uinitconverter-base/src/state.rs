@@ -63,6 +63,11 @@ impl UnitState {
     }
 }
 
+/// RUN_DIR/<this>: a runner asks a user manager to fall back to
+/// systemd --user (the OnFailure= unit on the first line, the reason on
+/// the second); the daemon's watcher takes it.
+pub const FALLBACK_REQUEST: &str = "fallback-request";
+
 /// Keys used across runner and daemon.
 pub mod keys {
     /// Result: success, exit-code, signal, timeout, start-limit-hit, resources, condition

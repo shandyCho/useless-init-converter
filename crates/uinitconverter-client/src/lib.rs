@@ -54,3 +54,22 @@ where
     .await
     .map_err(|e| e.to_string())
 }
+
+/// A unit's ActiveState, as the manager reports it.
+pub async fn unit_active_state(conn: &Connection, name: &str) -> Result<String, String> {
+    let reply = manager_call(conn, "LoadUnit", &(name,)).await?;
+    let path: zbus::zvariant::OwnedObjectPath =
+        reply.body().deserialize().map_err(|e| e.to_string())?;
+    let reply = conn
+        .call_method(
+            Some("org.freedesktop.systemd1"),
+            path.as_str(),
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &("org.freedesktop.systemd1.Unit", "ActiveState"),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let v: zbus::zvariant::OwnedValue = reply.body().deserialize().map_err(|e| e.to_string())?;
+    String::try_from(v).map_err(|e| e.to_string())
+}

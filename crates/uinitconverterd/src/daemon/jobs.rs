@@ -367,7 +367,17 @@ impl Daemon {
     }
 
     pub(super) async fn finish_job(&self, job: u32, id: &str, result: &str) {
-        self.jobs.lock().unwrap().remove(&job);
+        let jtype = self.jobs.lock().unwrap().remove(&job).map(|j| j.jtype);
+        // The user's session did not come up (the leader's start of
+        // gnome-session@NAME.target failed): systemd --user takes over.
+        if self.cfg.user_mode
+            && jtype.as_deref() == Some("start")
+            && !matches!(result, "done" | "skipped")
+            && self.cfg.is_fallback_unit(id)
+            && !self.exiting.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.request_fallback(&format!("the start of {id} ended {result}"));
+        }
         self.forget_unit_state(id);
         self.emit(
             MANAGER_PATH,

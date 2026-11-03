@@ -120,6 +120,12 @@ pub struct Config {
     pub user_manager: String,
     /// Globs of user units the s6 user manager does not run.
     pub user_exclude: Vec<String>,
+    /// Globs of user units whose failure path makes the s6 user manager
+    /// hand over to systemd --user (an OnFailure= start of one, or a failed
+    /// start job of one): GNOME 51's session units fail into
+    /// gnome-session-shutdown.target, and the leader starts
+    /// gnome-session@NAME.target.
+    pub user_fallback_on: Vec<String>,
 }
 
 static CGROUP_BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -277,6 +283,10 @@ impl Config {
             cgroup_base: None,
             user_manager: "systemd".into(),
             user_exclude: Vec::new(),
+            user_fallback_on: vec![
+                "gnome-session-shutdown.target".into(),
+                "gnome-session@*.target".into(),
+            ],
         }
     }
 
@@ -333,6 +343,9 @@ impl Config {
                 },
                 "USER_EXCLUDE" => {
                     cfg.user_exclude = v.split_whitespace().map(String::from).collect()
+                }
+                "USER_FALLBACK_ON" => {
+                    cfg.user_fallback_on = v.split_whitespace().map(String::from).collect()
                 }
                 "EXCLUDE_ADD" => cfg.exclude.extend(v.split_whitespace().map(String::from)),
                 "INCLUDE" => cfg.include = v.split_whitespace().map(String::from).collect(),
@@ -487,6 +500,15 @@ impl Config {
     }
 
     /// USER_MANAGER= as it applies on this boot: the kernel command line's
+    /// A user manager: whether `id` is in USER_FALLBACK_ON=.
+    pub fn is_fallback_unit(&self, id: &str) -> bool {
+        self.user_mode
+            && self
+                .user_fallback_on
+                .iter()
+                .any(|p| crate::util::fnmatch(p, id))
+    }
+
     /// uinitconverter.user_manager= wins.
     pub fn user_manager_now(&self, cmdline: &str) -> String {
         cmdline
