@@ -63,7 +63,9 @@ if they turned out to be wrong.
   `CORE_RPMS=DIR/rpms` (the standalone RPMs from `standalone/*/build-rpm.sh
   ~/uinitconverter-vm/rpmbuild/standalone`). `BOOT=s6` (session, lifecycle)
   and `BOOT=systemd-rpm` (the systemd boot with only `uinitconverter-user`
-  and `initconvert-user-setup on`) in front of `tests/vm-user-manager.sh`.
+  and `initconvert-user-setup on`) in front of `tests/vm-user-manager.sh`;
+  `tests/vm-user-setup.sh ~/uinitconverter-vm` (with `OLD_RPMS=` for the
+  upgrade case) for `initconvert-user-setup` with every package installed.
   Everything runs unprivileged and never touches the host's init system.
 - Never modify skarnet's sources (skalibs, execline, s6, s6-rc,
   s6-linux-init, s6-frontend), and don't add patches for them in

@@ -106,6 +106,9 @@ CORE_RPMS=~/uinitconverter-test/rpms tests/vm-s6-boot.sh ~/uinitconverter-vm s6
 BOOT=systemd-rpm CORE_RPMS=~/uinitconverter-test/rpms tests/vm-user-manager.sh ~/uinitconverter-vm session
 ```
 
+모든 패키지를 설치한 상태에서 `initconvert-user-setup`(켜기, 끄기, 삭제, 옛 빌드에서 업그레이드)을 확인하려면
+`tests/vm-user-setup.sh`를 쓰세요. 명령은 스크립트 머리말에 있습니다.
+
 `vm-s6-boot.sh`는 독립 도구 RPM을 `~/uinitconverter-vm/rpmbuild/standalone/rpms`(`STANDALONE_RPMS=`로
 바꿈)에서, skarnet.org RPM을 `~/rpmbuild-skarnet/rpms`(`SKARNET_RPMS=`)에서 가져옵니다.
 

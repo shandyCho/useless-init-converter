@@ -212,7 +212,7 @@ mk_without() {
         "$MK" -k "$KVER" -o "$3" --no-microcode
 }
 if mk_without "$none" "$none" "$W/s6-plain.img" >"$W/mk-plain.log" 2>&1 &&
-    ! zstd -dc "$W/s6-plain.img" | cpio -t --quiet 2>/dev/null | grep -q 'bin/cryptsetup$'; then
+    ! zstd -dc "$W/s6-plain.img" | cpio -t --quiet 2>/dev/null | grep 'bin/cryptsetup$' >/dev/null; then
     ok "no cryptsetup, nothing encrypted: the image builds, without it"
     IMG=$W/s6-plain.img
     boot "image without cryptsetup: boots an unencrypted root" \

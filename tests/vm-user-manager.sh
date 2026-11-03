@@ -359,7 +359,9 @@ case $cg in */user@$u.service/session.slice/org.gnome.Shell@user.service) ok "gn
 # has CAP_WAKE_ALARM); with one, bwrap refuses to run (glycin, flatpak).
 a=$(sed -n 's/^CapAmb:\t*//p' "/proc/$p/status")
 [ "$a" = 0000000000000000 ] && ok "gnome-shell has no ambient capabilities" || bad "gnome-shell's CapAmb: $a"
-if journalctl -b "_UID=$u" --no-pager -o cat | grep -q "Failed to load background"; then
+# grep without -q reads to the end: -q stops at the match, journalctl then
+# dies of SIGPIPE and, with pipefail, the match would read as "not found".
+if journalctl -b "_UID=$u" --no-pager -o cat | grep -F "Failed to load background" >/dev/null; then
     bad "the background did not load (glycin)"
 else
     ok "the background loaded"
@@ -632,7 +634,7 @@ case $step in
         until_ok '[ "$(loginctl show-session '"$t"' -p Active --value)" = yes ]' 30 && ok "back to tester's session" || bad "tester's session is not active" ;;
     after-reboot)
         n=0
-        if journalctl -b -1 --no-pager -o cat -t uinitconverter 2>/dev/null | grep -qx "shutdown starts"; then
+        if journalctl -b -1 --no-pager -o cat -t uinitconverter 2>/dev/null | grep -x "shutdown starts" >/dev/null; then
             # The s6 boot (BOOT=s6): from "shutdown starts" to the end of
             # each user@'s PAM session in its runner (pam_unix's close line).
             a=$(journalctl -b -1 -o short-unix --no-pager -t uinitconverter | awk '/shutdown starts/ {print $1; exit}')

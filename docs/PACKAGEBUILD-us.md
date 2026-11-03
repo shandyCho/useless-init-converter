@@ -112,6 +112,10 @@ CORE_RPMS=~/uinitconverter-test/rpms tests/vm-s6-boot.sh ~/uinitconverter-vm s6
 BOOT=systemd-rpm CORE_RPMS=~/uinitconverter-test/rpms tests/vm-user-manager.sh ~/uinitconverter-vm session
 ```
 
+For `initconvert-user-setup` with every package installed (on, off, removal,
+and an upgrade from an older build), `tests/vm-user-setup.sh`; its header has
+the commands.
+
 `vm-s6-boot.sh` takes the standalone RPMs from
 `~/uinitconverter-vm/rpmbuild/standalone/rpms` (`STANDALONE_RPMS=` to change
 it) and the skarnet.org ones from `~/rpmbuild-skarnet/rpms` (`SKARNET_RPMS=`).

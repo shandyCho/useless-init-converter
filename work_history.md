@@ -11536,3 +11536,48 @@ Committed on main with this entry, one commit after c04ebd2 for parts 154 and 15
 3. gnome-shell's exit hang under the s6 user manager on the s6 boot (part 154).
 4. The owner's machine: the new RPMs, `sudo initconvert init`, a reboot.
 5. SELinux for confined users; smaller items as in part 153.
+
+## 2026-11-04, part 156: initconvert-user-setup with every package installed (VM), test-script SIGPIPE bugs
+
+Owner, after part 155 was pushed: "do 1" (part 155's "Not tested"); asked for a Korean guide with commands, first for the VM, then whether it was meant for their own machine (it wasn't; a guide for the real machine followed); then "do VM first", and "if an error or bug occurs in the VM test, fix it with your recommendation".
+
+**The four cases, in the GNOME VM, enforcing:**
+- **A.** Every package installed (core, standalone, skarnet), `initconvert init --yes` with the systemd entry kept as the default, so the SELinux module is loaded and labels /usr/libexec/uinitconverter; then `on` and a reboot. user@1000 runs the s6 user manager with no fallback, tester's manager is running, gnome-shell runs, no AVC denials.
+- **B.** `off` and a reboot: no drop-in, systemd --user, USER_MANAGER=systemd.
+- **C.** `on`, then `dnf remove uinitconverter-user`: %preun removed the drop-in, user@1000's ExecStart is systemd --user's again; after a reboot systemd --user, no AVC.
+- **D.** A fresh VM with RPMs built from c04ebd2 (same version 0.2.2, no initconvert-user-setup), upgraded to 724ad8c's: uinitconverter-user upgraded, the script installed, nothing turned on, s6-rc kept; `initconvert init`, then `on` and a reboot: the s6 manager, no AVC.
+- The old RPMs were built first: the release holds the build time, so the newer build has to come second.
+
+**Result: 22/22 on the second run, no product bug.** The first run had 4 failures, all in my driver:
+- **status_has piped into `grep -q` under pipefail.** The match was the output's first line, grep exited, and ssh died of SIGPIPE, so the pipeline failed. That made "drop-in still there" in B and D. Lines at the end of the output passed. Fixed by capturing the output first.
+- **C's readlink ran as tester:** user@'s main process isn't readable by its own user (its capabilities make it non-dumpable). Now run with sudo.
+- **D's expected package name** lacked `.noarch`.
+
+**The same SIGPIPE trap in the project's scripts, fixed** (grep without -q, output to /dev/null, so grep reads to the end):
+- **tests/vm-user-manager.sh session.sh, "the background loaded":** `journalctl | grep -q "Failed to load background"` in an if. With a match and journal left after it, it read as no match: a false PASS.
+- **tests/initramfs.sh:** `! zstd | cpio -t | grep -q bin/cryptsetup` could pass an image that has cryptsetup.
+- **vm-user-manager.sh's after-reboot `grep -qx "shutdown starts"`:** short output, but the same pattern.
+- **Left as they are:** the other `| grep -q` sites in pipefail scripts (confine-vm.sh, gnome-vm.sh, vm-user-manager.sh's oomd and environment checks) read an echo of a variable or short command output, which the pipe holds whole before grep exits.
+
+**New test, tests/vm-user-setup.sh DIR:** the driver made reusable (CORE_RPMS, OLD_RPMS; D is skipped without it; STANDALONE_RPMS, SKARNET_RPMS; screenshots DIR/user-setup-A.png and -D.png). The old build must have the tree's version, because D moves the old core RPMs aside by it. Docs: the TESTING pair, the PACKAGEBUILD pair's VM section, CLAUDE.md's test list.
+
+**A guide for the owner's own machine (Korean, in the conversation):**
+- **Safety first:** the ways back (Ctrl+Alt+F3 and `off`; uinitconverter.user_manager=systemd at GRUB; the automatic fallback).
+- **The steps:** build the RPMs, upgrade from the systemd boot with dnf install (uinitconverter-user may be new), `initconvert init --yes`, .rpmnew files, then A, B and C by hand, with what to send back if something fails.
+- **Noted there:** `on` writes USER_MANAGER=s6, which the s6 boot also follows.
+
+**Tests:**
+- The second driver run: 22/22.
+- tests/vm-user-setup.sh itself, with OLD_RPMS: 22/22.
+- bash -n and shellcheck -S warning on vm-user-setup.sh, vm-user-manager.sh and initramfs.sh. initramfs.sh was not rerun (it needs mdevd and QEMU).
+
+### Current state
+
+Committed on main with this entry, one commit after 724ad8c (not pushed).
+
+### Next steps
+
+1. The owner's machine, by the Korean guide: the upgrade (part 151's migration), A, B and C by hand.
+2. The elogind plan (part 154).
+3. gnome-shell's exit hang under the s6 user manager on the s6 boot (part 154).
+4. SELinux for confined users; smaller items as in part 153.

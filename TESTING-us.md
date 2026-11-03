@@ -345,6 +345,16 @@ initconvert-user-setup on`, with no kernel flag. The baselines install the
 package and leave it off, so they also check that installing it changes
 nothing.
 
+`tests/vm-user-setup.sh ~/uinitconverter-vm` checks `initconvert-user-setup`
+on the systemd boot with everything installed and `initconvert init` run, the
+SELinux module included, as on an owner's machine: `on` and a reboot (the s6
+manager, enforcing, no AVC denials), `off` and a reboot, `on` then
+`dnf remove uinitconverter-user` (the drop-in goes), and with
+`OLD_RPMS=` an upgrade from an older build of the same version (nothing
+turned on by the upgrade, `on` works after it). Build the old RPMs first,
+so the newer build has the newer release; the script's header has the
+commands.
+
 `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm MODE` runs the
 `session` and `lifecycle` checks (and their baselines) on the s6 boot the same
 way: every RPM, `USER_MANAGER=s6` (not in the baselines) and `initconvert

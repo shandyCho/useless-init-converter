@@ -302,6 +302,12 @@ tester의 자동 로그인 세션(자기 유닛 안의 gnome-shell, 세션 타�
 패키지만(`CORE_RPMS=`, `SKARNET_RPMS=`에서) 설치하고 `sudo initconvert-user-setup on`을 실행하며, 커널 플래그는
 없습니다. baseline은 패키지를 설치하고 끈 채로 두므로, 설치만으로는 아무것도 바뀌지 않는지도 확인합니다.
 
+`tests/vm-user-setup.sh ~/uinitconverter-vm`은 모든 패키지를 설치하고 `initconvert init`을 실행한(SELinux 모듈 포함)
+systemd 부팅에서, 사용자 컴퓨터와 같은 구성으로 `initconvert-user-setup`을 확인합니다. `on`과 재부팅(s6 매니저,
+enforcing, AVC 거부 없음), `off`와 재부팅, `on` 뒤 `dnf remove uinitconverter-user`(드롭인이 지워짐), 그리고
+`OLD_RPMS=`가 있으면 같은 버전의 옛 빌드에서 업그레이드(업그레이드만으로는 켜지지 않고, 그 뒤 `on`이 동작)를
+확인합니다. 옛 RPM을 먼저 빌드해야 새 빌드의 릴리스 번호가 더 큽니다. 명령은 스크립트 머리말에 있습니다.
+
 `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm MODE`는 `session`과 `lifecycle` 확인(과 그 baseline)을
 같은 방식으로 s6 부팅에서 실행합니다. 모든 RPM, `USER_MANAGER=s6`(baseline 제외), `initconvert init`을 쓰므로
 s6 부팅의 러너가 모든 `user@`를 시작합니다. 재부팅 때는 각 `user@`를 "shutdown starts"부터 러너의 PAM 세션이
