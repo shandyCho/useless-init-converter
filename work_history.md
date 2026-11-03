@@ -11676,6 +11676,8 @@ Owner, on the s6 boot with 0370166's RPMs: `sudo initconvert-user-setup status` 
 
 **Seen, not looked into:** the greeter's user@60578 log repeats `mkdir: cannot create directory '/run/gdm/home/gdm-greeter': Permission denied` once a second; `s6-svscan: warning: unable to stat pipewire-pulse.service` while user@0 stops (a service directory removed during teardown, likely harmless).
 
+**Decision: keep systemd-hostnamed.** The owner asked how to replace it, then dropped the idea. It already works on the s6 boot: bus-activated on demand, idle exit, `hostnamectl` answers. Its binary is in the systemd RPM, which stays installed anyway. There is no maintained replacement (openrc-settingsd is old), so it would be our own reimplementation of org.freedesktop.hostname1 to keep up with systemd. Don't propose it again unless the owner asks; localed and timedated fall under the same reasoning.
+
 ### Current state
 
 Committed on main with this entry, one commit after 0370166 (not pushed).
