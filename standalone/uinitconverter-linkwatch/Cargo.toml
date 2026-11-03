@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Unblocks s6-rc-update and s6-svlink when they missed a new supervisor's start event"
 
+# The command is initconvert-linkwatch; the crate and the package keep their names.
+[[bin]]
+name = "initconvert-linkwatch"
+path = "src/main.rs"
+
 [dependencies]
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "param", "process"] }
 

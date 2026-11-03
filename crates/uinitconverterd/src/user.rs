@@ -1,4 +1,4 @@
-//! `uinitconverterd user-manager`: what user@UID.service runs instead of
+//! `initconvertd user-manager`: what user@UID.service runs instead of
 //! `systemd --user` (work_history parts 136-141). Under
 //! $XDG_RUNTIME_DIR/uinitconverter it makes a scan directory with its own
 //! s6-svscan and a configuration in user mode, then serves
@@ -196,7 +196,7 @@ fn run_generators(env: &mut Vec<(String, String)>, dirs: &[PathBuf]) {
         let mut child = match child {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("uinitconverterd user-manager: generator {name}: {e}");
+                eprintln!("initconvertd user-manager: generator {name}: {e}");
                 continue;
             }
         };
@@ -218,9 +218,9 @@ fn run_generators(env: &mut Vec<(String, String)>, dirs: &[PathBuf]) {
                 }
             }
             Some(st) => eprintln!(
-                "uinitconverterd user-manager: generator {name} failed ({st}), its output ignored"
+                "initconvertd user-manager: generator {name} failed ({st}), its output ignored"
             ),
-            None => eprintln!("uinitconverterd user-manager: generator {name} timed out, killed"),
+            None => eprintln!("initconvertd user-manager: generator {name} timed out, killed"),
         }
     }
 }
@@ -290,7 +290,7 @@ fn run_unit_generators_from(gens: &[PathBuf], runtime: &str, env: &[(String, Str
     for d in &dirs {
         let _ = fs::remove_dir_all(d);
         if let Err(e) = fs::create_dir_all(d) {
-            eprintln!("uinitconverterd user-manager: {}: {e}", d.display());
+            eprintln!("initconvertd user-manager: {}: {e}", d.display());
             return;
         }
     }
@@ -305,14 +305,14 @@ fn run_unit_generators_from(gens: &[PathBuf], runtime: &str, env: &[(String, Str
         let mut child = match child {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("uinitconverterd user-manager: generator {name}: {e}");
+                eprintln!("initconvertd user-manager: generator {name}: {e}");
                 continue;
             }
         };
         match wait_limited(&mut child, std::time::Duration::from_secs(5)) {
             Some(st) if st.success() => {}
-            Some(st) => eprintln!("uinitconverterd user-manager: generator {name} failed ({st})"),
-            None => eprintln!("uinitconverterd user-manager: generator {name} timed out, killed"),
+            Some(st) => eprintln!("initconvertd user-manager: generator {name} failed ({st})"),
+            None => eprintln!("initconvertd user-manager: generator {name} timed out, killed"),
         }
     }
 }
@@ -419,20 +419,22 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
         .any(|w| w == "uinitconverter.user_manager=s6");
     if (systemd_boot && !asked) || chosen(sys, &cmdline) == "systemd" {
         let err = Command::new(SYSTEMD_USER).arg("--user").args(args).exec();
-        eprintln!("uinitconverterd user-manager: {SYSTEMD_USER}: {err}; running the s6 user manager instead");
+        eprintln!(
+            "initconvertd user-manager: {SYSTEMD_USER}: {err}; running the s6 user manager instead"
+        );
     }
     // This boot already fell back for this user, or the last s6 manager of
     // this boot ended without cleaning up (a crash): systemd --user.
     let uid = unsafe { libc::getuid() };
     let fb = Fallback::new(uid);
     if let Some(reason) = fb.marked() {
-        eprintln!("uinitconverterd user-manager: fell back earlier in this boot ({reason}); running systemd --user");
+        eprintln!("initconvertd user-manager: fell back earlier in this boot ({reason}); running systemd --user");
         hand_over(delegated_cgroup().as_deref(), args);
     }
     if let Some(pid) = fb.stale_running() {
         let reason = format!("the s6 user manager of this boot (PID {pid}) ended without stopping");
         fb.mark(&reason);
-        eprintln!("uinitconverterd user-manager: {reason}; running systemd --user");
+        eprintln!("initconvertd user-manager: {reason}; running systemd --user");
         hand_over(delegated_cgroup().as_deref(), args);
     }
     fb.set_running();
@@ -453,7 +455,7 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
     }
     let runtime = env_dir("XDG_RUNTIME_DIR").unwrap_or_else(|| format!("/run/user/{uid}"));
     if !Path::new(&runtime).is_dir() {
-        eprintln!("uinitconverterd user-manager: no runtime directory {runtime}");
+        eprintln!("initconvertd user-manager: no runtime directory {runtime}");
         setup_failed(&fb, args);
     }
     // XDG_RUNTIME_DIR is set for the units even when user@ did not.
@@ -464,16 +466,13 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
     let _ = fs::remove_dir_all(&base);
     for d in ["scan", "live", "run"] {
         if let Err(e) = fs::create_dir_all(base.join(d)) {
-            eprintln!(
-                "uinitconverterd user-manager: {}: {e}",
-                base.join(d).display()
-            );
+            eprintln!("initconvertd user-manager: {}: {e}", base.join(d).display());
             setup_failed(&fb, args);
         }
     }
     let _ = fs::create_dir_all(PathBuf::from(&runtime).join("systemd"));
     if let Err(e) = std::os::unix::fs::symlink(base.join("scan"), base.join("live/scandir")) {
-        eprintln!("uinitconverterd user-manager: {e}");
+        eprintln!("initconvertd user-manager: {e}");
         setup_failed(&fb, args);
     }
 
@@ -486,13 +485,13 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
         let r = fs::create_dir_all(&init)
             .and_then(|_| fs::write(init.join("cgroup.procs"), std::process::id().to_string()));
         if let Err(e) = r {
-            eprintln!("uinitconverterd user-manager: {}: {e}", init.display());
+            eprintln!("initconvertd user-manager: {}: {e}", init.display());
         }
     }
 
     let conf = base.join("uinitconverter.conf");
     if let Err(e) = write_config(sys, &conf, &base, &runtime, cgroup.as_deref()) {
-        eprintln!("uinitconverterd user-manager: {e}");
+        eprintln!("initconvertd user-manager: {e}");
         setup_failed(&fb, args);
     }
     let _ = util::write_atomic(
@@ -503,7 +502,7 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
     let cfg = match Config::load(Some(&conf)) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("uinitconverterd user-manager: {e}");
+            eprintln!("initconvertd user-manager: {e}");
             setup_failed(&fb, args);
         }
     };
@@ -514,7 +513,7 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("uinitconverterd user-manager: s6-svscan: {e}");
+            eprintln!("initconvertd user-manager: s6-svscan: {e}");
             setup_failed(&fb, args);
         }
     };
@@ -529,6 +528,12 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
         .arg(base.join("scan"))
         .status();
     let _ = svscan.wait();
+    // What a job still had running when the manager began to exit (an
+    // s6-svunlink of the GNOME leader's logout, in init.scope beside us) is
+    // ended here, not left for systemd to kill at the stop of user@.
+    if let Some(base) = cgroup.as_deref() {
+        end_helpers(base);
+    }
     let reason = match served {
         Err(_) => Some("the daemon panicked".to_string()),
         Ok(0) => crate::daemon::fallback_reason(),
@@ -537,7 +542,7 @@ pub fn main(sys: &Config, args: &[String]) -> i32 {
     if let Some(reason) = reason {
         fb.mark(&reason);
         fb.clear_running();
-        eprintln!("uinitconverterd user-manager: {reason}; handing over to systemd --user");
+        eprintln!("initconvertd user-manager: {reason}; handing over to systemd --user");
         hand_over(cgroup.as_deref(), args);
     }
     fb.clear_running();
@@ -603,7 +608,7 @@ impl Fallback {
                 return;
             }
         }
-        eprintln!("uinitconverterd user-manager: could not record {name} for the fallback");
+        eprintln!("initconvertd user-manager: could not record {name} for the fallback");
     }
 
     fn remove(&self, name: &str) {
@@ -650,8 +655,8 @@ impl Fallback {
     }
 }
 
-/// Whether `pid` is a running uinitconverterd, under whichever name it was
-/// started (uinitconverter-user-manager's comm is cut to "uinitconverter-"):
+/// Whether `pid` is a running initconvertd, under whichever name it was
+/// started (initconvert-user-manager's comm is cut to "initconvert-use"):
 /// its executable, " (deleted)" after a package update replaced it.
 fn manager_alive(pid: u32) -> bool {
     if let Ok(exe) = fs::read_link(format!("/proc/{pid}/exe")) {
@@ -659,11 +664,38 @@ fn manager_alive(pid: u32) -> bool {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        return name.trim_end_matches(" (deleted)") == "uinitconverterd";
+        return name.trim_end_matches(" (deleted)") == "initconvertd";
     }
     fs::read_to_string(format!("/proc/{pid}/comm"))
-        .map(|c| matches!(c.trim(), "uinitconverterd" | "uinitconverter-"))
+        .map(|c| matches!(c.trim(), "initconvertd" | "initconvert-use"))
         .unwrap_or(false)
+}
+
+/// The other processes in our init.scope: SIGTERM, then SIGKILL after 1 s.
+fn end_helpers(base: &Path) {
+    let me = std::process::id().to_string();
+    let others = || -> Vec<i32> {
+        fs::read_to_string(base.join("init.scope/cgroup.procs"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|p| *p != me)
+            .filter_map(|p| p.parse().ok())
+            .collect()
+    };
+    let first = others();
+    if first.is_empty() {
+        return;
+    }
+    for &p in &first {
+        unsafe { libc::kill(p, libc::SIGTERM) };
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while !others().is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    for p in others() {
+        unsafe { libc::kill(p, libc::SIGKILL) };
+    }
 }
 
 /// Empty the delegated cgroup but for init.scope (where this process is):
@@ -742,7 +774,7 @@ fn hand_over(cgroup: Option<&Path>, args: &[String]) -> ! {
     let systemd =
         std::env::var("UINITCONVERTER_SYSTEMD_USER").unwrap_or_else(|_| SYSTEMD_USER.into());
     let err = Command::new(&systemd).arg("--user").args(args).exec();
-    eprintln!("uinitconverterd user-manager: {systemd}: {err}");
+    eprintln!("initconvertd user-manager: {systemd}: {err}");
     std::process::exit(1)
 }
 

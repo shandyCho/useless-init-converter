@@ -18,9 +18,7 @@ pub(super) fn check_system(ctx: &Ctx) {
         if ctx.dry && std::env::var("UINITCONVERTER_INIT_ANY_OS").as_deref() == Ok("1") {
             warn(&format!("not Fedora ({id}); dry run only"));
         } else {
-            die(&format!(
-                "uinitconverter init is for Fedora (found ID={id})"
-            ));
+            die(&format!("initconvert init is for Fedora (found ID={id})"));
         }
     }
     // What the steps copy or run; the configure step reads the two
@@ -31,7 +29,7 @@ pub(super) fn check_system(ctx: &Ctx) {
         format!("{SHARE}/s6.conf"),
         format!("{SHARE}/rsyslog.conf"),
         format!("{SHARE}/syslog-ng.conf"),
-        format!("{LIBEXEC}/uinitconverter-gen"),
+        format!("{LIBEXEC}/initconvert-gen"),
     ];
     if let Some(p) = packaged.iter().find(|p| !exists(p)) {
         let msg = format!("{p} is missing: install the packages first (sudo dnf install ./*.rpm with the RPMs from {RELEASES})");
@@ -58,7 +56,7 @@ pub(super) fn check_programs(ctx: &Ctx, s: &Settings) {
     }
     if !s.journal {
         need.push((
-            exists(&format!("{LIBEXEC}/uinitconverter-journal-relay")),
+            exists(&format!("{LIBEXEC}/initconvert-journal-relay")),
             "uinitconverter-journal-relay",
         ));
         if s.syslog == "syslog-ng" {
@@ -100,7 +98,7 @@ pub(super) fn check_programs(ctx: &Ctx, s: &Settings) {
 /// Show which builds are installed; the core tools must be from one build.
 pub(super) fn check_versions(ctx: &Ctx) {
     if ctx.dry {
-        println!("  + uinitconverter --version");
+        println!("  + initconvert --version");
         return;
     }
     let (lines, ok) = crate::version_report();

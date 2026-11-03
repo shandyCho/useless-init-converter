@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Holds file descriptors (systemd's FDSTORE=) for services, apart from the service manager"
 
+# The command is initconvert-fdstore; the crate and the package keep their names.
+[[bin]]
+name = "initconvert-fdstore"
+path = "src/main.rs"
+
 [dependencies]
 libc = "0.2"
 rustix = { version = "1.1", default-features = false, features = ["std", "event", "fs", "net", "process"] }

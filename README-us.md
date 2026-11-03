@@ -9,8 +9,9 @@
 uinitconverter runs Fedora with **s6 as PID 1** instead of systemd. It translates
 Fedora's unit files into s6-rc services, and you manage them with s6's own tools.
 `systemctl`, libsystemd and D-Bus clients keep working, so dnf, SELinux enforcing
-and GNOME still work. The commands, packages and paths are all named
-`uinitconverter`.
+and GNOME still work. The packages and paths are named `uinitconverter`; the
+commands are `initconvert` (`initconvert init`, `initconvert reload`, ...) and
+`initconvertd`, `initconvert-gen`, `initconvert-runner` and so on.
 
 **Read this before installing:**
 
@@ -39,7 +40,7 @@ says:
 | Tool | What it does | Without it |
 |---|---|---|
 | [`uinitconverter-linkwatch`](standalone/uinitconverter-linkwatch/README-us.md) | Unblocks a daemon-reload stuck on an s6 race | Such a reload hangs, and so does every s6-rc command after it, until the stuck `s6-rc-update` is killed |
-| [`uinitconverter-fdstore`](standalone/uinitconverter-fdstore/README-us.md) | Holds services' stored file descriptors and listening sockets | They are lost when `uinitconverterd` restarts, and on-demand services start at boot |
+| [`uinitconverter-fdstore`](standalone/uinitconverter-fdstore/README-us.md) | Holds services' stored file descriptors and listening sockets | They are lost when `initconvertd` restarts, and on-demand services start at boot |
 | [`uinitconverter-notify`](standalone/uinitconverter-notify/README-us.md) | `systemd-notify` replacement | Programs use `systemd-notify`, which stays installed |
 | [`uinitconverter-journal-relay`](standalone/uinitconverter-journal-relay/README-us.md) | Stands in for journald's client sockets with `--journal=no` | `--journal=no` can't be used; nothing changes with the default journald |
 
@@ -150,13 +151,13 @@ starts, then adds the GRUB entry "Fedora (s6 + uinitconverter)". If a package is
 missing, it stops and prints the `dnf install` command.
 
 ```sh
-uinitconverter init --dry-run
-sudo uinitconverter init
+initconvert init --dry-run
+sudo initconvert init
 ```
 
 The first run boots s6 with SELinux in permissive mode. Common options are
 below; all of them are in
-[What `uinitconverter init` does](docs/etc-us.md#what-uinitconverter-init-does).
+[What `initconvert init` does](docs/etc-us.md#what-initconvert-init-does).
 
 | Option | Effect |
 |---|---|
@@ -179,7 +180,7 @@ Log in, then run:
 
 ```sh
 cat /proc/1/comm                  # should print s6-svscan
-uinitconverter --version          # all core tools from one build
+initconvert --version          # all core tools from one build
 s6 live status | head             # the services s6 manages
 sudo ausearch -m AVC -ts boot     # SELinux denials on this boot
 ```
@@ -188,7 +189,7 @@ If there are no denials you need to worry about, switch to enforcing for the nex
 boot:
 
 ```sh
-sudo uinitconverter init --selinux=enforcing
+sudo initconvert init --selinux=enforcing
 ```
 
 ### If the boot fails
@@ -205,7 +206,7 @@ then:
 
 ```sh
 sudo dnf upgrade ./*.rpm
-sudo uinitconverter init --yes
+sudo initconvert init --yes
 ```
 
 With option B, pull the new source and rerun the two build commands from step 3,
@@ -214,10 +215,10 @@ then:
 ```sh
 sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm \
     ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm
-sudo uinitconverter init --yes
+sudo initconvert init --yes
 ```
 
-On the s6 boot, `init` restarts `uinitconverterd` so the new build takes over; reboot
+On the s6 boot, `init` restarts `initconvertd` so the new build takes over; reboot
 to finish the update. Rebuild the s6 packages only if `dist/skarnet.versions` changed.
 
 ### Remove
@@ -225,7 +226,7 @@ to finish the update. Rebuild the s6 packages only if `dist/skarnet.versions` ch
 Do this from the normal systemd boot:
 
 ```sh
-sudo uinitconverter init --uninstall
+sudo initconvert init --uninstall
 sudo dnf remove 'uinitconverter*'
 ```
 

@@ -1,4 +1,4 @@
-//! .path units. Each becomes an s6 longrun running `uinitconverter-timers path-run`,
+//! .path units. Each becomes an s6 longrun running `initconvert-timers path-run`,
 //! which watches with inotify and asks the daemon to start the unit.
 //!
 //! PathExists=, PathExistsGlob=, DirectoryNotEmpty= are levels: the unit is

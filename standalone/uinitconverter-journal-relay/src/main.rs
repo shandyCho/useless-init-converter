@@ -1,4 +1,4 @@
-//! uinitconverter-journal-relay: listens on journald's client sockets and
+//! initconvert-journal-relay: listens on journald's client sockets and
 //! forwards what arrives to syslog, for systems that run without journald
 //! (see relay.rs). Standalone: needs only a syslog daemon on /dev/log.
 
@@ -9,7 +9,7 @@ mod relay;
 mod scm;
 
 const USAGE: &str = "\
-usage: uinitconverter-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
+usage: initconvert-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
 
   --dir DIR       where to create journald's sockets (default /run/systemd/journal)
   --syslog PATH   the syslog socket to forward to (default /dev/log)
@@ -17,7 +17,7 @@ usage: uinitconverter-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
 ";
 
 fn die(msg: &str) -> ! {
-    eprintln!("uinitconverter-journal-relay: {msg}");
+    eprintln!("initconvert-journal-relay: {msg}");
     exit(1)
 }
 

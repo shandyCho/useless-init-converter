@@ -357,7 +357,7 @@ fn repo_sync(cfg: &Config) -> Result<(), String> {
 }
 
 /// The early services are `always`: those with flag-essential, and the
-/// members of SYSINIT_BUNDLE (uinitconverter init adds or removes syslog,
+/// members of SYSINIT_BUNDLE (initconvert init adds or removes syslog,
 /// journal-relay and resolv there, so they carry no flag of their own).
 /// A repository sync reads flags only for services it hasn't seen before,
 /// so this keeps the set in step when they change; a service that is no
@@ -502,7 +502,7 @@ fn set_change_groups(cfg: &Config, rx: &str, groups: &[(String, Vec<String>)]) -
         match change(g) {
             Ok(_) => moved.push(id.clone()),
             Err(e) => eprintln!(
-                "uinitconverter-gen: {id} stays {}: {}",
+                "initconvert-gen: {id} stays {}: {}",
                 install::set_rx(cfg, id).unwrap_or("?"),
                 e.trim()
             ),
@@ -512,7 +512,7 @@ fn set_change_groups(cfg: &Config, rx: &str, groups: &[(String, Vec<String>)]) -
 }
 
 /// The services AUTO_MASK= (removed) masked that are still masked in the
-/// set: each reload puts them back in the database. uinitconverterd holds
+/// set: each reload puts them back in the database. initconvertd holds
 /// their jobs during the reload, and stops those running as dynamic
 /// instances first (see undo_auto_mask).
 pub fn auto_masked(cfg: &Config) -> BTreeSet<String> {

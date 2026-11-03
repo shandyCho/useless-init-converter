@@ -29,7 +29,7 @@ echo "$n $up" >"$tries"
 echo -1000 >/proc/self/oom_score_adj
 
 if [ -z "$plain" ]; then
-    exec /usr/libexec/uinitconverter/uinitconverter-runner confine systemd-udevd.service -- \
+    exec /usr/libexec/uinitconverter/initconvert-runner confine systemd-udevd.service -- \
         s6-notifyoncheck -w 50 -n 0 -c "test -S /run/udev/control" /usr/lib/systemd/systemd-udevd
 fi
 echo "udevd: without systemd-udevd.service's sandbox: $plain" >&2

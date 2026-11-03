@@ -18,7 +18,7 @@ cargo build --release
 ## Install
 
 ```sh
-sudo install -Dm0755 target/release/uinitconverter-notify /usr/libexec/uinitconverter/uinitconverter-notify
+sudo install -Dm0755 target/release/initconvert-notify /usr/libexec/uinitconverter/initconvert-notify
 ```
 
 RPM: `./build-rpm.sh [OUTDIR]` builds `uinitconverter-notify.spec` into
@@ -30,9 +30,9 @@ the source RPM, to rebuild elsewhere (`rpmbuild --rebuild`, mock).
 ## Run
 
 ```sh
-uinitconverter-notify [OPTIONS] [VAR=VALUE...]
-uinitconverter-notify --exec [OPTIONS] [VAR=VALUE...] ";" COMMAND [ARGS...]
-uinitconverter-notify --booted
+initconvert-notify [OPTIONS] [VAR=VALUE...]
+initconvert-notify --exec [OPTIONS] [VAR=VALUE...] ";" COMMAND [ARGS...]
+initconvert-notify --booted
 ```
 
 | Option | Sends / does |
@@ -55,7 +55,7 @@ has read it (5 s at most; without an answer it only warns).
 For example, a service script saying it is ready:
 
 ```sh
-uinitconverter-notify --ready --status="listening on 8080"
+initconvert-notify --ready --status="listening on 8080"
 ```
 
 Without `$NOTIFY_SOCKET` it fails (exit code 1).

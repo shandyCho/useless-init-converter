@@ -10,7 +10,7 @@ pub fn wanted(arg: &str) -> bool {
     matches!(arg, "--version" | "-V" | "version")
 }
 
-/// Prints "TOOL VERSION", the line `uinitconverter --version` reads back.
+/// Prints "TOOL VERSION", the line `initconvert --version` reads back.
 pub fn print(tool: &str) {
     println!("{tool} {VERSION}");
 }

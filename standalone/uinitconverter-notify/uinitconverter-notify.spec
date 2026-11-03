@@ -28,11 +28,11 @@ cargo build --release --offline
 cargo test --release --offline
 
 %install
-install -Dm0755 target/release/uinitconverter-notify %{buildroot}%{_libexecdir}/uinitconverter/uinitconverter-notify
+install -Dm0755 target/release/initconvert-notify %{buildroot}%{_libexecdir}/uinitconverter/initconvert-notify
 
 %files
 %dir %{_libexecdir}/uinitconverter
-%{_libexecdir}/uinitconverter/uinitconverter-notify
+%{_libexecdir}/uinitconverter/initconvert-notify
 
 %changelog
 * Wed Oct 21 2026 uinitconverter developers - 0.1.0-1

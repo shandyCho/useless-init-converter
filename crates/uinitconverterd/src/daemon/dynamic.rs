@@ -97,7 +97,7 @@ impl Daemon {
             }
         };
         if let Err(e) = r {
-            eprintln!("uinitconverterd: {}: {e}", path.display());
+            eprintln!("initconvertd: {}: {e}", path.display());
         }
     }
 
@@ -235,7 +235,7 @@ impl Daemon {
             }
             let r = Box::pin(self.start_any(&dep)).await;
             if required && r != "done" {
-                eprintln!("uinitconverterd: {id}: dependency {dep} failed ({r})");
+                eprintln!("initconvertd: {id}: dependency {dep} failed ({r})");
                 return "dependency";
             }
         }
@@ -321,7 +321,7 @@ impl Daemon {
                     break;
                 };
                 eprintln!(
-                    "uinitconverterd: {top}: ordering cycle, starting {} first",
+                    "initconvertd: {top}: ordering cycle, starting {} first",
                     ids[k]
                 );
                 ready.push(k);
@@ -392,7 +392,7 @@ impl Daemon {
             }
         }
         if let Some(w) = why {
-            eprintln!("uinitconverterd: {id}: not started: {w}");
+            eprintln!("initconvertd: {id}: not started: {w}");
             return "dependency";
         }
         if id == top {
@@ -405,7 +405,7 @@ impl Daemon {
         }
         let r = Box::pin(self.dyn_start_one(id, unit)).await;
         if r != "done" {
-            eprintln!("uinitconverterd: {id}: start ({top}'s transaction): {r}");
+            eprintln!("initconvertd: {id}: start ({top}'s transaction): {r}");
         }
         r
     }
@@ -524,7 +524,7 @@ impl Daemon {
             return "done";
         };
         if let Err(e) = crate::socket::mark_requested(&self.cfg.run_dir, id) {
-            eprintln!("uinitconverterd: {id}: {e}");
+            eprintln!("initconvertd: {id}: {e}");
         }
         self.dynamic.lock().unwrap().insert(
             id.to_string(),
@@ -587,12 +587,12 @@ impl Daemon {
             let dir = match self.write_servicedir(id, unit, on_demand) {
                 Ok(d) => d,
                 Err(e) => {
-                    eprintln!("uinitconverterd: {id}: {e}");
+                    eprintln!("initconvertd: {id}: {e}");
                     return "failed";
                 }
             };
             let Ok(scan) = fs::canonicalize(self.cfg.live_dir.join("scandir")) else {
-                eprintln!("uinitconverterd: {id}: no s6 scan directory");
+                eprintln!("initconvertd: {id}: no s6 scan directory");
                 return "failed";
             };
             let st = Command::new(tools::path("s6-svlink"))
@@ -603,7 +603,7 @@ impl Daemon {
                 .status()
                 .await;
             if !st.map(|s| s.success()).unwrap_or(false) {
-                eprintln!("uinitconverterd: {id}: s6-svlink failed");
+                eprintln!("initconvertd: {id}: s6-svlink failed");
                 // Never an instance, so no stop would remove the directory.
                 // Kept if the link is still there: a dangling entry makes
                 // s6-svscan abort every scan.
@@ -688,7 +688,7 @@ impl Daemon {
         };
         if t.elapsed() >= std::time::Duration::from_secs(1) {
             eprintln!(
-                "uinitconverterd: stopping {id} took {:.1} s",
+                "initconvertd: stopping {id} took {:.1} s",
                 t.elapsed().as_secs_f64()
             );
         }
@@ -725,7 +725,7 @@ impl Daemon {
         let r = self.dyn_remove(id, unit).await;
         if rearm {
             // Its socket still listens (the fd store kept it).
-            eprintln!("uinitconverterd: {id}: stopped, its socket listens again");
+            eprintln!("initconvertd: {id}: stopped, its socket listens again");
             let st = crate::state::for_unit(&self.cfg.run_dir, id);
             st.clear(crate::state::keys::ACTIVATED);
             st.clear(crate::state::keys::START_REQUESTED);
@@ -797,12 +797,12 @@ impl Daemon {
                 // supervisors). Removing the directory under it would leave
                 // a dangling entry, on which s6-svscan aborts every scan.
                 eprintln!(
-                    "uinitconverterd: {id}: s6-svunlink failed, removing {}",
+                    "initconvertd: {id}: s6-svunlink failed, removing {}",
                     link.display()
                 );
                 if let Err(e) = fs::remove_file(&link) {
                     eprintln!(
-                        "uinitconverterd: {id}: {}: {e}; keeping its service directory",
+                        "initconvertd: {id}: {}: {e}; keeping its service directory",
                         link.display()
                     );
                     self.drop_stored_fds(id);
@@ -826,9 +826,9 @@ impl Daemon {
         tokio::time::sleep(Duration::from_millis(200)).await;
         let dir = self.dyn_dir(id);
         if super::s6::lock_held(&dir.join("supervise/lock")) {
-            eprintln!("uinitconverterd: {id}: s6-svscan did not release its supervisor (look for its warnings)");
+            eprintln!("initconvertd: {id}: s6-svscan did not release its supervisor (look for its warnings)");
         } else if super::s6::lock_held(&dir.join("log/supervise/lock")) {
-            eprintln!("uinitconverterd: {id}: its logger is still running (a leftover process may hold its output)");
+            eprintln!("initconvertd: {id}: its logger is still running (a leftover process may hold its output)");
         }
         let _ = fs::remove_dir_all(&dir);
         self.dynamic.lock().unwrap().remove(id);
@@ -899,7 +899,7 @@ impl Daemon {
             let took = t.elapsed();
             if took >= Duration::from_secs(2) {
                 eprintln!(
-                    "uinitconverterd: stopping {id} took {:.1} s",
+                    "initconvertd: stopping {id} took {:.1} s",
                     took.as_secs_f64()
                 );
             }
@@ -983,7 +983,7 @@ impl Daemon {
             let active = self.active_atoms().await;
             let st = self.unit_status(&cid, &active, &cu).await;
             if matches!(st.active, "active" | "activating" | "reloading") {
-                eprintln!("uinitconverterd: stopping {cid} (conflicts with {id})");
+                eprintln!("initconvertd: stopping {cid} (conflicts with {id})");
                 let r = if self.dynamic_kind(&cid).is_some() {
                     Box::pin(self.dyn_stop(&cid, &cu)).await
                 } else {

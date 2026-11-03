@@ -1,4 +1,4 @@
-//! uinitconverterd: serves org.freedesktop.systemd1 on the system bus and
+//! initconvertd: serves org.freedesktop.systemd1 on the system bus and
 //! carries out requests with s6-rc. The real `systemctl`, libsystemd and other
 //! D-Bus clients talk to it as if it were systemd.
 //!
@@ -290,7 +290,7 @@ impl Daemon {
                 .emit_signal(None::<&str>, path, iface, member, body)
                 .await
             {
-                eprintln!("uinitconverterd: emit {member}: {e}");
+                eprintln!("initconvertd: emit {member}: {e}");
             }
         }
         let peers: Vec<(u64, Connection)> = self.private.lock().unwrap().clone();
@@ -304,7 +304,7 @@ impl Daemon {
                 .await
                 .is_err()
             {
-                eprintln!("uinitconverterd: a private-socket client is not reading its messages; disconnecting it");
+                eprintln!("initconvertd: a private-socket client is not reading its messages; disconnecting it");
                 self.private.lock().unwrap().retain(|(i, _)| *i != id);
                 tokio::spawn(async move {
                     let _ =
@@ -334,7 +334,7 @@ impl Daemon {
             }
             *f = Some(reason.to_string());
         }
-        eprintln!("uinitconverterd: user mode: {reason}: handing over to systemd --user");
+        eprintln!("initconvertd: user mode: {reason}: handing over to systemd --user");
         self.request_exit();
     }
 
@@ -410,7 +410,7 @@ impl Daemon {
         }
         if !restart.is_empty() {
             eprintln!(
-                "uinitconverterd: {}: back to the database, restarted from it",
+                "initconvertd: {}: back to the database, restarted from it",
                 restart.join(" ")
             );
         }
@@ -430,12 +430,12 @@ impl Daemon {
         drop(unit_guards);
         if let Ok(r) = &res {
             eprintln!(
-                "uinitconverterd: reloaded: {} units, database {}",
+                "initconvertd: reloaded: {} units, database {}",
                 r.plan.units.len(),
                 r.db_dir.display()
             );
             for c in &r.set_changes {
-                eprintln!("uinitconverterd: set {}: {c}", self.cfg.set_name);
+                eprintln!("initconvertd: set {}: {c}", self.cfg.set_name);
             }
         }
         self.invalidate_caches();
@@ -443,7 +443,7 @@ impl Daemon {
         for id in &restart {
             let r = self.start_any(id).await;
             if r != "done" {
-                eprintln!("uinitconverterd: {id}: start from the database: {r}");
+                eprintln!("initconvertd: {id}: start from the database: {r}");
             }
         }
         self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(false,))
@@ -484,7 +484,7 @@ impl Daemon {
             Err(e) => Err(e),
         };
         if let Err(e) = res {
-            eprintln!("uinitconverterd: activation of {name} failed: {}", e.msg);
+            eprintln!("initconvertd: activation of {name} failed: {}", e.msg);
             let Some(conn) = self.bus() else { return };
             let r = conn
                 .emit_signal(
@@ -496,7 +496,7 @@ impl Daemon {
                 )
                 .await;
             if let Err(e) = r {
-                eprintln!("uinitconverterd: ActivationFailure: {e}");
+                eprintln!("initconvertd: ActivationFailure: {e}");
             }
         }
     }
@@ -541,7 +541,7 @@ async fn connect_bus(bus: &Bus) -> Result<(Connection, MessageStream), String> {
         .map_err(|e| e.to_string())?
         .build();
     if let Err(e) = dbus.add_match_rule(rule).await {
-        eprintln!("uinitconverterd: cannot watch ActivationRequest: {e}");
+        eprintln!("initconvertd: cannot watch ActivationRequest: {e}");
     }
     conn.request_name(BUS_NAME)
         .await
@@ -620,17 +620,17 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     }
     if daemon.index.read().unwrap().units.is_empty() && !daemon.cfg.user_mode {
         eprintln!(
-            "uinitconverterd: no generated database in {} (run `uinitconverter-gen reload`)",
+            "initconvertd: no generated database in {} (run `initconvert-gen reload`)",
             daemon.cfg.state_dir.display()
         );
     }
 
     if let Some(flag) = &daemon.cfg.booted_flag {
         if let Err(e) = std::fs::create_dir_all(flag) {
-            eprintln!("uinitconverterd: cannot create {}: {e}", flag.display());
+            eprintln!("initconvertd: cannot create {}: {e}", flag.display());
         }
     }
-    eprintln!("uinitconverterd: ready, serving {BUS_NAME}");
+    eprintln!("initconvertd: ready, serving {BUS_NAME}");
     if let Some(fd) = ready_fd {
         // s6 readiness notification (notification-fd).
         unsafe {
@@ -648,7 +648,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
             .fdstore
             .serve(&store_path, move |key| crate::fdstore::limit(&cfg, key))
         {
-            eprintln!("uinitconverterd: fd store unavailable: {e}");
+            eprintln!("initconvertd: fd store unavailable: {e}");
         }
     }
 
@@ -696,7 +696,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         let d = daemon.clone();
         tokio::spawn(async move {
             let r = d.start_any("default.target").await;
-            eprintln!("uinitconverterd: user mode: default.target {r}");
+            eprintln!("initconvertd: user mode: default.target {r}");
             util::sd_notify("READY=1\nSTATUS=Startup finished.");
         });
         let d = daemon.clone();
@@ -709,7 +709,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
                 if d.bus().is_none() && present && !d.exiting.load(Ordering::Relaxed) {
                     match connect_bus(&bus).await {
                         Ok((c, s)) => {
-                            eprintln!("uinitconverterd: user mode: on the bus, serving {BUS_NAME}");
+                            eprintln!("initconvertd: user mode: on the bus, serving {BUS_NAME}");
                             *d.conn.write().unwrap() = Some(c.clone());
                             said = false;
                             if tx.send((c, s)).is_err() {
@@ -717,7 +717,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
                             }
                         }
                         Err(e) if !said => {
-                            eprintln!("uinitconverterd: user mode: {e} (trying again)");
+                            eprintln!("initconvertd: user mode: {e} (trying again)");
                             said = true;
                         }
                         Err(_) => {}
@@ -803,7 +803,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
                     }
                     // The bus stopped (a restart, or it failed): serve the
                     // private socket meanwhile, connect again when it is back.
-                    eprintln!("uinitconverterd: user mode: the bus went away");
+                    eprintln!("initconvertd: user mode: the bus went away");
                     *daemon.conn.write().unwrap() = None;
                     current = None;
                     continue;

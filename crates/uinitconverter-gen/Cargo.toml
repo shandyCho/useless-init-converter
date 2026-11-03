@@ -2,7 +2,12 @@
 name = "uinitconverter-gen"
 version.workspace = true
 edition.workspace = true
-description = "Translate systemd units into an s6-rc database (uinitconverter-gen)"
+description = "Translate systemd units into an s6-rc database (initconvert-gen)"
+
+# The command is initconvert-gen; the crate and the package keep their names.
+[[bin]]
+name = "initconvert-gen"
+path = "src/main.rs"
 
 [dependencies]
 uinitconverter-version.workspace = true

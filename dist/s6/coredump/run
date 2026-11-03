@@ -28,4 +28,4 @@ rm -f "$sock"
         echo "coredump: no socket after 10 s, core_pattern not set" >&2
     fi
 ) &
-exec /usr/libexec/uinitconverter/uinitconverter-runner confine systemd-coredumpd.service -- "$coredump" --manager
+exec /usr/libexec/uinitconverter/initconvert-runner confine systemd-coredumpd.service -- "$coredump" --manager

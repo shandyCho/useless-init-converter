@@ -1,4 +1,4 @@
-//! `uinitconverter init`: set up an installed system to boot with s6-linux-init +
+//! `initconvert init`: set up an installed system to boot with s6-linux-init +
 //! s6-rc + uinitconverter instead of systemd as PID 1.
 //!
 //! The packages (dnf, e.g. from a GitHub release) bring the programs and the files in
@@ -50,8 +50,8 @@ const SKARNET_PACKAGES: [&str; 2] = ["s6-linux-init", "mdevd"];
 const RELEASE_PACKAGES: [&str; 1] = ["uinitconverter-journal-relay"];
 
 const USAGE: &str = "\
-usage: uinitconverter init [OPTIONS]
-       uinitconverter init --uninstall [--yes] [--dry-run]
+usage: initconvert init [OPTIONS]
+       initconvert init --uninstall [--yes] [--dry-run]
 
 Set up this Fedora system to boot with s6-linux-init + s6-rc + uinitconverter.
 Install the packages first: the skarnet ones built with
@@ -345,7 +345,7 @@ fn enable_units(ctx: &Ctx) {
 
 fn build_database(ctx: &Ctx) {
     say("Translating units into an s6-rc database");
-    let gen = format!("{LIBEXEC}/uinitconverter-gen");
+    let gen = format!("{LIBEXEC}/initconvert-gen");
     ctx.run(&[&gen, "reload", "--no-update"]);
     if ctx.dry {
         return;
@@ -410,7 +410,7 @@ fn setup_selinux(ctx: &Ctx) {
 // ---------------------------------------------------------------- uninstall
 
 fn uninstall(ctx: &Ctx, args: &[String]) -> ! {
-    say("Removing the s6 boot entry and what uinitconverter init wrote");
+    say("Removing the s6 boot entry and what initconvert init wrote");
     ctx.confirm(&format!(
         "Remove the '{TITLE}' boot entry, {S6LI_BASE} and the boot settings?"
     ));
@@ -458,7 +458,7 @@ pub fn main(args: &[String]) -> ! {
             exit(0);
         }
         Err(e) => {
-            eprintln!("uinitconverter init: {e}");
+            eprintln!("initconvert init: {e}");
             exit(2);
         }
     };
@@ -515,10 +515,10 @@ mod tests {
 
     #[test]
     fn dry_run_end_drops_the_flag() {
-        assert!(dry_run_end(&args(&["--dry-run"])).contains("  sudo uinitconverter init\n"));
+        assert!(dry_run_end(&args(&["--dry-run"])).contains("  sudo initconvert init\n"));
         assert!(
             dry_run_end(&args(&["--journal=no", "--dry-run", "--uninstall"]))
-                .contains("  sudo uinitconverter init --journal=no --uninstall\n")
+                .contains("  sudo initconvert init --journal=no --uninstall\n")
         );
     }
 

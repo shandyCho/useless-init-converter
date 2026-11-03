@@ -3,8 +3,8 @@
 //! and installed as the boot and live database).
 //!
 //! Mapping:
-//!   .service (long-running)  -> longrun  (run/finish call `uinitconverter-runner run|finish`)
-//!   .service Type=oneshot    -> oneshot  (up/down call `uinitconverter-runner up|down`)
+//!   .service (long-running)  -> longrun  (run/finish call `initconvert-runner run|finish`)
+//!   .service Type=oneshot    -> oneshot  (up/down call `initconvert-runner up|down`)
 //!   .target                  -> bundle   (contents = Wants/Requires + .wants/.requires dirs)
 //!   enabled .socket          -> its service is pulled in instead (sockets are bound by the runner);
 //!                               pulled in only that way, it starts on the first activity (on-demand)
@@ -1051,7 +1051,7 @@ pub fn regenerate(cfg: &Config, update_live: bool) -> Result<GenResult, String> 
     regenerate_plan(cfg, plan(cfg), update_live)
 }
 
-/// regenerate() with a plan the caller made (uinitconverterd, which looks
+/// regenerate() with a plan the caller made (initconvertd, which looks
 /// at the auto-masked list first: auto_masked).
 pub fn regenerate_plan(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResult, String> {
     // Config::load accepts only config::INITS, which is just "s6" so far;

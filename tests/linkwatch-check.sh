@@ -1,5 +1,5 @@
 #!/bin/bash
-# Check the running uinitconverter-linkwatch on the s6 boot (TESTING, "Reload
+# Check the running initconvert-linkwatch on the s6 boot (TESTING, "Reload
 # watchdog").
 #
 #   sudo tests/linkwatch-check.sh
@@ -39,9 +39,9 @@ cleanup() {
 }
 
 if s6-svstat /run/service/uinitconverter-linkwatch 2>/dev/null | grep -q '^up '; then
-    ok "uinitconverter-linkwatch is up"
+    ok "initconvert-linkwatch is up"
 else
-    bad "uinitconverter-linkwatch is not up: $(s6-svstat /run/service/uinitconverter-linkwatch 2>&1)"
+    bad "initconvert-linkwatch is not up: $(s6-svstat /run/service/uinitconverter-linkwatch 2>&1)"
     exit 1
 fi
 
@@ -75,8 +75,8 @@ else
     bad "linkwatch sent an event to a waiter that is not s6-rc-update or s6-svlink"
 fi
 
-if grep -q "uinitconverter-linkwatch: .*$T/svc" /run/uncaught-logs/current; then
-    ok "linkwatch logged it: $(grep -h "uinitconverter-linkwatch: .*$T/svc" /run/uncaught-logs/current | tail -1)"
+if grep -q "initconvert-linkwatch: .*$T/svc" /run/uncaught-logs/current; then
+    ok "linkwatch logged it: $(grep -h "initconvert-linkwatch: .*$T/svc" /run/uncaught-logs/current | tail -1)"
 else
     bad "no linkwatch line for $T/svc in /run/uncaught-logs/current"
 fi

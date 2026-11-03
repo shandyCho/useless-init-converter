@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run the s6 services started through `uinitconverter-runner confine` (rsyslog,
+# Run the s6 services started through `initconvert-runner confine` (rsyslog,
 # earlyoom, udevd) as real root, in QEMU, unprivileged: the running kernel, an
 # initramfs with this host's programs and unit files, dist/s6's run scripts
 # under s6-supervise. No SELinux policy is loaded in there; that takes a real
@@ -19,7 +19,7 @@ W=${1:?usage: tests/confine-vm.sh WORKDIR [KVER]}
 KVER=${2:-$(uname -r)}
 KERNEL=/boot/vmlinuz-$KVER
 [ -r "$KERNEL" ] || { echo "$KERNEL not readable" >&2; exit 1; }
-[ -x "$TOP/target/debug/uinitconverter-runner" ] || { echo "run cargo build first" >&2; exit 1; }
+[ -x "$TOP/target/debug/initconvert-runner" ] || { echo "run cargo build first" >&2; exit 1; }
 rm -rf "$W"
 R=$W/root
 mkdir -p "$R"/usr/bin "$R"/usr/sbin "$R"/usr/lib64 "$R"/usr/lib/systemd/system
@@ -52,8 +52,8 @@ add /usr/lib64/libseccomp.so.2 /usr/lib64/libkmod.so.2 /usr/lib64/libzstd.so.1
 add "$(rpm -ql s6 | grep -E '/s6-ftrigrd$' | head -n 1)"
 for m in /usr/lib64/rsyslog/*.so; do add "$m"; done
 mkdir -p "$R/usr/libexec/uinitconverter"
-cp "$TOP/target/debug/uinitconverter-runner" "$R/usr/libexec/uinitconverter/"
-add "$TOP/target/debug/uinitconverter-runner"
+cp "$TOP/target/debug/initconvert-runner" "$R/usr/libexec/uinitconverter/"
+add "$TOP/target/debug/initconvert-runner"
 rm -rf "$R${TOP:?}"
 cp /usr/lib/systemd/system/{rsyslog,earlyoom,systemd-udevd,systemd-coredumpd}.service "$R/usr/lib/systemd/system/"
 mkdir -p "$R/usr/lib/udev"
@@ -319,8 +319,8 @@ pu() { sed -n "s/^$2 //p" "/run/pu/$1" 2>/dev/null; }
 pu_run() { # command (run or confine) and unit: the probe's file appears
     rm -f "/run/pu/$2"
     case $1 in
-        run) /usr/libexec/uinitconverter/uinitconverter-runner run -- "$2.service" >"/run/$2.log" 2>&1 & ;;
-        confine) /usr/libexec/uinitconverter/uinitconverter-runner confine "$2.service" -- /usr/bin/pu-probe "/run/pu/$2" >"/run/$2.log" 2>&1 & ;;
+        run) /usr/libexec/uinitconverter/initconvert-runner run -- "$2.service" >"/run/$2.log" 2>&1 & ;;
+        confine) /usr/libexec/uinitconverter/initconvert-runner confine "$2.service" -- /usr/bin/pu-probe "/run/pu/$2" >"/run/$2.log" 2>&1 & ;;
     esac
     wait_for "[ -e /run/pu/$2 ]" || { bad "$2 ($1): no result: $(cat "/run/$2.log")"; return 1; }
 }
@@ -372,7 +372,7 @@ done
 # does RootDirectory=.
 mkdir -p /pu-root
 mount --rbind / /pu-root
-/usr/libexec/uinitconverter/uinitconverter-runner run -- pu-chroot.service >/run/pu-chroot.log 2>&1 &
+/usr/libexec/uinitconverter/initconvert-runner run -- pu-chroot.service >/run/pu-chroot.log 2>&1 &
 wait_for '[ -e /run/pu/pu-chroot ]' || bad "PrivateUsers= with RootDirectory=: no result: $(cat /run/pu-chroot.log)"
 is "PrivateUsers= with RootDirectory=: chrooted" "$(pu pu-chroot chroot)" yes
 is "PrivateUsers= with RootDirectory=: uid_map" "$(pu pu-chroot uid_map)" "0 0 1"

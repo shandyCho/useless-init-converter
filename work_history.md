@@ -11248,3 +11248,56 @@ Owner: "could you split our project that executable standalone and must need ano
 - VM, with user@ started through the link: lifecycle 18 + 53 (the managers' executable checked by /proc/PID/exe), fallback 18/18 (the SIGKILL crash still detected through the exe check).
 - **Not tested:** the runner's path (the s6 boot's own system manager switching user@), with or without the package. The VM boots systemd, where a drop-in runs the link directly.
 - tests/vm-user-manager.sh's inner check.sh has shellcheck SC2046 warnings (deliberate word splitting, from part 141). Left as is.
+
+## 2026-11-03, part 151: the commands renamed to initconvert*
+
+Owner: "change command uinitconverter* to initconvert*". Asked: scope "Commands only", migration "Manual guide". Part 150 was committed first (788b443).
+
+**Renamed (executables only):**
+- core: uinitconverter → initconvert (and /usr/bin/initconvert), uinitconverterd → initconvertd, -gen, -runner, -timers, -user-manager
+- standalone: -fdstore, -notify, -journal-relay, -linkwatch
+
+**Kept:** packages and specs, crates (a `[[bin]] name` per crate), project directories, /usr/libexec/uinitconverter/ and every other path, s6 service names (uinitconverterd, uinitconverter-fdstore, uinitconverter-linkwatch), the SELinux module (its filecon is a wildcard on the libexec directory, so the new files are labelled as before), D-Bus names, kernel options, UINITCONVERTER_* variables, the GRUB title, BLS ids, the library-wide "uinitconverter:" message tag and the runner's "uinitconverter[unit]".
+
+**How:**
+- Two scripts, kept in the session scratchpad: cmds.py for sources, scripts, dist and specs; docs.py for docs.
+- The executable names are matched as whole tokens. Context rules keep:
+  - lines naming packages: Name/Requires/Recommends/Suggests, dnf lines, `-p` crate flags, NAME=/PACKAGES=, spec changelogs, package lists in init.rs and in comments;
+  - s6 service names: DAEMON_SERVICE, FDSTORE_SERVICE, servicedir(), /run/service/, dist/s6/, "… service", the Korean service list;
+  - project directories (standalone/, crates/), temp-dir names, the README's install tables, the packages table's Package and Requires columns.
+- docs.py uses ASCII word boundaries, because Korean particles attach to names (`uinitconverterd가`).
+- Every dry run was reviewed before writing. Mistakes caught that way:
+  - standalone/… directory paths;
+  - main.rs's journal-relay entry, excluded by a too-wide rule;
+  - package mentions in spec descriptions;
+  - the source-layout trees;
+  - the standalone README titles and .spec file names;
+  - a dnf continuation line;
+  - heading anchors (#what-initconvert-init-does).
+- **The CLI:** usage texts, hints, printed `sudo initconvert init` lines, its --version line and its messages are renamed. Its markers are not: init reads `# set by uinitconverter init --…` back (and S6_CONF_MARK), and renaming them would make --uninstall miss lines an older version wrote. The boot files' hint comments are renamed, since only their existence is checked.
+- **Process names:**
+  - The user manager's comm is now "initconvert-use" (15 characters); manager_alive accepts it, and checks /proc/PID/exe for "initconvertd".
+  - hardencompare.sh's comm patterns also accept initconvert*.
+  - The runner's notify helper is argv0 "initconvert-runner"; check.sh's pgrep follows.
+  - The daemon's syslog identifier is "initconvertd"; journalctl -t in TESTING follows.
+- Old binaries were deleted from target/ (core and standalone) before testing, so a missed reference fails instead of running stale code.
+
+**Docs:**
+- The README pair's "all named uinitconverter" sentence was rewritten.
+- New section "Moving to the initconvert commands" in the packages README pair:
+  - upgrade from the systemd boot, then `sudo initconvert init`, which regenerates the database and rebuilds the s6-linux-init tree;
+  - .rpmnew files under /etc/uinitconverter/s6, which is %config(noreplace);
+  - don't upgrade on a running s6 boot.
+- CHANGELOG pair: an Unreleased entry. CLAUDE.md: a "Names" item. TESTING pair: process names.
+
+**Bug found while testing, fixed:** the lifecycle VM run failed one reboot check: systemd SIGKILLed an s6-svunlink left in a greeter's user@ after the manager exited. A job still running at exit (the GNOME leader's logout) was mid-unlink.
+- **First attempt:** wait up to 5 s for running jobs. It made that greeter's stop take 6.2 s (a job hung for the whole wait), so it was reverted.
+- **Fix:** after s6-svscan has ended, the launcher ends the other processes in its own init.scope (end_helpers: SIGTERM, then SIGKILL after 1 s). The next run passed every check, reboot stops 0.68-1.50 s.
+
+**Tests.**
+- cargo test 117, fmt clean; standalone 10/7/6/10.
+- System sandbox with SANDBOX_S6NET_BIN 370/370, SANDBOX_JOURNAL=no 377/377, SANDBOX_FDSTORE=no 358/358. These generate services running the runner by its new path and use the renamed standalone tools.
+- User sandbox 92/92. shellcheck on every tracked .sh.
+- VM, binaries installed under the new names: lifecycle 18 + 53 (the run after end_helpers), fallback 18/18.
+- RPM build: packages/build-rpms.sh built the six packages. They install /usr/bin/initconvert and /usr/libexec/uinitconverter/{initconvert, initconvertd, initconvert-gen, -runner, -timers, -user-manager} under unchanged package names. standalone/uinitconverter-fdstore/build-rpm.sh's package installs /usr/libexec/uinitconverter/initconvert-fdstore.
+- **Not tested:** the migration steps on an installed system (this machine still runs older RPMs); the s6 boot.

@@ -79,14 +79,14 @@ parse_opts() {
 reload_db() {
     systemctl daemon-reload
     if [ "$(current_init)" != s6 ]; then
-        uinitconverter reload --no-update >/dev/null
+        initconvert reload --no-update >/dev/null
     fi
 }
 
 install() {
     parse_opts "$@"
     need_root install
-    command -v uinitconverter >/dev/null || die "uinitconverter not found"
+    command -v initconvert >/dev/null || die "initconvert not found"
     case $DIR in *[[:space:]]*) die "--dir must not contain spaces (it goes into ExecStart=)" ;; esac
     mkdir -p "$LIB" "$LOG_DIR" "$DIR" || exit 1
     chown "$OWNER:" "$DIR" 2>/dev/null

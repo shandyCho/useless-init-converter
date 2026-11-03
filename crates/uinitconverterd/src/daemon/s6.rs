@@ -179,7 +179,7 @@ impl Daemon {
                             };
                         }
                         if !agree {
-                            eprintln!("uinitconverterd: the s6-rc state file layout is not what uinitconverter expects; using `s6-rc -a list` (slower)");
+                            eprintln!("initconvertd: the s6-rc state file layout is not what uinitconverter expects; using `s6-rc -a list` (slower)");
                         }
                         self.s6.state_reader.lock().unwrap().0 = Some(agree);
                         return r;
@@ -665,7 +665,7 @@ impl Daemon {
             _ => return None,
         };
         eprintln!(
-            "uinitconverterd: start {id}: s6-rc is busy with another change, starting it beside"
+            "initconvertd: start {id}: s6-rc is busy with another change, starting it beside"
         );
         if start_logger {
             self.s6.beside.lock().unwrap().insert(logger.clone());
@@ -675,7 +675,7 @@ impl Daemon {
                 .status()
                 .await;
             if !self.wait_up(&logger, Duration::from_secs(10)).await {
-                eprintln!("uinitconverterd: start {id}: logger {logger} did not come up");
+                eprintln!("initconvertd: start {id}: logger {logger} did not come up");
                 return Some("failed");
             }
         }
@@ -759,7 +759,7 @@ impl Daemon {
             if self.svstat(&id).await.map(|s| s.wanted_up).unwrap_or(false) {
                 // The service is up, so this only updates s6-rc's state.
                 if let Err(e) = self.s6rc_locked(&["-u", "change"], &[id.clone()]).await {
-                    eprintln!("uinitconverterd: recording {id} in s6-rc: {e}");
+                    eprintln!("initconvertd: recording {id} in s6-rc: {e}");
                 }
             }
             self.s6.beside.lock().unwrap().remove(&id);
@@ -767,7 +767,7 @@ impl Daemon {
         }
     }
 
-    /// Bring up the .stop oneshot (uinitconverter-gen) of each longrun s6-rc has
+    /// Bring up the .stop oneshot (initconvert-gen) of each longrun s6-rc has
     /// up, so that s6-rc stopping it runs its ExecStop=. A unit started by
     /// name (our s6-rc changes, start_beside(), `s6 live start`) doesn't
     /// pull it in, nor does the boot when the set has it usable, and an
@@ -815,12 +815,12 @@ impl Daemon {
         match out {
             Ok(o) if !o.status.success() && !self.s6rc_lock_held() => {
                 eprintln!(
-                    "uinitconverterd: starting {}: {}",
+                    "initconvertd: starting {}: {}",
                     names.join(" "),
                     String::from_utf8_lossy(&o.stderr).trim()
                 );
             }
-            Err(e) => eprintln!("uinitconverterd: s6-rc: {e}"),
+            Err(e) => eprintln!("initconvertd: s6-rc: {e}"),
             _ => {}
         }
     }
@@ -873,10 +873,10 @@ impl Daemon {
             if deadline.is_some_and(|d| Instant::now() > d) {
                 if killed {
                     st.clear(keys::RESTART_REQUESTED);
-                    eprintln!("uinitconverterd: restart {id}: process {old_pid} survived SIGKILL");
+                    eprintln!("initconvertd: restart {id}: process {old_pid} survived SIGKILL");
                     return "timeout";
                 }
-                eprintln!("uinitconverterd: restart {id}: stop timed out, killing");
+                eprintln!("initconvertd: restart {id}: stop timed out, killing");
                 let _ = Command::new(tools::path("s6-svc"))
                     .arg("-k")
                     .arg(self.scandir(id))
@@ -899,7 +899,7 @@ impl Daemon {
         match c.status().await {
             Ok(s) => s.success(),
             Err(e) => {
-                eprintln!("uinitconverterd: {sub} {id}: {e}");
+                eprintln!("initconvertd: {sub} {id}: {e}");
                 false
             }
         }
@@ -1071,7 +1071,7 @@ impl Daemon {
                     }
                 }
                 if let Err(e) = self.s6rc(&args, &names).await {
-                    eprintln!("uinitconverterd: start {id}: {e}");
+                    eprintln!("initconvertd: start {id}: {e}");
                     // Wanted units failing does not fail a target.
                 }
                 if !isolate {
@@ -1107,7 +1107,7 @@ impl Daemon {
                 match self.s6rc(&["-u", "change"], &[id.to_string()]).await {
                     Ok(()) => "done",
                     Err(e) => {
-                        eprintln!("uinitconverterd: start {id}: {e}");
+                        eprintln!("initconvertd: start {id}: {e}");
                         self.dependency_or_failed(id, started_at)
                     }
                 }
@@ -1164,7 +1164,7 @@ impl Daemon {
                         }
                     }
                     Err(e) => {
-                        eprintln!("uinitconverterd: start {id}: {e}");
+                        eprintln!("initconvertd: start {id}: {e}");
                         self.dependency_or_failed(id, started_at)
                     }
                 }
@@ -1280,7 +1280,7 @@ impl Daemon {
                     match self.s6rc(&["-d", "change"], &[id.to_string()]).await {
                         Ok(()) => "done",
                         Err(e) => {
-                            eprintln!("uinitconverterd: stop {id}: {e}");
+                            eprintln!("initconvertd: stop {id}: {e}");
                             "failed"
                         }
                     }

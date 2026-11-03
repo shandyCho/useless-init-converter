@@ -15,13 +15,13 @@ Source0:        uinitconverter-%{version}.tar.gz
 
 BuildRequires:  cargo
 BuildRequires:  rust
-# The units a timer or path triggers are started through uinitconverterd.
+# The units a timer or path triggers are started through initconvertd.
 Requires:       uinitconverterd = %{version}-%{release}
 
 %description
 Long-running s6 services for .timer and .path units: waits for the calendar
 time, the elapsed time or the file system change, then starts the unit
-through uinitconverterd.
+through initconvertd.
 
 %prep
 %autosetup -n uinitconverter-%{version}
@@ -37,11 +37,11 @@ export UINITCONVERTER_BUILD=%{version}-%{release}
 cargo test --release --offline -p uinitconverter-timers -p uinitconverter-base -p uinitconverter-client -p uinitconverter-version
 
 %install
-install -Dm0755 target/release/uinitconverter-timers %{buildroot}%{_libexecdir}/uinitconverter/uinitconverter-timers
+install -Dm0755 target/release/initconvert-timers %{buildroot}%{_libexecdir}/uinitconverter/initconvert-timers
 
 %files
 %dir %{_libexecdir}/uinitconverter
-%{_libexecdir}/uinitconverter/uinitconverter-timers
+%{_libexecdir}/uinitconverter/initconvert-timers
 
 %changelog
 * Mon Nov 02 2026 uinitconverter developers

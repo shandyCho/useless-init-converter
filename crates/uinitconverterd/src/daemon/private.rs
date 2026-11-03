@@ -28,7 +28,7 @@ pub async fn listen(d: Arc<Daemon>, path: PathBuf) {
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("uinitconverterd: cannot listen on {}: {e}", path.display());
+            eprintln!("initconvertd: cannot listen on {}: {e}", path.display());
             return;
         }
     };
@@ -39,7 +39,7 @@ pub async fn listen(d: Arc<Daemon>, path: PathBuf) {
                 tokio::spawn(serve(d.clone(), stream));
             }
             Err(e) => {
-                eprintln!("uinitconverterd: accept on {}: {e}", path.display());
+                eprintln!("initconvertd: accept on {}: {e}", path.display());
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
         }
@@ -104,7 +104,7 @@ async fn serve(d: Arc<Daemon>, mut stream: UnixStream) {
     };
     let guid = zbus::Guid::generate();
     if let Err(e) = handshake(&mut stream, guid.as_str()).await {
-        eprintln!("uinitconverterd: private socket handshake: {e}");
+        eprintln!("initconvertd: private socket handshake: {e}");
         return;
     }
     let conn = match zbus::connection::Builder::authenticated_socket(stream, guid).map(|b| b.p2p())
@@ -112,12 +112,12 @@ async fn serve(d: Arc<Daemon>, mut stream: UnixStream) {
         Ok(b) => match b.build().await {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("uinitconverterd: private connection: {e}");
+                eprintln!("initconvertd: private connection: {e}");
                 return;
             }
         },
         Err(e) => {
-            eprintln!("uinitconverterd: private connection: {e}");
+            eprintln!("initconvertd: private connection: {e}");
             return;
         }
     };

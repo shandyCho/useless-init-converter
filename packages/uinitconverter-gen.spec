@@ -16,8 +16,8 @@ Source0:        uinitconverter-%{version}.tar.gz
 BuildRequires:  cargo
 BuildRequires:  rust
 Requires:       s6-rc
-# The generated services run uinitconverter-runner; .timer and .path units run
-# uinitconverter-timers.
+# The generated services run initconvert-runner; .timer and .path units run
+# initconvert-timers.
 Requires:       uinitconverter-runner = %{version}-%{release}
 Requires:       uinitconverter-timers = %{version}-%{release}
 
@@ -40,12 +40,12 @@ export UINITCONVERTER_BUILD=%{version}-%{release}
 cargo test --release --offline -p uinitconverter-gen -p uinitconverter-base -p uinitconverter-install -p uinitconverter-client -p uinitconverter-version
 
 %install
-install -Dm0755 target/release/uinitconverter-gen %{buildroot}%{_libexecdir}/uinitconverter/uinitconverter-gen
+install -Dm0755 target/release/initconvert-gen %{buildroot}%{_libexecdir}/uinitconverter/initconvert-gen
 install -d %{buildroot}%{_sharedstatedir}/uinitconverter
 
 %files
 %dir %{_libexecdir}/uinitconverter
-%{_libexecdir}/uinitconverter/uinitconverter-gen
+%{_libexecdir}/uinitconverter/initconvert-gen
 %dir %{_sharedstatedir}/uinitconverter
 
 %changelog

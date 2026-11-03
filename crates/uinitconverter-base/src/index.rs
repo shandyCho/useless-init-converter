@@ -1,5 +1,5 @@
 //! The index of a generated s6-rc database: which s6-rc service each unit
-//! became. uinitconverter-gen writes it (STATE_DIR/current/index); the runner and
+//! became. initconvert-gen writes it (STATE_DIR/current/index); the runner and
 //! the daemon read it.
 
 use std::collections::BTreeMap;
@@ -32,7 +32,7 @@ impl Kind {
     }
 }
 
-/// The oneshot uinitconverter-gen adds beside a longrun service with ExecStop=.
+/// The oneshot initconvert-gen adds beside a longrun service with ExecStop=.
 /// It depends on the service, so s6-rc always takes it down first, and its
 /// `down` runs the ExecStop=. No unit type ends in ".stop", so no unit can
 /// have this name.

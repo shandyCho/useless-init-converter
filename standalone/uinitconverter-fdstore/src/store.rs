@@ -160,7 +160,7 @@ fn same_inode_and_flags(a: BorrowedFd<'_>, b: BorrowedFd<'_>) -> bool {
 }
 
 /// Under SELinux only peers in the store's own domain may use it. Its
-/// clients are the service manager's own processes (uinitconverterd and the
+/// clients are the service manager's own processes (initconvertd and the
 /// runner, init_t on the s6 boot), and it holds every service's
 /// descriptors; root alone is not enough, as the policy lets many confined
 /// root daemons connect to init_t's sockets. Keep in step with

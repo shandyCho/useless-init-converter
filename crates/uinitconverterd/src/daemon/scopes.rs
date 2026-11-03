@@ -121,7 +121,7 @@ impl Daemon {
             return;
         };
         if dir == std::path::Path::new(crate::cgroup::CGROUP_ROOT) || dir == crate::cgroup::base() {
-            eprintln!("uinitconverterd: refusing to stop {id}: it is the root cgroup");
+            eprintln!("initconvertd: refusing to stop {id}: it is the root cgroup");
             return;
         }
         if kind == "slice" {
@@ -292,9 +292,7 @@ impl Daemon {
                 )
             {
                 if let Err(e) = self.attach_via_system(&dir, *p).await {
-                    eprintln!(
-                        "uinitconverterd: {name}: the system manager did not move PID {p}: {e}"
-                    );
+                    eprintln!("initconvertd: {name}: the system manager did not move PID {p}: {e}");
                 } else {
                     r = Ok(());
                 }
@@ -572,7 +570,7 @@ impl Daemon {
         // Always logged, unlike the slow-stop lines: its time against the user
         // manager's exit.target says whether this wait is what ordered them.
         eprintln!(
-            "uinitconverterd: shutdown scopes [{}]: {left} not empty after {:.3} s",
+            "initconvertd: shutdown scopes [{}]: {left} not empty after {:.3} s",
             names.join(" "),
             t.elapsed().as_secs_f64()
         );

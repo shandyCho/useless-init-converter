@@ -7,8 +7,8 @@ use uinitconverter_gen as gen;
 use uinitconverter_install as install;
 
 const USAGE: &str = "\
-usage: uinitconverter-gen [--config PATH] COMMAND [ARGS]
-       uinitconverter-gen --version
+usage: initconvert-gen [--config PATH] COMMAND [ARGS]
+       initconvert-gen --version
 
 Database:
   reload [--no-update] [--direct]
@@ -16,7 +16,7 @@ Database:
                            s6-rc repository, commit its set and install it as
                            the boot and live database (s6-rc-set-install);
                            --no-update: the boot database only. On a running
-                           s6 boot uinitconverterd does it (daemon-reload); --direct
+                           s6 boot initconvertd does it (daemon-reload); --direct
                            does it here
   plan                     print the translation report without writing anything
 
@@ -26,7 +26,7 @@ Offline unit file management:
 ";
 
 fn die(msg: &str) -> ! {
-    eprintln!("uinitconverter-gen: {msg}");
+    eprintln!("initconvert-gen: {msg}");
     exit(1)
 }
 
@@ -40,8 +40,8 @@ fn print_changes(changes: &[install::Change]) {
     }
 }
 
-/// `reload` on a running s6 boot: Manager.Reload on uinitconverterd. Refuses a
-/// manager that isn't uinitconverterd (systemd's own private socket).
+/// `reload` on a running s6 boot: Manager.Reload on initconvertd. Refuses a
+/// manager that isn't initconvertd (systemd's own private socket).
 fn reload_via_daemon(cfg: &Config) -> i32 {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -67,7 +67,7 @@ fn reload_via_daemon(cfg: &Config) -> i32 {
             .and_then(|v| String::try_from(v).map_err(|e| e.to_string()))?;
         if !version.contains("uinitconverter") {
             return Err(format!(
-                "the service manager is not uinitconverterd ({version})"
+                "the service manager is not initconvertd ({version})"
             ));
         }
         uinitconverter_client::manager_call(&conn, "Reload", &())
@@ -77,7 +77,7 @@ fn reload_via_daemon(cfg: &Config) -> i32 {
     match res {
         Ok(()) => {
             let db = fs::read_link(cfg.state_dir.join("current")).unwrap_or_default();
-            println!("reloaded by uinitconverterd");
+            println!("reloaded by initconvertd");
             println!(
                 "database: {} (live state updated)",
                 cfg.state_dir.join(&db).display()
@@ -89,8 +89,8 @@ fn reload_via_daemon(cfg: &Config) -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("uinitconverter-gen: reload through uinitconverterd failed: {e}");
-            eprintln!("uinitconverter-gen: `reload --direct` updates the live state from this process instead");
+            eprintln!("initconvert-gen: reload through initconvertd failed: {e}");
+            eprintln!("initconvert-gen: `reload --direct` updates the live state from this process instead");
             1
         }
     }
@@ -118,7 +118,7 @@ fn main() {
         exit(1);
     };
     if uinitconverter_version::wanted(&cmd) {
-        uinitconverter_version::print("uinitconverter-gen");
+        uinitconverter_version::print("initconvert-gen");
         exit(0);
     }
     let rest = &args[1..];
@@ -136,7 +136,7 @@ fn main() {
         "reload" => {
             let update = !rest.iter().any(|a| a == "--no-update");
             let direct = rest.iter().any(|a| a == "--direct");
-            // With a live state, uinitconverterd does the update (as daemon-reload
+            // With a live state, initconvertd does the update (as daemon-reload
             // does): run from a login shell, s6-rc-update's links and service
             // directories get the shell's SELinux labels (user_tmp_t in the
             // tmpfs scan directory), which init_t can't read; s6-svscan then
@@ -206,7 +206,7 @@ fn main() {
             code
         }
         other => die(&format!(
-            "unknown command {other} (see uinitconverter-gen help)"
+            "unknown command {other} (see initconvert-gen help)"
         )),
     };
     exit(code);

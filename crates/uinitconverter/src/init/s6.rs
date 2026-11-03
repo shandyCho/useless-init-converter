@@ -1,6 +1,6 @@
-//! The s6 part of `uinitconverter init`: s6-linux-init's tree, /etc/s6.conf
+//! The s6 part of `initconvert init`: s6-linux-init's tree, /etc/s6.conf
 //! for the s6 command, the uinitconverter-sysinit members, the s6 runtime
-//! labels, and restarting uinitconverterd on a running s6 boot.
+//! labels, and restarting initconvertd on a running s6 boot.
 
 use super::*;
 
@@ -78,10 +78,10 @@ pub(super) fn svok(ctx: &Ctx, dir: &str) -> bool {
     Path::new(dir).is_dir() && (ctx.dry || succeeds(&["s6-svok", dir]))
 }
 
-/// On the s6 boot, restart uinitconverterd so the installed build takes over
+/// On the s6 boot, restart initconvertd so the installed build takes over
 /// without a reboot. The daemon keeps dynamic units, the fd store and device
-/// state across a restart. uinitconverter-fdstore and journal-relay are left alone:
-/// restarting them would drop held fds and log sockets. uinitconverter-linkwatch
+/// state across a restart. initconvert-fdstore and journal-relay are left alone:
+/// restarting them would drop held fds and log sockets. initconvert-linkwatch
 /// keeps no state: it is restarted too.
 pub(super) fn restart_daemon(ctx: &Ctx) {
     let servicedir = |name: &str| {
@@ -150,9 +150,9 @@ pub(super) fn configure(ctx: &Ctx, s: &Settings) {
 }
 
 /// The s6-rc repository and, on a running s6 boot, the runtime state:
-/// labels uinitconverterd (init_t) and the services need.
+/// labels initconvertd (init_t) and the services need.
 pub(super) fn relabel_runtime(ctx: &Ctx) {
-    // The s6-rc repository, which uinitconverterd (init_t) syncs and commits; on a
+    // The s6-rc repository, which initconvertd (init_t) syncs and commits; on a
     // running s6 boot the runtime state too.
     let repo_parent = ctx
         .cfg

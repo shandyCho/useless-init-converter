@@ -18,8 +18,8 @@ check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 echo "== snap"
 # A runner-like helper started first (the oldest), the service after it.
-cp "$(command -v sleep)" "$W/uinitconverter-runner"
-"$W/uinitconverter-runner" 60 &
+cp "$(command -v sleep)" "$W/initconvert-runner"
+"$W/initconvert-runner" 60 &
 helper=$!
 sleep 0.1
 sleep 60 &

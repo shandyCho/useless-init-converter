@@ -2,7 +2,7 @@
 
 **English** | [한국어](etc.md)
 
-Everything that isn't needed for a first install: how it works, what is and isn't implemented, what `uinitconverter init` does, configuration and the source layout. To install, start with the [README](../README-us.md).
+Everything that isn't needed for a first install: how it works, what is and isn't implemented, what `initconvert init` does, configuration and the source layout. To install, start with the [README](../README-us.md).
 
 ## Architecture
 
@@ -10,15 +10,15 @@ Everything that isn't needed for a first install: how it works, what is and isn'
  systemctl / dnf scriptlets / libsystemd clients / dbus-daemon activation
               │ org.freedesktop.systemd1 (system bus + /run/systemd/private)
               ▼
-   uinitconverterd ── jobs, unit state, enable/disable/preset, scopes
+   initconvertd ── jobs, unit state, enable/disable/preset, scopes
               │ s6-rc -u/-d, s6-svc, s6-svstat
               ▼
-   s6-rc database  ◄── uinitconverter-gen reload: unit files → s6-rc store →
+   s6-rc database  ◄── initconvert-gen reload: unit files → s6-rc store →
               │          repository set "current" (s6 set ...) → commit, install
               │
-   s6-supervise ── run/finish scripts call `uinitconverter-runner run|finish|up|down`
+   s6-supervise ── run/finish scripts call `initconvert-runner run|finish|up|down`
                    (User=, Environment=, sockets, NOTIFY_SOCKET, Restart=, ...)
-                   and `uinitconverter-timers timer-run|path-run`
+                   and `initconvert-timers timer-run|path-run`
 ```
 
 It works at the protocol level, not by replacing libraries: the real `systemctl`
@@ -54,7 +54,7 @@ Workstation machine. The systemd numbers are from boots up to 2026-10-31.
 |---|---|
 | Memory | About the same: the median (total - available) is 1154 vs 1176 MiB (-23 MiB; 21 s6 and 6 systemd snapshots), about the normal 20-25 MiB variation between boots. |
 | Boot speed | Perhaps faster, but not shown by a controlled test: from kernel start to the login screen's session opening, the median in the logs is about 19 vs 28 s (23 s6 and 11 systemd boots, excluding firmware and boot loader). Those boots ran on different days, with different builds and initramfs images, and the session opens before the login screen appears. |
-| Security | Not better overall. PID 1 is smaller, but `uinitconverterd` and about 37 helper processes run as root, and the latest hardening comparison of 28 services shows no setting weaker on s6 (98 differ). It still flags bolt's seccomp filter count (9 vs 11): one filter here covers the three ABIs where systemd loads one per ABI. |
+| Security | Not better overall. PID 1 is smaller, but `initconvertd` and about 37 helper processes run as root, and the latest hardening comparison of 28 services shows no setting weaker on s6 (98 differ). It still flags bolt's seccomp filter count (9 vs 11): one filter here covers the three ABIs where systemd loads one per ABI. |
 | Less systemd | Only partly. udevd, logind and `systemd --user` still run (GNOME needs logind and `systemd --user`), and the `systemd` package stays installed. |
 
 **Costs compared with systemd**
@@ -86,15 +86,15 @@ on its own, and the core works without them.
 
 | Tool | Commands | Role |
 |---|---|---|
-| `uinitconverter-gen` | `reload`, `plan` | Translates every unit into an s6-rc store, syncs the s6-rc repository with it and the hand-written stores (`EXTRA_SOURCE`), then commits the set `current` and installs it as the boot and live database (`s6-rc-set-install`). Writes a coverage report. On a running s6 boot `reload` asks uinitconverterd to do it, as `systemctl daemon-reload` does. See [The `s6` command](#the-s6-command-s6-frontend). |
+| `initconvert-gen` | `reload`, `plan` | Translates every unit into an s6-rc store, syncs the s6-rc repository with it and the hand-written stores (`EXTRA_SOURCE`), then commits the set `current` and installs it as the boot and live database (`s6-rc-set-install`). Writes a coverage report. On a running s6 boot `reload` asks initconvertd to do it, as `systemctl daemon-reload` does. See [The `s6` command](#the-s6-command-s6-frontend). |
 | | `enable/disable/mask/unmask/preset/is-enabled` | Offline unit file management. |
-| `uinitconverterd` | `daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
+| `initconvertd` | `daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | Minimal client for the daemon (private socket or bus); a service's log (`journalctl -u`, or the s6-log directory with `JOURNAL=no`). |
 | | `stop-instances` | Run by `rc.shutdown`: asks the daemon to stop the on-demand instances (`user@UID`, ...) before s6-rc stops the services they are ordered after. |
-| `uinitconverter-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. `stop-atom` is the `down` of a longrun's `UNIT.stop` oneshot (its `ExecStop=`). `confine UNIT -- COMMAND` gives a program s6 starts itself the unit's cgroup, limits and sandbox (the system bus with `--bus=broker`). |
-| `uinitconverter-timers` | `timer-run`, `path-run` | Runs one `.timer` (computes elapses) or `.path` unit (inotify) as an s6 longrun and asks the daemon to start the unit. |
-| `uinitconverter` | any of the above (not `stop-instances`/`stop-atom`/`confine`) | The command users know (`/usr/bin/uinitconverter`): runs the tool that handles the command, so `uinitconverter reload` still works. `fdstore`, `journal-relay`, `linkwatch` and `notify` run the standalone tools when they are installed. |
-| | `init` | Sets up the s6 boot entry (see [What `uinitconverter init` does](#what-uinitconverter-init-does)). |
+| `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. `stop-atom` is the `down` of a longrun's `UNIT.stop` oneshot (its `ExecStop=`). `confine UNIT -- COMMAND` gives a program s6 starts itself the unit's cgroup, limits and sandbox (the system bus with `--bus=broker`). |
+| `initconvert-timers` | `timer-run`, `path-run` | Runs one `.timer` (computes elapses) or `.path` unit (inotify) as an s6 longrun and asks the daemon to start the unit. |
+| `initconvert` | any of the above (not `stop-instances`/`stop-atom`/`confine`) | The command users know (`/usr/bin/initconvert`): runs the tool that handles the command, so `initconvert reload` still works. `fdstore`, `journal-relay`, `linkwatch` and `notify` run the standalone tools when they are installed. |
+| | `init` | Sets up the s6 boot entry (see [What `initconvert init` does](#what-initconvert-init-does)). |
 | | `--version` | This build and each installed tool's build. Says so and exits 1 when the core tools are from different builds. Each tool also has `--version`. |
 
 Each core tool is its own RPM package, and the packages depend on each other
@@ -107,10 +107,10 @@ are not packaged. The packages and how to build them:
 
 | Project | Role | Without it |
 |---|---|---|
-| `uinitconverter-fdstore` | Holds `FDSTORE=` fds and listening sockets in a process of its own. Reads no configuration or unit files. | uinitconverterd holds them itself; they are lost when uinitconverterd restarts. |
-| `uinitconverter-journal-relay` | With `JOURNAL=no`: listens on journald's client sockets (`/run/systemd/journal/socket` and `stdout`) and forwards to rsyslog. dbus-broker, the session bus of `systemd --user`, refuses to start without them. | Needed for `JOURNAL=no`; nothing with `JOURNAL=yes` (the default). |
-| `uinitconverter-linkwatch` | Unblocks a daemon-reload (`s6-rc-update`) or an `s6-svlink` that waits for a new supervisor's start event which came before it listened (an s6 race; the wait has no end and holds s6-rc's lock). Looks at `/proc` every 2 s and acts on a wait older than 10 s. | Such a reload hangs, and every s6-rc command after it, until the stuck `s6-rc-update` is killed. |
-| `uinitconverter-notify` | `systemd-notify` replacement; works under any service manager that sets `$NOTIFY_SOCKET`. | Use `systemd-notify`, which stays installed. |
+| `initconvert-fdstore` | Holds `FDSTORE=` fds and listening sockets in a process of its own. Reads no configuration or unit files. | initconvertd holds them itself; they are lost when initconvertd restarts. |
+| `initconvert-journal-relay` | With `JOURNAL=no`: listens on journald's client sockets (`/run/systemd/journal/socket` and `stdout`) and forwards to rsyslog. dbus-broker, the session bus of `systemd --user`, refuses to start without them. | Needed for `JOURNAL=no`; nothing with `JOURNAL=yes` (the default). |
+| `initconvert-linkwatch` | Unblocks a daemon-reload (`s6-rc-update`) or an `s6-svlink` that waits for a new supervisor's start event which came before it listened (an s6 race; the wait has no end and holds s6-rc's lock). Looks at `/proc` every 2 s and acts on a wait older than 10 s. | Such a reload hangs, and every s6-rc command after it, until the stuck `s6-rc-update` is killed. |
+| `initconvert-notify` | `systemd-notify` replacement; works under any service manager that sets `$NOTIFY_SOCKET`. | Use `systemd-notify`, which stays installed. |
 
 How each one is built, installed and run: [standalone/uinitconverter-fdstore](../standalone/uinitconverter-fdstore/README-us.md),
 [standalone/uinitconverter-journal-relay](../standalone/uinitconverter-journal-relay/README-us.md),
@@ -125,7 +125,7 @@ How each one is built, installed and run: [standalone/uinitconverter-fdstore](..
 - Implicit dependencies: `DefaultDependencies=` → `sysinit.target`; `Type=dbus` → `dbus.socket`. Services with `BusName=` (and another `Type=`) are also ordered after `dbus.socket`: systemd starts them by bus activation, but here a socket unit may start them at boot.
 - Dependency cycles are broken (and reported) instead of failing the compile.
 - `DEP_MAP` maps systemd units to hand-written s6 services. For example, `dbus.service` → `dbus`.
-- An enabled `.socket` pulls in its service. The runner binds the sockets, matched by name or by `Service=`. A service the boot pulls in only through its sockets (sockets.target wants `virtlogd.socket`, nothing wants `virtlogd.service`) is on demand: its runner only binds the sockets and waits (`run --on-demand`, "on demand" in `uinitconverter plan`).
+- An enabled `.socket` pulls in its service. The runner binds the sockets, matched by name or by `Service=`. A service the boot pulls in only through its sockets (sockets.target wants `virtlogd.socket`, nothing wants `virtlogd.service`) is on demand: its runner only binds the sockets and waits (`run --on-demand`, "on demand" in `initconvert plan`).
 - `Conflicts=`: if both units would start at boot, the conflicted one is dropped from the targets (for example `gdm.service` over `getty@tty1.service`). At runtime, starting or restarting a unit stops the units it conflicts with, and those that list it in their own `Conflicts=`.
 - Job side effects as with systemd: stopping a unit also stops the running units that have it in `PartOf=`, `BindsTo=` or `Requires=` (database units and on-demand instances alike), and restarting it restarts those with `PartOf=`. A running unit with `StopWhenUnneeded=yes` is stopped once no running unit needs it (`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`), also right after a job started it directly. A target's state is its own: a stopped target is inactive even while units it pulled in still run, and starting it again starts its wanted units that are no longer active (a oneshot that already ran). A `Type=notify` service that sends `STOPPING=1` is stopped, with what is bound to it (gnome-session's monitor ends a session this way). A `Type=notify` service with `NotifyAccess=all` may hand its main process over with `MAINPID=`, as podman's quadlet units do (`podman run -d` exits once conmon runs the container): its runner then stays as s6's process, forwards signals to the current main process, and the service ends when that one does. A start of a unit while another start of it is pending merges into that one, as systemd merges jobs: it gets the same result without running again (the GNOME leader and two `gnome-session-ctl` start `gnome-session-shutdown.target` at once). Unlike systemd, a restart does not propagate along `Requires=` (restarting dbus would restart everything that needs it).
 
@@ -163,15 +163,15 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - `Runtime/State/Cache/Logs/ConfigurationDirectory=`.
 - `StandardInput/Output/Error=` (null, tty, file:, append:, truncate:), `TTYPath=` and `TTYVHangup=`, which are enough for `getty@.service`.
 - Socket activation for `Accept=no`: `ListenStream/Datagram/SequentialPacket/FIFO/Special`, with `LISTEN_FDS`, `LISTEN_PID` and `LISTEN_FDNAMES` set. A service that exits cleanly while it has sockets is started again on the next activity on them, as with systemd (systemd-rfkill exits when idle). Starting a `.socket` (`systemctl start`, udev's `SYSTEMD_WANTS`) starts its service with the socket.
-- `Accept=yes` with one `ListenStream=`, a unix path (e.g. `polkit-agent-helper.socket`) or an IP port (e.g. `sshd.socket`): the socket is an s6 service of its own, where `s6-ipcserverd` (unix) or `s6-tcpserverd` (TCP, from the optional s6-networking package) accepts and starts one instance of the template per connection, named as systemd names it (`NAME@N-PID-UID.service`, or `NAME@N-LOCALIP:PORT-REMOTEIP:PORT.service`). TCP instances also get `REMOTE_ADDR` and `REMOTE_PORT`. The instance gets the connection on fd 3 (`LISTEN_FDS=1`, and `LISTEN_FDNAMES=` the socket's `FileDescriptorName=` or `connection`: systemd's varlink services such as `journalctl` serve only on an fd named `varlink`) and, with `StandardInput=`/`StandardOutput=socket`, on stdin/stdout. It runs `ExecStartPre=`, `ExecStart=`, `ExecStartPost=`, `ExecStop=` and `ExecStopPost=` with the template's user, sandbox and cgroup. Templates may be `Type=simple`, `exec` or `oneshot`. `MaxConnections=` (default 64) and `MaxConnectionsPerSource=` become the server's `-c`/`-C`, at most 1000 for unix sockets and 16384 for TCP. Without `s6-tcpserverd` a TCP socket is not generated, and `uinitconverter plan` says so. `systemctl status` shows `Accepted:` and `Connected:`. While a connection runs, its instance is a unit like any other: `systemctl list-units` lists it, `systemctl status` shows its main process, and `systemctl stop` sends it `KillSignal=` (SIGKILL after `TimeoutStopSec=`) and then runs `ExecStopPost=`. A main process ended by SIGTERM, SIGHUP, SIGINT or SIGPIPE counts as success, as with systemd. Stopping the socket leaves running connections alone, as with systemd. A socket that can't be bound (`sshd.socket` while `sshd.service` holds port 22: `Conflicts=` isn't enforced) is `failed` and isn't retried until it is started again.
-- On-demand activation at boot: an on-demand service is `inactive` until the first activity on its sockets, as under systemd (iscsid, the libvirt daemons, cupsd, dmeventd, hostnamed). It then also starts the on-demand services it requires (`Requires=`/`BindsTo=`/`Wants=`) that are still waiting. A start by a job (`systemctl start`, a dependency, D-Bus activation, a `.path` unit) runs it at once; s6 restarting one that ran (`Restart=`, `systemctl restart`) doesn't wait either. After `systemctl stop` the sockets are closed, as before. The sockets are held by `uinitconverter-fdstore`; without it nothing can hold them before uinitconverterd is up, so the service starts at once.
+- `Accept=yes` with one `ListenStream=`, a unix path (e.g. `polkit-agent-helper.socket`) or an IP port (e.g. `sshd.socket`): the socket is an s6 service of its own, where `s6-ipcserverd` (unix) or `s6-tcpserverd` (TCP, from the optional s6-networking package) accepts and starts one instance of the template per connection, named as systemd names it (`NAME@N-PID-UID.service`, or `NAME@N-LOCALIP:PORT-REMOTEIP:PORT.service`). TCP instances also get `REMOTE_ADDR` and `REMOTE_PORT`. The instance gets the connection on fd 3 (`LISTEN_FDS=1`, and `LISTEN_FDNAMES=` the socket's `FileDescriptorName=` or `connection`: systemd's varlink services such as `journalctl` serve only on an fd named `varlink`) and, with `StandardInput=`/`StandardOutput=socket`, on stdin/stdout. It runs `ExecStartPre=`, `ExecStart=`, `ExecStartPost=`, `ExecStop=` and `ExecStopPost=` with the template's user, sandbox and cgroup. Templates may be `Type=simple`, `exec` or `oneshot`. `MaxConnections=` (default 64) and `MaxConnectionsPerSource=` become the server's `-c`/`-C`, at most 1000 for unix sockets and 16384 for TCP. Without `s6-tcpserverd` a TCP socket is not generated, and `initconvert plan` says so. `systemctl status` shows `Accepted:` and `Connected:`. While a connection runs, its instance is a unit like any other: `systemctl list-units` lists it, `systemctl status` shows its main process, and `systemctl stop` sends it `KillSignal=` (SIGKILL after `TimeoutStopSec=`) and then runs `ExecStopPost=`. A main process ended by SIGTERM, SIGHUP, SIGINT or SIGPIPE counts as success, as with systemd. Stopping the socket leaves running connections alone, as with systemd. A socket that can't be bound (`sshd.socket` while `sshd.service` holds port 22: `Conflicts=` isn't enforced) is `failed` and isn't retried until it is started again.
+- On-demand activation at boot: an on-demand service is `inactive` until the first activity on its sockets, as under systemd (iscsid, the libvirt daemons, cupsd, dmeventd, hostnamed). It then also starts the on-demand services it requires (`Requires=`/`BindsTo=`/`Wants=`) that are still waiting. A start by a job (`systemctl start`, a dependency, D-Bus activation, a `.path` unit) runs it at once; s6 restarting one that ran (`Restart=`, `systemctl restart`) doesn't wait either. After `systemctl stop` the sockets are closed, as before. The sockets are held by `initconvert-fdstore`; without it nothing can hold them before initconvertd is up, so the service starts at once.
 - `Restart=` (all modes), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=` (reboot/poweroff/halt).
 - `FDSTORE=1` / `FileDescriptorStoreMax=`: stored fds are held and handed back
   after a restart (journald and logind use this). Listening sockets are held
   the same way, so they stay open across service restarts. The store is its
-  own s6 service running the standalone `uinitconverter-fdstore` tool, so the fds
-  also survive a restart of uinitconverterd; when that tool is not installed the
+  own s6 service running the standalone `initconvert-fdstore` tool, so the fds
+  also survive a restart of initconvertd; when that tool is not installed the
   daemon holds them itself.
   Services with `FileDescriptorStoreMax=` start after it.
 - `TimeoutStartSec=` is enforced by the runner: on timeout the start fails and the service is terminated.
@@ -210,10 +210,10 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
   root too: the caller's label (from the bus, or `SO_PEERSEC` on the private
   socket) needs the method's permission in class `service` on the unit
   file's label (`start`, `stop`, `reload`, `status`), or in class `system` on
-  uinitconverterd's own label (`reload`, `status`, `halt`, `reboot`, `enable`,
+  initconvertd's own label (`reload`, `status`, `halt`, `reboot`, `enable`,
   `start`) for manager calls and units without a unit file. `ListUnits`
   leaves out the units the caller may not see. Permissive mode and
-  permissive domains only log the denial (to uinitconverterd's stderr).
+  permissive domains only log the denial (to initconvertd's stderr).
 - D-Bus activation is accepted only from the bus daemon itself, and never makes
   the daemon regenerate its database.
 - Jobs on the same unit run one after another; queued jobs can be cancelled.
@@ -224,8 +224,8 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 
 ## Not implemented (yet)
 
-- Encrypted volumes in `/etc/crypttab` that the initramfs does not unlock (systemd opens them with `systemd-cryptsetup@` units). The LUKS root disk is unlocked by the initramfs and works; `uinitconverter init` warns about the others.
-- `Accept=yes` with more than one listener, anything but `ListenStream=` (or `vsock:`), and with a `Type=notify`, `forking` or `dbus` template: the socket is skipped, and `uinitconverter plan` gives the reason. An instance disappears when its connection ends, also when it failed: systemd keeps failed ones until `systemctl reset-failed`, so here they don't count in `systemctl --failed` (their result is in the socket's log and `ExecStopPost=`). Restarting or reloading a running connection fails. The template's `Wants=` and `Requires=` are started with the socket rather than per connection.
+- Encrypted volumes in `/etc/crypttab` that the initramfs does not unlock (systemd opens them with `systemd-cryptsetup@` units). The LUKS root disk is unlocked by the initramfs and works; `initconvert init` warns about the others.
+- `Accept=yes` with more than one listener, anything but `ListenStream=` (or `vsock:`), and with a `Type=notify`, `forking` or `dbus` template: the socket is skipped, and `initconvert plan` gives the reason. An instance disappears when its connection ends, also when it failed: systemd keeps failed ones until `systemctl reset-failed`, so here they don't count in `systemctl --failed` (their result is in the socket's log and `ExecStopPost=`). Restarting or reloading a running connection fails. The template's `Wants=` and `Requires=` are started with the socket rather than per connection.
 - `Accept=no`: starting a `.socket` at run time still starts its service at once, and an on-demand service's requirements that are not on demand themselves are started at boot (s6-rc dependencies).
 - autofs: `.automount` units mount eagerly.
 - systemd generators: none of the system's runs on the s6 boot (the s6 user manager runs the user ones, see [the s6 user manager](#the-s6-user-manager-in-progress)). `/etc/fstab` is mounted by the `mount-fs` s6 service and the zram swap set up by the `zram` one; units that other generators would make (e.g. `systemd-gpt-auto-generator`'s, `rc-local`) don't exist there.
@@ -263,8 +263,8 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 | dbus-daemon | The system bus (`--systemd-activation`), or dbus-broker with `--bus=broker`; dbus-broker stays for the user bus |
 | util-linux | `mount`, `swapon`, `mountpoint` for mount units and early boot; `rfkill` for the radio state |
 | shadow-utils | `useradd` for the system users that stand in for `DynamicUser=` |
-| policycoreutils, policycoreutils-python-utils | `restorecon` and `semodule` for the SELinux module; `semanage` for `uinitconverter init` |
-| grubby | The boot entry (`uinitconverter init`) |
+| policycoreutils, policycoreutils-python-utils | `restorecon` and `semodule` for the SELinux module; `semanage` for `initconvert init` |
+| grubby | The boot entry (`initconvert init`) |
 
 **Libraries loaded at run time (recommended).** uinitconverter `dlopen()`s them, so
 none is needed to build. Without one, the matching feature is missing:
@@ -280,7 +280,7 @@ NetworkManager, rsyslog or syslog-ng (only with `JOURNAL=no`).
 
 **Build:** cargo and rust. The core uses zbus, tokio, futures-util, libc,
 rustix, jiff and serde (`Cargo.toml`); the standalone tools libc and rustix
-(`uinitconverter-linkwatch` only rustix).
+(`initconvert-linkwatch` only rustix).
 
 ## Testing on Fedora
 
@@ -306,19 +306,19 @@ tests/sandbox.sh ~/sdc-sandbox stop
 `SYSTEMD_ROOT=` to an extracted Fedora `systemd` + `systemd-shared` +
 `systemd-libs` RPM. This setup was tested on Artix with Fedora 44's systemctl 259.5.
 
-## What `uinitconverter init` does
+## What `initconvert init` does
 
 The project was called **sdcompat** before. To move an sdcompat install to
 uinitconverter (remove, then install as new), see "Moving from sdcompat" in
 [packages/README-us.md](../packages/README-us.md#moving-from-sdcompat).
 
-`uinitconverter init` **adds** a GRUB entry, "Fedora (s6 + uinitconverter)", and keeps the
+`initconvert init` **adds** a GRUB entry, "Fedora (s6 + uinitconverter)", and keeps the
 normal systemd boot as the default unless you pass `--default-s6`. It installs
 nothing: when a setting needs a package that is missing, it stops and prints
 the `dnf install` command. Backups of anything it overwrites go to
 `/var/lib/uinitconverter/setup-backup/`. It shows its plan, asks, and then:
 
-1. Shows the installed builds (`uinitconverter --version`): the core packages must
+1. Shows the installed builds (`initconvert --version`): the core packages must
    come from one build.
 2. Writes the settings in `/etc/uinitconverter/` (`JOURNAL=`, `RESOLVED=` in
    `uinitconverter.conf`, the s6 services in the `uinitconverter-sysinit` bundle) and
@@ -332,7 +332,7 @@ the `dnf install` command. Backups of anything it overwrites go to
 3. Enables chronyd and NetworkManager when they are installed (a missing one
    is only a warning) and, when gdm is installed, enables gdm and sets
    `graphical.target` as the default.
-4. Runs `uinitconverter reload --no-update`, which creates the s6-rc repository and its set `current` (from systemd's enable state) and installs the boot database, and prints the translation summary. It also creates `/etc/s6/sources` for your own s6-rc services.
+4. Runs `initconvert reload --no-update`, which creates the s6-rc repository and its set `current` (from systemd's enable state) and installs the boot database, and prints the translation summary. It also creates `/etc/s6/sources` for your own s6-rc services.
 5. Generates `/etc/s6-linux-init/current` with a rescue getty on tty9.
 6. SELinux: labels `bin/init` as `init_exec_t` and loads the policy module
    (`/usr/share/uinitconverter/selinux/uinitconverter.cil`, from `dist/selinux/`), which labels the s6, s6-rc, s6-linux-init and
@@ -341,7 +341,7 @@ the `dnf install` command. Backups of anything it overwrites go to
    s6 does that systemd does not (the catch-all logger's fifo, links in
    `/run/service`, the run scripts of `user@UID.service` in /run/uinitconverter).
    The package loads the module when it is installed and removes it when it is removed.
-7. On the s6 boot, restarts uinitconverterd so the installed build takes over.
+7. On the s6 boot, restarts initconvertd so the installed build takes over.
 8. Runs the package's kernel-install plugin for every installed kernel, which copies the boot entry with `init=/usr/sbin/init-selinux` added. It removes the
    splash (`rhgb quiet`, `plymouth.enable=0`), because plymouth's quit unit is
    systemd-only. On the first run it also adds `enforcing=0`; `--selinux=enforcing` leaves that out.
@@ -350,7 +350,7 @@ Options:
 
 | Option | Effect |
 |---|---|
-| `--dry-run` | Print every command, change nothing (works without root). It ends with the command that applies it: `sudo uinitconverter init` with the same options minus `--dry-run` |
+| `--dry-run` | Print every command, change nothing (works without root). It ends with the command that applies it: `sudo initconvert init` with the same options minus `--dry-run` |
 | `-y`, `--yes` | Don't ask before starting |
 | `--journal=yes\|no` | `no`: no systemd-journald, a syslog daemon plus one s6-log directory per service (needs the `--syslog` package and `uinitconverter-journal-relay`) / `yes`: back to journald |
 | `--syslog=rsyslog\|syslog-ng` | The syslog daemon with `--journal=no` (default rsyslog). Its configuration goes to `/etc/uinitconverter/rsyslog.conf` or `syslog-ng.conf`; the distribution's stays as it is. Both write the files of Fedora's rsyslog defaults (`/var/log/messages`, `secure`, `maillog`, `cron`, …) |
@@ -365,7 +365,7 @@ Options:
 An option left out keeps what the last run set: `JOURNAL=`/`RESOLVED=` in
 `/etc/uinitconverter/uinitconverter.conf`, the SELinux mode in
 `/etc/uinitconverter/boot-options`, `/etc/uinitconverter/boot-only-s6` and
-`/etc/uinitconverter/boot-default`. So a plain `sudo uinitconverter init` after a package
+`/etc/uinitconverter/boot-default`. So a plain `sudo initconvert init` after a package
 upgrade redoes the setup with the same choices.
 
 The journal and resolved options also switch an existing install. With `--resolved=no`, the s6 oneshot `resolv` writes `/run/NetworkManager/conf.d/99-uinitconverter-no-resolved.conf` (`dns=default`, `rc-manager=symlink`) at boot and points the resolved stub file that `/etc/resolv.conf` links to at `/run/NetworkManager/resolv.conf`. Everything is in `/run`, so the systemd boot keeps using resolved. A `dns=` setting in `/etc/NetworkManager` overrides it (NetworkManager reads `/run` first). nss-resolve in `/etc/nsswitch.conf` finds no resolved and falls through to `dns`.
@@ -405,7 +405,7 @@ encryption just mounts (checked in QEMU with ext4, xfs and btrfs), and
 LUKS support, unless `/etc/crypttab` has an entry or the command line has
 `rd.luks.uuid=` or `rd.luks.name=`, when the build fails. Limits: an encrypted
 root must be opened by a typed passphrase (no TPM2/FIDO2/PKCS#11 unlock), a
-root on LVM or MD can't be assembled (`uinitconverter init` warns; use
+root on LVM or MD can't be assembled (`initconvert init` warns; use
 `--boot-only-s6=no`), no
 plymouth (the s6 entry has none anyway), no hibernation resume, no
 non-US keymap for the prompt. Extra modules go in
@@ -452,7 +452,7 @@ Core dumps are kept as on systemd: the `coredump` s6 service runs
 What an s6 shutdown printed on the console is kept for the next boot in
 `/var/log/uinitconverter/last-shutdown-console.log` (s6's catch-all log) and
 `last-shutdown-kernel.log` (the kernel log from the start of the shutdown,
-including SELinux denials after auditd stops); both are root-only. Once shutdown begins, uinitconverterd refuses
+including SELinux denials after auditd stops); both are root-only. Once shutdown begins, initconvertd refuses
 new unit starts and D-Bus activations at once, as systemd does. It first asks the
 display manager (`display-manager.service`) to stop, so it doesn't try new
 greeters when its session ends, then stops the scopes (logind's sessions) and
@@ -484,8 +484,8 @@ tests/systemctl.sh status notifier.service
 ```
 
 To exercise what the unprivileged sandbox can't test (`User=`, cgroups,
-sandboxing, transient scopes), run `uinitconverter reload` with a config file in a
-root-owned VM. The report and `uinitconverter plan` show how Fedora's own units are
+sandboxing, transient scopes), run `initconvert reload` with a config file in a
+root-owned VM. The report and `initconvert plan` show how Fedora's own units are
 translated without starting anything:
 
 ```sh
@@ -531,9 +531,9 @@ Work is under way to replace `systemd --user` too (the plan is in
 `work_history.md`, parts 136-150). It is the `uinitconverter-user` package
 (`dnf install uinitconverter-user`). With it, `USER_MANAGER=s6` in
 `uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
-command line, makes the runner start `uinitconverter-user-manager` (a link to
-`uinitconverterd`, which runs as the user manager under that name; also
-`uinitconverterd user-manager`) for `user@UID.service` instead of
+command line, makes the runner start `initconvert-user-manager` (a link to
+`initconvertd`, which runs as the user manager under that name; also
+`initconvertd user-manager`) for `user@UID.service` instead of
 `systemd --user`; the unit file is not changed. Without the package, `user@`
 keeps `systemd --user` and the runner logs why.
 `USER_MANAGER=systemd` (the default) or `uinitconverter.user_manager=systemd`
@@ -639,13 +639,13 @@ system manager. Keep the default until those are done.
 The system is managed with s6's own tools.
 [s6-frontend](https://skarnet.org/software/s6-frontend/) (version in
 `dist/skarnet.versions`, built with the other skarnet packages) provides the
-`s6` command, and `uinitconverter init` writes `/etc/s6.conf` (from
+`s6` command, and `initconvert init` writes `/etc/s6.conf` (from
 `dist/s6.conf`) with uinitconverter's repository, stores and boot database. Service names are the s6-rc names: `sshd.service`, `gdm.service`,
 … and uinitconverter's own s6 services (`dbus`, `uinitconverterd`, `earlyoom`, `udevd`, …).
 
 How it fits together:
 
-- uinitconverter-gen translates the unit files into an s6-rc **store**
+- initconvert-gen translates the unit files into an s6-rc **store**
   (`/var/lib/uinitconverter/store`). The s6-rc **repository**
   (`/var/lib/s6-rc/repository`) links three stores, in this order: the
   translated units, uinitconverter's early-boot services (`/etc/uinitconverter/s6`) and
@@ -670,7 +670,7 @@ How it fits together:
   then is stopped and started again from the database. Until then they
   are still started dynamically on request. `AUTO_MASK=` left in the
   configuration is ignored.
-- `systemctl daemon-reload` and `uinitconverter reload` (also run by dnf's file
+- `systemctl daemon-reload` and `initconvert reload` (also run by dnf's file
   triggers when packages change) regenerate the store, sync the repository,
   then commit `current` and install it as the boot and live database. Before
   committing they run `s6-rc-set-fix -u`, which enables what an `active`
@@ -708,7 +708,7 @@ Notes:
   skarnet's sources.
 - **Early-boot services** are `always` exactly when their store says so
   (`flag-essential`, or membership in `uinitconverter-sysinit`, which
-  `uinitconverter init` changes for syslog, journal-relay and resolv); a reload
+  `initconvert init` changes for syslog, journal-relay and resolv); a reload
   puts them back if a set moves them.
 - `s6 live start/stop` and `s6 process restart` act below uinitconverter: there is
   no systemd job, so units are better started and stopped with `systemctl`.
@@ -734,11 +734,11 @@ and defaults). The most important keys:
 - `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: the repository (s6.conf's `repodir`), the generated store, the set a reload commits and installs, and the bundle its commit makes for the boot (`default`).
 - `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR` and excludes the distribution's `rsyslog.service` and `syslog-ng.service`, since the s6 `syslog` service is the syslog daemon (`SYSLOG`; `INCLUDE` brings them back).
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
-- `SYSLOG`: the daemon the s6 `syslog` service runs with `JOURNAL=no`: `rsyslog` (default) or `syslog-ng` (`uinitconverter init --syslog=`). Either way the distribution's `rsyslog.service` and `syslog-ng.service` are excluded. syslog-ng won't open `/dev/log` itself when `/run/systemd/system` exists (uinitconverter creates it for `sd_booted()`), so the run script binds it and passes it in `LISTEN_FDS`.
-- `BUS`: `daemon` (default) or `broker`, the system bus of the s6 boot (`uinitconverter init --bus=`); read by the `dbus` s6 service's run script.
-- `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `uinitconverter-sysinit` too, as `uinitconverter init --resolved=no` does, or DNS breaks).
+- `SYSLOG`: the daemon the s6 `syslog` service runs with `JOURNAL=no`: `rsyslog` (default) or `syslog-ng` (`initconvert init --syslog=`). Either way the distribution's `rsyslog.service` and `syslog-ng.service` are excluded. syslog-ng won't open `/dev/log` itself when `/run/systemd/system` exists (uinitconverter creates it for `sd_booted()`), so the run script binds it and passes it in `LISTEN_FDS`.
+- `BUS`: `daemon` (default) or `broker`, the system bus of the s6 boot (`initconvert init --bus=`); read by the `dbus` s6 service's run script.
+- `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `uinitconverter-sysinit` too, as `initconvert init --resolved=no` does, or DNS breaks).
 - `INIT`: the init system units are translated for. Only `s6` exists yet; any other value stops every tool with a configuration error.
-- `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `uinitconverter init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. The shell scripts and s6 service definitions in `dist/` still run them by name.
+- `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `initconvert init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. The shell scripts and s6 service definitions in `dist/` still run them by name.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
 - `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: what `user@UID.service` runs, `systemd` (default) or `s6` (see [the s6 user manager](#the-s6-user-manager-in-progress); `uinitconverter.user_manager=` on the kernel command line wins), the user units the s6 one leaves out, and the user units whose failure path hands a user over to `systemd --user` (default `gnome-session-shutdown.target gnome-session@*.target`).
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
@@ -771,20 +771,20 @@ crates/                    the core (one Cargo workspace)
     execcmd.rs, conditions.rs   Exec*= command lines, Condition*/Assert*
   uinitconverter-client/         small D-Bus client for the daemon
   uinitconverter-version/        the build's version for --version (RPM version-release or git commit)
-  uinitconverter-gen/            plan → s6-rc source, compile, s6-rc-update, report (tool uinitconverter-gen)
-  uinitconverter-runner/         exec environment, readiness, restart policy (tool uinitconverter-runner)
+  uinitconverter-gen/            plan → s6-rc source, compile, s6-rc-update, report (tool initconvert-gen)
+  uinitconverter-runner/         exec environment, readiness, restart policy (tool initconvert-runner)
     runner.rs              the Runner type and the run, finish, up and down commands
     runner/                exec.rs, environment.rs, stdio.rs, sockets.rs, forking.rs,
                            notify.rs (readiness helpers), status.rs (exit results)
-  uinitconverter-timers/         timer and path unit runners (tool uinitconverter-timers)
+  uinitconverter-timers/         timer and path unit runners (tool initconvert-timers)
   uinitconverterd/               D-Bus API: dispatch, properties, s6 backend, private socket,
                            on-demand instances (dynamic.rs), systemd-run (transient.rs),
                            units wanted by devices (devices.rs), SELinux access
-                           checks (access.rs) (tool uinitconverterd)
+                           checks (access.rs) (tool initconvertd)
     daemon/mod.rs          the Daemon type, unit loading, the main loop
     daemon/                dispatch.rs, manager.rs (Manager methods), jobs.rs,
                            scopes.rs (StartTransientUnit), caller.rs, errors.rs, ...
-  uinitconverter/                the uinitconverter command, which runs the right tool, and `uinitconverter init`
+  uinitconverter/                the initconvert command, which runs the right tool, and `initconvert init`
 standalone/                separate projects, each with its own README and spec
   uinitconverter-fdstore/        file descriptor store server
   uinitconverter-journal-relay/  journald's client sockets to syslog (JOURNAL=no)

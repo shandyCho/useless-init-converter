@@ -1,4 +1,4 @@
-//! `uinitconverter COMMAND`: the one command users and older scripts know. Each
+//! `initconvert COMMAND`: the one command users and older scripts know. Each
 //! command belongs to one of the uinitconverter tools; this execs that tool with
 //! the same arguments. Generated databases from before the split call
 //! `/usr/libexec/uinitconverter/uinitconverter run|finish|...`, which still works.
@@ -10,23 +10,23 @@ use std::process::{exit, Command};
 mod init;
 
 const USAGE: &str = "\
-usage: uinitconverter [--config PATH] COMMAND [ARGS]
-       uinitconverter --version     this build and the installed tools' builds
+usage: initconvert [--config PATH] COMMAND [ARGS]
+       initconvert --version     this build and the installed tools' builds
 
-  uinitconverter init [OPTIONS]  set up booting with s6 (see uinitconverter init --help)
+  initconvert init [OPTIONS]  set up booting with s6 (see initconvert init --help)
 
 Each other command is handled by one uinitconverter tool (in /usr/libexec/uinitconverter):
 
-  uinitconverter-gen        reload, plan, enable, disable, mask, unmask, preset, is-enabled
-  uinitconverterd           daemon, start, stop, restart, log
-  uinitconverter-runner     run, finish, up, down, stop-exec, reload-exec
-  uinitconverter-timers     timer-run, path-run
-  uinitconverter-fdstore    fdstore           (standalone, optional)
-  uinitconverter-journal-relay  journal-relay (standalone, optional)
-  uinitconverter-notify     notify            (standalone, optional)
-  uinitconverter-linkwatch  linkwatch         (standalone, optional)
+  initconvert-gen        reload, plan, enable, disable, mask, unmask, preset, is-enabled
+  initconvertd           daemon, start, stop, restart, log
+  initconvert-runner     run, finish, up, down, stop-exec, reload-exec
+  initconvert-timers     timer-run, path-run
+  initconvert-fdstore    fdstore           (standalone, optional)
+  initconvert-journal-relay  journal-relay (standalone, optional)
+  initconvert-notify     notify            (standalone, optional)
+  initconvert-linkwatch  linkwatch         (standalone, optional)
 
-Run `uinitconverter COMMAND --help` or see the tool's own usage for details.
+Run `initconvert COMMAND --help` or see the tool's own usage for details.
 ";
 
 /// The tool for a command, and whether it takes the command name as its
@@ -34,17 +34,17 @@ Run `uinitconverter COMMAND --help` or see the tool's own usage for details.
 fn tool_for(cmd: &str) -> Option<(&'static str, bool)> {
     Some(match cmd {
         "reload" | "plan" | "enable" | "disable" | "mask" | "unmask" | "preset" | "is-enabled" => {
-            ("uinitconverter-gen", true)
+            ("initconvert-gen", true)
         }
-        "daemon" | "start" | "stop" | "restart" | "log" => ("uinitconverterd", true),
+        "daemon" | "start" | "stop" | "restart" | "log" => ("initconvertd", true),
         "run" | "finish" | "up" | "down" | "stop-exec" | "reload-exec" => {
-            ("uinitconverter-runner", true)
+            ("initconvert-runner", true)
         }
-        "timer-run" | "path-run" => ("uinitconverter-timers", true),
-        "fdstore" => ("uinitconverter-fdstore", false),
-        "journal-relay" => ("uinitconverter-journal-relay", false),
-        "notify" => ("uinitconverter-notify", false),
-        "linkwatch" => ("uinitconverter-linkwatch", false),
+        "timer-run" | "path-run" => ("initconvert-timers", true),
+        "fdstore" => ("initconvert-fdstore", false),
+        "journal-relay" => ("initconvert-journal-relay", false),
+        "notify" => ("initconvert-notify", false),
+        "linkwatch" => ("initconvert-linkwatch", false),
         _ => return None,
     })
 }
@@ -66,27 +66,24 @@ fn tool_path(name: &str) -> PathBuf {
 
 /// The core tools, whose builds should match this one.
 const CORE_TOOLS: [&str; 4] = [
-    "uinitconverter-gen",
-    "uinitconverter-runner",
-    "uinitconverter-timers",
-    "uinitconverterd",
+    "initconvert-gen",
+    "initconvert-runner",
+    "initconvert-timers",
+    "initconvertd",
 ];
 /// The standalone tools: separate projects with their own versions.
 const STANDALONE: [&str; 4] = [
-    "uinitconverter-fdstore",
-    "uinitconverter-journal-relay",
-    "uinitconverter-linkwatch",
-    "uinitconverter-notify",
+    "initconvert-fdstore",
+    "initconvert-journal-relay",
+    "initconvert-linkwatch",
+    "initconvert-notify",
 ];
 
-/// The lines of `uinitconverter --version`: this build, each core tool's (from
+/// The lines of `initconvert --version`: this build, each core tool's (from
 /// its own --version) and whether the standalone tools are installed; and
 /// whether every core tool is installed and from this build.
 fn version_report() -> (Vec<String>, bool) {
-    let mut lines = vec![format!(
-        "uinitconverter {}",
-        uinitconverter_version::VERSION
-    )];
+    let mut lines = vec![format!("initconvert {}", uinitconverter_version::VERSION)];
     let mut ok = true;
     for tool in CORE_TOOLS {
         let path = tool_path(tool);
@@ -102,7 +99,7 @@ fn version_report() -> (Vec<String>, bool) {
         } else {
             ok = false;
             if theirs.is_some_and(|v| !v.starts_with('(') && !v.starts_with("not ")) {
-                lines.push(format!("  {line}  (differs from uinitconverter)"));
+                lines.push(format!("  {line}  (differs from initconvert)"));
             } else {
                 lines.push(format!("  {line}"));
             }
@@ -119,7 +116,7 @@ fn version_report() -> (Vec<String>, bool) {
     (lines, ok)
 }
 
-/// `uinitconverter --version`. Exits 1 when a core tool is missing or from
+/// `initconvert --version`. Exits 1 when a core tool is missing or from
 /// another build.
 fn version() -> ! {
     let (lines, ok) = version_report();
@@ -151,7 +148,7 @@ fn main() {
         init::main(&args[i + 1..]);
     }
     let Some((tool, with_cmd)) = tool_for(cmd) else {
-        eprintln!("uinitconverter: unknown command {cmd} (see uinitconverter help)");
+        eprintln!("initconvert: unknown command {cmd} (see initconvert help)");
         exit(1);
     };
     let path = tool_path(tool);
@@ -165,9 +162,9 @@ fn main() {
     }
     let err = c.exec();
     if err.kind() == std::io::ErrorKind::NotFound {
-        eprintln!("uinitconverter: {cmd}: {} is not installed", path.display());
+        eprintln!("initconvert: {cmd}: {} is not installed", path.display());
     } else {
-        eprintln!("uinitconverter: {}: {err}", path.display());
+        eprintln!("initconvert: {}: {err}", path.display());
     }
     exit(127);
 }

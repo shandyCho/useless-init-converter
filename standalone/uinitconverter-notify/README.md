@@ -18,7 +18,7 @@ cargo build --release
 ## 설치
 
 ```sh
-sudo install -Dm0755 target/release/uinitconverter-notify /usr/libexec/uinitconverter/uinitconverter-notify
+sudo install -Dm0755 target/release/initconvert-notify /usr/libexec/uinitconverter/initconvert-notify
 ```
 
 RPM: `./build-rpm.sh [OUTDIR]`가 `uinitconverter-notify.spec`을 `~/rpmbuild-uinitconverter-standalone/rpms`에
@@ -29,9 +29,9 @@ RPM: `./build-rpm.sh [OUTDIR]`가 `uinitconverter-notify.spec`을 `~/rpmbuild-ui
 ## 실행
 
 ```sh
-uinitconverter-notify [옵션] [VAR=VALUE...]
-uinitconverter-notify --exec [옵션] [VAR=VALUE...] ";" 명령 [인자...]
-uinitconverter-notify --booted
+initconvert-notify [옵션] [VAR=VALUE...]
+initconvert-notify --exec [옵션] [VAR=VALUE...] ";" 명령 [인자...]
+initconvert-notify --booted
 ```
 
 | 옵션 | 전송 내용 / 동작 |
@@ -54,7 +54,7 @@ systemd-notify(254 이후)처럼 메시지는 호출한 프로세스의 이름�
 예: 서비스 스크립트에서 준비가 끝났음을 알리기
 
 ```sh
-uinitconverter-notify --ready --status="listening on 8080"
+initconvert-notify --ready --status="listening on 8080"
 ```
 
 `$NOTIFY_SOCKET`이 없으면 오류(종료 코드 1)로 끝납니다.

@@ -46,7 +46,7 @@ cargo test
 ## 설치
 
 ```sh
-sudo install -Dm0755 target/release/uinitconverter-linkwatch /usr/libexec/uinitconverter/uinitconverter-linkwatch
+sudo install -Dm0755 target/release/initconvert-linkwatch /usr/libexec/uinitconverter/initconvert-linkwatch
 ```
 
 RPM: `./build-rpm.sh [OUTDIR]`가 `uinitconverter-linkwatch.spec`을 `~/rpmbuild-uinitconverter-standalone/rpms`에
@@ -59,7 +59,7 @@ uinitconverter는 이것을 s6 서비스 `uinitconverter-linkwatch`로 실행합
 ## 실행
 
 ```sh
-uinitconverter-linkwatch [--after 초] [--interval 초] [--under 디렉터리] [--once]
+initconvert-linkwatch [--after 초] [--interval 초] [--under 디렉터리] [--once]
 ```
 
 | 옵션 | 설명 |
@@ -70,4 +70,4 @@ uinitconverter-linkwatch [--after 초] [--interval 초] [--under 디렉터리] [
 | `--once` | 한 번 확인하고 종료합니다 |
 
 보낸 이벤트마다 stderr에 기록합니다:
-`uinitconverter-linkwatch: s6-rc-update (pid N) waited 12 s for DIR, whose supervisor runs: sent its start event`.
+`initconvert-linkwatch: s6-rc-update (pid N) waited 12 s for DIR, whose supervisor runs: sent its start event`.

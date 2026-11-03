@@ -21,7 +21,7 @@ cargo test
 ## Install
 
 ```sh
-sudo install -Dm0755 target/release/uinitconverter-fdstore /usr/libexec/uinitconverter/uinitconverter-fdstore
+sudo install -Dm0755 target/release/initconvert-fdstore /usr/libexec/uinitconverter/initconvert-fdstore
 ```
 
 RPM: `./build-rpm.sh [OUTDIR]` builds `uinitconverter-fdstore.spec` into
@@ -33,7 +33,7 @@ the source RPM, to rebuild elsewhere (`rpmbuild --rebuild`, mock).
 ## Run
 
 ```sh
-uinitconverter-fdstore [--socket PATH] [--ready-fd N]
+initconvert-fdstore [--socket PATH] [--ready-fd N]
 ```
 
 - `--socket PATH`: where to listen (default `/run/uinitconverter/fdstore`).
@@ -41,10 +41,10 @@ uinitconverter-fdstore [--socket PATH] [--ready-fd N]
 
 Only root and the user running the server may use it, and under SELinux only
 peers in the server's own domain (with uinitconverter: `init_t`, the domain of
-uinitconverterd and the runner, its only clients; many confined root daemons may
+initconvertd and the runner, its only clients; many confined root daemons may
 connect to `init_t`'s sockets). With uinitconverter, the
 `/etc/uinitconverter/s6/uinitconverter-fdstore` s6 service runs it; when this tool is not
-installed that service idles and uinitconverterd holds the fds itself.
+installed that service idles and initconvertd holds the fds itself.
 
 ## Protocol
 

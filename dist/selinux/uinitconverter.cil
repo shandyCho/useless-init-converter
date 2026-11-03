@@ -45,7 +45,7 @@
 (filecon "/run/s6-rc(:[^/]+)?(/.*)?" any (system_u object_r init_var_run_t ((s0) (s0))))
 ;
 ; /var/lib/uinitconverter holds the s6-rc databases, which rc.init regenerates at
-; boot (uinitconverter-gen, init_t) and then swaps in by renaming symlinks. init_t
+; boot (initconvert-gen, init_t) and then swaps in by renaming symlinks. init_t
 ; may create symlinks in var_lib_t but not rename or unlink them, nor remove
 ; old database directories; label it like systemd's /var/lib/systemd.
 (filecon "/var/lib/uinitconverter(/.*)?" any (system_u object_r init_var_lib_t ((s0) (s0))))
@@ -96,7 +96,7 @@
 ; tmpfs it was tmpfs_t, so a waiter run from an admin's shell (unconfined_t)
 ; made its fifo user_tmp_t (the policy's unconfined_t tmpfs_t fifo_file
 ; transition), s6-supervise's writes were denied and the waiter never saw
-; the event (setup's `s6-svc -wR` on uinitconverterd timed out although the daemon
+; the event (setup's `s6-svc -wR` on initconvertd timed out although the daemon
 ; was ready). init_var_run_t, as restorecon makes the rest of the live
 ; directory: fifos created there keep that type, which init_t may write.
 (typetransition init_t tmpfs_t dir "event" init_var_run_t)
@@ -125,7 +125,7 @@
 ; links, s6-rc-update waited forever for supervisors that never started,
 ; and a later update in init_t could not roll back. Like a SysV init
 ; script run by root (initrc_exec_t -> initrc_t), these two enter init_t,
-; the domain uinitconverterd's own updates run in.
+; the domain initconvertd's own updates run in.
 (type uinitconverter_live_exec_t)
 (roletype object_r uinitconverter_live_exec_t)
 (typeattributeset file_type (uinitconverter_live_exec_t))
@@ -139,7 +139,7 @@
 (typetransition unconfined_t uinitconverter_live_exec_t process init_t)
 (roletransition unconfined_r uinitconverter_live_exec_t process system_r)
 ;
-; The s6-rc repository (s6-rc-repo-init, `s6 set`), which uinitconverterd syncs,
+; The s6-rc repository (s6-rc-repo-init, `s6 set`), which initconvertd syncs,
 ; commits and installs on daemon-reload: like /var/lib/uinitconverter, init_t must
 ; rename and remove its symlinks and directories.
 (filecon "/var/lib/s6-rc(/.*)?" any (system_u object_r init_var_lib_t ((s0) (s0))))

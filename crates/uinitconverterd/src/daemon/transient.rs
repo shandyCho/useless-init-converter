@@ -308,7 +308,9 @@ fn render(
                     .collect::<Vec<_>>()
                     .join(" "),
                 _ => {
-                    eprintln!("uinitconverterd: transient property {name} with an unsupported type, ignored");
+                    eprintln!(
+                        "initconvertd: transient property {name} with an unsupported type, ignored"
+                    );
                     return Ok(out);
                 }
             };

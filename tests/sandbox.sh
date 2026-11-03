@@ -5,27 +5,27 @@
 #   tests/sandbox.sh [WORKDIR]      set up and start everything
 #   tests/sandbox.sh WORKDIR stop   tear it down
 # SANDBOX_JOURNAL=no sets it up as a JOURNAL=no install (per-service s6-log).
-# SANDBOX_FDSTORE=no runs it without the standalone uinitconverter-fdstore (the
+# SANDBOX_FDSTORE=no runs it without the standalone initconvert-fdstore (the
 # daemon then holds the fds itself).
 # SANDBOX_BUS=broker runs the bus with dbus-broker-launch instead of
 # dbus-daemon --systemd-activation (needs dbus-broker and unshare).
 #
 # Needs `cargo build` in this workspace; the standalone tools it uses
-# (uinitconverter-notify, uinitconverter-fdstore, uinitconverter-journal-relay,
-# uinitconverter-linkwatch) are built here.
+# (initconvert-notify, initconvert-fdstore, initconvert-journal-relay,
+# initconvert-linkwatch) are built here.
 set -eu
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 BIN=$TOP/target/debug
-GEN=$BIN/uinitconverter-gen
-DAEMON=$BIN/uinitconverterd
+GEN=$BIN/initconvert-gen
+DAEMON=$BIN/initconvertd
 for p in uinitconverter-notify uinitconverter-fdstore uinitconverter-journal-relay uinitconverter-linkwatch; do
     cargo build --quiet --manifest-path "$TOP/standalone/$p/Cargo.toml"
 done
-NOTIFY=$TOP/standalone/uinitconverter-notify/target/debug/uinitconverter-notify
-FDSTORE=$TOP/standalone/uinitconverter-fdstore/target/debug/uinitconverter-fdstore
-RELAY=$TOP/standalone/uinitconverter-journal-relay/target/debug/uinitconverter-journal-relay
-LINKWATCH=$TOP/standalone/uinitconverter-linkwatch/target/debug/uinitconverter-linkwatch
+NOTIFY=$TOP/standalone/uinitconverter-notify/target/debug/initconvert-notify
+FDSTORE=$TOP/standalone/uinitconverter-fdstore/target/debug/initconvert-fdstore
+RELAY=$TOP/standalone/uinitconverter-journal-relay/target/debug/initconvert-journal-relay
+LINKWATCH=$TOP/standalone/uinitconverter-linkwatch/target/debug/initconvert-linkwatch
 W=${1:-${TMPDIR:-/tmp}/uinitconverter-sandbox}
 # Sockets need short paths (sun_path is 108 bytes).
 R=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sdc-test
@@ -83,8 +83,8 @@ BOOTED_FLAG=
 PRIVATE_SOCKET=$R/private
 BUS_ADDRESS=unix:path=$R/bus
 ALLOW_UIDS=$(id -u)
-RUNNER=$BIN/uinitconverter-runner
-TIMER_RUNNER=$BIN/uinitconverter-timers
+RUNNER=$BIN/initconvert-runner
+TIMER_RUNNER=$BIN/initconvert-timers
 POWEROFF_CMD=touch $R/poweroff-requested
 REBOOT_CMD=touch $R/reboot-requested
 JOURNAL=${SANDBOX_JOURNAL:-yes}
@@ -262,7 +262,7 @@ out.append("sysnet " + " ".join(sorted(os.listdir("/sys/class/net"))))
 out.append("mntns " + os.readlink("/proc/self/ns/mnt"))
 open(sys.argv[1], "w").write("\n".join(out) + "\n")
 PYT
-# Not started: for `uinitconverter-runner confine` (as the system bus's unit).
+# Not started: for `initconvert-runner confine` (as the system bus's unit).
 cat > "$U/confined.service" <<EOF
 [Service]
 ExecStart=/bin/true

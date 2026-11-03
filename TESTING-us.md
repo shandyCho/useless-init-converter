@@ -121,19 +121,19 @@ sandbox. To run it again, recreate the sandbox:
 To test a `JOURNAL=no` install (per-service s6-log instead of journald), set up
 the sandbox with `SANDBOX_JOURNAL=no tests/sandbox.sh ~/sdc`. `check.sh` then
 looks for service output under `~/sdc/logs/` instead of the journal stream, and
-sends native and stream messages through `uinitconverter-journal-relay` (sockets in
+sends native and stream messages through `initconvert-journal-relay` (sockets in
 `$XDG_RUNTIME_DIR/sdc-test/jrelay`, forwarded to a stand-in `/dev/log` that
 writes `devlog.out` next to them).
 
-To check that the core works without the standalone `uinitconverter-fdstore`, run
+To check that the core works without the standalone `initconvert-fdstore`, run
 `sandbox.sh` and `check.sh` with `SANDBOX_FDSTORE=no` in front. The daemon then
 holds the fds itself, so `check.sh` checks that they are gone after the daemon
 restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
 User mode (a user's service manager without systemd --user, in progress):
 `tests/user-sandbox.sh DIR` runs the user manager as `user@` would (as
-`uinitconverter-user-manager`, the `uinitconverter-user` package's link to
-`uinitconverterd`), with `XDG_RUNTIME_DIR` in a sandbox directory: the private socket,
+`initconvert-user-manager`, the `uinitconverter-user` package's link to
+`initconvertd`), with `XDG_RUNTIME_DIR` in a sandbox directory: the private socket,
 `default.target`, `READY=1`, the bus started from `dbus.socket` (dbus-daemon
 here), `systemctl --user`, a GNOME-shaped session and logout, a bus restart
 and the stop on `SIGTERM`; then the later slices' checks: environment and
@@ -199,7 +199,7 @@ pressure, tests udevd's fallback, crashes a process to see its core file kept,
 and runs `init-selinux` with stand-ins for the policy load and s6-linux-init,
 for the hard `RLIMIT_NOFILE` it sets (524288, as systemd gives services) and
 the soft `RLIMIT_CORE` (unlimited). It also checks `PrivateUsers=` through both
-`uinitconverter-runner run` and `confine`: the maps, groups, bounding set, and that
+`initconvert-runner run` and `confine`: the maps, groups, bounding set, and that
 the namespace's capabilities don't reach the host's mounts. No SELinux policy is loaded in there,
 which takes a real boot. Needs `cargo build`, QEMU, `/dev/kvm`, and rsyslog,
 earlyoom and s6 installed:
@@ -254,8 +254,8 @@ provisioned image again.
 a real `user@UID.service` in that VM (after `cargo build`). The VM boots
 systemd; the script installs the debug binaries and the skalibs and s6 RPMs
 (`SKARNET_RPMS=`, default `~/rpmbuild-skarnet/RPMS/x86_64`), adds a user
-`s6test` whose `user@` gets a drop-in for `uinitconverter-user-manager` (a link
-to `uinitconverterd`, as the `uinitconverter-user` package installs it),
+`s6test` whose `user@` gets a drop-in for `initconvert-user-manager` (a link
+to `initconvertd`, as the `uinitconverter-user` package installs it),
 sets `uinitconverter.user_manager=s6` on the kernel command line and boots
 again. It then starts that `user@`, checks readiness, `init.scope` and
 `app.slice`, the user bus and `systemctl --user`, prints the memory (PSS)
@@ -346,7 +346,7 @@ needed to build):
 packages/build-rpms.sh
 for b in standalone/*/build-rpm.sh; do "$b"; done
 sudo dnf install ~/rpmbuild-uinitconverter/rpms/*.rpm ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm
-uinitconverter --version                    # every core tool from the same build
+initconvert --version                    # every core tool from the same build
 ```
 
 (With the packages from a GitHub release instead, download the release's
@@ -359,17 +359,17 @@ Installing the packages changes nothing about booting yet. Preview, then set
 up the boot:
 
 ```sh
-uinitconverter init --dry-run
-sudo uinitconverter init
+initconvert init --dry-run
+sudo initconvert init
 ```
 
 The preview prints every command it would run and ends with `Dry run:
 nothing was changed. To apply this, run:` and the command to apply it
-(`sudo uinitconverter init`, with the same options if you gave any). Nothing is
+(`sudo initconvert init`, with the same options if you gave any). Nothing is
 changed. If a package is missing it stops before that with a `sudo dnf
 install ...` hint.
 
-`uinitconverter init` prints a plan and asks before changing anything. It adds a boot
+`initconvert init` prints a plan and asks before changing anything. It adds a boot
 entry **"Fedora (s6 + uinitconverter)"** and keeps the normal systemd boot as the
 default (once the s6 boot works for you, `--default-s6` makes it the default;
 see the end of this file). The first run makes that entry boot with SELinux
@@ -396,7 +396,7 @@ boot messages instead of the splash screen, then the GDM login screen.
 entry disables plymouth. Type the passphrase there as usual. The root disk is
 unlocked by the initramfs exactly as on a normal boot. Additional encrypted
 volumes that the initramfs does not unlock are not opened under s6;
-`uinitconverter init` warns about them in stage 5.
+`initconvert init` warns about them in stage 5.
 
 **If it never reaches GDM,** see [If the s6 boot fails](#if-the-s6-boot-fails).
 
@@ -407,10 +407,10 @@ After logging in to GNOME, open a terminal and go through this list:
 | s6 is PID 1 | `cat /proc/1/comm` | `s6-svscan` |
 | SELinux domains | `ps -eZ \| grep -E ' (s6-svscan\|chronyd\|gdm\|systemd-logind)$'` | `init_t`, `chronyd_t`, `xdm_t`, `systemd_logind_t` (not `unconfined_service_t`) |
 | SELinux denials | `sudo ausearch -m AVC -ts boot \| audit2allow` | ideally nothing; send the output otherwise |
-| SELinux checks on D-Bus callers | `sudo runcon -r system_r -t insights_core_t -- env systemctl show -p Version`, then `sudo runcon -r system_r -t insights_core_t -- env systemctl daemon-reload`, then `sudo grep -E 'SELinux access check\|avc: +denied' /run/uncaught-logs/current` | neither prints anything: insights_core_t may not write to the terminal (no rule on `user_devpts_t`), so the grep is the result. It shows the AVC's `avc:  denied  { reload } … tclass=system permissive=0` and, on its own line, `uinitconverterd: SELinux access check … perm=reload state=enforcing function=Reload` (the second is refused although run as root, as under systemd); nothing for the first (`status` is granted to that domain) and, from normal use, nothing else (send any other line) |
+| SELinux checks on D-Bus callers | `sudo runcon -r system_r -t insights_core_t -- env systemctl show -p Version`, then `sudo runcon -r system_r -t insights_core_t -- env systemctl daemon-reload`, then `sudo grep -E 'SELinux access check\|avc: +denied' /run/uncaught-logs/current` | neither prints anything: insights_core_t may not write to the terminal (no rule on `user_devpts_t`), so the grep is the result. It shows the AVC's `avc:  denied  { reload } … tclass=system permissive=0` and, on its own line, `initconvertd: SELinux access check … perm=reload state=enforcing function=Reload` (the second is refused although run as root, as under systemd); nothing for the first (`status` is granted to that domain) and, from normal use, nothing else (send any other line) |
 | Dispatcher scripts' output (only with `--journal=no`) | after a reboot, `sudo ausearch -m AVC -ts boot \| grep NetworkManager_dispatcher` | nothing (their writes to the s6-log pipe were denied before) |
 | fwupd | `fwupdmgr get-devices` | a device list (fwupd starts with its syscall filter) |
-| No busy runner | `top -b -n1 -o %CPU \| head -15` | no `uinitconverter` process near 100 % CPU |
+| No busy runner | `top -b -n1 -o %CPU \| head -15` | no `initconvert*` process near 100 % CPU |
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (twice, a few seconds apart) | `up (pid …) N seconds`, with N growing (not restarting) |
 | Shutdown order | after an s6 reboot from GNOME: `grep -E 'org.gnome.Shell@user.service: Consumed\|Activating special unit exit.target' /var/log/uinitconverter/user@1000.service/current \| tail -4` | the shell's `Consumed` line before `Activating special unit exit.target` |
 | `/run/service` labels restored on a running s6 boot | `sudo restorecon -R /run/service` (the restore `fixfiles` does when `selinux-policy-targeted` is updated with a package that has its own SELinux module; `/var/run` is a symlink, so that path doesn't reproduce it); `sudo ls -lZ /run/service/.s6-svscan/control`; `sudo find /run/service/ /run/uinitconverter -type p -context '*:var_run_t:*' -printf '%p\n'`; `sudo systemctl daemon-reload; echo $?` | `control` is `init_var_run_t`; `find` prints nothing; `0`; `sudo ausearch -m AVC -ts recent` shows no `s6` denials |
@@ -423,7 +423,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | Accept=yes TCP (optional) | With s6-networking installed: `sudo systemctl stop sshd.service`, `sudo systemctl start sshd.socket`, `ssh localhost true`, then `systemctl status sshd.socket`, and with an `ssh localhost` session open in another terminal `systemctl list-units 'sshd@*'`; afterwards `sudo systemctl stop sshd.socket` and `sudo systemctl start sshd.service` | `active (listening)` with `Listen: [::]:22 (Stream)`, the login works, `Accepted: 1`; the open session is listed as `sshd@N-...service loaded active running` |
 | Swap (zram) | `swapon --show` and `s6-rc -a list \| grep -x zram` | `/dev/zram0` with priority `100` and the same size as on the systemd boot (`min(ram, 8 GiB)` by default); `zram` is listed |
 | Radio state (rfkill) | Turn Bluetooth off in GNOME Settings, reboot into the s6 entry, then `rfkill` and `s6-rc -a list \| grep -x rfkill` | Bluetooth still `blocked` after the reboot; `rfkill` is listed (the oneshot, not systemd-rfkill) |
-| Reload watchdog | `sudo s6-svstat /run/service/uinitconverter-linkwatch` and `sudo grep -h uinitconverter-linkwatch /run/uncaught-logs/current` | `up (pid …)`; a log line only if a reload was stuck (`… sent its start event`) |
+| Reload watchdog | `sudo s6-svstat /run/service/uinitconverter-linkwatch` and `sudo grep -h initconvert-linkwatch /run/uncaught-logs/current` | `up (pid …)`; a log line only if a reload was stuck (`… sent its start event`) |
 | Reload watchdog unblocks a wait | `sudo tests/linkwatch-check.sh` (about 30 s; a throwaway supervisor in /run/uinitconverter/lwtest, removed afterwards) | five `ok:` lines and exit 0: a waiter named s6-rc-update gets the missed start event after about 10 s, a plain s6-ftrig-wait times out, linkwatch logs the send, no denials |
 | Restart on package update | `systemctl show -p MainPID chronyd`, then `sudo dnf reinstall -y chrony`, then the first command again | a different MainPID (the update marked chronyd needs-restart and `systemctl enqueue-marked` restarted it) |
 | User managers on package update | `sudo systemctl --user -M $USER@ is-system-running`, then `sudo /usr/lib/systemd/systemd-update-helper user-reload-restart; echo $?` | `running` or `degraded` (reached through `systemd-run --pipe`), then `0` |
@@ -438,7 +438,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | s6 set | `s6 set status gdm.service sshd.service dbus` | `gdm.service/active`, `sshd.service/usable` (unless you enabled sshd), `dbus/always` |
 | s6 set decides what boots | `sudo s6 set disable -p chronyd.service`, `sudo systemctl daemon-reload`, `s6 set status chronyd.service`, reboot into s6, `systemctl is-active chronyd.service`; then `sudo s6 set enable chronyd.service` and `sudo systemctl daemon-reload` | `chronyd.service/usable` and `chronyd.service.log/usable` after the reload (`s6 set status chronyd.service chronyd.service.log`), `systemctl is-enabled chronyd.service` says `disabled`; `inactive` after the reboot; after the enable and reload both `active` and `enabled` |
 | `s6 live install` from a shell | `sudo s6 set commit --no-snapshot && sudo s6 live install --no-snapshot`, then `ls -Z /run/service \| awk '{print $1}' \| sort \| uniq -c` and `sudo ausearch -m AVC -ts recent` | it returns; the links are `tmpfs_t` or `init_var_run_t`, no `user_tmp_t`; no denials |
-| Previous shutdown | after an s6 power-off and the next s6 boot: `sudo ls -l /var/log/uinitconverter/last-shutdown-*.log; sudo grep -ci denied /var/log/uinitconverter/last-shutdown-*.log` | both files from the power-off time, and `0` denials (send the files otherwise); the power-off took a few seconds, not 25 s or more; the console log is not empty and has no `unable to rename`, no `Failed to activate service ... timed out` and no `uinitconverterd: stopping ... took`; the kernel log has no `services still not down after 180 s` |
+| Previous shutdown | after an s6 power-off and the next s6 boot: `sudo ls -l /var/log/uinitconverter/last-shutdown-*.log; sudo grep -ci denied /var/log/uinitconverter/last-shutdown-*.log` | both files from the power-off time, and `0` denials (send the files otherwise); the power-off took a few seconds, not 25 s or more; the console log is not empty and has no `unable to rename`, no `Failed to activate service ... timed out` and no `initconvertd: stopping ... took`; the kernel log has no `services still not down after 180 s` |
 | ExecStop= of longruns | `printf '[Service]\nExecStart=/bin/sleep infinity\nExecStop=/bin/sh -c "echo stop $$MAINPID >> /var/tmp/sdc-stop.log"\n' \| sudo tee /etc/systemd/system/sdc-stoptest.service; sudo systemctl daemon-reload; sudo systemctl start sdc-stoptest; sleep 2; s6 live status sdc-stoptest.service.stop; sudo s6 live stop sdc-stoptest.service; cat /var/tmp/sdc-stop.log`; then `sudo systemctl start sdc-stoptest`, power off, boot s6 again, `cat /var/tmp/sdc-stop.log`; afterwards `sudo rm /etc/systemd/system/sdc-stoptest.service /var/tmp/sdc-stop.log; sudo systemctl daemon-reload` | `sdc-stoptest.service.stop` is up; one `stop PID` line after `s6 live stop` and a second one from the power-off; the Previous shutdown row still holds |
 | Bus and userdb labels | `ls -dZ /run/dbus/system_bus_socket /run/systemd/userdb` | `system_dbusd_var_run_t` and `systemd_userdbd_runtime_t` |
 | Catch-all fifo label | `ls -Z /run/service/s6-svscan-log/fifo` and `sudo ausearch -m AVC -ts boot \| grep s6-svscan-log/fifo` | `uinitconverter_log_fifo_t`, no denials on that fifo (as `initctl_t` the services' stderr became /dev/null) |
@@ -557,7 +557,7 @@ unprivileged.
    s6 boot are then visible with `journalctl -b -1`, if journald was running.
    uinitconverter's own messages (the daemon, and the runner's errors such as a
    failed PAM session or exec) are there too:
-   `journalctl -b -1 -t uinitconverterd -t uinitconverter`.
+   `journalctl -b -1 -t initconvertd -t uinitconverter`.
 4. Run `sudo tests/collect-diagnostics.sh` from whichever boot you can reach
    and send the archive. If you can only use the rescue console, send
    `/run/uncaught-logs/current`.
@@ -572,7 +572,7 @@ git pull
 packages/build-rpms.sh
 for b in standalone/*/build-rpm.sh; do "$b"; done
 sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm
-sudo uinitconverter init --yes
+sudo initconvert init --yes
 ```
 
 (From a GitHub release: download the next release's files, `sudo dnf upgrade ./*.rpm`, then `sudo uinitconverter init --yes`.)
@@ -584,14 +584,14 @@ uinitconverter as new, as described in "Moving from sdcompat" in
 clone still works after `git pull` (GitHub redirects the old repository
 name); its directory keeps the old name.
 
-Running `uinitconverter init` again is safe. It keeps your `/etc/uinitconverter`
+Running `initconvert init` again is safe. It keeps your `/etc/uinitconverter`
 configuration and the choices of the last run, regenerates the database,
 the s6-linux-init tree and the boot entry, and backs up what it replaces.
 The s6 services in `/etc/uinitconverter/s6` belong to the package: dnf updates
 the ones you did not edit and leaves an edited file alone, with the new
 version beside it as `FILE.rpmnew` to merge yourself. Run on the s6 boot,
-init restarts uinitconverterd so the new binary takes over without a reboot
-(uinitconverter-fdstore and journal-relay keep the old one until the next boot).
+init restarts initconvertd so the new binary takes over without a reboot
+(initconvert-fdstore and journal-relay keep the old one until the next boot).
 It also reloads the SELinux policy module; check that it is loaded:
 
 ```sh
@@ -610,7 +610,7 @@ Once the s6 boot works for you (the checks above pass, ideally enforcing),
 make its entry the default (init keeps your other choices):
 
 ```sh
-sudo uinitconverter init --selinux=enforcing --default-s6
+sudo initconvert init --selinux=enforcing --default-s6
 ```
 
 Check:
@@ -624,7 +624,7 @@ Check:
 
 To reach the systemd entry once, hold Shift or press Esc while GRUB starts
 and pick it. To make systemd the default again:
-`sudo uinitconverter init --default-systemd`.
+`sudo initconvert init --default-systemd`.
 
 ## Booting with no systemd at all
 
@@ -653,7 +653,7 @@ boots end at a stand-in init: this doesn't test a full s6 boot on such a root.
 Then on the machine:
 
 ```sh
-sudo uinitconverter init --boot-only-s6=yes
+sudo initconvert init --boot-only-s6=yes
 ```
 
 | What | Command | Expected |
@@ -672,14 +672,14 @@ If the prompt never comes or the disk is not found, the rescue shell is on
 the console: `dmesg`, `ls /dev`, `cat /proc/cmdline` show what is missing
 (send them). To boot once with Fedora's initramfs, press `e` on the s6 entry
 and change `initramfs-<kernel>-s6.img` to `initramfs-<kernel>.img`. To go
-back for good: `sudo uinitconverter init --boot-only-s6=no`.
+back for good: `sudo initconvert init --boot-only-s6=no`.
 
 ## Removing it
 
 Boot the normal Fedora entry, then:
 
 ```sh
-sudo uinitconverter init --uninstall
+sudo initconvert init --uninstall
 sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd uinitconverter-user \
     uinitconverter-fdstore uinitconverter-notify uinitconverter-journal-relay uinitconverter-linkwatch
 sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd \

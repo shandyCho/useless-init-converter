@@ -1,5 +1,5 @@
 #!/bin/bash
-# The user manager (`uinitconverter-user-manager`, a link to uinitconverterd as
+# The user manager (`initconvert-user-manager`, a link to initconvertd as
 # the uinitconverter-user package installs it; work_history parts
 # 136-141), unprivileged: the launcher as user@UID.service runs it, with
 # XDG_RUNTIME_DIR in a sandbox directory. It makes its own s6-svscan and
@@ -64,8 +64,8 @@ trap cleanup EXIT
 cat >"$W/system.conf" <<EOF
 USER_MANAGER=s6
 USER_FALLBACK_ON=fbdown.target fbsess@*.target
-RUNNER=$BIN/uinitconverter-runner
-TIMER_RUNNER=$BIN/uinitconverter-timers
+RUNNER=$BIN/initconvert-runner
+TIMER_RUNNER=$BIN/initconvert-timers
 JOURNAL=no
 EOF
 
@@ -458,14 +458,14 @@ open(sys.argv[2], "a").write(s.recv(4096).decode() + "\n")
 echo $! >>"$W/pids"
 sleep 0.3
 # start_mgr LOG: the launcher, as user@UID.service runs it: by the name the
-# uinitconverter-user package gives it (a link to uinitconverterd).
-ln -sf "$BIN/uinitconverterd" "$W/uinitconverter-user-manager"
+# uinitconverter-user package gives it (a link to initconvertd).
+ln -sf "$BIN/initconvertd" "$W/initconvert-user-manager"
 start_mgr() {
     env HOME="$W/home" XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" \
         NOTIFY_SOCKET="$R/notify" UINITCONVERTER_USER_UNIT_PATH="$U:$R/systemd/generator.late" UINITCONVERTER_USER_CGROUP=no \
         UINITCONVERTER_USER_GENERATOR_PATH="$W/generators" UINITCONVERTER_USER_UNIT_GENERATOR_PATH="$W/unitgens" \
         UINITCONVERTER_SYSTEMD_USER="$W/fake-systemd" UINITCONVERTER_USER_FALLBACK_DIR="$W/fb" \
-        "$W/uinitconverter-user-manager" --config "$W/system.conf" >"$1" 2>&1 &
+        "$W/initconvert-user-manager" --config "$W/system.conf" >"$1" 2>&1 &
     MGR_PID=$!
     echo $MGR_PID >>"$W/pids"
 }

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the s6 initramfs (uinitconverter init --boot-only-s6=yes): s6-svscan is its
+# Build the s6 initramfs (initconvert init --boot-only-s6=yes): s6-svscan is its
 # PID 1, mdevd loads the drivers, and a bash script opens LUKS, if any, and mounts
 # the root (see root/ beside this script, installed as /usr/share/uinitconverter/initramfs).
 # No systemd and no dracut run at boot; dracut-install only copies binaries

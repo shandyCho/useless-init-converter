@@ -2,7 +2,12 @@
 name = "uinitconverter-runner"
 version.workspace = true
 edition.workspace = true
-description = "Run one systemd service under s6 with systemd's execution semantics (uinitconverter-runner)"
+description = "Run one systemd service under s6 with systemd's execution semantics (initconvert-runner)"
+
+# The command is initconvert-runner; the crate and the package keep their names.
+[[bin]]
+name = "initconvert-runner"
+path = "src/main.rs"
 
 [dependencies]
 uinitconverter-version.workspace = true

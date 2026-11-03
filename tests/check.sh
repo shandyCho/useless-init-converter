@@ -113,7 +113,7 @@ expect_state notifier.service active/running
 expect_eq "notify STATUS= relayed" "$(prop notifier.service Service StatusText)" "all good"
 # The notify helper re-executes the runner, so it doesn't keep the whole
 # runner's memory, and keeps only its socket (not the service's fds).
-helper=$(pgrep -u "$(id -u)" -f 'uinitconverter-runner notify-helper .*--unit notifier\.service$' | head -1)
+helper=$(pgrep -u "$(id -u)" -f 'initconvert-runner notify-helper .*--unit notifier\.service$' | head -1)
 [ -n "$helper" ] && ok "notify helper re-executed" || bad "no notify-helper process for notifier.service"
 anon=$(awk '/^RssAnon:/ {print $2}' "/proc/$helper/status" 2>/dev/null)
 [ "${anon:-99999}" -lt 1024 ] && ok "notify helper small (RssAnon ${anon} kB)" || bad "notify helper RssAnon ${anon:-?} kB"
@@ -124,7 +124,7 @@ expect_eq "ExecStartPost= ran with \$MAINPID" "$(cat "$R/notifier-post.out" 2>/d
 # The notify helper must block in poll() after READY=1, not spin.
 ticks() {
     t=0
-    for p in $(pgrep -u "$(id -u)" -f 'uinitconverter-runner notify-helper .*--unit notifier\.service$'); do
+    for p in $(pgrep -u "$(id -u)" -f 'initconvert-runner notify-helper .*--unit notifier\.service$'); do
         t=$((t + $(awk '{print $14 + $15}' "/proc/$p/stat" 2>/dev/null || echo 0)))
     done
     echo "$t"
@@ -138,7 +138,7 @@ expect_eq "UnitFileState enabled" "$(prop hello.service Unit UnitFileState)" "en
 expect_eq "preset disabled" "$(prop failing.service Unit UnitFilePreset)" "disabled"
 
 # sock.socket is enabled, sock.service is not: listening, not started.
-# Without uinitconverter-fdstore nothing holds the sockets before the
+# Without initconvert-fdstore nothing holds the sockets before the
 # daemon is up, so the runner starts it at once.
 if [ -e "$W/fdstore.log" ]; then
     expect_state sock.service inactive/dead
@@ -193,8 +193,8 @@ expect_eq "'+' command is not filtered" "$(cat "$R/scf-plus.out" 2>/dev/null)" "
 expect_state scf-allow.service inactive/dead
 expect_eq "fwupd's allow list: mlock fails with EPERM" "$(cat "$R/scf-allow.out" 2>/dev/null)" "errno 1"
 
-section "uinitconverter-runner confine"
-RN=$(dirname "$0")/../target/debug/uinitconverter-runner
+section "initconvert-runner confine"
+RN=$(dirname "$0")/../target/debug/initconvert-runner
 CF=$W/uinitconverter.conf
 out=$(CONFINE_VAR=kept "$RN" --config "$CF" confine confined.service -- sh -c \
     'echo "$CONFINE_VAR $(ulimit -n) $(sed -n "s/^Seccomp_filters:\t//p" /proc/self/status)"; echo fd >&9' 9>"$R/confine.fd")
@@ -348,10 +348,10 @@ out=$($B call $MGR EnableUnitFiles asbb 1 hello.service false false)
 case "$out" in *symlink*) ok "enable created links" ;; *) bad "enable: $out" ;; esac
 call Reload && ok "daemon-reload"
 expect_state hello.service active/running
-# With a live state, `uinitconverter-gen reload` goes through uinitconverterd (from a
+# With a live state, `initconvert-gen reload` goes through initconvertd (from a
 # login shell s6-rc-update would label the scan directory for that shell).
-out=$("$(dirname "$0")/../target/debug/uinitconverter-gen" --config "$W/uinitconverter.conf" reload 2>&1)
-case "$out" in "reloaded by uinitconverterd"*) ok "uinitconverter-gen reload through uinitconverterd" ;; *) bad "uinitconverter-gen reload: $out" ;; esac
+out=$("$(dirname "$0")/../target/debug/initconvert-gen" --config "$W/uinitconverter.conf" reload 2>&1)
+case "$out" in "reloaded by initconvertd"*) ok "initconvert-gen reload through initconvertd" ;; *) bad "initconvert-gen reload: $out" ;; esac
 expect_state hello.service active/running
 
 section "timers"
@@ -816,7 +816,7 @@ restart_daemon() {
     sleep 1
 }
 grep -v '^ALLOW_UIDS=' "$W/uinitconverter.conf" > "$W/unpriv.conf"
-DAEMON=$(dirname "$(sed -n 's/^RUNNER=//p' "$W/uinitconverter.conf")")/uinitconverterd
+DAEMON=$(dirname "$(sed -n 's/^RUNNER=//p' "$W/uinitconverter.conf")")/initconvertd
 # On-demand instances outlive the daemon: a longrun (like user@UID) with the
 # oneshot it is bound to, and a oneshot alone (like systemd-backlight@).
 call StartUnit ss inst@b.service replace
@@ -875,7 +875,7 @@ restart_daemon "$W/uinitconverter.conf"
 # Stopping the oneshot stops the longrun bound to it: the daemon knows both.
 call StopUnit ss prep@b.service replace
 expect_state inst@b.service inactive/dead
-# With uinitconverter-fdstore the store is its own process: what units stored
+# With initconvert-fdstore the store is its own process: what units stored
 # survived both daemon swaps. Without it (SANDBOX_FDSTORE=no) the daemon
 # held them, so they went with it and the socket was bound anew.
 n=$(lines "$R/fdkeep.out")
@@ -887,9 +887,9 @@ if [ -e "$W/fdstore.log" ]; then
     expect_eq "FDSTORE=1 fd kept across daemon restarts" "$(last_new "$R/fdkeep.out" "$n")" "start names=kept"
     expect_eq "listening socket kept across daemon restarts" "$(stat -c %i "$R/test.sock")" "$i1"
 else
-    expect_eq "FDSTORE=1 fd gone with the daemon (no uinitconverter-fdstore)" "$(last_new "$R/fdkeep.out" "$n")" "start names="
-    [ "$(stat -c %i "$R/test.sock")" != "$i1" ] && ok "listening socket bound anew (no uinitconverter-fdstore)" \
-        || bad "listening socket kept without uinitconverter-fdstore"
+    expect_eq "FDSTORE=1 fd gone with the daemon (no initconvert-fdstore)" "$(last_new "$R/fdkeep.out" "$n")" "start names="
+    [ "$(stat -c %i "$R/test.sock")" != "$i1" ] && ok "listening socket bound anew (no initconvert-fdstore)" \
+        || bad "listening socket kept without initconvert-fdstore"
 fi
 expect_state prep@b.service inactive/dead
 [ ! -e "$R/run/dyn/inst@b.service" ] && ok "inst@b's service directory removed" || bad "inst@b's service directory left"
@@ -923,7 +923,7 @@ time.sleep(0.3)
 fi
 
 section "shutdown stops on-demand oneshots"
-# As rc.shutdown: the marker, then s6-rc takes uinitconverterd down (SIGTERM).
+# As rc.shutdown: the marker, then s6-rc takes initconvertd down (SIGTERM).
 : > "$R/run/shutting-down"
 # Starts are refused at once: rc.shutdown holds the s6-rc lock, and a D-Bus
 # caller would otherwise wait for the bus's activation timeout.
@@ -985,7 +985,7 @@ section "s6-rc repository"
 # The translated units are a store in an s6-rc repository; the set
 # "current" decides what boots. systemd's enable state only gives a new
 # service its first prescription; after that the set decides.
-GEN="$(dirname "$0")/../target/debug/uinitconverter-gen"
+GEN="$(dirname "$0")/../target/debug/initconvert-gen"
 rx() { s6-rc-set-status -r "$W/repo" current "$1" 2>/dev/null | cut -d/ -f2; }
 in_default() { s6-rc-db -l "$R/live" contents default 2>/dev/null | grep -qx "$1"; }
 expect_eq "enabled unit starts active in the set" "$(rx hello.service)" "active"
@@ -1084,7 +1084,7 @@ in_default stopper.service.stop && ok "and in the default bundle" || bad "stoppe
 section "linkwatch"
 # A supervisor that started before anyone listened: its "s" went to nobody.
 # A waiter named s6-rc-update (s6-ftrig-wait under that name) waits on it as
-# s6_supervise_link_names() would; the sandbox's uinitconverter-linkwatch
+# s6_supervise_link_names() would; the sandbox's initconvert-linkwatch
 # (--after 3) sends the missed event. Under its own name it is left alone.
 mkdir -p "$R/lw/svc" "$W/lw-bin"
 printf '#!/bin/sh\nexec sleep 1000\n' > "$R/lw/svc/run"
@@ -1211,7 +1211,7 @@ wait_file() {
 me=$(id -u)
 expect_state echo.socket active/listening
 expect_state rawfd.socket active/listening
-"$(dirname "$0")/../target/debug/uinitconverter-gen" --config "$W/uinitconverter.conf" plan >"$W/accept-plan.out" 2>&1
+"$(dirname "$0")/../target/debug/initconvert-gen" --config "$W/uinitconverter.conf" plan >"$W/accept-plan.out" 2>&1
 r=$(cli "$R/echo.sock" hi)
 case $r in
     "echo:hi fds=1 names=connection fd3=True pidok=True inst=0-"*"-$me") ok "connection on stdin/stdout and fd 3, LISTEN_*, instance name ($r)" ;;

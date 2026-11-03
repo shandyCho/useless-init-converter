@@ -80,8 +80,8 @@ find "$WORK"/core/rpms "$WORK"/standalone/rpms -name '*.rpm' \
     echo '```sh'
     echo "sha256sum -c SHA256SUMS"
     echo "sudo dnf install ./*.rpm        # an update: sudo dnf upgrade ./*.rpm"
-    echo "uinitconverter init --dry-run"
-    echo "sudo uinitconverter init"
+    echo "initconvert init --dry-run"
+    echo "sudo initconvert init"
     echo '```'
     echo
     echo "With the GitHub CLI: gh release download $TAG -R $GITHUB_REPO"

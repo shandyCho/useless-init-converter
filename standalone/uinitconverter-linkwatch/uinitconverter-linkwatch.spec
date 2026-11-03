@@ -31,11 +31,11 @@ cargo build --release --offline
 cargo test --release --offline
 
 %install
-install -Dm0755 target/release/uinitconverter-linkwatch %{buildroot}%{_libexecdir}/uinitconverter/uinitconverter-linkwatch
+install -Dm0755 target/release/initconvert-linkwatch %{buildroot}%{_libexecdir}/uinitconverter/initconvert-linkwatch
 
 %files
 %dir %{_libexecdir}/uinitconverter
-%{_libexecdir}/uinitconverter/uinitconverter-linkwatch
+%{_libexecdir}/uinitconverter/initconvert-linkwatch
 
 %changelog
 * Mon Oct 26 2026 uinitconverter developers - 0.1.0-1

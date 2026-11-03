@@ -2,7 +2,7 @@
 # All of them build from the same tarball, which packages/build-rpms.sh makes:
 #   Cargo.toml Cargo.lock crates dist vendor .cargo  under uinitconverter-VERSION/
 # with .cargo/config.toml pointing [source.crates-io] at vendor/.
-# This one holds the uinitconverter command (with `uinitconverter init`, the boot
+# This one holds the initconvert command (with `initconvert init`, the boot
 # setup) and the files it sets up from, and pulls in the tools as their own
 # packages.
 Name:           uinitconverter
@@ -24,7 +24,7 @@ Requires:       s6-rc
 Requires:       execline
 Requires:       dbus-daemon
 Requires:       util-linux
-# uinitconverter init: SELinux file labels and the boot entry.
+# initconvert init: SELinux file labels and the boot entry.
 Requires:       policycoreutils-python-utils
 Requires:       grubby
 # The tools, each its own RPM from this source.
@@ -34,16 +34,16 @@ Requires:       uinitconverter-timers = %{version}-%{release}
 Requires:       uinitconverterd = %{version}-%{release}
 Requires(post): policycoreutils
 Requires(postun): policycoreutils
-# JOURNAL=no: the syslog daemon of the s6 boot (SYSLOG=, uinitconverter init --syslog=).
+# JOURNAL=no: the syslog daemon of the s6 boot (SYSLOG=, initconvert init --syslog=).
 Recommends:     (rsyslog or syslog-ng)
 Recommends:     earlyoom
-# The s6 command; uinitconverter init writes /etc/s6.conf for it.
+# The s6 command; initconvert init writes /etc/s6.conf for it.
 Recommends:     s6-frontend
-# The s6 initramfs (uinitconverter init --boot-only-s6=yes) loads drivers with it.
+# The s6 initramfs (initconvert init --boot-only-s6=yes) loads drivers with it.
 Recommends:     mdevd
 # Separate projects (standalone/), each its own package; uinitconverter works
 # without them. uinitconverter-journal-relay is needed for JOURNAL=no
-# (uinitconverter init --journal=no).
+# (initconvert init --journal=no).
 Recommends:     uinitconverter-fdstore
 Recommends:     uinitconverter-notify
 Recommends:     uinitconverter-linkwatch
@@ -54,7 +54,7 @@ Suggests:       uinitconverter-user = %{version}-%{release}
 %description
 Runs Fedora's systemd units with s6 as the init system. This package holds
 the uinitconverter command, which passes each subcommand to the tool that handles
-it, and the boot setup: `sudo uinitconverter init` adds a GRUB entry that boots
+it, and the boot setup: `sudo initconvert init` adds a GRUB entry that boots
 with s6, from this package's configuration, hand-written s6-rc services,
 s6-linux-init skeleton, SELinux policy module and kernel-install plugin. The tools come in their own packages: uinitconverter-gen, uinitconverter-runner,
 uinitconverter-timers and uinitconverterd.
@@ -73,11 +73,11 @@ export UINITCONVERTER_BUILD=%{version}-%{release}
 cargo test --release --offline -p uinitconverter -p uinitconverter-version
 
 %install
-install -Dm0755 target/release/uinitconverter %{buildroot}%{_libexecdir}/uinitconverter/uinitconverter
+install -Dm0755 target/release/initconvert %{buildroot}%{_libexecdir}/uinitconverter/initconvert
 install -Dm0755 dist/early %{buildroot}%{_libexecdir}/uinitconverter/early
 install -Dm0755 dist/initramfs/mkinitramfs %{buildroot}%{_libexecdir}/uinitconverter/mkinitramfs
 install -d %{buildroot}%{_bindir}
-ln -s ../libexec/uinitconverter/uinitconverter %{buildroot}%{_bindir}/uinitconverter
+ln -s ../libexec/uinitconverter/initconvert %{buildroot}%{_bindir}/initconvert
 install -Dm0644 dist/uinitconverter.conf %{buildroot}%{_sysconfdir}/uinitconverter/uinitconverter.conf
 install -d %{buildroot}%{_sysconfdir}/uinitconverter
 cp -a dist/s6 %{buildroot}%{_sysconfdir}/uinitconverter/s6
@@ -111,7 +111,7 @@ if [ -x /usr/sbin/semodule ]; then
 fi
 
 %posttrans
-# The s6 initramfs (uinitconverter init --boot-only-s6=yes) holds this package's
+# The s6 initramfs (initconvert init --boot-only-s6=yes) holds this package's
 # initramfs scripts: rebuild the images there are, so an update reaches the
 # next boot and not only the next kernel. The plugin falls back to Fedora's
 # image if a build fails.
@@ -135,10 +135,10 @@ if [ "$1" -eq 0 ] && [ -x /usr/sbin/semodule ]; then
 fi
 
 %files
-%{_bindir}/uinitconverter
+%{_bindir}/initconvert
 %{_prefix}/lib/kernel/install.d/90-uinitconverter.install
 %dir %{_libexecdir}/uinitconverter
-%{_libexecdir}/uinitconverter/uinitconverter
+%{_libexecdir}/uinitconverter/initconvert
 %{_libexecdir}/uinitconverter/early
 %{_libexecdir}/uinitconverter/mkinitramfs
 %{_sbindir}/init-selinux

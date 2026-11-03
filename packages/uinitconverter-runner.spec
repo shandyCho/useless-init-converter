@@ -17,14 +17,14 @@ BuildRequires:  cargo
 BuildRequires:  rust
 Requires:       s6
 Requires:       shadow-utils
-# OnFailure= and OnSuccess= units are started through uinitconverterd.
+# OnFailure= and OnSuccess= units are started through initconvertd.
 Recommends:     uinitconverterd = %{version}-%{release}
 # s6-tcpserverd for Accept=yes TCP sockets; without it they are not generated.
 Recommends:     s6-networking
 
 %description
-Started by the s6 run and finish scripts uinitconverter-gen writes, and by
-uinitconverterd: sets up the sandbox, credentials, cgroup, seccomp filter, sockets
+Started by the s6 run and finish scripts initconvert-gen writes, and by
+initconvertd: sets up the sandbox, credentials, cgroup, seccomp filter, sockets
 and environment a unit asks for, then executes its commands.
 
 %prep
@@ -41,11 +41,11 @@ export UINITCONVERTER_BUILD=%{version}-%{release}
 cargo test --release --offline -p uinitconverter-runner -p uinitconverter-base -p uinitconverter-client -p uinitconverter-exec -p uinitconverter-install -p uinitconverter-version
 
 %install
-install -Dm0755 target/release/uinitconverter-runner %{buildroot}%{_libexecdir}/uinitconverter/uinitconverter-runner
+install -Dm0755 target/release/initconvert-runner %{buildroot}%{_libexecdir}/uinitconverter/initconvert-runner
 
 %files
 %dir %{_libexecdir}/uinitconverter
-%{_libexecdir}/uinitconverter/uinitconverter-runner
+%{_libexecdir}/uinitconverter/initconvert-runner
 
 %changelog
 * Mon Nov 02 2026 uinitconverter developers

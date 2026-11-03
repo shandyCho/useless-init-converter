@@ -76,7 +76,7 @@ pub struct Runner {
     /// What `deadline` limits, for the log: "start", or "stop" for ExecStop=.
     deadline_what: std::cell::Cell<&'static str>,
     timed_out: std::cell::Cell<bool>,
-    /// `run --on-demand` (uinitconverter-gen): bind the sockets and wait for
+    /// `run --on-demand` (initconvert-gen): bind the sockets and wait for
     /// activity before the first start, as systemd's socket activation.
     pub on_demand: bool,
     /// `connection` (Accept=yes): the client's socket, and whether the
@@ -336,7 +336,7 @@ impl Runner {
         }
         // The s6 user manager is the uinitconverter-user package: without
         // it, user@ keeps systemd --user.
-        let manager = crate::config::tool_path("uinitconverter-user-manager");
+        let manager = crate::config::tool_path("initconvert-user-manager");
         if !manager.exists() {
             log(
                 self.id(),
@@ -1062,7 +1062,7 @@ impl Runner {
         }
     }
 
-    /// `down` of the longrun's UNIT.stop oneshot (uinitconverter-gen), which s6-rc
+    /// `down` of the longrun's UNIT.stop oneshot (initconvert-gen), which s6-rc
     /// takes down before the longrun: ExecStop= with $MAINPID, as systemd
     /// runs it before the KillSignal=, if the service runs. Skipped, as
     /// systemd's stop of an inactive unit, when it was not started or waits

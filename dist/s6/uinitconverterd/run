@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /usr/libexec/uinitconverter/uinitconverterd daemon --ready-fd 3
+exec /usr/libexec/uinitconverter/initconvertd daemon --ready-fd 3

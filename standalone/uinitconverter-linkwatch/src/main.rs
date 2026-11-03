@@ -1,4 +1,4 @@
-//! uinitconverter-linkwatch: unblocks s6-rc-update and s6-svlink when they wait
+//! initconvert-linkwatch: unblocks s6-rc-update and s6-svlink when they wait
 //! for a supervisor's start event that came before they listened.
 //!
 //! s6_supervise_link_names() (s6 2.15) first notes which service
@@ -32,7 +32,7 @@ use rustix::fs::OFlags;
 use rustix::process::{fcntl_getlk, Flock, FlockType};
 
 const USAGE: &str = "\
-usage: uinitconverter-linkwatch [--after SECONDS] [--interval SECONDS] [--under DIR] [--once]
+usage: initconvert-linkwatch [--after SECONDS] [--interval SECONDS] [--under DIR] [--once]
 
   --after SECONDS     how long a wait lasts before it is unblocked (default 10)
   --interval SECONDS  how often to look (default 2)
@@ -44,7 +44,7 @@ usage: uinitconverter-linkwatch [--after SECONDS] [--interval SECONDS] [--under 
 const WAITERS: [&str; 2] = ["s6-rc-update", "s6-svlink"];
 
 fn die(msg: &str) -> ! {
-    eprintln!("uinitconverter-linkwatch: {msg}");
+    eprintln!("initconvert-linkwatch: {msg}");
     exit(1)
 }
 
@@ -190,12 +190,12 @@ impl Watch {
                 match send_event(&fd_link, &fifo, self.uid) {
                     Ok(()) => {
                         eprintln!(
-                            "uinitconverter-linkwatch: {parent} (pid {ppid}) waited {waited:.0} s for {}, whose supervisor runs: sent its start event",
+                            "initconvert-linkwatch: {parent} (pid {ppid}) waited {waited:.0} s for {}, whose supervisor runs: sent its start event",
                             svc.display()
                         );
                         done.push(fifo);
                     }
-                    Err(err) => eprintln!("uinitconverter-linkwatch: {}: {err}", fifo.display()),
+                    Err(err) => eprintln!("initconvert-linkwatch: {}: {err}", fifo.display()),
                 }
             }
         }

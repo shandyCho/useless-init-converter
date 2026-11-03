@@ -1,5 +1,5 @@
 #!/bin/sh
-# The system bus. BUS= in uinitconverter.conf (uinitconverter init --bus=)
+# The system bus. BUS= in uinitconverter.conf (initconvert init --bus=)
 # picks it, uinitconverter.bus=daemon|broker on the kernel command line
 # overrides that for one boot.
 #  - daemon (default): the reference dbus-daemon; --systemd-activation makes
@@ -51,7 +51,7 @@ if [ "$bus" = broker ]; then
         # it (cgroup, LimitNOFILE=, ProtectSystem=, PrivateTmp=, PrivateDevices=).
         # If that fails, this exits and the tries above lead to dbus-daemon.
         echo -900 >/proc/self/oom_score_adj
-        exec /usr/libexec/uinitconverter/uinitconverter-runner confine dbus-broker.service -- \
+        exec /usr/libexec/uinitconverter/initconvert-runner confine dbus-broker.service -- \
             s6-ipcserver-socketbinder -a 0666 /run/dbus/system_bus_socket sh -c '
             echo >&3
             export LISTEN_FDS=1 LISTEN_PID=$$

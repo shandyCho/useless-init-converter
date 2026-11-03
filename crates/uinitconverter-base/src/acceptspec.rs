@@ -1,7 +1,7 @@
 //! What an Accept=yes .socket unit says, and what uinitconverter supports of
 //! it: one ListenStream=, on a unix path (served by s6-ipcserverd) or an IP
 //! port (s6-tcpserverd, from s6-networking), with one instance of the
-//! socket's template service per connection (uinitconverter-runner `accept`
+//! socket's template service per connection (initconvert-runner `accept`
 //! and `connection`). The generator, the runner and the daemon share these
 //! rules and state names.
 

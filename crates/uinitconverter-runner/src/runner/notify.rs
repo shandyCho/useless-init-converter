@@ -131,13 +131,13 @@ impl NotifyHelper {
 
     /// exec() the runner as `notify-helper`; returns only on failure.
     pub(super) fn exec(&self) {
-        // The installed path, so ps shows uinitconverter-runner; after an
+        // The installed path, so ps shows initconvert-runner; after an
         // update replaced it, /proc/self/exe still is this binary.
         let exe = std::env::current_exe()
             .ok()
             .filter(|p| !p.to_string_lossy().ends_with(" (deleted)"))
             .unwrap_or_else(|| PathBuf::from("/proc/self/exe"));
-        let mut argv: Vec<CString> = vec![cstr("uinitconverter-runner")];
+        let mut argv: Vec<CString> = vec![cstr("initconvert-runner")];
         argv.extend(self.to_args().iter().map(|a| cstr(a)));
         let mut ptrs: Vec<*const libc::c_char> = argv.iter().map(|a| a.as_ptr()).collect();
         ptrs.push(std::ptr::null());
@@ -316,14 +316,14 @@ impl NotifyHelper {
     }
 }
 
-/// `uinitconverter-runner notify-helper ...` (started by `run`, see
+/// `initconvert-runner notify-helper ...` (started by `run`, see
 /// NotifyHelper). Only the fds it was given stay open: the runner's
 /// LISTEN_FDS are the service's.
 pub fn notify_helper_main(args: &[String]) -> i32 {
     let h = match NotifyHelper::from_args(args) {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("uinitconverter-runner notify-helper: {e}");
+            eprintln!("initconvert-runner notify-helper: {e}");
             return 2;
         }
     };

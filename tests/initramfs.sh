@@ -1,5 +1,5 @@
 #!/bin/bash
-# Boot the s6 initramfs (dist/initramfs, uinitconverter init --boot-only-s6=yes) in
+# Boot the s6 initramfs (dist/initramfs, initconvert init --boot-only-s6=yes) in
 # QEMU, unprivileged: a LUKS2 disk with a btrfs root in subvol=root, opened
 # with a passphrase typed on the serial console; then roots with no encryption
 # (ext4, xfs and btrfs on partitions), also from an image without cryptsetup.

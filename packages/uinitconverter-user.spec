@@ -15,7 +15,7 @@ Source0:        uinitconverter-%{version}.tar.gz
 # A link and a tmpfiles.d file: nothing is compiled here.
 BuildArch:      noarch
 
-# The user manager is uinitconverterd in user mode (the link points at it),
+# The user manager is initconvertd in user mode (the link points at it),
 # with its own s6-svscan; the runner switches user@ to it.
 Requires:       uinitconverterd = %{version}-%{release}
 Requires:       uinitconverter-runner = %{version}-%{release}
@@ -26,7 +26,7 @@ Requires:       systemd
 %description
 The s6 user manager: with USER_MANAGER=s6 in uinitconverter.conf, or
 uinitconverter.user_manager=s6 on the kernel command line, user@UID.service
-runs uinitconverter-user-manager instead of systemd --user. It serves
+runs initconvert-user-manager instead of systemd --user. It serves
 org.freedesktop.systemd1 on the user bus and runs the user's units under its
 own s6-svscan; if it fails a user, it hands over to systemd --user for the
 rest of the boot (the record is in /run/uinitconverter-user). Without this
@@ -39,7 +39,7 @@ package, user@ keeps systemd --user whatever USER_MANAGER says.
 
 %install
 install -d %{buildroot}%{_libexecdir}/uinitconverter
-ln -s uinitconverterd %{buildroot}%{_libexecdir}/uinitconverter/uinitconverter-user-manager
+ln -s initconvertd %{buildroot}%{_libexecdir}/uinitconverter/initconvert-user-manager
 install -Dm0644 dist/tmpfiles.d/uinitconverter-user.conf %{buildroot}%{_prefix}/lib/tmpfiles.d/uinitconverter-user.conf
 
 %post
@@ -48,7 +48,7 @@ systemd-tmpfiles --create %{_prefix}/lib/tmpfiles.d/uinitconverter-user.conf >/d
 
 %files
 %dir %{_libexecdir}/uinitconverter
-%{_libexecdir}/uinitconverter/uinitconverter-user-manager
+%{_libexecdir}/uinitconverter/initconvert-user-manager
 %{_prefix}/lib/tmpfiles.d/uinitconverter-user.conf
 
 %changelog

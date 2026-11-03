@@ -10,7 +10,7 @@ mount -o remount,rw / || true
 # The boot database is the set uinitconverter (or `s6 live install`) installed
 # last; nothing is regenerated here. Unit files changed while the system
 # was down (e.g. from a systemd boot) are picked up by the next
-# `systemctl daemon-reload` or `uinitconverter reload`.
+# `systemctl daemon-reload` or `initconvert reload`.
 # Kernel command line option:
 #   uinitconverter.db=previous   boot the database installed before the last one
 db=/var/lib/uinitconverter/compiled

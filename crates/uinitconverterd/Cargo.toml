@@ -2,7 +2,12 @@
 name = "uinitconverterd"
 version.workspace = true
 edition.workspace = true
-description = "The org.freedesktop.systemd1 D-Bus API on top of s6-rc (uinitconverterd)"
+description = "The org.freedesktop.systemd1 D-Bus API on top of s6-rc (initconvertd)"
+
+# The command is initconvertd; the crate and the package keep their names.
+[[bin]]
+name = "initconvertd"
+path = "src/main.rs"
 
 [dependencies]
 uinitconverter-version.workspace = true

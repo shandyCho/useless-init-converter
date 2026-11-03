@@ -71,7 +71,7 @@ pub(super) fn add_grub_entry(ctx: &Ctx, s: &Settings) {
     if s.boot_only_s6 {
         ctx.put(
             BOOT_ONLY_S6_FILE,
-            "# The s6 entries boot with the s6 initramfs (uinitconverter init --boot-only-s6=yes).\n",
+            "# The s6 entries boot with the s6 initramfs (initconvert init --boot-only-s6=yes).\n",
             0o644,
         );
     } else if exists(BOOT_ONLY_S6_FILE) {
@@ -132,7 +132,7 @@ pub(super) fn set_boot_default(ctx: &Ctx, s: &Settings, kver: &str) {
     }
     ctx.put(
         BOOT_DEFAULT_FILE,
-        &format!("# s6: the \"{TITLE}\" entry is the default boot entry (uinitconverter init --default-s6).\ns6\n"),
+        &format!("# s6: the \"{TITLE}\" entry is the default boot entry (initconvert init --default-s6).\ns6\n"),
         0o644,
     );
     let suffix = format!("{kver}~uinitconverter.conf");

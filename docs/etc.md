@@ -2,7 +2,7 @@
 
 [English](etc-us.md) | **한국어**
 
-처음 설치할 때는 필요 없는 내용을 모았습니다. 동작 방식, 구현된 기능과 구현되지 않은 기능, `uinitconverter init`이 하는 일, 설정, 소스 구조를 다룹니다. 설치는 [README](../README.md)부터 보세요.
+처음 설치할 때는 필요 없는 내용을 모았습니다. 동작 방식, 구현된 기능과 구현되지 않은 기능, `initconvert init`이 하는 일, 설정, 소스 구조를 다룹니다. 설치는 [README](../README.md)부터 보세요.
 
 ## 구조
 
@@ -10,14 +10,14 @@
  systemctl / dnf 스크립틀릿 / libsystemd 클라이언트 / dbus-daemon 활성화
               │ org.freedesktop.systemd1 (시스템 버스 + /run/systemd/private)
               ▼
-   uinitconverterd ── 작업(job), 유닛 상태, enable/disable/preset, scope
+   initconvertd ── 작업(job), 유닛 상태, enable/disable/preset, scope
               │ s6-rc -u/-d, s6-svc, s6-svstat
               ▼
-   s6-rc 데이터베이스  ◄── uinitconverter-gen reload: 유닛 파일 → s6-rc 스토어 →
+   s6-rc 데이터베이스  ◄── initconvert-gen reload: 유닛 파일 → s6-rc 스토어 →
               │          저장소 세트 "current" (s6 set ...) → 커밋, 설치
               │
-   s6-supervise ── run/finish 스크립트가 `uinitconverter-runner run|finish|up|down`,
-                   `uinitconverter-timers timer-run|path-run` 호출
+   s6-supervise ── run/finish 스크립트가 `initconvert-runner run|finish|up|down`,
+                   `initconvert-timers timer-run|path-run` 호출
                    (User=, Environment=, 소켓, NOTIFY_SOCKET, Restart= 등)
 ```
 
@@ -51,7 +51,7 @@ s6를 PID 1로 두고 s6의 도구로 관리하면서 Fedora와 GNOME을 쓸 수
 |---|---|
 | 메모리 | 거의 같습니다. 중앙값(total - available) 1154 대 1176 MiB(-23 MiB, 스냅숏 s6 21개와 systemd 6개)로, 부팅마다 생기는 20-25 MiB의 차이와 비슷합니다. |
 | 부팅 속도 | 더 빠를 수도 있지만 통제된 시험으로 확인하지는 않았습니다. 커널 시작부터 로그인 화면의 세션이 열릴 때까지 로그상 중앙값은 약 19초 대 28초입니다(s6 23번과 systemd 11번 부팅, 펌웨어와 부트 로더 제외). 이 부팅들은 날짜, 빌드, initramfs가 서로 다르고, 세션은 로그인 화면이 나타나기 전에 열립니다. |
-| 보안 | 전체적으로 낫지 않습니다. PID 1은 작아지지만 `uinitconverterd`와 도우미 프로세스 약 37개가 root로 실행되고, 최근 28개 서비스의 강화 설정 비교에서 s6가 더 약한 설정은 없습니다(다른 설정은 98개). bolt의 seccomp 필터 수(9 대 11)는 계속 표시되는데, systemd는 ABI마다 필터를 하나씩 올리고 여기서는 필터 하나가 세 ABI를 모두 다루기 때문입니다. |
+| 보안 | 전체적으로 낫지 않습니다. PID 1은 작아지지만 `initconvertd`와 도우미 프로세스 약 37개가 root로 실행되고, 최근 28개 서비스의 강화 설정 비교에서 s6가 더 약한 설정은 없습니다(다른 설정은 98개). bolt의 seccomp 필터 수(9 대 11)는 계속 표시되는데, systemd는 ABI마다 필터를 하나씩 올리고 여기서는 필터 하나가 세 ABI를 모두 다루기 때문입니다. |
 | systemd 줄이기 | 일부만 줄어듭니다. udevd, logind, `systemd --user`는 계속 실행되고(GNOME에 logind와 `systemd --user`가 필요합니다), `systemd` 패키지도 설치된 채로 남습니다. |
 
 **systemd와 비교한 비용**
@@ -79,15 +79,15 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 
 | 도구 | 명령 | 역할 |
 |---|---|---|
-| `uinitconverter-gen` | `reload`, `plan` | 모든 유닛을 s6-rc 스토어로 변환하고, 그것과 직접 작성한 스토어(`EXTRA_SOURCE`)로 s6-rc 저장소를 동기화한 뒤, 세트 `current`를 커밋해 부팅 및 live 데이터베이스로 설치합니다(`s6-rc-set-install`). 변환 보고서를 남깁니다. s6로 부팅된 상태에서는 `systemctl daemon-reload`처럼 `reload`를 uinitconverterd에 위임합니다. [`s6` 명령](#s6-명령-s6-frontend) 참고. |
+| `initconvert-gen` | `reload`, `plan` | 모든 유닛을 s6-rc 스토어로 변환하고, 그것과 직접 작성한 스토어(`EXTRA_SOURCE`)로 s6-rc 저장소를 동기화한 뒤, 세트 `current`를 커밋해 부팅 및 live 데이터베이스로 설치합니다(`s6-rc-set-install`). 변환 보고서를 남깁니다. s6로 부팅된 상태에서는 `systemctl daemon-reload`처럼 `reload`를 initconvertd에 위임합니다. [`s6` 명령](#s6-명령-s6-frontend) 참고. |
 | | `enable/disable/mask/unmask/preset/is-enabled` | 오프라인 유닛 파일 관리입니다. |
-| `uinitconverterd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
+| `initconvertd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | 데몬용 최소 클라이언트(private 소켓 또는 버스)와, 서비스 로그 보기(`journalctl -u`, `JOURNAL=no`이면 s6-log 디렉터리)입니다. |
 | | `stop-instances` | `rc.shutdown`이 실행합니다. s6-rc가 서비스를 멈추기 전에, 그 서비스들 뒤에 순서가 잡힌 요청 시 인스턴스(`user@UID` 등)를 멈추라고 데몬에 요청합니다. |
-| `uinitconverter-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 longrun의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. `confine UNIT -- COMMAND`는 s6가 직접 시작하는 프로그램에 유닛의 cgroup, 제한, 샌드박스를 적용합니다(`--bus=broker`의 시스템 버스). |
-| `uinitconverter-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
-| `uinitconverter` | 위의 모든 명령(`stop-instances`/`stop-atom`/`confine` 제외) | 사용자가 쓰는 명령(`/usr/bin/uinitconverter`)입니다. 해당 명령을 처리하는 도구를 실행하므로 `uinitconverter reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
-| | `init` | s6 부팅 항목을 설정합니다([`uinitconverter init`이 하는 일](#uinitconverter-init이-하는-일) 참고). |
+| `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 longrun의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. `confine UNIT -- COMMAND`는 s6가 직접 시작하는 프로그램에 유닛의 cgroup, 제한, 샌드박스를 적용합니다(`--bus=broker`의 시스템 버스). |
+| `initconvert-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
+| `initconvert` | 위의 모든 명령(`stop-instances`/`stop-atom`/`confine` 제외) | 사용자가 쓰는 명령(`/usr/bin/initconvert`)입니다. 해당 명령을 처리하는 도구를 실행하므로 `initconvert reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
+| | `init` | s6 부팅 항목을 설정합니다([`initconvert init`이 하는 일](#initconvert-init이-하는-일) 참고). |
 | | `--version` | 자신의 빌드와 설치된 각 도구의 빌드를 보여 줍니다. 본체 도구가 서로 다른 빌드이면 그 사실을 표시하고 종료 상태 1로 끝납니다. 도구마다 `--version`도 있습니다. |
 
 본체 도구는 각각 RPM 패키지가 되고, 패키지끼리 `Requires`로 의존합니다. 소스는 작업공간
@@ -99,10 +99,10 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 
 | 프로젝트 | 역할 | 없으면 |
 |---|---|---|
-| `uinitconverter-fdstore` | `FDSTORE=` fd와 리스닝 소켓을 별도 프로세스에서 보관합니다. 설정 파일과 유닛 파일을 읽지 않습니다. | uinitconverterd가 직접 보관합니다. uinitconverterd를 다시 시작하면 사라집니다. |
-| `uinitconverter-journal-relay` | `JOURNAL=no`일 때 journald의 클라이언트 소켓(`/run/systemd/journal/socket`과 `stdout`)을 열고 받은 내용을 rsyslog로 전달합니다. `systemd --user`의 세션 버스인 dbus-broker는 이 소켓이 없으면 시작하지 않습니다. | `JOURNAL=no`에는 꼭 필요합니다. `JOURNAL=yes`(기본값)에서는 영향이 없습니다. |
-| `uinitconverter-linkwatch` | 새 감독자(supervisor)의 시작 이벤트가 수신 대기 전에 발생해 끝나지 않는 daemon-reload(`s6-rc-update`)나 `s6-svlink`의 대기를 해제합니다(s6의 경쟁 조건입니다. 이 대기는 끝나지 않으며 s6-rc의 잠금을 계속 보유합니다). 2초마다 `/proc`를 확인해 10초를 넘긴 대기를 처리합니다. | 해당 reload가 멈추고, 멈춘 `s6-rc-update`를 강제 종료할 때까지 이후의 모든 s6-rc 명령도 멈춥니다. |
-| `uinitconverter-notify` | `systemd-notify` 대체입니다. `$NOTIFY_SOCKET`을 설정하는 어떤 서비스 관리자 아래에서도 동작합니다. | 계속 설치되어 있는 `systemd-notify`를 쓰면 됩니다. |
+| `initconvert-fdstore` | `FDSTORE=` fd와 리스닝 소켓을 별도 프로세스에서 보관합니다. 설정 파일과 유닛 파일을 읽지 않습니다. | initconvertd가 직접 보관합니다. initconvertd를 다시 시작하면 사라집니다. |
+| `initconvert-journal-relay` | `JOURNAL=no`일 때 journald의 클라이언트 소켓(`/run/systemd/journal/socket`과 `stdout`)을 열고 받은 내용을 rsyslog로 전달합니다. `systemd --user`의 세션 버스인 dbus-broker는 이 소켓이 없으면 시작하지 않습니다. | `JOURNAL=no`에는 꼭 필요합니다. `JOURNAL=yes`(기본값)에서는 영향이 없습니다. |
+| `initconvert-linkwatch` | 새 감독자(supervisor)의 시작 이벤트가 수신 대기 전에 발생해 끝나지 않는 daemon-reload(`s6-rc-update`)나 `s6-svlink`의 대기를 해제합니다(s6의 경쟁 조건입니다. 이 대기는 끝나지 않으며 s6-rc의 잠금을 계속 보유합니다). 2초마다 `/proc`를 확인해 10초를 넘긴 대기를 처리합니다. | 해당 reload가 멈추고, 멈춘 `s6-rc-update`를 강제 종료할 때까지 이후의 모든 s6-rc 명령도 멈춥니다. |
+| `initconvert-notify` | `systemd-notify` 대체입니다. `$NOTIFY_SOCKET`을 설정하는 어떤 서비스 관리자 아래에서도 동작합니다. | 계속 설치되어 있는 `systemd-notify`를 쓰면 됩니다. |
 
 각각의 빌드·설치·실행 방법: [standalone/uinitconverter-fdstore](../standalone/uinitconverter-fdstore/README.md),
 [standalone/uinitconverter-journal-relay](../standalone/uinitconverter-journal-relay/README.md),
@@ -117,7 +117,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 암묵적 의존성: `DefaultDependencies=` → `sysinit.target`, `Type=dbus` → `dbus.socket`. `BusName=`이 있는(다른 `Type=`의) 서비스도 `dbus.socket` 다음에 시작합니다. systemd는 이런 서비스를 버스 활성화로 시작하지만, 여기서는 소켓 유닛이 부팅 때 시작할 수 있기 때문입니다.
 - 의존성 순환은 컴파일을 실패시키는 대신 끊고 보고합니다.
 - `DEP_MAP`은 systemd 유닛을 직접 작성한 s6 서비스에 대응시킵니다. 예: `dbus.service` → `dbus`.
-- 활성화된 `.socket`은 자신의 서비스도 함께 포함합니다. 소켓은 러너가 바인드하며, 이름 또는 `Service=`로 짝을 찾습니다. 부팅에서 소켓을 통해서만 포함되는 서비스(sockets.target이 `virtlogd.socket`을 요구하고 `virtlogd.service`를 요구하는 유닛은 없음)는 요청 시(on-demand) 서비스입니다. 러너는 소켓만 바인드하고 기다립니다(`run --on-demand`, `uinitconverter plan`의 "on demand").
+- 활성화된 `.socket`은 자신의 서비스도 함께 포함합니다. 소켓은 러너가 바인드하며, 이름 또는 `Service=`로 짝을 찾습니다. 부팅에서 소켓을 통해서만 포함되는 서비스(sockets.target이 `virtlogd.socket`을 요구하고 `virtlogd.service`를 요구하는 유닛은 없음)는 요청 시(on-demand) 서비스입니다. 러너는 소켓만 바인드하고 기다립니다(`run --on-demand`, `initconvert plan`의 "on demand").
 - `Conflicts=`: 두 유닛이 모두 부팅 시 시작될 경우, 충돌 대상은 타깃에서 빠집니다(예: `getty@tty1.service`보다 `gdm.service`). 실행 중에는 유닛을 시작하거나 재시작할 때 충돌하는 유닛과, 자기 `Conflicts=`에 그 유닛을 적은 유닛을 멈춥니다.
 - systemd와 같은 작업 부수 효과: 유닛을 멈추면 `PartOf=`, `BindsTo=`, `Requires=`로 그 유닛을 가리키는 실행 중인 유닛도 멈추고(데이터베이스 유닛과 요청 시 인스턴스 모두), 재시작하면 `PartOf=`로 가리키는 유닛도 재시작합니다. `StopWhenUnneeded=yes`인 실행 중 유닛은 그것을 필요로 하는(`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`) 실행 중 유닛이 없어지면 멈추며, 작업으로 직접 시작한 직후에도 마찬가지입니다. 타깃의 상태는 타깃 자신의 것입니다. 멈춘 타깃은 그것이 불러온 유닛이 아직 실행 중이어도 비활성이고, 다시 시작하면 더 이상 활성이 아닌 원하는 유닛(이미 실행된 oneshot)을 다시 시작합니다. `STOPPING=1`을 보낸 `Type=notify` 서비스는 거기에 묶인 유닛과 함께 멈춥니다(gnome-session의 monitor가 세션을 이렇게 끝냅니다). `NotifyAccess=all`인 `Type=notify` 서비스는 podman의 quadlet 유닛처럼 `MAINPID=`로 주 프로세스를 넘길 수 있습니다(`podman run -d`는 conmon이 컨테이너를 실행하면 끝납니다). 이때 러너가 s6의 프로세스로 남아 현재 주 프로세스에 시그널을 전달하고, 그 프로세스가 끝나면 서비스도 끝납니다. 어떤 유닛의 시작이 대기 중일 때 같은 유닛을 또 시작하면 systemd처럼 그 작업에 합쳐져서, 다시 실행하지 않고 같은 결과를 받습니다(GNOME 리더와 `gnome-session-ctl` 둘이 `gnome-session-shutdown.target`을 동시에 시작합니다). systemd와 달리 재시작은 `Requires=`를 따라 전파되지 않습니다(dbus를 재시작하면 그것이 필요한 모든 것이 재시작되기 때문입니다).
 
@@ -152,11 +152,11 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - `Runtime/State/Cache/Logs/ConfigurationDirectory=`.
 - `StandardInput/Output/Error=`(null, tty, file:, append:, truncate:), `TTYPath=`, `TTYVHangup=`. `getty@.service`에 필요한 만큼 지원합니다.
 - `Accept=no` 소켓 활성화: `ListenStream/Datagram/SequentialPacket/FIFO/Special`와 `LISTEN_FDS`, `LISTEN_PID`, `LISTEN_FDNAMES`. 소켓이 있는 서비스가 정상 종료하면 systemd처럼 소켓에 다음 활동이 있을 때 다시 시작됩니다(systemd-rfkill은 할 일이 없으면 종료합니다). `.socket`을 시작하면(`systemctl start`, udev의 `SYSTEMD_WANTS`) 그 서비스가 소켓과 함께 시작됩니다.
-- `ListenStream=` 하나인 `Accept=yes`, 유닉스 경로(예: `polkit-agent-helper.socket`)나 IP 포트(예: `sshd.socket`): 소켓이 따로 s6 서비스가 되어 `s6-ipcserverd`(유닉스)나 `s6-tcpserverd`(TCP, 선택 패키지 s6-networking)가 연결을 받고, 연결마다 템플릿의 인스턴스를 systemd와 같은 이름(`NAME@N-PID-UID.service` 또는 `NAME@N-LOCALIP:PORT-REMOTEIP:PORT.service`)으로 하나씩 시작합니다. TCP 인스턴스는 `REMOTE_ADDR`와 `REMOTE_PORT`도 받습니다. 인스턴스는 연결을 fd 3(`LISTEN_FDS=1`, `LISTEN_FDNAMES=`는 소켓의 `FileDescriptorName=`이거나 `connection`. `journalctl` 같은 systemd의 varlink 서비스는 이름이 `varlink`인 fd에서만 응답합니다)으로 받고, `StandardInput=`/`StandardOutput=socket`이면 표준 입출력으로도 받습니다. 템플릿의 사용자, 샌드박스, cgroup으로 `ExecStartPre=`, `ExecStart=`, `ExecStartPost=`, `ExecStop=`, `ExecStopPost=`를 실행합니다. 템플릿은 `Type=simple`, `exec`, `oneshot`만 됩니다. `MaxConnections=`(기본 64)와 `MaxConnectionsPerSource=`는 서버의 `-c`/`-C`가 되며 최대값은 유닉스 소켓이 1000, TCP가 16384입니다. `s6-tcpserverd`가 없으면 TCP 소켓은 생성되지 않고 `uinitconverter plan`이 그렇게 알려 줍니다. `systemctl status`에 `Accepted:`와 `Connected:`가 나옵니다. 연결이 실행되는 동안 그 인스턴스는 다른 유닛과 같습니다. `systemctl list-units`에 나오고, `systemctl status`에 주 프로세스가 보이며, `systemctl stop`은 `KillSignal=`을 보내고(`TimeoutStopSec=` 뒤에는 SIGKILL) `ExecStopPost=`를 실행합니다. systemd처럼 SIGTERM, SIGHUP, SIGINT, SIGPIPE로 끝난 주 프로세스는 성공으로 칩니다. 소켓을 멈춰도 systemd처럼 실행 중인 연결은 그대로 둡니다. 바인드할 수 없는 소켓(`sshd.service`가 22번 포트를 잡고 있을 때의 `sshd.socket`. `Conflicts=`는 강제되지 않습니다)은 `failed`가 되며, 다시 시작할 때까지 재시도하지 않습니다.
-- 부팅 때의 요청 시 활성화: 요청 시 서비스는 systemd에서처럼 소켓에 첫 활동이 있을 때까지 `inactive`입니다(iscsid, libvirt 데몬들, cupsd, dmeventd, hostnamed). 그때 자신이 요구하는(`Requires=`/`BindsTo=`/`Wants=`) 요청 시 서비스 중 아직 기다리는 것도 시작합니다. 작업으로 시작하면(`systemctl start`, 의존성, D-Bus 활성화, `.path` 유닛) 바로 실행되고, 한 번 실행된 서비스를 s6가 다시 시작할 때(`Restart=`, `systemctl restart`)도 기다리지 않습니다. `systemctl stop` 뒤에는 이전처럼 소켓이 닫힙니다. 소켓은 `uinitconverter-fdstore`가 보관합니다. 이것이 없으면 uinitconverterd가 시작되기 전에는 소켓을 보관할 곳이 없으므로 서비스가 바로 시작됩니다.
+- `ListenStream=` 하나인 `Accept=yes`, 유닉스 경로(예: `polkit-agent-helper.socket`)나 IP 포트(예: `sshd.socket`): 소켓이 따로 s6 서비스가 되어 `s6-ipcserverd`(유닉스)나 `s6-tcpserverd`(TCP, 선택 패키지 s6-networking)가 연결을 받고, 연결마다 템플릿의 인스턴스를 systemd와 같은 이름(`NAME@N-PID-UID.service` 또는 `NAME@N-LOCALIP:PORT-REMOTEIP:PORT.service`)으로 하나씩 시작합니다. TCP 인스턴스는 `REMOTE_ADDR`와 `REMOTE_PORT`도 받습니다. 인스턴스는 연결을 fd 3(`LISTEN_FDS=1`, `LISTEN_FDNAMES=`는 소켓의 `FileDescriptorName=`이거나 `connection`. `journalctl` 같은 systemd의 varlink 서비스는 이름이 `varlink`인 fd에서만 응답합니다)으로 받고, `StandardInput=`/`StandardOutput=socket`이면 표준 입출력으로도 받습니다. 템플릿의 사용자, 샌드박스, cgroup으로 `ExecStartPre=`, `ExecStart=`, `ExecStartPost=`, `ExecStop=`, `ExecStopPost=`를 실행합니다. 템플릿은 `Type=simple`, `exec`, `oneshot`만 됩니다. `MaxConnections=`(기본 64)와 `MaxConnectionsPerSource=`는 서버의 `-c`/`-C`가 되며 최대값은 유닉스 소켓이 1000, TCP가 16384입니다. `s6-tcpserverd`가 없으면 TCP 소켓은 생성되지 않고 `initconvert plan`이 그렇게 알려 줍니다. `systemctl status`에 `Accepted:`와 `Connected:`가 나옵니다. 연결이 실행되는 동안 그 인스턴스는 다른 유닛과 같습니다. `systemctl list-units`에 나오고, `systemctl status`에 주 프로세스가 보이며, `systemctl stop`은 `KillSignal=`을 보내고(`TimeoutStopSec=` 뒤에는 SIGKILL) `ExecStopPost=`를 실행합니다. systemd처럼 SIGTERM, SIGHUP, SIGINT, SIGPIPE로 끝난 주 프로세스는 성공으로 칩니다. 소켓을 멈춰도 systemd처럼 실행 중인 연결은 그대로 둡니다. 바인드할 수 없는 소켓(`sshd.service`가 22번 포트를 잡고 있을 때의 `sshd.socket`. `Conflicts=`는 강제되지 않습니다)은 `failed`가 되며, 다시 시작할 때까지 재시도하지 않습니다.
+- 부팅 때의 요청 시 활성화: 요청 시 서비스는 systemd에서처럼 소켓에 첫 활동이 있을 때까지 `inactive`입니다(iscsid, libvirt 데몬들, cupsd, dmeventd, hostnamed). 그때 자신이 요구하는(`Requires=`/`BindsTo=`/`Wants=`) 요청 시 서비스 중 아직 기다리는 것도 시작합니다. 작업으로 시작하면(`systemctl start`, 의존성, D-Bus 활성화, `.path` 유닛) 바로 실행되고, 한 번 실행된 서비스를 s6가 다시 시작할 때(`Restart=`, `systemctl restart`)도 기다리지 않습니다. `systemctl stop` 뒤에는 이전처럼 소켓이 닫힙니다. 소켓은 `initconvert-fdstore`가 보관합니다. 이것이 없으면 initconvertd가 시작되기 전에는 소켓을 보관할 곳이 없으므로 서비스가 바로 시작됩니다.
 - `Restart=`(모든 모드), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=`(reboot/poweroff/halt).
-- `FDSTORE=1` / `FileDescriptorStoreMax=`: 저장된 fd를 보관했다가 재시작 후 돌려줍니다(journald와 logind가 사용). 리스닝 소켓도 같은 방식으로 보관하므로 서비스를 재시작해도 열린 채로 유지됩니다. 저장소는 독립 도구 `uinitconverter-fdstore`를 실행하는 별도의 s6 서비스이므로 uinitconverterd를 다시 시작해도 fd가 남습니다. 이 도구를 설치하지 않았으면 데몬이 직접 보관합니다. `FileDescriptorStoreMax=`가 있는 서비스는 이 서비스 다음에 시작됩니다.
+- `FDSTORE=1` / `FileDescriptorStoreMax=`: 저장된 fd를 보관했다가 재시작 후 돌려줍니다(journald와 logind가 사용). 리스닝 소켓도 같은 방식으로 보관하므로 서비스를 재시작해도 열린 채로 유지됩니다. 저장소는 독립 도구 `initconvert-fdstore`를 실행하는 별도의 s6 서비스이므로 initconvertd를 다시 시작해도 fd가 남습니다. 이 도구를 설치하지 않았으면 데몬이 직접 보관합니다. `FileDescriptorStoreMax=`가 있는 서비스는 이 서비스 다음에 시작됩니다.
 - `TimeoutStartSec=`는 러너가 직접 적용합니다. 제한 시간을 넘기면 시작이 실패하고 서비스는 종료됩니다.
 - 출력은 stdout 스트림 프로토콜을 통해 **systemd-journald**로 보냅니다(PID 1이 하는 방식 그대로). journald가 cgroup으로 유닛을 식별하므로 `journalctl -u UNIT`과 `systemctl status`의 로그 줄이 동작합니다. `JOURNAL=no`이면 서비스마다 s6-log 디렉터리를 씁니다.
 - 조건과 단언: 경로, 커널 명령줄, 가상화, 보안 등에 대한 `Condition*=`/`Assert*=`.
@@ -179,7 +179,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - `poweroff.target`, `reboot.target`, `halt.target`을 시작하면(logind가 전원을 끄는 방식) 설정된 종료 명령을 실행합니다.
 - D-Bus 활성화: dbus-daemon의 `ActivationRequest`에 응답하고, 시작이 실패하면 `ActivationFailure`로 응답합니다. `--bus=broker`이면 systemd에서처럼 dbus-broker-launch가 `StartUnit`(`SystemdService=`가 있을 때)이나 `StartTransientUnit`(그 밖에는 transient `dbus-:1.N-NAME@K.service`)으로 서비스를 시작하고, `JobRemoved`와 유닛의 `ActiveState`를 감시합니다.
 - 권한: 상태를 바꾸는 호출에는 root, `ALLOW_UIDS`에 있는 uid, 또는 systemd의 action ID(`manage-units`, `manage-unit-files`, `reload-daemon`, `set-environment`; 정책 파일은 systemd에 포함)에 대한 polkit 허가가 필요합니다. polkit이 없으면 root가 아닌 호출자는 거부됩니다. `ALLOW_UIDS`는 root와 같은 권한입니다. 유닛 하나에 대한 호출은 systemd처럼 polkit에 `unit`과 `verb` 세부 정보를 넘기므로, 그것으로 판단하는 규칙이 동작합니다. systemd와 같이 `AttachProcessesToUnit`의 유닛 이름이 비어 있으면 호출자 자신의 유닛이며, 위임된 유닛(`Delegate=yes`나 컨트롤러 목록)이 호출자로 실행 중이고 호출자가 그 안에 있으면, 권한 없는 호출자도 자기 프로세스를 그 유닛으로, 밖에서도 옮길 수 있습니다(사용자 매니저가 ssh 로그인에서 시작된 앱을 앱 scope로 옮길 때).
-- SELinux 접근 검사를 systemd 262와 같이 polkit보다 먼저, root에게도 합니다. 호출자의 레이블(버스에서, 또는 private 소켓의 `SO_PEERSEC`)이 유닛 파일 레이블에 대해 클래스 `service`의 해당 권한(`start`, `stop`, `reload`, `status`)을, 매니저 호출과 유닛 파일이 없는 유닛은 uinitconverterd 자신의 레이블에 대해 클래스 `system`의 권한(`reload`, `status`, `halt`, `reboot`, `enable`, `start`)을 가져야 합니다. `ListUnits`는 호출자가 볼 수 없는 유닛을 빼고 보여 줍니다. permissive 모드와 permissive 도메인에서는 거부를 기록만 합니다(uinitconverterd의 stderr).
+- SELinux 접근 검사를 systemd 262와 같이 polkit보다 먼저, root에게도 합니다. 호출자의 레이블(버스에서, 또는 private 소켓의 `SO_PEERSEC`)이 유닛 파일 레이블에 대해 클래스 `service`의 해당 권한(`start`, `stop`, `reload`, `status`)을, 매니저 호출과 유닛 파일이 없는 유닛은 initconvertd 자신의 레이블에 대해 클래스 `system`의 권한(`reload`, `status`, `halt`, `reboot`, `enable`, `start`)을 가져야 합니다. `ListUnits`는 호출자가 볼 수 없는 유닛을 빼고 보여 줍니다. permissive 모드와 permissive 도메인에서는 거부를 기록만 합니다(initconvertd의 stderr).
 - D-Bus 활성화 요청은 버스 데몬 자신이 보낸 것만 받아들이며, 활성화 때문에 데이터베이스를 다시 만들지 않습니다.
 - 같은 유닛의 작업은 차례로 실행되며, 대기 중인 작업은 취소할 수 있습니다.
 - 장치가 요청하는 유닛(udev의 `SYSTEMD_WANTS`, 예: 블루투스 어댑터의 `bluetooth.target`,
@@ -189,8 +189,8 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 
 ## 아직 구현되지 않은 기능
 
-- initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `uinitconverter init`이 경고합니다.
-- 리스너가 둘 이상이거나 `ListenStream=`이 아닌(또는 `vsock:`인) `Accept=yes`, 그리고 템플릿이 `Type=notify`, `forking`, `dbus`인 경우: 소켓을 건너뛰며 이유는 `uinitconverter plan`에 나옵니다. 인스턴스는 연결이 끝나면 실패했어도 사라집니다. systemd는 실패한 인스턴스를 `systemctl reset-failed`까지 남겨 두지만 여기서는 `systemctl --failed`에 들어가지 않습니다(결과는 소켓의 로그와 `ExecStopPost=`에 남습니다). 실행 중인 연결의 재시작이나 다시 읽기는 실패합니다. 템플릿의 `Wants=`와 `Requires=`는 연결마다가 아니라 소켓과 함께 시작됩니다.
+- initramfs가 열지 않는 `/etc/crypttab`의 암호화 볼륨(systemd는 `systemd-cryptsetup@` 유닛으로 엽니다). LUKS 루트 디스크는 initramfs가 열기 때문에 동작하며, 나머지는 `initconvert init`이 경고합니다.
+- 리스너가 둘 이상이거나 `ListenStream=`이 아닌(또는 `vsock:`인) `Accept=yes`, 그리고 템플릿이 `Type=notify`, `forking`, `dbus`인 경우: 소켓을 건너뛰며 이유는 `initconvert plan`에 나옵니다. 인스턴스는 연결이 끝나면 실패했어도 사라집니다. systemd는 실패한 인스턴스를 `systemctl reset-failed`까지 남겨 두지만 여기서는 `systemctl --failed`에 들어가지 않습니다(결과는 소켓의 로그와 `ExecStopPost=`에 남습니다). 실행 중인 연결의 재시작이나 다시 읽기는 실패합니다. 템플릿의 `Wants=`와 `Requires=`는 연결마다가 아니라 소켓과 함께 시작됩니다.
 - `Accept=no`: 실행 중에 `.socket`을 시작하면 여전히 그 서비스가 바로 시작되고, 요청 시 서비스가 요구하는 유닛 중 요청 시 서비스가 아닌 것은 부팅 때 시작됩니다(s6-rc 의존성).
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
 - systemd generator: 시스템의 generator는 s6 부팅에서 하나도 실행되지 않습니다(사용자 generator는 s6 사용자 매니저가 실행합니다. [s6 사용자 매니저](#s6-사용자-매니저-진행-중) 참고). `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
@@ -225,8 +225,8 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | dbus-daemon | 시스템 버스(`--systemd-activation`), `--bus=broker`이면 dbus-broker. 사용자 버스는 dbus-broker가 계속 맡습니다 |
 | util-linux | 마운트 유닛과 초기 부팅의 `mount`, `swapon`, `mountpoint`, 무선 상태의 `rfkill` |
 | shadow-utils | `DynamicUser=` 대신 쓰는 시스템 사용자를 만드는 `useradd` |
-| policycoreutils, policycoreutils-python-utils | SELinux 모듈용 `restorecon`, `semodule`. `uinitconverter init`용 `semanage` |
-| grubby | 부팅 항목(`uinitconverter init`) |
+| policycoreutils, policycoreutils-python-utils | SELinux 모듈용 `restorecon`, `semodule`. `initconvert init`용 `semanage` |
+| grubby | 부팅 항목(`initconvert init`) |
 
 **실행 중에 불러오는 라이브러리 (권장).** uinitconverter가 `dlopen()`으로 불러오므로
 빌드에는 필요 없습니다. 없으면 해당 기능만 빠집니다:
@@ -240,7 +240,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 **권장 패키지:** earlyoom(systemd-oomd 대신), chrony, NetworkManager,
 rsyslog 또는 syslog-ng(`JOURNAL=no`일 때만).
 
-**빌드:** cargo와 rust. 본체는 zbus, tokio, futures-util, libc, rustix, jiff, serde를, 독립 도구는 libc와 rustix를 씁니다(`uinitconverter-linkwatch`는 rustix만)
+**빌드:** cargo와 rust. 본체는 zbus, tokio, futures-util, libc, rustix, jiff, serde를, 독립 도구는 libc와 rustix를 씁니다(`initconvert-linkwatch`는 rustix만)
 (`Cargo.toml`).
 
 ## Fedora에서 테스트하기
@@ -267,18 +267,18 @@ tests/sandbox.sh ~/sdc-sandbox stop
 압축을 푼 Fedora `systemd` + `systemd-shared` + `systemd-libs` RPM 경로를
 `SYSTEMD_ROOT=`로 지정하세요. 이 구성은 Artix에서 Fedora 44의 systemctl 259.5로 테스트했습니다.
 
-## `uinitconverter init`이 하는 일
+## `initconvert init`이 하는 일
 
 이 프로젝트의 예전 이름은 **sdcompat**입니다. sdcompat 설치를 uinitconverter로 이전하려면(제거한 뒤
 새로 설치) [packages/README.md](../packages/README.md#sdcompat에서-이전하기)의 "sdcompat에서
 이전하기"를 보세요.
 
-`uinitconverter init`은 GRUB 항목 "Fedora (s6 + uinitconverter)"를 **추가**하고, `--default-s6`을 주지
+`initconvert init`은 GRUB 항목 "Fedora (s6 + uinitconverter)"를 **추가**하고, `--default-s6`을 주지
 않으면 일반 systemd 부팅을 기본값으로 둡니다. 아무것도 설치하지 않습니다. 설정에 필요한 패키지가
 없으면 중단하고 `dnf install` 명령을 알려 줍니다. 덮어쓰는 파일은 `/var/lib/uinitconverter/setup-backup/`에
 백업합니다. 계획을 보여 주고 확인을 받은 뒤 다음을 수행합니다.
 
-1. 설치된 빌드를 보여 줍니다(`uinitconverter --version`). 본체 패키지들은 한 빌드에서 나온 것이어야 합니다.
+1. 설치된 빌드를 보여 줍니다(`initconvert --version`). 본체 패키지들은 한 빌드에서 나온 것이어야 합니다.
 2. `/etc/uinitconverter/`의 설정(`uinitconverter.conf`의 `JOURNAL=`, `RESOLVED=`, `uinitconverter-sysinit` 번들의
    s6 서비스)과 `s6` 명령용 `/etc/s6.conf`를 씁니다. s6 서비스(초기 부팅, dbus-daemon, 데몬,
    earlyoom)는 패키지가 설치합니다. systemd-journald는 s6 서비스로 실행됩니다. `--journal=no`를
@@ -287,7 +287,7 @@ tests/sandbox.sh ~/sdc-sandbox stop
    전달합니다(MESSAGE, 우선순위, 식별자만 남습니다).
 3. chronyd와 NetworkManager가 설치되어 있으면 활성화하고(없으면 경고만 합니다), gdm이
    설치되어 있으면 gdm을 활성화하고 `graphical.target`을 기본값으로 설정합니다.
-4. `uinitconverter reload --no-update`를 실행해 s6-rc 저장소와 세트 `current`(systemd의 활성화 상태에서 시작)를 만들고 부팅 데이터베이스를 설치한 뒤, 변환 요약을 출력합니다. 직접 작성할 s6-rc 서비스용 `/etc/s6/sources`도 만듭니다.
+4. `initconvert reload --no-update`를 실행해 s6-rc 저장소와 세트 `current`(systemd의 활성화 상태에서 시작)를 만들고 부팅 데이터베이스를 설치한 뒤, 변환 요약을 출력합니다. 직접 작성할 s6-rc 서비스용 `/etc/s6/sources`도 만듭니다.
 5. tty9에 복구용 getty가 있는 `/etc/s6-linux-init/current`를 생성합니다.
 6. SELinux: `bin/init`에 `init_exec_t` 레이블을 붙이고 정책 모듈
    (`/usr/share/uinitconverter/selinux/uinitconverter.cil`, 원본은 `dist/selinux/`)을 불러옵니다. 이 모듈은 s6, s6-rc, s6-linux-init,
@@ -295,7 +295,7 @@ tests/sandbox.sh ~/sdc-sandbox stop
    s6 트리 전체가 `init_t`에 머물게 합니다. 또 systemd에는 없고 s6만 하는 몇 가지
    동작(catch-all 로거의 fifo, `/run/service`의 링크, /run/uinitconverter에 있는
    `user@UID.service`의 run 스크립트)을 허용합니다. 모듈은 패키지를 설치할 때 불러오고 제거할 때 지웁니다.
-7. s6 부팅 중이면 uinitconverterd를 다시 시작해 설치된 빌드로 바꿉니다.
+7. s6 부팅 중이면 initconvertd를 다시 시작해 설치된 빌드로 바꿉니다.
 8. 설치된 커널마다 패키지의 kernel-install 플러그인을 실행해 부팅 항목을 복사하면서
    `init=/usr/sbin/init-selinux`를 추가합니다. plymouth의 종료 유닛은 systemd 전용이라
    스플래시를 제거합니다(`rhgb quiet`, `plymouth.enable=0`). 처음 실행할 때는 `enforcing=0`도
@@ -305,7 +305,7 @@ tests/sandbox.sh ~/sdc-sandbox stop
 
 | 옵션 | 효과 |
 |---|---|
-| `--dry-run` | 모든 명령을 출력만 하고 아무것도 바꾸지 않습니다(root 불필요). 끝에 적용할 명령(같은 옵션에서 `--dry-run`만 뺀 `sudo uinitconverter init ...`)을 보여줍니다 |
+| `--dry-run` | 모든 명령을 출력만 하고 아무것도 바꾸지 않습니다(root 불필요). 끝에 적용할 명령(같은 옵션에서 `--dry-run`만 뺀 `sudo initconvert init ...`)을 보여줍니다 |
 | `-y`, `--yes` | 시작 전에 확인을 받지 않습니다 |
 | `--journal=yes\|no` | `no`: systemd-journald 없이 syslog 데몬과 서비스별 s6-log 디렉터리를 씁니다(`--syslog`의 패키지와 `uinitconverter-journal-relay` 필요) / `yes`: journald로 되돌립니다 |
 | `--syslog=rsyslog\|syslog-ng` | `--journal=no`일 때 쓸 syslog 데몬(기본값 rsyslog). 설정은 `/etc/uinitconverter/rsyslog.conf` 또는 `syslog-ng.conf`에 쓰이고 배포판의 설정은 그대로 둡니다. 두 설정 모두 Fedora rsyslog 기본값과 같은 파일(`/var/log/messages`, `secure`, `maillog`, `cron` 등)에 기록합니다 |
@@ -320,7 +320,7 @@ tests/sandbox.sh ~/sdc-sandbox stop
 빠진 옵션은 지난 실행의 선택을 유지합니다. `/etc/uinitconverter/uinitconverter.conf`의
 `JOURNAL=`/`RESOLVED=`, `/etc/uinitconverter/boot-options`의 SELinux 모드,
 `/etc/uinitconverter/boot-only-s6`, `/etc/uinitconverter/boot-default`를 읽습니다. 그래서 패키지를
-업그레이드한 뒤 `sudo uinitconverter init`만 실행하면 같은 선택으로 설정을 다시 적용합니다.
+업그레이드한 뒤 `sudo initconvert init`만 실행하면 같은 선택으로 설정을 다시 적용합니다.
 
 journal과 resolved 옵션은 이미 설치된 시스템도 전환합니다. `--resolved=no`이면 s6 oneshot `resolv`가 부팅 때 `/run/NetworkManager/conf.d/99-uinitconverter-no-resolved.conf`(`dns=default`, `rc-manager=symlink`)를 쓰고, `/etc/resolv.conf`가 가리키는 resolved의 stub 파일을 `/run/NetworkManager/resolv.conf`로 연결합니다. 모두 `/run`에 있으므로 systemd 부팅은 계속 resolved를 씁니다. `/etc/NetworkManager`에 `dns=` 설정이 있으면 그것이 우선합니다(NetworkManager는 `/run`을 먼저 읽습니다). `/etc/nsswitch.conf`의 nss-resolve는 resolved가 없으면 `dns`로 넘어갑니다.
 
@@ -350,7 +350,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 않습니다. 암호화하지 않은 루트는 그대로 마운트합니다(QEMU에서 ext4, xfs, btrfs로 확인). `cryptsetup`은 LUKS에만
 필요합니다. 없으면 LUKS를 지원하지 않는 이미지를 만들지만, `/etc/crypttab`에 항목이 있거나 명령줄에
 `rd.luks.uuid=`, `rd.luks.name=`이 있으면 빌드가 실패합니다. 제한: 암호화된 루트는 입력한 암호로 열어야 하고
-(TPM2/FIDO2/PKCS#11 잠금 해제 없음), LVM이나 MD 위의 루트는 조립할 수 없으며(`uinitconverter init`이 경고합니다.
+(TPM2/FIDO2/PKCS#11 잠금 해제 없음), LVM이나 MD 위의 루트는 조립할 수 없으며(`initconvert init`이 경고합니다.
 `--boot-only-s6=no`를 쓰세요), plymouth가
 없으며(s6 항목은 원래 없음), 최대 절전 모드 복귀가 없고, 암호 입력에 US가 아닌 키맵을 쓰지
 않습니다. 추가 모듈은 `/etc/uinitconverter/initramfs-modules`에 적습니다(한 줄에 이름 또는 `=DIR`
@@ -392,7 +392,7 @@ s6가 계속 다시 시도합니다.
 
 s6 종료 때 콘솔에 나온 내용은 다음 부팅에서 `/var/log/uinitconverter/last-shutdown-console.log`
 (s6의 catch-all 로그)와 `last-shutdown-kernel.log`(종료가 시작된 뒤의 커널 로그, auditd가 멈춘 뒤의
-SELinux 거부 포함)로 볼 수 있습니다(root 전용). 종료가 시작되면 uinitconverterd는 새 유닛 시작과 D-Bus
+SELinux 거부 포함)로 볼 수 있습니다(root 전용). 종료가 시작되면 initconvertd는 새 유닛 시작과 D-Bus
 활성화를 systemd처럼 바로 거부합니다. 먼저 디스플레이 관리자(`display-manager.service`)에 멈추라고 요청해 세션이 끝날 때 새 그리터를 시작하지 않게 하고, 스코프(logind의 세션)를 멈춘 뒤 최대 11초까지 기다립니다. 그래서
 systemd에서처럼 데스크톱 세션이 사용자 매니저가 멈추기 전에 자체 종료합니다. 그다음 요청 시 시작된 인스턴스(user@UID, user-runtime-dir@UID,
 systemd-backlight@ 등)를 logind와 D-Bus가 아직 실행 중일 때 `After=`에 맞게 멈추고, 그다음에
@@ -417,8 +417,8 @@ tests/systemctl.sh status notifier.service
 ```
 
 비특권 샌드박스로는 테스트할 수 없는 부분(`User=`, cgroup, 샌드박스, 임시 scope)을
-확인하려면 root 소유의 VM에서 설정 파일을 지정해 `uinitconverter reload`를 실행하세요. 보고서와
-`uinitconverter plan`은 아무것도 시작하지 않고 Fedora 자체 유닛이 어떻게 변환되는지 보여줍니다.
+확인하려면 root 소유의 VM에서 설정 파일을 지정해 `initconvert reload`를 실행하세요. 보고서와
+`initconvert plan`은 아무것도 시작하지 않고 Fedora 자체 유닛이 어떻게 변환되는지 보여줍니다.
 
 ```sh
 sudo uinitconverter --config /etc/uinitconverter/uinitconverter.conf plan | less
@@ -460,8 +460,8 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 `systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-150부). 이것은
 `uinitconverter-user` 패키지입니다(`dnf install uinitconverter-user`). 이 패키지가 있으면
 `uinitconverter.conf`의 `USER_MANAGER=s6` 또는 커널 명령줄의 `uinitconverter.user_manager=s6`이
-있을 때 러너가 `user@UID.service`에 `systemd --user` 대신 `uinitconverter-user-manager`(`uinitconverterd`로의
-링크. 이 이름으로 실행되면 사용자 매니저로 동작하며, `uinitconverterd user-manager`와 같습니다)를
+있을 때 러너가 `user@UID.service`에 `systemd --user` 대신 `initconvert-user-manager`(`initconvertd`로의
+링크. 이 이름으로 실행되면 사용자 매니저로 동작하며, `initconvertd user-manager`와 같습니다)를
 실행합니다. 유닛 파일은 바꾸지 않습니다. 패키지가 없으면 `user@`는 `systemd --user`를 그대로 쓰고
 러너가 그 이유를 로그에 남깁니다. `USER_MANAGER=systemd`(기본값)나
 `uinitconverter.user_manager=systemd`이면 `systemd --user`를 그대로 씁니다. systemd로 부팅했을
@@ -541,7 +541,7 @@ systemd-oomd에 알리고(`io.systemd.oom.ReportManagedOOMCGroups`, `systemd --u
 
 시스템은 s6 자체의 도구로 관리합니다. `s6` 명령은
 [s6-frontend](https://skarnet.org/software/s6-frontend/)(버전은 `dist/skarnet.versions`.
-다른 skarnet 패키지와 함께 빌드합니다)가 제공하고, `uinitconverter init`이
+다른 skarnet 패키지와 함께 빌드합니다)가 제공하고, `initconvert init`이
 uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베이스를 적은
 `/etc/s6.conf`(`dist/s6.conf`에서)를 씁니다. 서비스 이름은 s6-rc의 이름입니다:
 `sshd.service`, `gdm.service` 등과 uinitconverter 자체의 s6 서비스(`dbus`, `uinitconverterd`,
@@ -549,7 +549,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 
 구성 방식:
 
-- uinitconverter-gen은 유닛 파일을 s6-rc **스토어**(`/var/lib/uinitconverter/store`)로 변환합니다.
+- initconvert-gen은 유닛 파일을 s6-rc **스토어**(`/var/lib/uinitconverter/store`)로 변환합니다.
   s6-rc **저장소**(`/var/lib/s6-rc/repository`)는 스토어 세 개를 이 순서로 연결합니다:
   변환된 유닛, uinitconverter의 초기 부팅 서비스(`/etc/uinitconverter/s6`), 직접 작성한 s6-rc
   서비스(`/etc/s6/sources`. 여기 있는 서비스는 앞 스토어의 같은 이름을 덮어씁니다).
@@ -568,7 +568,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
   비면 `auto-masked`와 `auto-masked.keep`을 지웁니다. 그때 동적 서비스로 실행 중인 것은
   멈췄다가 데이터베이스에서 다시 시작합니다. 되돌리기 전까지는 요청이 오면 지금처럼
   동적으로 시작합니다. 설정에 남은 `AUTO_MASK=`는 무시됩니다.
-- `systemctl daemon-reload`와 `uinitconverter reload`(패키지가 바뀌면 dnf의 파일 트리거도 실행)는
+- `systemctl daemon-reload`와 `initconvert reload`(패키지가 바뀌면 dnf의 파일 트리거도 실행)는
   스토어를 다시 만들고 저장소를 동기화한 뒤 `current`를 커밋해 부팅 및 live 데이터베이스로
   설치합니다. 커밋 전에 `s6-rc-set-fix -u`를 실행해 `active` 서비스가 의존하는 것을
   활성화하고(커밋은 일관성 없는 세트를 거부합니다), 옮긴 것을 출력합니다. 서비스가 더는
@@ -599,7 +599,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
   한 바이트 늦게 끝냅니다). 그래서 이 옵션이 없으면 방금 커밋한 세트를 무작위로
   "not up-to-date"라며 거부합니다. uinitconverter는 항상 이 옵션을 전달합니다. 업스트림 버그이며,
   uinitconverter는 skarnet의 소스를 패치하지 않습니다.
-- **초기 부팅 서비스**는 스토어에 그렇게 지정되어 있을 때(`flag-essential`, 또는 `uinitconverter init`이
+- **초기 부팅 서비스**는 스토어에 그렇게 지정되어 있을 때(`flag-essential`, 또는 `initconvert init`이
   syslog, journal-relay, resolv에 대해 바꾸는 `uinitconverter-sysinit` 소속) 정확히 `always`입니다.
   세트에서 옮겨도 reload가 되돌립니다.
 - `s6 live start/stop`과 `s6 process restart`는 uinitconverter 아래에서 동작합니다. systemd
@@ -624,11 +624,11 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: 저장소(s6.conf의 `repodir`), 생성된 스토어, reload가 커밋하고 설치하는 세트, 그 커밋이 부팅용으로 만드는 번들(`default`).
 - `JOURNAL`: `yes`(기본값)이면 systemd-journald를 실행하고 서비스 출력을 보냅니다. `no`이면 `LOG_DIR` 아래 서비스별 s6-log 디렉터리를 쓰고, s6 `syslog` 서비스가 syslog 데몬(`SYSLOG`)이므로 배포판의 `rsyslog.service`와 `syslog-ng.service`는 제외합니다(`INCLUDE`로 다시 포함할 수 있습니다).
 - `LOG_DIR`: `JOURNAL=no`일 때 s6-log 디렉터리가 들어갈 위치.
-- `SYSLOG`: `JOURNAL=no`일 때 s6 `syslog` 서비스가 실행할 데몬, `rsyslog`(기본값) 또는 `syslog-ng`(`uinitconverter init --syslog=`). 두 경우 모두 배포판의 `rsyslog.service`, `syslog-ng.service`는 제외됩니다. syslog-ng는 `/run/systemd/system`이 있으면(uinitconverter가 `sd_booted()`용으로 만듭니다) `/dev/log`를 직접 열지 않으려 하므로, run 스크립트가 소켓을 열어 `LISTEN_FDS`로 전달합니다.
-- `BUS`: s6 부팅의 시스템 버스, `daemon`(기본값) 또는 `broker`(`uinitconverter init --bus=`). `dbus` s6 서비스의 run 스크립트가 읽습니다.
-- `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`uinitconverter init --resolved=no`처럼 `resolv` s6 서비스도 `uinitconverter-sysinit`에 넣어야 DNS가 동작합니다).
+- `SYSLOG`: `JOURNAL=no`일 때 s6 `syslog` 서비스가 실행할 데몬, `rsyslog`(기본값) 또는 `syslog-ng`(`initconvert init --syslog=`). 두 경우 모두 배포판의 `rsyslog.service`, `syslog-ng.service`는 제외됩니다. syslog-ng는 `/run/systemd/system`이 있으면(uinitconverter가 `sd_booted()`용으로 만듭니다) `/dev/log`를 직접 열지 않으려 하므로, run 스크립트가 소켓을 열어 `LISTEN_FDS`로 전달합니다.
+- `BUS`: s6 부팅의 시스템 버스, `daemon`(기본값) 또는 `broker`(`initconvert init --bus=`). `dbus` s6 서비스의 run 스크립트가 읽습니다.
+- `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`initconvert init --resolved=no`처럼 `resolv` s6 서비스도 `uinitconverter-sysinit`에 넣어야 DNS가 동작합니다).
 - `INIT`: 유닛을 변환할 대상 init 시스템. 지금은 `s6`만 있고, 다른 값이면 모든 도구가 설정 오류로 멈춥니다.
-- `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `uinitconverter init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
+- `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `initconvert init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
 - `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: `user@UID.service`가 실행할 것, `systemd`(기본값) 또는 `s6`([s6 사용자 매니저](#s6-사용자-매니저-진행-중) 참고. 커널 명령줄의 `uinitconverter.user_manager=`가 우선), s6 쪽이 실행하지 않을 사용자 유닛, 그리고 실패 경로가 사용자를 `systemd --user`로 넘기는 사용자 유닛(기본값 `gnome-session-shutdown.target gnome-session@*.target`).
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 요청하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
@@ -661,20 +661,20 @@ crates/                    본체 (Cargo 작업공간 하나)
     execcmd.rs, conditions.rs   Exec*= 명령줄, Condition*/Assert*
   uinitconverter-client/         데몬용 작은 D-Bus 클라이언트
   uinitconverter-version/        --version이 보여 주는 빌드 버전(RPM 버전-릴리스 또는 git 커밋)
-  uinitconverter-gen/            계획 → s6-rc 소스, 컴파일, s6-rc-update, 보고서 (도구 uinitconverter-gen)
-  uinitconverter-runner/         실행 환경, 준비 완료 신호, 재시작 정책 (도구 uinitconverter-runner)
+  uinitconverter-gen/            계획 → s6-rc 소스, 컴파일, s6-rc-update, 보고서 (도구 initconvert-gen)
+  uinitconverter-runner/         실행 환경, 준비 완료 신호, 재시작 정책 (도구 initconvert-runner)
     runner.rs              Runner 타입과 run, finish, up, down 명령
     runner/                exec.rs, environment.rs, stdio.rs, sockets.rs, forking.rs,
                            notify.rs(준비 완료 도우미), status.rs(종료 결과)
-  uinitconverter-timers/         타이머와 path 유닛 러너 (도구 uinitconverter-timers)
+  uinitconverter-timers/         타이머와 path 유닛 러너 (도구 initconvert-timers)
   uinitconverterd/               D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓,
                            요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs),
                            장치가 요청하는 유닛(devices.rs), SELinux 접근 검사
-                           (access.rs) (도구 uinitconverterd)
+                           (access.rs) (도구 initconvertd)
     daemon/mod.rs          Daemon 타입, 유닛 불러오기, 메인 루프
     daemon/                dispatch.rs, manager.rs(Manager 메서드), jobs.rs,
                            scopes.rs(StartTransientUnit), caller.rs, errors.rs, ...
-  uinitconverter/                알맞은 도구를 실행하는 uinitconverter 명령과 `uinitconverter init`
+  uinitconverter/                알맞은 도구를 실행하는 initconvert 명령과 `initconvert init`
 standalone/                별도 프로젝트. 각각 README와 spec이 있습니다
   uinitconverter-fdstore/        파일 디스크립터 저장소 서버
   uinitconverter-journal-relay/  journald 클라이언트 소켓을 syslog로 전달(JOURNAL=no)

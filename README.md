@@ -9,7 +9,8 @@
 uinitconverter는 systemd 대신 **s6를 PID 1로** 삼아 Fedora를 실행합니다. Fedora의 유닛
 파일을 s6-rc 서비스로 변환하고, 관리는 s6 자체의 도구로 합니다. `systemctl`, libsystemd,
 D-Bus 클라이언트가 계속 동작하므로 dnf, SELinux enforcing, GNOME도 그대로 쓸 수 있습니다.
-명령, 패키지, 경로의 이름은 모두 `uinitconverter`입니다.
+패키지와 경로의 이름은 `uinitconverter`이고, 명령은 `initconvert`(`initconvert init`, `initconvert reload` 등)와
+`initconvertd`, `initconvert-gen`, `initconvert-runner` 등입니다.
 
 **설치 전에 읽어 주세요.**
 
@@ -37,7 +38,7 @@ D-Bus 클라이언트가 계속 동작하므로 dnf, SELinux enforcing, GNOME도
 | 도구 | 하는 일 | 없을 때 |
 |---|---|---|
 | [`uinitconverter-linkwatch`](standalone/uinitconverter-linkwatch/README.md) | s6 경쟁 상태로 멈춘 daemon-reload를 풀어 줍니다 | 멈춘 `s6-rc-update`를 죽일 때까지 그 reload와 이후의 모든 s6-rc 명령이 멈춥니다 |
-| [`uinitconverter-fdstore`](standalone/uinitconverter-fdstore/README.md) | 서비스가 저장한 파일 디스크립터와 수신 소켓을 보관합니다 | `uinitconverterd`가 재시작할 때 사라지고, 요청 시 시작하는 서비스가 부팅 때 시작됩니다 |
+| [`uinitconverter-fdstore`](standalone/uinitconverter-fdstore/README.md) | 서비스가 저장한 파일 디스크립터와 수신 소켓을 보관합니다 | `initconvertd`가 재시작할 때 사라지고, 요청 시 시작하는 서비스가 부팅 때 시작됩니다 |
 | [`uinitconverter-notify`](standalone/uinitconverter-notify/README.md) | `systemd-notify` 대체 도구입니다 | 프로그램들이 계속 설치되어 있는 `systemd-notify`를 씁니다 |
 | [`uinitconverter-journal-relay`](standalone/uinitconverter-journal-relay/README.md) | `--journal=no`일 때 journald의 클라이언트 소켓을 대신합니다 | `--journal=no`를 쓸 수 없습니다. 기본값인 journald를 쓰면 달라지는 것이 없습니다 |
 
@@ -147,12 +148,12 @@ sudo dnf install ~/rpmbuild-uinitconverter/rpms/*.rpm \
 명령을 알려 줍니다.
 
 ```sh
-uinitconverter init --dry-run
-sudo uinitconverter init
+initconvert init --dry-run
+sudo initconvert init
 ```
 
 첫 실행에서는 s6 부팅의 SELinux가 permissive 모드가 됩니다. 자주 쓰는 옵션은 아래와 같고,
-전체 옵션은 [`uinitconverter init`이 하는 일](docs/etc.md#uinitconverter-init이-하는-일)에 있습니다.
+전체 옵션은 [`initconvert init`이 하는 일](docs/etc.md#initconvert-init이-하는-일)에 있습니다.
 
 | 옵션 | 효과 |
 |---|---|
@@ -175,7 +176,7 @@ GRUB 메뉴에서 **Fedora (s6 + uinitconverter)**를 고르세요.
 
 ```sh
 cat /proc/1/comm                  # s6-svscan이 나와야 합니다
-uinitconverter --version          # 본체 도구가 모두 한 빌드인지 확인
+initconvert --version          # 본체 도구가 모두 한 빌드인지 확인
 s6 live status | head             # s6가 관리하는 서비스
 sudo ausearch -m AVC -ts boot     # 이번 부팅의 SELinux 거부 기록
 ```
@@ -183,7 +184,7 @@ sudo ausearch -m AVC -ts boot     # 이번 부팅의 SELinux 거부 기록
 문제가 될 거부 기록이 없다면 다음 부팅부터 enforcing으로 바꾸세요.
 
 ```sh
-sudo uinitconverter init --selinux=enforcing
+sudo initconvert init --selinux=enforcing
 ```
 
 ### 부팅에 실패하면
@@ -199,7 +200,7 @@ sudo uinitconverter init --selinux=enforcing
 
 ```sh
 sudo dnf upgrade ./*.rpm
-sudo uinitconverter init --yes
+sudo initconvert init --yes
 ```
 
 방법 B라면 새 소스를 받아 3단계의 빌드 명령 두 개를 다시 실행한 뒤 실행합니다.
@@ -207,10 +208,10 @@ sudo uinitconverter init --yes
 ```sh
 sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm \
     ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm
-sudo uinitconverter init --yes
+sudo initconvert init --yes
 ```
 
-s6 부팅에서는 `init`이 `uinitconverterd`를 다시 시작해 새 빌드로 바꿉니다. 업데이트를 마치려면 재부팅하세요.
+s6 부팅에서는 `init`이 `initconvertd`를 다시 시작해 새 빌드로 바꿉니다. 업데이트를 마치려면 재부팅하세요.
 s6 패키지는 `dist/skarnet.versions`가 바뀌었을 때만 다시 빌드합니다.
 
 ### 제거
@@ -218,7 +219,7 @@ s6 패키지는 `dist/skarnet.versions`가 바뀌었을 때만 다시 빌드합�
 일반 systemd 부팅에서 실행하세요.
 
 ```sh
-sudo uinitconverter init --uninstall
+sudo initconvert init --uninstall
 sudo dnf remove 'uinitconverter*'
 ```
 

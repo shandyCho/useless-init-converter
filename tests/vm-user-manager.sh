@@ -1,8 +1,8 @@
 #!/bin/bash
 # The s6 user manager under a real user@UID.service (slice A, work_history
 # part 141), in the GNOME VM of tests/gnome-vm.sh. The VM boots systemd; a
-# drop-in makes one test user's user@ run `uinitconverter-user-manager` (the
-# uinitconverter-user package's link to uinitconverterd),
+# drop-in makes one test user's user@ run `initconvert-user-manager` (the
+# uinitconverter-user package's link to initconvertd),
 # and uinitconverter.user_manager=s6 on the kernel command line lets it
 # (the launcher hands over to systemd --user on a systemd boot otherwise).
 # GDM, the greeter and tester's GNOME session keep systemd --user. A second
@@ -38,7 +38,7 @@
 #                                        # over, the next login works; a crashed
 #                                        # manager (a lingering user) too
 #
-# Copies target/debug's uinitconverterd, -runner and -timers (cargo build
+# Copies target/debug's initconvertd, -runner and -timers (cargo build
 # first) and the skalibs and s6 RPMs from SKARNET_RPMS (default
 # ~/rpmbuild-skarnet/RPMS/x86_64, the newest of each) into a fresh overlay.
 set -euo pipefail
@@ -66,7 +66,7 @@ s6=$(pick s6)
 # BUILD=release for the memory figure (debug binaries are several times
 # larger): cargo build --release first.
 BUILD=${BUILD:-debug}
-for b in uinitconverterd uinitconverter-runner uinitconverter-timers; do
+for b in initconvertd initconvert-runner initconvert-timers; do
     [ -x "$TOP/target/$BUILD/$b" ] || { echo "build first: target/$BUILD/$b" >&2; exit 1; }
 done
 
@@ -92,9 +92,9 @@ case $1 in *baseline) exit 0 ;; esac
 # Built locally, so unsigned.
 rpm -Uvh --nodeps --nosignature --replacepkgs ./skalibs-*.rpm ./execline-*.rpm ./s6-*.rpm
 install -d /usr/local/libexec/uinitconverter
-install -m 0755 uinitconverterd uinitconverter-runner uinitconverter-timers /usr/local/libexec/uinitconverter/
+install -m 0755 initconvertd initconvert-runner initconvert-timers /usr/local/libexec/uinitconverter/
 # As the uinitconverter-user package installs it.
-ln -sf uinitconverterd /usr/local/libexec/uinitconverter/uinitconverter-user-manager
+ln -sf initconvertd /usr/local/libexec/uinitconverter/initconvert-user-manager
 # The fallback's record directory, as the package's tmpfiles.d makes it.
 install -Dm0644 uinitconverter-user.conf /etc/tmpfiles.d/uinitconverter-user.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/uinitconverter-user.conf
@@ -111,7 +111,7 @@ mkdir -p "$dir"
 cat >"$dir/90-uinitconverter.conf" <<EOF
 [Service]
 ExecStart=
-ExecStart=/usr/local/libexec/uinitconverter/uinitconverter-user-manager
+ExecStart=/usr/local/libexec/uinitconverter/initconvert-user-manager
 EOF
 if [ "$1" = fallback ]; then
     # Broken for the s6 manager only: a unit path that only it reads (the
@@ -160,9 +160,9 @@ systemctl start "user@$uid.service" && ok "user@$uid.service started (READY=1 ar
 echo "   start took $(( ($(date +%s%N) - t0) / 1000000 )) ms"
 systemctl start "user@$ref.service"
 main=$(systemctl show -p MainPID --value "user@$uid.service")
-# By its executable: started as uinitconverter-user-manager, comm is cut.
+# By its executable: started as initconvert-user-manager, comm is cut.
 exe=$(basename "$(readlink "/proc/$main/exe")")
-[ "$exe" = uinitconverterd ] && ok "its main process is uinitconverterd ($(cat "/proc/$main/comm"))" || bad "main PID $main is $exe"
+[ "$exe" = initconvertd ] && ok "its main process is initconvertd ($(cat "/proc/$main/comm"))" || bad "main PID $main is $exe"
 grep -qx "$main" "$cg/init.scope/cgroup.procs" && ok "the manager is in init.scope" || bad "init.scope: $(cat "$cg/init.scope/cgroup.procs" 2>&1)"
 sleep 3
 for u in default.target sockets.target dbus.socket hello.service; do
@@ -171,7 +171,7 @@ for u in default.target sockets.target dbus.socket hello.service; do
 done
 grep -q . "$cg/app.slice/hello.service/cgroup.procs" 2>/dev/null && ok "hello.service runs in app.slice/hello.service" || bad "no $cg/app.slice/hello.service: $(find "$cg" -maxdepth 2 -type d | sed "s|$cg||" | tr '\n' ' ')"
 own=$(as s6test busctl --user status org.freedesktop.systemd1 2>&1 | sed -n 's/^PID=//p')
-[ "$own" = "$main" ] && ok "org.freedesktop.systemd1 on the user bus is uinitconverterd" || bad "the bus name's owner: ${own:-none} ($(as s6test busctl --user status org.freedesktop.systemd1 2>&1 | head -3))"
+[ "$own" = "$main" ] && ok "org.freedesktop.systemd1 on the user bus is initconvertd" || bad "the bus name's owner: ${own:-none} ($(as s6test busctl --user status org.freedesktop.systemd1 2>&1 | head -3))"
 b=$(as s6test systemctl --user show -p ActiveState --value dbus-broker.service 2>&1)
 [ "$b" = active ] && ok "dbus-broker.service (the user bus) is active" || bad "dbus-broker.service: $b"
 as s6test busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ListNames >/dev/null && ok "a client on the user bus" || bad "ListNames failed"
@@ -450,7 +450,7 @@ EOS
 cat >"$S/life.sh" <<'EOS'
 #!/bin/bash
 # As root in the VM: slice E's steps. life.sh STEP MANAGER, MANAGER being
-# the executable of the user managers expected (uinitconverterd or systemd).
+# the executable of the user managers expected (initconvertd or systemd).
 set -uo pipefail
 step=$1 want=${2:-uinitconverterd}
 pass=0 fail=0
@@ -464,11 +464,11 @@ as() {
     runuser -u "$u" -- env HOME="/home/$u" XDG_RUNTIME_DIR="/run/user/$id" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$id/bus" "$@"
 }
 seat_session() { loginctl list-sessions --no-legend | awk -v u="$1" '$3 == u && $4 == "seat0" {print $1}' | head -1; }
-# The manager's executable (comm is cut for uinitconverter-user-manager).
+# The manager's executable (comm is cut for initconvert-user-manager).
 mgr_comm() { basename "$(readlink "/proc/$(systemctl show -p MainPID --value "user@$(id -u "$1").service")/exe")" 2>/dev/null; }
 greeter_up() { pgrep -f -u "$(getent passwd | awk -F: '/^gdm-greeter/ {print $1}' | paste -sd,)" '^/usr/bin/gnome-shell' >/dev/null 2>&1; }
 no_fallback() {
-    [ "$want" = uinitconverterd ] || return 0
+    [ "$want" = initconvertd ] || return 0
     [ ! -e "/run/uinitconverter-user/$(id -u "$1")" ] && ok "no fallback for $1" || bad "$1 fell back: $(cat "/run/uinitconverter-user/$(id -u "$1")")"
 }
 session_up() {
@@ -603,13 +603,13 @@ case $step in
         [ "$(stat -c %U /run/uinitconverter-user/1000)" = tester ] && ok "the record is tester's own file" || bad "owner: $(stat -c %U /run/uinitconverter-user/1000)"
         until_ok '[ "$(systemctl is-active user@1000.service)" != active ] || [ "$(mgr_comm 1000)" = systemd ]' 30
         echo "   user@1000.service: $(systemctl is-active user@1000.service), main $(mgr_comm 1000)"
-        [ -z "$(pgrep -u tester -x s6-svscan)$(pgrep -u tester -x s6-supervise)$(pgrep -u tester -f '^uinitconverter-runner|/uinitconverter-runner ')" ] \
+        [ -z "$(pgrep -u tester -x s6-svscan)$(pgrep -u tester -x s6-supervise)$(pgrep -u tester -f '^initconvert-runner|/initconvert-runner ')" ] \
             && ok "no s6 process of tester is left" || bad "left: $(pgrep -a -u tester -x s6-svscan; pgrep -a -u tester -x s6-supervise)"
         if [ "$(systemctl is-active user@1000.service)" = active ]; then
             cg=/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service
             [ ! -e "$cg/app.slice/uinitconverter" ] && ok "user@1000 is systemd --user's now" || bad "cgroup: $(ls "$cg")"
         fi
-        journalctl -b _UID=1000 --no-pager -o cat | grep -E "^uinitconverterd.*(handing over|fallback|fell back)" | sed 's/^/   /'
+        journalctl -b _UID=1000 --no-pager -o cat | grep -E "^initconvertd.*(handing over|fallback|fell back)" | sed 's/^/   /'
         until_ok 'pgrep -f -u "$(getent passwd | awk -F: '"'"'/^gdm-greeter/ {print $1}'"'"' | paste -sd,)" "^/usr/bin/gnome-shell" >/dev/null' 90 \
             && ok "the greeter is back" || bad "no greeter" ;;
     relogin)
@@ -624,7 +624,7 @@ case $step in
         b=$(id -u bob)
         loginctl enable-linger bob
         until_ok '[ "$(systemctl is-active user@'"$b"'.service)" = active ]' 30
-        [ "$(mgr_comm "$b")" = uinitconverterd ] && ok "bob's manager is the s6 one" || bad "bob's manager: $(mgr_comm "$b")"
+        [ "$(mgr_comm "$b")" = initconvertd ] && ok "bob's manager is the s6 one" || bad "bob's manager: $(mgr_comm "$b")"
         [ -e "/run/uinitconverter-user/$b.running" ] && ok "its running stamp is there" || bad "no running stamp"
         # SIGKILL (the OOM killer): a Rust program ignores a SIGSEGV sent
         # with kill (its handler only acts on a real fault).
@@ -645,7 +645,7 @@ echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
 EOS
 
-cp "$TOP/target/$BUILD/uinitconverterd" "$TOP/target/$BUILD/uinitconverter-runner" "$TOP/target/$BUILD/uinitconverter-timers" "$skalibs" "$execline" "$s6" "$TOP/dist/tmpfiles.d/uinitconverter-user.conf" "$S/"
+cp "$TOP/target/$BUILD/initconvertd" "$TOP/target/$BUILD/initconvert-runner" "$TOP/target/$BUILD/initconvert-timers" "$skalibs" "$execline" "$s6" "$TOP/dist/tmpfiles.d/uinitconverter-user.conf" "$S/"
 "$VM" start "$D"
 "$VM" wait "$D"
 "$VM" copy "$D" "$S"/*
@@ -660,7 +660,7 @@ if [ "$MODE" = user ]; then
 fi
 case $MODE in
     lifecycle | lifecycle-baseline)
-        want=uinitconverterd
+        want=initconvertd
         [ "$MODE" = lifecycle-baseline ] && want=systemd
         rc=0
         "$VM" wait "$D" || rc=$?

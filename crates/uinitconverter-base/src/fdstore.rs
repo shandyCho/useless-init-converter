@@ -2,8 +2,8 @@
 //! so descriptors survive service restarts. Also keeps a service's
 //! listening sockets open across restarts (key "<unit>#sockets").
 //!
-//! Served by the standalone uinitconverter-fdstore, its own s6 service, so the
-//! descriptors also survive a restart of uinitconverterd; the daemon serves it
+//! Served by the standalone initconvert-fdstore, its own s6 service, so the
+//! descriptors also survive a restart of initconvertd; the daemon serves it
 //! itself (Store) when that service is not running.
 //!
 //! Protocol: SOCK_SEQPACKET at RUN_DIR/fdstore, one fd per message (SCM_RIGHTS).
@@ -271,7 +271,7 @@ fn same_inode_and_flags(a: BorrowedFd<'_>, b: BorrowedFd<'_>) -> bool {
 }
 
 /// Under SELinux only peers in the store's own domain may use it. Its
-/// clients are the service manager's own processes (uinitconverterd and the
+/// clients are the service manager's own processes (initconvertd and the
 /// runner, init_t on the s6 boot), and it holds every service's
 /// descriptors; root alone is not enough, as the policy lets many confined
 /// root daemons connect to init_t's sockets. Keep in step with

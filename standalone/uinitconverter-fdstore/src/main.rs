@@ -1,4 +1,4 @@
-//! uinitconverter-fdstore: holds file descriptors for services (systemd's
+//! initconvert-fdstore: holds file descriptors for services (systemd's
 //! FDSTORE=1 and the listening sockets of socket-activated services), so
 //! they survive a restart of the service and of the service manager.
 //!
@@ -13,14 +13,14 @@ use std::process::exit;
 mod store;
 
 const USAGE: &str = "\
-usage: uinitconverter-fdstore [--socket PATH] [--ready-fd N]
+usage: initconvert-fdstore [--socket PATH] [--ready-fd N]
 
   --socket PATH   where to listen (default /run/uinitconverter/fdstore)
   --ready-fd N    write a newline to fd N once listening (s6 readiness)
 ";
 
 fn die(msg: &str) -> ! {
-    eprintln!("uinitconverter-fdstore: {msg}");
+    eprintln!("initconvert-fdstore: {msg}");
     exit(1)
 }
 

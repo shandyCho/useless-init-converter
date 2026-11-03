@@ -2,7 +2,7 @@
 # kernel-install plugin: keep a "Fedora (s6 + uinitconverter)" boot entry for every
 # installed kernel. It copies the BLS entry that 20-grub.install just wrote
 # and adds the s6 options. Options come from /etc/uinitconverter/boot-options.
-# With /etc/uinitconverter/boot-only-s6 (uinitconverter init --boot-only-s6=yes) it also
+# With /etc/uinitconverter/boot-only-s6 (initconvert init --boot-only-s6=yes) it also
 # builds the s6 initramfs (initramfs-VERSION-s6.img, PID 1 s6-svscan, no
 # systemd) and boots the s6 entry with it; the systemd entry keeps Fedora's.
 #   kernel-install add VERSION IMAGE  /  kernel-install remove VERSION
@@ -11,7 +11,7 @@ KVER=$2
 ENTRIES=${UINITCONVERTER_BLS_DIR:-/boot/loader/entries}
 TITLE="Fedora (s6 + uinitconverter)"
 OPTS_FILE=${UINITCONVERTER_BOOT_OPTIONS:-/etc/uinitconverter/boot-options}
-# "s6" here (uinitconverter init --default-s6) keeps the s6 entry the default.
+# "s6" here (initconvert init --default-s6) keeps the s6 entry the default.
 DEFAULT_FILE=${UINITCONVERTER_BOOT_DEFAULT:-/etc/uinitconverter/boot-default}
 EDITENV=${UINITCONVERTER_GRUB_EDITENV:-grub2-editenv}
 ONLY_S6_FILE=${UINITCONVERTER_BOOT_ONLY_S6:-/etc/uinitconverter/boot-only-s6}

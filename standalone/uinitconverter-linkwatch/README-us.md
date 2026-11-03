@@ -49,7 +49,7 @@ cargo test
 ## Install
 
 ```sh
-sudo install -Dm0755 target/release/uinitconverter-linkwatch /usr/libexec/uinitconverter/uinitconverter-linkwatch
+sudo install -Dm0755 target/release/initconvert-linkwatch /usr/libexec/uinitconverter/initconvert-linkwatch
 ```
 
 RPM: `./build-rpm.sh [OUTDIR]` builds `uinitconverter-linkwatch.spec` into
@@ -62,7 +62,7 @@ the source RPM, to rebuild elsewhere (`rpmbuild --rebuild`, mock). uinitconverte
 ## Run
 
 ```sh
-uinitconverter-linkwatch [--after SECONDS] [--interval SECONDS] [--under DIR] [--once]
+initconvert-linkwatch [--after SECONDS] [--interval SECONDS] [--under DIR] [--once]
 ```
 
 | Option | Meaning |
@@ -73,4 +73,4 @@ uinitconverter-linkwatch [--after SECONDS] [--interval SECONDS] [--under DIR] [-
 | `--once` | look once and exit |
 
 Each event it sends is logged to stderr:
-`uinitconverter-linkwatch: s6-rc-update (pid N) waited 12 s for DIR, whose supervisor runs: sent its start event`.
+`initconvert-linkwatch: s6-rc-update (pid N) waited 12 s for DIR, whose supervisor runs: sent its start event`.

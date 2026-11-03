@@ -356,7 +356,7 @@ impl Runner {
     /// run script's readiness pipe). Only returns on failure.
     pub fn cmd_confine(&mut self, argv: &[String]) -> i32 {
         if argv.is_empty() {
-            eprintln!("uinitconverter-runner: confine: no command");
+            eprintln!("initconvert-runner: confine: no command");
             return 1;
         }
         let Err(e) = self.confine(argv);

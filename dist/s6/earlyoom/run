@@ -6,4 +6,4 @@
 eval "set -- ${EARLYOOM_ARGS:-}"
 # earlyoom.service's user, capabilities, sandbox, Nice= and OOMScoreAdjust=. If
 # they can't be applied it doesn't start, and s6 tries again.
-exec /usr/libexec/uinitconverter/uinitconverter-runner confine earlyoom.service -- /usr/bin/earlyoom "$@"
+exec /usr/libexec/uinitconverter/initconvert-runner confine earlyoom.service -- /usr/bin/earlyoom "$@"

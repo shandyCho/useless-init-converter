@@ -15,7 +15,7 @@ BuildRequires:  skalibs-devel
 %description
 mdevd is a small daemon managing kernel hotplug events, similarly to udevd,
 with the configuration file format of busybox's mdev. uinitconverter's s6
-initramfs (uinitconverter init --boot-only-s6=yes) uses it to load drivers.
+initramfs (initconvert init --boot-only-s6=yes) uses it to load drivers.
 
 %prep
 %autosetup

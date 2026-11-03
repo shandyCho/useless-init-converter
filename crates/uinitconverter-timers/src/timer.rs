@@ -1,4 +1,4 @@
-//! Timer units. Each .timer becomes an s6 longrun running `uinitconverter-timers
+//! Timer units. Each .timer becomes an s6 longrun running `initconvert-timers
 //! timer-run`, which computes the next elapse, sleeps, and asks the daemon to
 //! start the triggered unit (so all job semantics stay in one place).
 //!

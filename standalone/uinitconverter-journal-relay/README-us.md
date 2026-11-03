@@ -22,7 +22,7 @@ cargo test
 ## Install
 
 ```sh
-sudo install -Dm0755 target/release/uinitconverter-journal-relay /usr/libexec/uinitconverter/uinitconverter-journal-relay
+sudo install -Dm0755 target/release/initconvert-journal-relay /usr/libexec/uinitconverter/initconvert-journal-relay
 ```
 
 RPM: `./build-rpm.sh [OUTDIR]` builds `uinitconverter-journal-relay.spec` into
@@ -34,7 +34,7 @@ the source RPM, to rebuild elsewhere (`rpmbuild --rebuild`, mock).
 ## Run
 
 ```sh
-uinitconverter-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
+initconvert-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
 ```
 
 - `--dir DIR`: where to create journald's sockets (default `/run/systemd/journal`).

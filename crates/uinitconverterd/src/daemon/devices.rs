@@ -59,7 +59,7 @@ impl Daemon {
                 Ok(fd) => {
                     std::thread::spawn(move || monitor_loop(fd, tx));
                 }
-                Err(e) => eprintln!("uinitconverterd: cannot listen to udev events: {e}"),
+                Err(e) => eprintln!("initconvertd: cannot listen to udev events: {e}"),
             }
         } else {
             drop(tx);
@@ -121,9 +121,9 @@ impl Daemon {
                 )
                 .await;
                 let r = self.execute_job(job, &id, &unit, "start", "replace").await;
-                eprintln!("uinitconverterd: {id} wanted by device {dev}: {r}");
+                eprintln!("initconvertd: {id} wanted by device {dev}: {r}");
             }
-            Err(e) => eprintln!("uinitconverterd: device {dev} wants {name}: {}", e.msg),
+            Err(e) => eprintln!("initconvertd: device {dev} wants {name}: {}", e.msg),
         }
     }
 }
@@ -151,7 +151,7 @@ fn save_plugged(path: &Path, plugged: &Plugged) {
     }
     let tmp = path.with_extension("tmp");
     if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, path)) {
-        eprintln!("uinitconverterd: cannot write {}: {e}", path.display());
+        eprintln!("initconvertd: cannot write {}: {e}", path.display());
     }
 }
 
@@ -420,7 +420,7 @@ fn monitor_loop(fd: OwnedFd, tx: tokio::sync::mpsc::UnboundedSender<Msg>) {
             Err(e) if e.raw_os_error() == Some(libc::ENOBUFS) => Msg::Rescan,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => {
-                eprintln!("uinitconverterd: udev monitor: {e}");
+                eprintln!("initconvertd: udev monitor: {e}");
                 return;
             }
         };

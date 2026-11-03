@@ -1,4 +1,4 @@
-//! Command line and uinitconverter.conf: what `uinitconverter init` was asked to do.
+//! Command line and uinitconverter.conf: what `initconvert init` was asked to do.
 
 use super::*;
 
@@ -100,14 +100,10 @@ pub(super) fn parse_args(args: &[String]) -> Result<Option<Opts>, String> {
                 None,
             ) => {
                 return Err(format!(
-                    "unknown option {a}; see uinitconverter init --help (it is --NAME=yes|no now)"
+                    "unknown option {a}; see initconvert init --help (it is --NAME=yes|no now)"
                 ))
             }
-            _ => {
-                return Err(format!(
-                    "unknown option {a} (see uinitconverter init --help)"
-                ))
-            }
+            _ => return Err(format!("unknown option {a} (see initconvert init --help)")),
         }
     }
     Ok(Some(o))

@@ -3,19 +3,19 @@
 [English](README-us.md)
 
 본체(`crates/`)의 실행 파일은 각각 RPM 패키지 하나가 되고, s6 사용자 매니저도 자기 패키지가
-있습니다(`uinitconverter-user`, `uinitconverterd`로 들어가는 진입점). 소스는 Cargo 작업공간
+있습니다(`uinitconverter-user`, `initconvertd`로 들어가는 진입점). 소스는 Cargo 작업공간
 하나에 그대로 있고, 여섯 패키지 모두 같은 소스 타르볼로 빌드합니다. 라이브러리
 크레이트(`uinitconverter-base`, `uinitconverter-install`, `uinitconverter-exec`, `uinitconverter-client`)는
 실행 파일에 정적으로 링크되므로 빌드할 때만 쓰이고, 따로 패키지가 되지 않습니다.
 
 | 패키지 | 들어 있는 것 | 실행할 때 필요한 패키지 (`Requires`) |
 |---|---|---|
-| `uinitconverter-runner` | `uinitconverter-runner` | s6, shadow-utils. `uinitconverterd`는 권장(`OnFailure=`/`OnSuccess=` 유닛을 데몬으로 시작) |
-| `uinitconverterd` | `uinitconverterd`, D-Bus 정책(`uinitconverter.conf`) | s6, s6-rc, dbus-daemon, `uinitconverter-runner`. `uinitconverter-timers`는 권장(`systemd-run --on-calendar`), `uinitconverter-user`는 제안 |
-| `uinitconverter-user` (noarch) | `uinitconverter-user-manager`(`uinitconverterd`로의 링크. 이 이름으로 실행되면 사용자 매니저로 동작), `/run/uinitconverter-user`(대체 기록)용 tmpfiles.d 항목 | `uinitconverterd`, `uinitconverter-runner`, s6, systemd(`systemd --user`가 기본값이자 대체). 이 패키지가 없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다 |
-| `uinitconverter-timers` | `uinitconverter-timers` | `uinitconverterd` (타이머가 유닛을 데몬으로 시작) |
-| `uinitconverter-gen` | `uinitconverter-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (생성된 서비스가 실행) |
-| `uinitconverter` | `uinitconverter` 명령(부팅 설정 `uinitconverter init` 포함), `early`, 설정, s6 서비스, s6-linux-init 골격, SELinux 모듈, kernel-install 플러그인, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, 그리고 위의 도구 패키지 네 개. `uinitconverter-user`는 제안 |
+| `uinitconverter-runner` | `initconvert-runner` | s6, shadow-utils. `uinitconverterd`는 권장(`OnFailure=`/`OnSuccess=` 유닛을 데몬으로 시작) |
+| `uinitconverterd` | `initconvertd`, D-Bus 정책(`uinitconverter.conf`) | s6, s6-rc, dbus-daemon, `uinitconverter-runner`. `uinitconverter-timers`는 권장(`systemd-run --on-calendar`), `uinitconverter-user`는 제안 |
+| `uinitconverter-user` (noarch) | `initconvert-user-manager`(`initconvertd`로의 링크. 이 이름으로 실행되면 사용자 매니저로 동작), `/run/uinitconverter-user`(대체 기록)용 tmpfiles.d 항목 | `uinitconverterd`, `uinitconverter-runner`, s6, systemd(`systemd --user`가 기본값이자 대체). 이 패키지가 없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다 |
+| `uinitconverter-timers` | `initconvert-timers` | `uinitconverterd` (타이머가 유닛을 데몬으로 시작) |
+| `uinitconverter-gen` | `initconvert-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (생성된 서비스가 실행) |
+| `uinitconverter` | `initconvert` 명령(부팅 설정 `initconvert init` 포함), `early`, 설정, s6 서비스, s6-linux-init 골격, SELinux 모듈, kernel-install 플러그인, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, 그리고 위의 도구 패키지 네 개. `uinitconverter-user`는 제안 |
 
 - `dnf install uinitconverter`로 전부 설치됩니다. 부팅에 필요한 설정과 SELinux 모듈은
   `uinitconverter` 패키지에 있으므로, s6로 부팅하려면 이 패키지가 있어야 합니다.
@@ -52,7 +52,7 @@ spec에는 버전을 적지 않습니다. 스크립트가 정해서 전달하므
 - 여섯 패키지는 같은 버전-릴리스끼리만 맞도록 묶여 있고, 스크립트는 언제나 여섯 개를
   함께 빌드합니다. `rpms/`에는 마지막 빌드의 여섯 개만 남습니다.
 - RPM으로 빌드한 도구의 `--version`은 패키지의 버전-릴리스를 보여 줍니다(예:
-  `uinitconverter-gen 0.1.0-1.20261021073517.gc8aabf8.fc45`). 소스에서 빌드하면
+  `initconvert-gen 0.1.0-1.20261021073517.gc8aabf8.fc45`). 소스에서 빌드하면
   `0.1.0 (git c8aabf8)`처럼 커밋을 보여 줍니다.
 - 공개 릴리스처럼 릴리스 번호를 직접 정하려면 `UINITCONVERTER_RELEASE=1 packages/build-rpms.sh`.
 
@@ -104,8 +104,8 @@ sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm
 gh release download vVERSION -R shandyCho/useless-init-converter    # 또는 브라우저로 파일을 받기
 sha256sum -c SHA256SUMS
 sudo dnf install ./*.rpm
-uinitconverter init --dry-run
-sudo uinitconverter init
+initconvert init --dry-run
+sudo initconvert init
 ```
 
 rsyslog, earlyoom 같은 다른 의존 패키지는 dnf가 Fedora 저장소에서 가져옵니다. GitHub에는
@@ -121,7 +121,7 @@ spec에는 아직 `License: TBD`라고 되어 있습니다. 공개하기 전에 
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm      # skarnet 도구 (dist/rpm/build-skarnet-rpms.sh)
 sudo dnf install ~/rpmbuild-uinitconverter/rpms/*.rpm
 sudo dnf install ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm   # 선택 (standalone/*/build-rpm.sh)
-sudo uinitconverter init
+sudo initconvert init
 ```
 
 Rust 코드를 수정한 뒤에는 다시 빌드하고 업그레이드합니다.
@@ -130,16 +130,16 @@ Rust 코드를 수정한 뒤에는 다시 빌드하고 업그레이드합니다.
 git pull                                            # 또는 직접 수정하고 커밋
 packages/build-rpms.sh
 sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm
-uinitconverter --version                                  # 설치된 빌드 확인
+initconvert --version                                  # 설치된 빌드 확인
 ```
 
-s6로 부팅한 상태라면, 새 uinitconverterd는 데몬을 다시 시작하면 적용됩니다(`s6-svc -r
+s6로 부팅한 상태라면, 새 initconvertd는 데몬을 다시 시작하면 적용됩니다(`s6-svc -r
 /run/service/uinitconverterd`). runner와 timers는 서비스가 다음에 시작될 때 적용되고,
-uinitconverter-gen은 다음 `uinitconverter reload` 때 적용됩니다(`systemctl daemon-reload`는 uinitconverterd에
+initconvert-gen은 다음 `initconvert reload` 때 적용됩니다(`systemctl daemon-reload`는 initconvertd에
 들어 있는 사본을 쓰므로, 데몬이 다시 시작된 뒤에 바뀝니다). 부팅 때는 아무것도 다시 만들지
 않습니다.
 
-s6-rc 저장소가 없던 버전(`s6 set` 변경 이전)에서 이전할 때는 `sudo uinitconverter init`을 다시
+s6-rc 저장소가 없던 버전(`s6 set` 변경 이전)에서 이전할 때는 `sudo initconvert init`을 다시
 실행하세요. `/etc/uinitconverter/s6/default`를 지우고(이제 세트의 커밋이 `default` 번들을 만듭니다.
 이것이 있으면 reload가 실행을 거부합니다), 새 `/etc/s6.conf`를 쓰고, `/etc/s6/sources`를
 만들고, 새 SELinux 모듈을 불러오고, systemd의 활성화 상태에서 시작하는 세트 `current`와 함께
@@ -148,8 +148,35 @@ s6-rc 저장소가 없던 버전(`s6 set` 변경 이전)에서 이전할 때는 
 s6-linux-init 골격(`rc.init`, `rc.shutdown`, `rc.shutdown.final`)은
 다릅니다. 패키지는 init이 쓰는 원본을 설치할 뿐이고, 부팅에 쓰이는 것은
 `s6-linux-init-maker`가 그것으로 만든 `/etc/s6-linux-init/current`입니다.
-업그레이드로 골격이 바뀌면 `sudo uinitconverter init`을 다시 실행해(지난 실행의 선택을
+업그레이드로 골격이 바뀌면 `sudo initconvert init`을 다시 실행해(지난 실행의 선택을
 유지합니다) 새로 만드세요. `early`와 나머지는 그러지 않아도 다음 부팅부터 적용됩니다.
+
+### initconvert 명령으로 이전하기
+
+명령의 이름이 `uinitconverter*`에서 `initconvert*`로 바뀌었습니다. `initconvert`(`/usr/bin/initconvert`),
+`/usr/libexec/uinitconverter/`의 `initconvertd`, `initconvert-gen`, `initconvert-runner`,
+`initconvert-timers`, `initconvert-user-manager`, 그리고 독립 도구 `initconvert-fdstore`,
+`initconvert-notify`, `initconvert-journal-relay`, `initconvert-linkwatch`입니다. 나머지는 이름이 그대로입니다.
+패키지, `/etc/uinitconverter`, `/var/lib/uinitconverter`, `/run/uinitconverter`, s6 서비스
+(`uinitconverterd`, `uinitconverter-fdstore` 등), SELinux 모듈, D-Bus 인터페이스, 커널 옵션,
+`UINITCONVERTER_*` 변수. 자동 이전은 없습니다. s6-rc 데이터베이스와 s6-linux-init 트리는 프로그램을
+경로로 가리키므로, 업그레이드한 뒤 다시 만들어야 합니다. **일반 systemd 부팅**에서:
+
+```sh
+sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm \
+    ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm   # 또는 릴리스의 RPM
+sudo initconvert init          # 지난 실행과 같은 선택으로: 데이터베이스를 다시 만들고
+                               # s6-linux-init 트리를 다시 빌드합니다
+```
+
+`/etc/uinitconverter/s6` 아래의 서비스를 고친 적이 있다면(`%config(noreplace)`입니다), dnf는 옛 경로를
+담은 그 사본을 두고 새 파일을 `.rpmnew`로 옆에 놓습니다. `initconvert init`을 실행하기 전에 새 경로를
+옮겨 적으세요(`sudo find /etc/uinitconverter -name '*.rpmnew'`).
+
+그다음 s6 항목으로 부팅하세요. `uinitconverter`, `uinitconverterd` 등 옛 이름을 부르는 직접 만든
+스크립트는 새 이름으로 고쳐야 합니다. 설정과 s6-rc 세트는 그대로 유지됩니다. s6로 부팅한 상태에서
+업그레이드하지 마세요. `initconvert init`을 실행하기 전까지는 (다시) 시작하는 서비스가 사라진 옛 경로를
+실행합니다.
 
 ### sdcompat에서 이전하기
 
@@ -169,12 +196,12 @@ sudo rm -rf /var/lib/sdcompat /var/log/sdcompat
 ```
 
 패키지를 제거하면 예전 SELinux 모듈도 제거됩니다. s6-rc 저장소는 세트가 아직 예전 서비스
-이름을 담고 있으므로 다른 이름으로 옮겨 둡니다. `uinitconverter init`이 systemd의 활성화 상태에서 새
+이름을 담고 있으므로 다른 이름으로 옮겨 둡니다. `initconvert init`이 systemd의 활성화 상태에서 새
 저장소를 만듭니다(직접 적용한 `s6 set` 변경은 다시 적용해야 합니다). 그다음 uinitconverter RPM을
 설치하고 예전에 쓰던 옵션으로 `sudo uinitconverter init`을 실행하세요(예: `--journal=no
 --boot-only-s6=yes --selinux=enforcing`. 예전 선택은 읽지 않습니다). 수정한 설정은
 `~/sdcompat-etc`에서 `/etc/uinitconverter`로 직접 옮기세요(파일 이름은 같고
 `sdcompat.conf`만 `uinitconverter.conf`가 됩니다).
 
-제거: `sudo uinitconverter init --uninstall` 다음
+제거: `sudo initconvert init --uninstall` 다음
 `dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd uinitconverter-user`.

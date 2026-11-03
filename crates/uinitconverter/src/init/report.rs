@@ -79,7 +79,7 @@ pub(super) fn next_steps(s: &Settings) -> String {
         "  4. SELinux: the entry boots permissive. Collect denials with\n\
          \x20      ausearch -m AVC -ts boot | audit2allow -M uinitconverter_local\n\
          \x20    review uinitconverter_local.te, load it with semodule -i, then run\n\
-         \x20      sudo uinitconverter init --selinux=enforcing\n"
+         \x20      sudo initconvert init --selinux=enforcing\n"
     };
     let only_s6 = if s.boot_only_s6 {
         "     With the s6 initramfs (--boot-only-s6=yes) an encrypted root's passphrase\n\
@@ -107,9 +107,9 @@ pub(super) fn next_steps(s: &Settings) -> String {
          {only_s6}\
          \x20 6. To go back: boot the normal Fedora entry (hold Shift or press Esc for the\n\
          \x20    GRUB menu); make it the default again with\n\
-         \x20      sudo uinitconverter init --default-systemd\n\
+         \x20      sudo initconvert init --default-systemd\n\
          \x20    To remove the s6 boot entry and what init wrote:\n\
-         \x20      sudo uinitconverter init --uninstall\n"
+         \x20      sudo initconvert init --uninstall\n"
     )
 }
 
@@ -121,9 +121,9 @@ pub(super) fn dry_run_end(args: &[String]) -> String {
         .filter(|a| *a != "--dry-run")
         .collect();
     let cmd = if rest.is_empty() {
-        "sudo uinitconverter init".to_string()
+        "sudo initconvert init".to_string()
     } else {
-        format!("sudo uinitconverter init {}", rest.join(" "))
+        format!("sudo initconvert init {}", rest.join(" "))
     };
     format!("\nDry run: nothing was changed. To apply this, run:\n  {cmd}\n")
 }

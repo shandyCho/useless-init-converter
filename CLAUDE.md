@@ -21,11 +21,17 @@ if they turned out to be wrong.
   `[workspace]`, Cargo.lock, README pair and spec) and must not depend on the
   core or on each other: no path dependencies, no shared code. The core must
   keep working without them.
+- Names: the commands are `initconvert*` (`initconvert`, `initconvertd`,
+  `initconvert-gen`, ..., the standalone `initconvert-fdstore`, ...);
+  everything else stays `uinitconverter*`: packages, crates, project
+  directories, paths (`/usr/libexec/uinitconverter/`, `/etc/uinitconverter`),
+  s6 service names, the SELinux module, D-Bus names, kernel options and
+  variables.
 - Packaging: each core executable is its own RPM (`packages/NAME.spec`, all
   built from one workspace tarball by `packages/build-rpms.sh`), and they
   depend on each other with `Requires`; the library crates are not packaged.
   `uinitconverter-user` (noarch) is the s6 user manager: the link
-  `uinitconverter-user-manager` into `uinitconverterd` and its tmpfiles.d
+  `initconvert-user-manager` into `initconvertd` and its tmpfiles.d
   entry; without it `user@` keeps `systemd --user`.
   The `uinitconverter` package holds the boot setup (`dist/`) and requires the tools.
   The version is `[workspace.package] version` in Cargo.toml and the release

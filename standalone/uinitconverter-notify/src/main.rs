@@ -1,4 +1,4 @@
-//! uinitconverter-notify: a systemd-notify replacement. Sends one sd_notify
+//! initconvert-notify: a systemd-notify replacement. Sends one sd_notify
 //! message to the socket in $NOTIFY_SOCKET (a path, or @name for the
 //! abstract namespace). Works under any service manager that sets it.
 //!
@@ -21,9 +21,9 @@ use rustix::process::Pid;
 use rustix::time::{clock_gettime, ClockId};
 
 const USAGE: &str = "\
-usage: uinitconverter-notify [OPTIONS] [VAR=VALUE...]
-       uinitconverter-notify --exec [OPTIONS] [VAR=VALUE...] ; COMMAND [ARGS...]
-       uinitconverter-notify --booted
+usage: initconvert-notify [OPTIONS] [VAR=VALUE...]
+       initconvert-notify --exec [OPTIONS] [VAR=VALUE...] ; COMMAND [ARGS...]
+       initconvert-notify --booted
 
   --ready              READY=1
   --reloading          RELOADING=1 (and MONOTONIC_USEC=)
@@ -55,7 +55,7 @@ fn main() {
         exit(0);
     }
     if args.iter().any(|a| a == "--version") {
-        println!("uinitconverter-notify {}", env!("CARGO_PKG_VERSION"));
+        println!("initconvert-notify {}", env!("CARGO_PKG_VERSION"));
         exit(0);
     }
     exit(run(&args))
@@ -150,7 +150,7 @@ fn run(args: &[String]) -> i32 {
     let o = match parse(args) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("uinitconverter-notify: {e}");
+            eprintln!("initconvert-notify: {e}");
             return 1;
         }
     };
@@ -158,12 +158,12 @@ fn run(args: &[String]) -> i32 {
         return i32::from(!std::path::Path::new("/run/systemd/system").is_dir());
     }
     let Ok(sock) = std::env::var("NOTIFY_SOCKET") else {
-        eprintln!("uinitconverter-notify: NOTIFY_SOCKET not set");
+        eprintln!("initconvert-notify: NOTIFY_SOCKET not set");
         return 1;
     };
     if let Some(u) = &o.uid {
         if let Err(e) = become_user(u) {
-            eprintln!("uinitconverter-notify: --uid={u}: {e}");
+            eprintln!("initconvert-notify: --uid={u}: {e}");
             return 1;
         }
     }
@@ -178,13 +178,13 @@ fn run(args: &[String]) -> i32 {
         .map(|&n| unsafe { BorrowedFd::borrow_raw(n) })
         .collect();
     if let Err(e) = send(&sock, o.lines.join("\n").as_bytes(), source, &fds) {
-        eprintln!("uinitconverter-notify: {e}");
+        eprintln!("initconvert-notify: {e}");
         return 1;
     }
     if !o.no_block {
         if let Err(e) = barrier(&sock, source) {
             // An old manager may not answer barriers: the message went out.
-            eprintln!("uinitconverter-notify: barrier: {e}");
+            eprintln!("initconvert-notify: barrier: {e}");
         }
     }
     if !o.exec.is_empty() {
@@ -196,7 +196,7 @@ fn run(args: &[String]) -> i32 {
         let mut p: Vec<*const libc::c_char> = c.iter().map(|a| a.as_ptr()).collect();
         p.push(std::ptr::null());
         unsafe { libc::execvp(p[0], p.as_ptr()) };
-        eprintln!("uinitconverter-notify: exec {}: {}", o.exec[0], errno());
+        eprintln!("initconvert-notify: exec {}: {}", o.exec[0], errno());
         return 1;
     }
     0

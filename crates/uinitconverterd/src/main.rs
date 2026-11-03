@@ -1,4 +1,4 @@
-//! uinitconverterd: serves org.freedesktop.systemd1 on top of s6-rc, so systemctl,
+//! initconvertd: serves org.freedesktop.systemd1 on top of s6-rc, so systemctl,
 //! libsystemd and logind keep working; also a minimal client for it.
 
 use std::path::{Path, PathBuf};
@@ -20,13 +20,13 @@ mod user;
 use config::Config;
 
 const USAGE: &str = "\
-usage: uinitconverterd [--config PATH] [COMMAND] [ARGS]
-       uinitconverterd --version
+usage: initconvertd [--config PATH] [COMMAND] [ARGS]
+       initconvertd --version
 
   daemon [--system | --session | --address ADDR] [--ready-fd N]
                 serve org.freedesktop.systemd1 (default: system bus and
                 PRIVATE_SOCKET); with --ready-fd, write a newline to fd N
-                when ready. This is also what uinitconverterd does with no command.
+                when ready. This is also what initconvertd does with no command.
   start|stop|restart UNIT...
                 ask the running daemon (private socket or bus)
   stop-instances
@@ -38,13 +38,13 @@ usage: uinitconverterd [--config PATH] [COMMAND] [ARGS]
                 $XDG_RUNTIME_DIR/uinitconverter), or `systemd --user` with
                 USER_MANAGER=systemd / uinitconverter.user_manager=systemd.
                 The uinitconverter-user package runs it as
-                uinitconverter-user-manager (a link to this program).
+                initconvert-user-manager (a link to this program).
   log UNIT [-f] show (or follow) a service's log: journalctl -u, or its
                 s6-log directory with JOURNAL=no
 ";
 
 fn die(msg: &str) -> ! {
-    eprintln!("uinitconverterd: {msg}");
+    eprintln!("initconvertd: {msg}");
     exit(1)
 }
 
@@ -73,7 +73,7 @@ fn serve(cfg: Config, rest: &[String]) -> i32 {
             o => die(&format!("unknown daemon option {o}")),
         }
     }
-    util::tee_stderr_to_syslog(c"uinitconverterd");
+    util::tee_stderr_to_syslog(c"initconvertd");
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -103,7 +103,7 @@ fn client(cfg: &Config, cmd: &str, units: &[String]) -> i32 {
             if let Err(e) =
                 uinitconverter_client::manager_call(&conn, method, &(u.as_str(), "replace")).await
             {
-                eprintln!("uinitconverterd: {u}: {e}");
+                eprintln!("initconvertd: {u}: {e}");
                 code = 1;
             }
         }
@@ -134,7 +134,7 @@ fn stop_instances(cfg: &Config) -> i32 {
         match r {
             Ok(_) => 0,
             Err(e) => {
-                eprintln!("uinitconverterd: stop-instances: {e}");
+                eprintln!("initconvertd: stop-instances: {e}");
                 1
             }
         }
@@ -144,7 +144,7 @@ fn stop_instances(cfg: &Config) -> i32 {
 fn log(cfg: &Config, rest: &[String]) -> ! {
     let follow = rest.iter().any(|a| a == "-f" || a == "--follow");
     let Some(unit) = rest.iter().find(|a| !a.starts_with('-')) else {
-        die("usage: uinitconverterd log UNIT [-f]")
+        die("usage: initconvertd log UNIT [-f]")
     };
     if cfg.journal {
         let mut j = std::process::Command::new(tools::path("journalctl"));
@@ -167,12 +167,12 @@ fn log(cfg: &Config, rest: &[String]) -> ! {
 }
 
 /// The user manager's own name: the uinitconverter-user package installs
-/// it as a link to uinitconverterd, and user@UID.service runs it.
-pub const USER_MANAGER_NAME: &str = "uinitconverter-user-manager";
+/// it as a link to initconvertd, and user@UID.service runs it.
+pub const USER_MANAGER_NAME: &str = "initconvert-user-manager";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    // Started as uinitconverter-user-manager: `uinitconverterd user-manager`.
+    // Started as initconvert-user-manager: `initconvertd user-manager`.
     let argv0 = std::env::args().next().unwrap_or_default();
     if Path::new(&argv0).file_name() == Some(USER_MANAGER_NAME.as_ref()) {
         args.insert(0, "user-manager".into());
@@ -200,7 +200,7 @@ fn main() {
         exit(0);
     }
     if uinitconverter_version::wanted(&cmd) {
-        uinitconverter_version::print("uinitconverterd");
+        uinitconverter_version::print("initconvertd");
         exit(0);
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
@@ -212,9 +212,7 @@ fn main() {
         "stop-instances" => stop_instances(&cfg),
         "user-manager" => user::main(&cfg, rest),
         "log" => log(&cfg, rest),
-        other => die(&format!(
-            "unknown command {other} (see uinitconverterd help)"
-        )),
+        other => die(&format!("unknown command {other} (see initconvertd help)")),
     };
     exit(code);
 }

@@ -236,7 +236,7 @@ impl Reporter {
         if ok {
             self.sent = now;
         } else {
-            eprintln!("uinitconverterd: systemd-oomd: the report could not be sent; again later");
+            eprintln!("initconvertd: systemd-oomd: the report could not be sent; again later");
             self.conn = None;
             self.sent.clear();
         }

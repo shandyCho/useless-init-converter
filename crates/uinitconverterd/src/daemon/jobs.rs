@@ -147,7 +147,7 @@ impl Daemon {
                 // Sockets are bound by their service's runner: record this
                 // one so the runner binds it too, then start the service.
                 if let Err(e) = crate::socket::mark_requested(&self.cfg.run_dir, &id) {
-                    eprintln!("uinitconverterd: {id}: {e}");
+                    eprintln!("initconvertd: {id}: {e}");
                 }
                 return Box::pin(self.check_job(&svc, jtype, allow_reload, manual)).await;
             }
@@ -258,7 +258,7 @@ impl Daemon {
                     "reboot" => self.cfg.reboot_cmd.clone(),
                     _ => self.cfg.halt_cmd.clone(),
                 };
-                eprintln!("uinitconverterd: {id} requested, running: {cmd}");
+                eprintln!("initconvertd: {id} requested, running: {cmd}");
                 let _ = tokio::process::Command::new("/bin/sh")
                     .arg("-c")
                     .arg(cmd)
@@ -491,7 +491,7 @@ impl Daemon {
             let pid = self.caller_pid(c, msg).await.unwrap_or(0);
             let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
             eprintln!(
-                "uinitconverterd: job {jtype} {name} ({mode}) from PID {pid} {}",
+                "initconvertd: job {jtype} {name} ({mode}) from PID {pid} {}",
                 comm.trim()
             );
         }
@@ -533,7 +533,7 @@ impl Daemon {
                 .await
             {
                 eprintln!(
-                    "uinitconverterd: {name}: failed to enqueue marked job: {}",
+                    "initconvertd: {name}: failed to enqueue marked job: {}",
                     e.msg
                 );
                 continue;
@@ -542,7 +542,7 @@ impl Daemon {
                 Ok((id, unit)) => queued.push((self.new_job(&id, jtype), id, unit, jtype)),
                 // A reload of an inactive unit is a no-op for systemd too.
                 Err(e) if e.name == E_INACTIVE => {}
-                Err(e) => eprintln!("uinitconverterd: marked {name}: {}", e.msg),
+                Err(e) => eprintln!("initconvertd: marked {name}: {}", e.msg),
             }
         }
         let paths: Vec<ObjectPath<'static>> =

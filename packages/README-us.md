@@ -4,19 +4,19 @@
 
 Each executable of the core (`crates/`) is its own RPM package, and the s6
 user manager has one of its own (`uinitconverter-user`, an entry point into
-`uinitconverterd`). The source stays in the one Cargo workspace, and all six
+`initconvertd`). The source stays in the one Cargo workspace, and all six
 packages build from the same source tarball. The library crates (`uinitconverter-base`, `uinitconverter-install`,
 `uinitconverter-exec`, `uinitconverter-client`) are linked statically into the
 executables, so they are used only to build and are not packaged.
 
 | Package | Contains | Needs at run time (`Requires`) |
 |---|---|---|
-| `uinitconverter-runner` | `uinitconverter-runner` | s6, shadow-utils. Recommends `uinitconverterd` (`OnFailure=`/`OnSuccess=` units are started through the daemon) |
-| `uinitconverterd` | `uinitconverterd`, the D-Bus policy (`uinitconverter.conf`) | s6, s6-rc, dbus-daemon, `uinitconverter-runner`. Recommends `uinitconverter-timers` (`systemd-run --on-calendar`); suggests `uinitconverter-user` |
-| `uinitconverter-user` (noarch) | `uinitconverter-user-manager` (a link to `uinitconverterd`, which runs as the user manager under that name), the tmpfiles.d entry for `/run/uinitconverter-user` (the fallback record) | `uinitconverterd`, `uinitconverter-runner`, s6, systemd (`systemd --user` is the default and the fallback). Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says |
-| `uinitconverter-timers` | `uinitconverter-timers` | `uinitconverterd` (timers start units through the daemon) |
-| `uinitconverter-gen` | `uinitconverter-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (the generated services run them) |
-| `uinitconverter` | the `uinitconverter` command (with `uinitconverter init`, the boot setup), `early`, configuration, s6 services, s6-linux-init skeleton, SELinux module, kernel-install plugin, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, and the four tool packages above; suggests `uinitconverter-user` |
+| `uinitconverter-runner` | `initconvert-runner` | s6, shadow-utils. Recommends `uinitconverterd` (`OnFailure=`/`OnSuccess=` units are started through the daemon) |
+| `uinitconverterd` | `initconvertd`, the D-Bus policy (`uinitconverter.conf`) | s6, s6-rc, dbus-daemon, `uinitconverter-runner`. Recommends `uinitconverter-timers` (`systemd-run --on-calendar`); suggests `uinitconverter-user` |
+| `uinitconverter-user` (noarch) | `initconvert-user-manager` (a link to `initconvertd`, which runs as the user manager under that name), the tmpfiles.d entry for `/run/uinitconverter-user` (the fallback record) | `uinitconverterd`, `uinitconverter-runner`, s6, systemd (`systemd --user` is the default and the fallback). Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says |
+| `uinitconverter-timers` | `initconvert-timers` | `uinitconverterd` (timers start units through the daemon) |
+| `uinitconverter-gen` | `initconvert-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (the generated services run them) |
+| `uinitconverter` | the `initconvert` command (with `initconvert init`, the boot setup), `early`, configuration, s6 services, s6-linux-init skeleton, SELinux module, kernel-install plugin, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, and the four tool packages above; suggests `uinitconverter-user` |
 
 - `dnf install uinitconverter` installs everything. The boot configuration and the
   SELinux module are in the `uinitconverter` package, so booting with s6 needs it.
@@ -55,7 +55,7 @@ this script (plain `rpmbuild` fails for lack of a version).
 - The six packages are tied to one version-release, and the script always
   builds all six together. `rpms/` holds only the last build's six.
 - The tools built as RPMs print the package's version-release for
-  `--version` (e.g. `uinitconverter-gen 0.1.0-1.20261021073517.gc8aabf8.fc45`);
+  `--version` (e.g. `initconvert-gen 0.1.0-1.20261021073517.gc8aabf8.fc45`);
   built from source they print the commit, like `0.1.0 (git c8aabf8)`.
 - To set the release yourself, e.g. for a published release:
   `UINITCONVERTER_RELEASE=1 packages/build-rpms.sh`.
@@ -112,8 +112,8 @@ then, in an empty directory:
 gh release download vVERSION -R shandyCho/useless-init-converter    # or download the files in a browser
 sha256sum -c SHA256SUMS
 sudo dnf install ./*.rpm
-uinitconverter init --dry-run
-sudo uinitconverter init
+initconvert init --dry-run
+sudo initconvert init
 ```
 
 dnf takes rsyslog, earlyoom and the other dependencies from Fedora's
@@ -130,7 +130,7 @@ The specs still say `License: TBD`; choose a license before publishing.
 sudo dnf install ~/rpmbuild-skarnet/rpms/*.rpm      # skarnet tools (dist/rpm/build-skarnet-rpms.sh)
 sudo dnf install ~/rpmbuild-uinitconverter/rpms/*.rpm
 sudo dnf install ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm   # optional (standalone/*/build-rpm.sh)
-sudo uinitconverter init
+sudo initconvert init
 ```
 
 After the Rust code changed, rebuild and upgrade:
@@ -139,17 +139,17 @@ After the Rust code changed, rebuild and upgrade:
 git pull                                            # or make your change and commit it
 packages/build-rpms.sh
 sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm
-uinitconverter --version                                  # which build is installed
+initconvert --version                                  # which build is installed
 ```
 
-On a running s6 boot, the new uinitconverterd is used once the daemon restarts
+On a running s6 boot, the new initconvertd is used once the daemon restarts
 (`s6-svc -r /run/service/uinitconverterd`). The runner and timers are used the next
-time a service starts, and uinitconverter-gen at the next `uinitconverter reload`
-(`systemctl daemon-reload` runs uinitconverterd's copy, so it changes once the
+time a service starts, and initconvert-gen at the next `initconvert reload`
+(`systemctl daemon-reload` runs initconvertd's copy, so it changes once the
 daemon restarts). Nothing is regenerated at boot.
 
 Moving from a version without the s6-rc repository (before the `s6 set`
-change): rerun `sudo uinitconverter init`. It removes `/etc/uinitconverter/s6/default`
+change): rerun `sudo initconvert init`. It removes `/etc/uinitconverter/s6/default`
 (the set's commit makes the `default` bundle now; a reload refuses to run
 while it exists), writes the new `/etc/s6.conf`, creates `/etc/s6/sources`,
 loads the new SELinux module and creates the repository with the set
@@ -158,9 +158,42 @@ loads the new SELinux module and creates the repository with the set
 The s6-linux-init skeleton (`rc.init`, `rc.shutdown`, `rc.shutdown.final`)
 is different: the package installs the copy init works from, but the boot
 uses `/etc/s6-linux-init/current`, which `s6-linux-init-maker` makes from it.
-When an upgrade changes the skeleton, rerun `sudo uinitconverter init` (it keeps the
+When an upgrade changes the skeleton, rerun `sudo initconvert init` (it keeps the
 choices of the last run) to rebuild it; `early` and the rest take effect at
 the next boot without that.
+
+### Moving to the initconvert commands
+
+The commands were renamed from `uinitconverter*` to `initconvert*`:
+`initconvert` (`/usr/bin/initconvert`), `initconvertd`, `initconvert-gen`,
+`initconvert-runner`, `initconvert-timers`, `initconvert-user-manager` in
+`/usr/libexec/uinitconverter/`, and the standalone `initconvert-fdstore`,
+`initconvert-notify`, `initconvert-journal-relay` and `initconvert-linkwatch`.
+Everything else keeps its name: the packages, `/etc/uinitconverter`,
+`/var/lib/uinitconverter`, `/run/uinitconverter`, the s6 services
+(`uinitconverterd`, `uinitconverter-fdstore`, ...), the SELinux module, the
+D-Bus interface, the kernel options and `UINITCONVERTER_*` variables. There is
+no automatic migration. The s6-rc database and the s6-linux-init tree name
+the programs by path, so after the upgrade they are made again. From the
+**normal systemd boot**:
+
+```sh
+sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm \
+    ~/rpmbuild-uinitconverter-standalone/rpms/*.rpm   # or a release's RPMs
+sudo initconvert init          # same choices as the last run: regenerates
+                               # the database, rebuilds the s6-linux-init tree
+```
+
+If you edited a service under `/etc/uinitconverter/s6` (it is
+`%config(noreplace)`), dnf keeps your copy, which still names the old
+path, and puts the new one beside it as `.rpmnew`: carry the new path over
+before running `initconvert init`
+(`sudo find /etc/uinitconverter -name '*.rpmnew'`).
+
+Then boot the s6 entry. Scripts of your own that call `uinitconverter`,
+`uinitconverterd` or another old name need the new one; settings and the
+s6-rc set are kept. Don't upgrade on a running s6 boot: until `initconvert init`
+has run, a service that (re)starts still runs the old path, which is gone.
 
 ### Moving from sdcompat
 
@@ -183,13 +216,13 @@ sudo rm -rf /var/lib/sdcompat /var/log/sdcompat
 
 Removing the packages also unloads the old SELinux module. The s6-rc
 repository is moved aside because its set still names the old services;
-`uinitconverter init` creates a new one from systemd's enable state (`s6
+`initconvert init` creates a new one from systemd's enable state (`s6
 set` changes made by hand have to be made again). Then install the
-uinitconverter RPMs and run `sudo uinitconverter init` with the options you
+uinitconverter RPMs and run `sudo initconvert init` with the options you
 used before (e.g. `--journal=no --boot-only-s6=yes --selinux=enforcing`;
 the old choices are not read), and copy your edits from `~/sdcompat-etc`
 into `/etc/uinitconverter` (the file names are the same except
 `sdcompat.conf` → `uinitconverter.conf`).
 
-To remove: `sudo uinitconverter init --uninstall`, then
+To remove: `sudo initconvert init --uninstall`, then
 `dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd uinitconverter-user`.

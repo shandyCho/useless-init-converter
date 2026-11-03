@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "journald's client sockets without journald: forwards log messages to syslog"
 
+# The command is initconvert-journal-relay; the crate and the package keep their names.
+[[bin]]
+name = "initconvert-journal-relay"
+path = "src/main.rs"
+
 [dependencies]
 libc = "0.2"
 rustix = { version = "1.1", default-features = false, features = ["std", "net", "time"] }

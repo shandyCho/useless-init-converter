@@ -1,4 +1,4 @@
-//! uinitconverter-journal-relay: journald's two client sockets for JOURNAL=no,
+//! initconvert-journal-relay: journald's two client sockets for JOURNAL=no,
 //! forwarding what arrives to syslog (/dev/log, rsyslog under s6).
 //!
 //! Without journald nothing listens on /run/systemd/journal, and some
@@ -323,7 +323,7 @@ impl Relay {
                 // but not without bound (the socket is world-writable).
                 if active.load(Ordering::SeqCst) >= STREAMS_MAX {
                     eprintln!(
-                        "uinitconverter-journal-relay: too many stdout streams, refusing one"
+                        "initconvert-journal-relay: too many stdout streams, refusing one"
                     );
                     continue;
                 }
@@ -375,7 +375,7 @@ impl Relay {
 /// Serve until killed.
 pub fn serve_forever(dir: &Path, syslog: &Path, ready_fd: Option<RawFd>) -> i32 {
     if let Err(e) = Relay::new(dir, syslog).and_then(Relay::start) {
-        eprintln!("uinitconverter-journal-relay: {e}");
+        eprintln!("initconvert-journal-relay: {e}");
         return 1;
     }
     if let Some(fd) = ready_fd {

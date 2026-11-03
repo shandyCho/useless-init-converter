@@ -135,7 +135,7 @@ impl Daemon {
             let found = self.reverse(id, key);
             if t.elapsed() >= std::time::Duration::from_secs(1) {
                 eprintln!(
-                    "uinitconverterd: finding the {key}= units of {id} took {:.1} s",
+                    "initconvertd: finding the {key}= units of {id} took {:.1} s",
                     t.elapsed().as_secs_f64()
                 );
             }
@@ -143,7 +143,7 @@ impl Daemon {
                 if !seen.insert(did.clone()) || !self.is_up(&did, &du).await {
                     continue;
                 }
-                eprintln!("uinitconverterd: {then} {did} ({key}={id})");
+                eprintln!("initconvertd: {then} {did} ({key}={id})");
                 let r = Box::pin(self.run_job_once(&did, &du, then, "replace")).await;
                 if r == "done" {
                     Box::pin(self.propagate(&did, then, seen)).await;
@@ -183,7 +183,7 @@ impl Daemon {
                 }
             }
             if !needed {
-                eprintln!("uinitconverterd: stopping {id} (StopWhenUnneeded=, not needed)");
+                eprintln!("initconvertd: stopping {id} (StopWhenUnneeded=, not needed)");
                 if Box::pin(self.run_job_once(&id, &u, "stop", "replace")).await == "done" {
                     Box::pin(self.propagate(&id, "stop", &mut BTreeSet::from([id.clone()]))).await;
                 }
@@ -257,7 +257,7 @@ impl Daemon {
             if crate::state::for_unit(&self.cfg.run_dir, &id).take(crate::state::keys::STOPPING)
                 && self.is_up(&id, &unit).await
             {
-                eprintln!("uinitconverterd: {id} sent STOPPING=1, stopping it");
+                eprintln!("initconvertd: {id} sent STOPPING=1, stopping it");
                 let lock = self.unit_lock(&id);
                 let _guard = lock.lock().await;
                 Box::pin(self.run_job(&id, &unit, "stop", "replace")).await;
@@ -303,7 +303,7 @@ impl Daemon {
         }
         if set.len() > 1 {
             let names: Vec<&str> = set[1..].iter().map(|(n, _)| n.as_str()).collect();
-            eprintln!("uinitconverterd: stop {id} with {}", names.join(" "));
+            eprintln!("initconvertd: stop {id} with {}", names.join(" "));
         }
         self.stop_in_waves(set, Some(id)).await.unwrap_or("done")
     }
@@ -361,7 +361,7 @@ impl Daemon {
             if t.elapsed() >= std::time::Duration::from_secs(1) {
                 let names: Vec<&str> = wave.iter().map(|&k| pending[k].0.as_str()).collect();
                 eprintln!(
-                    "uinitconverterd: stopping {} took {:.1} s",
+                    "initconvertd: stopping {} took {:.1} s",
                     names.join(" "),
                     t.elapsed().as_secs_f64()
                 );

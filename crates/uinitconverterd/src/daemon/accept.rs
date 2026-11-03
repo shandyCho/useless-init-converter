@@ -111,7 +111,7 @@ impl Daemon {
         let mut killed = false;
         while self.connection(id).is_some() {
             if !killed && start.elapsed() >= timeout {
-                eprintln!("uinitconverterd: {id}: stop timed out, killing");
+                eprintln!("initconvertd: {id}: stop timed out, killing");
                 for p in targets() {
                     unsafe { libc::kill(p, libc::SIGKILL) };
                 }

@@ -153,8 +153,8 @@ sysctl)
 vconsole)
     # Keymap and font from /etc/vconsole.conf. udev's 90-vconsole.rules asks
     # for systemd-vconsole-setup.service for each console during the
-    # trigger, before uinitconverterd is up to start it, so run it here once
-    # udev has settled. Later consoles go through uinitconverterd.
+    # trigger, before initconvertd is up to start it, so run it here once
+    # udev has settled. Later consoles go through initconvertd.
     [ -e /dev/tty0 ] || exit 0
     v=/usr/lib/systemd/systemd-vconsole-setup
     [ -x "$v" ] || exit 0
@@ -193,7 +193,7 @@ rfkill | rfkill-save)
     done
     ;;
 resolv)
-    # RESOLVED=no (uinitconverter init --resolved=no): systemd-resolved does not
+    # RESOLVED=no (initconvert init --resolved=no): systemd-resolved does not
     # run on this boot. NetworkManager handles DNS itself, and the stub file
     # /etc/resolv.conf links to points at NetworkManager's copy. All of it
     # is in /run, so the systemd boot keeps using resolved.

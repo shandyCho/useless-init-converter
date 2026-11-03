@@ -7,7 +7,7 @@
 
 ## 미출시
 
-0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-147부에 있습니다.
+0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-151부에 있습니다.
 
 ### 추가
 - `Accept=yes` 소켓: 유닉스 경로는 `s6-ipcserverd`로, TCP 포트는 `s6-tcpserverd`로(선택 패키지
@@ -17,7 +17,7 @@
   `PropertiesChanged`.
 - **s6 사용자 매니저(선택).** `uinitconverter.conf`의 `USER_MANAGER=s6`이나 커널 명령줄의
   `uinitconverter.user_manager=s6`이 있으면 `user@UID.service`에 `systemd --user` 대신
-  `uinitconverter-user-manager`(`uinitconverter-user` 패키지)를 실행합니다. 기본값은 계속 `systemd`입니다. 테스트 VM에서 GDM 그리터와
+  `initconvert-user-manager`(`uinitconverter-user` 패키지)를 실행합니다. 기본값은 계속 `systemd`입니다. 테스트 VM에서 GDM 그리터와
   GNOME 세션을 수정 없이 실행합니다. 로그아웃, 다시 로그인, 사용자 전환, linger 사용자, RPM 업데이트
   도우미, 재부팅, 타이머와 path 유닛, 소켓(`Accept=yes` 포함), systemd-oomd 보고, podman quadlet 유닛,
   flatpak 앱이 동작합니다. 트랜잭션의 유닛은 병렬로 시작합니다. 사용자를 제대로 받지 못하면(GNOME의 실패
@@ -26,6 +26,11 @@
 - 데몬 환경의 `UINITCONVERTER_LOG_JOBS=1`은 모든 작업 요청을 호출자의 프로세스 이름과 함께 기록합니다.
 
 ### 변경
+- **명령의 이름이 `initconvert*`입니다**: `initconvert`(이전 `uinitconverter`), `initconvertd`,
+  `initconvert-gen`, `initconvert-runner`, `initconvert-timers`, `initconvert-user-manager`, 그리고
+  독립 도구 `initconvert-fdstore`, `-notify`, `-journal-relay`, `-linkwatch`. 패키지, 경로, s6 서비스,
+  SELinux 모듈, D-Bus 인터페이스, 커널 옵션, 변수는 `uinitconverter` 이름을 유지합니다. 설치된 시스템의
+  이전: [initconvert 명령으로 이전하기](packages/README.md#initconvert-명령으로-이전하기).
 - systemd와 같은 작업 부수 효과: 시작하는 유닛을 `Conflicts=`에 적은 유닛을 멈추고, 유닛을 멈추면
   `PartOf=`, `BindsTo=`, `Requires=`로 그 유닛을 가리키는 실행 중 유닛도 멈추며, 재시작하면 `PartOf=`인
   유닛도 재시작합니다. `StopWhenUnneeded=`를 따르고, 타깃의 상태는 타깃 자신의 것이며, `STOPPING=1`을
@@ -35,8 +40,8 @@
   유닛), 러너는 알려진 프로세스를 따라갑니다.
 - `AttachProcessesToUnit`은 권한 없는 호출자에 대해 systemd의 규칙을 따르고, 컨트롤러 목록을 적은
   `Delegate=`도 위임으로 봅니다.
-- 새 패키지 `uinitconverter-user`(noarch): s6 사용자 매니저의 진입점 `uinitconverter-user-manager`
-  (`uinitconverterd`로의 링크)와 `/run/uinitconverter-user`(대체 기록)용 tmpfiles.d 항목. 이 패키지가
+- 새 패키지 `uinitconverter-user`(noarch): s6 사용자 매니저의 진입점 `initconvert-user-manager`
+  (`initconvertd`로의 링크)와 `/run/uinitconverter-user`(대체 기록)용 tmpfiles.d 항목. 이 패키지가
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정

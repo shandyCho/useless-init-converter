@@ -7,7 +7,7 @@ versions. Release notes: [packages/release-notes](packages/release-notes).
 
 ## Unreleased
 
-Changes since 0.2.2. Details per step in `work_history.md`, parts 130-147.
+Changes since 0.2.2. Details per step in `work_history.md`, parts 130-151.
 
 ### Added
 - `Accept=yes` sockets: on unix paths through `s6-ipcserverd`, on TCP ports
@@ -18,7 +18,7 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-147.
   `PropertiesChanged` for every state change, not only a job's own unit.
 - **The s6 user manager, opt-in.** `USER_MANAGER=s6` in
   `uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
-  command line, runs `uinitconverter-user-manager` (package
+  command line, runs `initconvert-user-manager` (package
   `uinitconverter-user`) for `user@UID.service`
   instead of `systemd --user`; the default stays `systemd`. In the test VM it
   runs GDM's greeter and GNOME sessions unmodified: logout, a new login, a
@@ -32,6 +32,13 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-147.
   request with the caller's process name.
 
 ### Changed
+- **The commands are named `initconvert*`**: `initconvert` (was
+  `uinitconverter`), `initconvertd`, `initconvert-gen`, `initconvert-runner`,
+  `initconvert-timers`, `initconvert-user-manager`, and the standalone
+  `initconvert-fdstore`, `-notify`, `-journal-relay`, `-linkwatch`. Packages,
+  paths, s6 services, the SELinux module, the D-Bus interface, kernel options
+  and variables keep the `uinitconverter` names. Moving an installed system:
+  [Moving to the initconvert commands](packages/README-us.md#moving-to-the-initconvert-commands).
 - Job side effects as with systemd: units that list a starting unit in
   `Conflicts=` are stopped; stopping a unit stops the running units with
   `PartOf=`, `BindsTo=` or `Requires=` on it, restarting it restarts those with
@@ -45,7 +52,7 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-147.
 - `AttachProcessesToUnit` follows systemd's rule for unprivileged callers, and
   `Delegate=` with a controller list counts as delegation.
 - New package `uinitconverter-user` (noarch): the s6 user manager's entry point
-  `uinitconverter-user-manager` (a link to `uinitconverterd`) and the
+  `initconvert-user-manager` (a link to `initconvertd`) and the
   tmpfiles.d entry for `/run/uinitconverter-user` (its fallback record).
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 

@@ -31,11 +31,11 @@ cargo build --release --offline
 cargo test --release --offline
 
 %install
-install -Dm0755 target/release/uinitconverter-journal-relay %{buildroot}%{_libexecdir}/uinitconverter/uinitconverter-journal-relay
+install -Dm0755 target/release/initconvert-journal-relay %{buildroot}%{_libexecdir}/uinitconverter/initconvert-journal-relay
 
 %files
 %dir %{_libexecdir}/uinitconverter
-%{_libexecdir}/uinitconverter/uinitconverter-journal-relay
+%{_libexecdir}/uinitconverter/initconvert-journal-relay
 
 %changelog
 * Wed Oct 21 2026 uinitconverter developers - 0.1.0-1

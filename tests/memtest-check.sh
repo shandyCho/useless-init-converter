@@ -42,7 +42,7 @@ check "unit enabled" 'calls | grep -qx "systemctl enable memtest-uinitconverter.
 check "old unit name disabled and removed" 'calls | grep -qx "systemctl disable uinitconverter-memtest.service" && [ ! -e "$W/units/uinitconverter-memtest.service" ]'
 # The default EXCLUDE has uinitconverter*: a unit named so is never in the s6 database.
 check "unit name outside the default EXCLUDE" 'case ${U##*/} in uinitconverter*) false ;; esac'
-check "s6 boot database rebuilt" 'calls | grep -qx "uinitconverter reload --no-update"'
+check "s6 boot database rebuilt" 'calls | grep -qx "initconvert reload --no-update"'
 
 echo "== the boot service"
 service systemd
@@ -60,11 +60,11 @@ check "run adds a snapshot" '[ "$(compgen -G "$D/mem-*.tsv" | wc -l)" = 2 ]'
 : >"$W/calls"
 MEMTEST_INIT=s6 "$TOP/tests/memtest.sh" uninstall >/dev/null 2>&1
 check "uninstall removes the unit and scripts" '[ ! -e "$U" ] && [ ! -e "$W/lib" ]'
-check "uninstall on s6: disable, daemon reload only" 'calls | grep -qx "systemctl disable memtest-uinitconverter.service" && calls | grep -qx "systemctl daemon-reload" && ! calls | grep -q "uinitconverter reload"'
+check "uninstall on s6: disable, daemon reload only" 'calls | grep -qx "systemctl disable memtest-uinitconverter.service" && calls | grep -qx "systemctl daemon-reload" && ! calls | grep -q "initconvert reload"'
 check "snapshots kept" '[ -s "$D/report.txt" ]'
 : >"$W/calls"
 MEMTEST_INIT=s6 "$TOP/tests/memtest.sh" install --wait 0 --dir "$D" >/dev/null 2>&1
-check "install on s6: daemon reload only" 'calls | grep -qx "systemctl daemon-reload" && ! calls | grep -q "uinitconverter reload"'
+check "install on s6: daemon reload only" 'calls | grep -qx "systemctl daemon-reload" && ! calls | grep -q "initconvert reload"'
 "$TOP/tests/memtest.sh" install --dir "$W/with space" >/dev/null 2>&1
 check "refuses a --dir with spaces" '[ $? != 0 ]'
 

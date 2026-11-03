@@ -2,7 +2,12 @@
 name = "uinitconverter-timers"
 version.workspace = true
 edition.workspace = true
-description = "Run .timer and .path units under s6 (uinitconverter-timers)"
+description = "Run .timer and .path units under s6 (initconvert-timers)"
+
+# The command is initconvert-timers; the crate and the package keep their names.
+[[bin]]
+name = "initconvert-timers"
+path = "src/main.rs"
 
 [dependencies]
 uinitconverter-version.workspace = true

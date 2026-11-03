@@ -79,7 +79,7 @@ main_pid() {
     local best="" bt=0 p st t
     while read -r p; do
         [ -r "/proc/$p/stat" ] || continue
-        case $(cat "/proc/$p/comm" 2>/dev/null) in uinitconverter* | s6-*) continue ;; esac
+        case $(cat "/proc/$p/comm" 2>/dev/null) in uinitconverter* | initconvert* | s6-*) continue ;; esac
         st=$(cat "/proc/$p/stat" 2>/dev/null) || continue
         # Field 22 (starttime), counted after the ")" that ends comm.
         t=$(echo "${st##*) }" | cut -d' ' -f20)
@@ -89,7 +89,7 @@ main_pid() {
 }
 
 # The services in the root cgroup, as "UNIT PID", oldest process per unit:
-# not kernel threads (no command line), PID 1, s6 or uinitconverter.
+# not kernel threads (no command line), PID 1, s6 or uinitconverter (initconvert*).
 root_services() {
     local p c u st t
     declare -A pid start
@@ -98,7 +98,7 @@ root_services() {
         [ -n "$(tr -d '\0' <"/proc/$p/cmdline" 2>/dev/null | head -c 1)" ] || continue
         c=$(cat "/proc/$p/comm" 2>/dev/null) || continue
         case $c in
-            uinitconverter* | s6-*) continue ;;
+            uinitconverter* | initconvert* | s6-*) continue ;;
             dbus-broker*) u=dbus-broker.service ;;
             rsyslogd) u=rsyslog.service ;;
             *) u=$c.service ;;

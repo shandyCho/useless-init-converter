@@ -70,7 +70,7 @@ pub struct Config {
     /// The bundle s6-rc-set-commit makes of the set's active and always
     /// services: what boots (s6-linux-init's runlevel).
     pub default_bundle: String,
-    /// s6 service running uinitconverterd; timers depend on it.
+    /// s6 service running initconvertd; timers depend on it.
     pub daemon_service: String,
     /// Created once the daemon is ready, so sd_booted() returns true.
     pub booted_flag: Option<PathBuf>,
@@ -80,7 +80,7 @@ pub struct Config {
     pub bus_address: Option<String>,
     /// Path of the uinitconverter binary as seen from generated scripts.
     pub runner: PathBuf,
-    /// uinitconverter-timers: what generated .timer and .path services run.
+    /// initconvert-timers: what generated .timer and .path services run.
     pub timer_runner: PathBuf,
     /// Shutdown commands used for PowerOff/Reboot/Halt.
     pub poweroff_cmd: String,
@@ -114,7 +114,7 @@ pub struct Config {
     /// The cgroup units go under (CGROUP_BASE=): a user manager's delegated
     /// user@UID.service. None: the cgroup2 root, as the system manager.
     pub cgroup_base: Option<PathBuf>,
-    /// What user@UID.service runs (`uinitconverterd user-manager`):
+    /// What user@UID.service runs (`initconvertd user-manager`):
     /// "systemd" (`systemd --user`) or "s6" (uinitconverter's user mode).
     /// The kernel command line's uinitconverter.user_manager= overrides it.
     pub user_manager: String,
@@ -163,8 +163,8 @@ const SYSLOG_UNITS: &[&str] = &["rsyslog.service", "syslog-ng.service", "syslog.
 
 impl Config {
     pub fn defaults() -> Config {
-        let runner = tool_path("uinitconverter-runner");
-        let timer_runner = tool_path("uinitconverter-timers");
+        let runner = tool_path("initconvert-runner");
+        let timer_runner = tool_path("initconvert-timers");
         Config {
             config_path: PathBuf::from(DEFAULT_CONFIG),
             init: "s6".into(),
@@ -233,7 +233,7 @@ impl Config {
                 "systemd-resolved-varlink.socket",
                 "systemd-resolved-monitor.socket",
                 // udev restarts it for each new console (vtcon); the boot run
-                // is the vconsole s6 oneshot, since uinitconverterd isn't up yet.
+                // is the vconsole s6 oneshot, since initconvertd isn't up yet.
                 "systemd-vconsole-setup.service",
                 // Wanted by udev for each backlight device: restore the
                 // brightness at boot, save it at stop. (The radio state is

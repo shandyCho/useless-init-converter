@@ -1,5 +1,5 @@
-//! uinitconverter-runner: runs one systemd service under s6, called from the
-//! scripts uinitconverter-gen writes and by uinitconverterd.
+//! initconvert-runner: runs one systemd service under s6, called from the
+//! scripts initconvert-gen writes and by initconvertd.
 
 use std::path::PathBuf;
 use std::process::exit;
@@ -19,8 +19,8 @@ mod supervisor;
 use config::Config;
 
 const USAGE: &str = "\
-usage: uinitconverter-runner [--config PATH] COMMAND [--config PATH] [--mainpid N] (-- UNIT | --unit-hex HEX) [ARGS]
-       uinitconverter-runner --version
+usage: initconvert-runner [--config PATH] COMMAND [--config PATH] [--mainpid N] (-- UNIT | --unit-hex HEX) [ARGS]
+       initconvert-runner --version
 
   run [--on-demand]
                longrun `run` script; ends by exec()ing the main process
@@ -28,9 +28,9 @@ usage: uinitconverter-runner [--config PATH] COMMAND [--config PATH] [--mainpid 
   finish CODE SIG
                longrun `finish` script; cleanup and Restart= policy
   up | down    oneshot scripts (also mount and swap units)
-  stop-exec    ExecStop= with $MAINPID (called by uinitconverterd)
+  stop-exec    ExecStop= with $MAINPID (called by initconvertd)
   stop-atom    `down` of UNIT.stop: ExecStop= when s6-rc stops a longrun
-  reload-exec  ExecReload= with $MAINPID (called by uinitconverterd)
+  reload-exec  ExecReload= with $MAINPID (called by initconvertd)
   accept | accept-finish
                `run`/`finish` of an Accept=yes .socket: bind it, exec
                s6-ipcserverd, which runs `connection` for each client
@@ -44,7 +44,7 @@ usage: uinitconverter-runner [--config PATH] COMMAND [--config PATH] [--mainpid 
 ";
 
 fn die(msg: &str) -> ! {
-    eprintln!("uinitconverter-runner: {msg}");
+    eprintln!("initconvert-runner: {msg}");
     exit(1)
 }
 
@@ -108,7 +108,7 @@ fn parse_internal(args: &[String]) -> Internal {
 /// records it and succeeds.
 fn setup_failed(cfg: &Config, cmd: &str, unit: &str, e: &str) -> i32 {
     use state::keys;
-    eprintln!("uinitconverter-runner: {unit}: {e}");
+    eprintln!("initconvert-runner: {unit}: {e}");
     let st = state::for_unit(&cfg.run_dir, &loader::Loader::new(cfg).load(unit).id);
     match cmd {
         "run" | "up" => {
@@ -160,7 +160,7 @@ fn main() {
         exit(0);
     }
     if uinitconverter_version::wanted(&cmd) {
-        uinitconverter_version::print("uinitconverter-runner");
+        uinitconverter_version::print("initconvert-runner");
         exit(0);
     }
     // Internal: `run` re-executes into it; it loads no config or unit.
@@ -199,7 +199,7 @@ fn main() {
         "reload-exec" => r.cmd_reload(a.main_pid),
         "confine" => r.cmd_confine(&a.rest),
         other => die(&format!(
-            "unknown command {other} (see uinitconverter-runner help)"
+            "unknown command {other} (see initconvert-runner help)"
         )),
     };
     exit(code);

@@ -46,12 +46,12 @@ export UINITCONVERTER_BUILD=%{version}-%{release}
 cargo test --release --offline -p uinitconverterd -p uinitconverter-base -p uinitconverter-client -p uinitconverter-exec -p uinitconverter-gen -p uinitconverter-install -p uinitconverter-version
 
 %install
-install -Dm0755 target/release/uinitconverterd %{buildroot}%{_libexecdir}/uinitconverter/uinitconverterd
+install -Dm0755 target/release/initconvertd %{buildroot}%{_libexecdir}/uinitconverter/initconvertd
 install -Dm0644 dist/dbus/uinitconverter.conf %{buildroot}%{_datadir}/dbus-1/system.d/uinitconverter.conf
 
 %files
 %dir %{_libexecdir}/uinitconverter
-%{_libexecdir}/uinitconverter/uinitconverterd
+%{_libexecdir}/uinitconverter/initconvertd
 %{_datadir}/dbus-1/system.d/uinitconverter.conf
 
 %changelog

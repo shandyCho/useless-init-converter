@@ -1,5 +1,5 @@
-//! uinitconverter-timers: runs .timer and .path units, each as its own s6
-//! longrun, and asks uinitconverterd to start the unit they trigger.
+//! initconvert-timers: runs .timer and .path units, each as its own s6
+//! longrun, and asks initconvertd to start the unit they trigger.
 
 use std::path::PathBuf;
 use std::process::exit;
@@ -13,15 +13,15 @@ mod timer;
 use config::Config;
 
 const USAGE: &str = "\
-usage: uinitconverter-timers [--config PATH] COMMAND [--config PATH] (-- UNIT | --unit-hex HEX)
-       uinitconverter-timers --version
+usage: initconvert-timers [--config PATH] COMMAND [--config PATH] (-- UNIT | --unit-hex HEX)
+       initconvert-timers --version
 
   timer-run    compute the timer's next elapse, sleep, start its unit; repeat
   path-run     watch the .path unit's paths with inotify, start its unit
 ";
 
 fn die(msg: &str) -> ! {
-    eprintln!("uinitconverter-timers: {msg}");
+    eprintln!("initconvert-timers: {msg}");
     exit(1)
 }
 
@@ -74,7 +74,7 @@ fn main() {
         exit(0);
     }
     if uinitconverter_version::wanted(&cmd) {
-        uinitconverter_version::print("uinitconverter-timers");
+        uinitconverter_version::print("initconvert-timers");
         exit(0);
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
@@ -83,7 +83,7 @@ fn main() {
         "timer-run" => timer::cmd_timer_run(cfg, &unit),
         "path-run" => pathunit::cmd_path_run(cfg, &unit),
         other => die(&format!(
-            "unknown command {other} (see uinitconverter-timers help)"
+            "unknown command {other} (see initconvert-timers help)"
         )),
     };
     exit(code);

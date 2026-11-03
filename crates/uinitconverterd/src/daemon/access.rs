@@ -147,7 +147,7 @@ impl Daemon {
                     .and_then(|u| u.fragment.as_ref())
                     .map(|p| p.display().to_string());
                 eprintln!(
-                    "uinitconverterd: SELinux access check scon={scon} tcon={tcon} tclass={tclass} perm={perm} state={} function={member} path={}: {e}",
+                    "initconvertd: SELinux access check scon={scon} tcon={tcon} tclass={tclass} perm={perm} state={} function={member} path={}: {e}",
                     if enforce { "enforcing" } else { "permissive" },
                     path.as_deref().unwrap_or("n/a"),
                 );

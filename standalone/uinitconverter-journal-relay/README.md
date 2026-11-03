@@ -21,7 +21,7 @@ cargo test
 ## 설치
 
 ```sh
-sudo install -Dm0755 target/release/uinitconverter-journal-relay /usr/libexec/uinitconverter/uinitconverter-journal-relay
+sudo install -Dm0755 target/release/initconvert-journal-relay /usr/libexec/uinitconverter/initconvert-journal-relay
 ```
 
 RPM: `./build-rpm.sh [OUTDIR]`가 `uinitconverter-journal-relay.spec`을 `~/rpmbuild-uinitconverter-standalone/rpms`에
@@ -32,7 +32,7 @@ RPM: `./build-rpm.sh [OUTDIR]`가 `uinitconverter-journal-relay.spec`을 `~/rpmb
 ## 실행
 
 ```sh
-uinitconverter-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
+initconvert-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
 ```
 
 - `--dir DIR`: journald 소켓을 만들 곳(기본값 `/run/systemd/journal`).

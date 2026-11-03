@@ -1,5 +1,5 @@
 //! What the removed AUTO_MASK= left behind. It masked, in the s6 set,
-//! translated units nothing booted or depended on, and uinitconverterd ran
+//! translated units nothing booted or depended on, and initconvertd ran
 //! them as dynamic instances on request; STATE_DIR/auto-masked lists them,
 //! STATE_DIR/auto-masked.keep the ones the admin took back. Reloads now
 //! put the listed ones back to `usable` and remove both files once the
@@ -67,7 +67,7 @@ pub fn is_masked(cfg: &Config, name: &str) -> bool {
     c.as_ref().is_some_and(|(_, _, set)| set.contains(name))
 }
 
-/// Whether `name` runs as uinitconverterd's dynamic instance: a longrun's
+/// Whether `name` runs as initconvertd's dynamic instance: a longrun's
 /// service directory (RUN_DIR/dyn/NAME) or an active oneshot's marker
 /// (RUN_DIR/dyn-oneshot/NAME).
 pub fn running_dynamic(cfg: &Config, name: &str) -> bool {
