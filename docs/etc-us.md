@@ -528,7 +528,7 @@ log UNIT`, which also works with `JOURNAL=no`).
 ### The s6 user manager (in progress)
 
 Work is under way to replace `systemd --user` too (the plan is in
-`work_history.md`, parts 136-150). It is the `uinitconverter-user` package
+`work_history.md`, parts 136-151). It is the `uinitconverter-user` package
 (`dnf install uinitconverter-user`). With it, `USER_MANAGER=s6` in
 `uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
 command line, makes the runner start `initconvert-user-manager` (a link to

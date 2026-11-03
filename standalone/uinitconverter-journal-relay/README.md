@@ -41,7 +41,7 @@ initconvert-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
 
 journald가 실행 중인 시스템에서는 실행하지 마세요(같은 소켓을 씁니다). uinitconverter를
 `JOURNAL=no`로 설치하면 `journal-relay` s6 서비스가 이것을 실행하며, 이때는 꼭
-설치되어 있어야 합니다(`uinitconverter init --journal=no`가 확인합니다).
+설치되어 있어야 합니다(`initconvert init --journal=no`가 확인합니다).
 
 MESSAGE, PRIORITY, SYSLOG_FACILITY, SYSLOG_IDENTIFIER, SYSLOG_PID만 전달하고 나머지
 필드는 버립니다. syslog가 없거나 처리 속도가 따라가지 못하면 메시지를 버립니다. 클라이언트를

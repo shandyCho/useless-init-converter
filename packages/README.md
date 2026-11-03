@@ -198,7 +198,7 @@ sudo rm -rf /var/lib/sdcompat /var/log/sdcompat
 패키지를 제거하면 예전 SELinux 모듈도 제거됩니다. s6-rc 저장소는 세트가 아직 예전 서비스
 이름을 담고 있으므로 다른 이름으로 옮겨 둡니다. `initconvert init`이 systemd의 활성화 상태에서 새
 저장소를 만듭니다(직접 적용한 `s6 set` 변경은 다시 적용해야 합니다). 그다음 uinitconverter RPM을
-설치하고 예전에 쓰던 옵션으로 `sudo uinitconverter init`을 실행하세요(예: `--journal=no
+설치하고 예전에 쓰던 옵션으로 `sudo initconvert init`을 실행하세요(예: `--journal=no
 --boot-only-s6=yes --selinux=enforcing`. 예전 선택은 읽지 않습니다). 수정한 설정은
 `~/sdcompat-etc`에서 `/etc/uinitconverter`로 직접 옮기세요(파일 이름은 같고
 `sdcompat.conf`만 `uinitconverter.conf`가 됩니다).

@@ -457,7 +457,7 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 
 ### s6 사용자 매니저 (진행 중)
 
-`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-150부). 이것은
+`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-151부). 이것은
 `uinitconverter-user` 패키지입니다(`dnf install uinitconverter-user`). 이 패키지가 있으면
 `uinitconverter.conf`의 `USER_MANAGER=s6` 또는 커널 명령줄의 `uinitconverter.user_manager=s6`이
 있을 때 러너가 `user@UID.service`에 `systemd --user` 대신 `initconvert-user-manager`(`initconvertd`로의

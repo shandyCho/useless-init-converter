@@ -11301,3 +11301,17 @@ Owner: "change command uinitconverter* to initconvert*". Asked: scope "Commands 
 - VM, binaries installed under the new names: lifecycle 18 + 53 (the run after end_helpers), fallback 18/18.
 - RPM build: packages/build-rpms.sh built the six packages. They install /usr/bin/initconvert and /usr/libexec/uinitconverter/{initconvert, initconvertd, initconvert-gen, -runner, -timers, -user-manager} under unchanged package names. standalone/uinitconverter-fdstore/build-rpm.sh's package installs /usr/libexec/uinitconverter/initconvert-fdstore.
 - **Not tested:** the migration steps on an installed system (this machine still runs older RPMs); the s6 boot.
+
+## 2026-11-03, part 152: documents checked again after the split and the rename
+
+Owner: "update documents in this project". Every document was checked against parts 149-151.
+
+**Fixed:**
+- The journal-relay README pair still said `uinitconverter init --journal=no`, and the Korean "Moving from sdcompat" section said `sudo uinitconverter init`. Part 151's docs.py skipped every line containing --journal=no, to keep the "needs uinitconverter-journal-relay" package mentions, and so missed these commands.
+- The docs/etc pair's user-manager section cites parts 136-151.
+
+**Checked, unchanged:**
+- The remaining uinitconverter-* names in docs are packages, crates, project directories or s6 services.
+- Every language pair has the same headings.
+- The renamed anchors (#what-initconvert-init-does, #moving-to-the-initconvert-commands and the Korean ones) resolve.
+- The CHANGELOG Unreleased section covers parts 130-151.

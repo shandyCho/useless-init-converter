@@ -43,7 +43,7 @@ initconvert-journal-relay [--dir DIR] [--syslog PATH] [--ready-fd N]
 
 Don't run it where journald runs (they use the same sockets). With uinitconverter
 installed as `JOURNAL=no`, the `journal-relay` s6 service runs it, and then it
-must be installed (`uinitconverter init --journal=no` checks).
+must be installed (`initconvert init --journal=no` checks).
 
 Only MESSAGE, PRIORITY, SYSLOG_FACILITY, SYSLOG_IDENTIFIER and SYSLOG_PID are
 forwarded; other fields are dropped. Messages are dropped too when syslog is
