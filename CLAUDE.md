@@ -54,7 +54,12 @@ if they turned out to be wrong.
   `session`, `apps`, `lifecycle`, `fallback`; `baseline` (for `greeter`)
   and `session-`, `apps-`, `lifecycle-baseline` run the same on stock
   `systemd --user` to compare (see the TESTING pair). `VM_KEEP=yes` keeps
-  the VM up for `tests/gnome-vm.sh ssh`.
+  the VM up for `tests/gnome-vm.sh ssh`. The s6 boot itself (the RPMs,
+  `initconvert init`, `rc.init`, the runner's `user@`):
+  `tests/vm-s6-boot.sh ~/uinitconverter-vm MODE`, modes `s6`, `no-package`,
+  `default`, after `packages/build-rpms.sh --test DIR` with
+  `CORE_RPMS=DIR/rpms` (the standalone RPMs from `standalone/*/build-rpm.sh
+  ~/uinitconverter-vm/rpmbuild/standalone`).
   Everything runs unprivileged and never touches the host's init system.
 - Never modify skarnet's sources (skalibs, execline, s6, s6-rc,
   s6-linux-init, s6-frontend), and don't add patches for them in

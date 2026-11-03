@@ -5,6 +5,18 @@
 #
 #   packages/build-rpms.sh [OUTDIR]          # default: ~/rpmbuild-uinitconverter
 #   packages/build-rpms.sh --srpm [OUTDIR]   # source RPMs only
+#   packages/build-rpms.sh [--shared-target] [--nocheck] [--test] [OUTDIR]
+#
+# For RPMs only tested (in a VM, say), never published, two options make
+# a rebuild much faster:
+#   --shared-target  every spec builds from one copy of the source at a
+#                    fixed path into one target directory, both under
+#                    OUTDIR/cargo-target and kept for the next build, so
+#                    cargo compiles a crate once, not once per spec and build;
+#                    no debuginfo or debugsource packages
+#   --nocheck        rpmbuild --nocheck: no %check (no cargo test in rpmbuild)
+#   --test           both
+# Published RPMs are built with neither (github-release.sh).
 #
 # With --srpm the six source RPMs go to OUTDIR/srpms, each with the version
 # and release in its spec and the vendored tarball inside, so they rebuild
@@ -24,11 +36,18 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-SRPM=0
-if [ "${1:-}" = --srpm ]; then
-    SRPM=1
+SRPM=0 SHARED=0 NOCHECK=0
+while [ $# -gt 0 ]; do
+    case $1 in
+        --srpm) SRPM=1 ;;
+        --shared-target) SHARED=1 ;;
+        --nocheck) NOCHECK=1 ;;
+        --test) SHARED=1 NOCHECK=1 ;;
+        -*) echo "error: unknown option $1" >&2; exit 2 ;;
+        *) break ;;
+    esac
     shift
-fi
+done
 OUT=${1:-$HOME/rpmbuild-uinitconverter}
 PACKAGES=(uinitconverter-runner uinitconverterd uinitconverter-user uinitconverter-timers uinitconverter-gen uinitconverter)
 
@@ -50,6 +69,15 @@ fi
 
 mkdir -p "$OUT"/{SOURCES,SPECS,SRPMS,RPMS,BUILD,rpms,srpms}
 TOP=(--define "_topdir $OUT")
+if [ "$SRPM" = 1 ] && [ $((SHARED + NOCHECK)) -gt 0 ]; then
+    die "--shared-target, --nocheck and --test build binary RPMs; not with --srpm"
+fi
+# The specs link target to it (%{uinitconverter_target}, unset otherwise).
+# No debuginfo or debugsource packages then: the sources are outside the
+# package's build directory, so debugsource would be empty (an rpmbuild error).
+[ "$SHARED" = 1 ] && TOP+=(--define "uinitconverter_target $OUT/cargo-target" --define "debug_package %{nil}") \
+    && mkdir -p "$OUT/cargo-target"
+[ "$NOCHECK" = 1 ] && TOP+=(--nocheck)
 
 echo "==> uinitconverter $VERSION-$RELEASE: making uinitconverter-$VERSION.tar.gz with vendored crates"
 stage=$(mktemp -d)
@@ -89,6 +117,8 @@ if [ "$SRPM" = 1 ]; then
     exit 0
 fi
 
+[ "$SHARED" = 1 ] && echo "==> --shared-target: $OUT/cargo-target"
+[ "$NOCHECK" = 1 ] && echo "==> --nocheck: no %check, no cargo test"
 for p in "${PACKAGES[@]}"; do
     echo "==> Building $p"
     rpmbuild "${TOP[@]}" -bb "$OUT/SPECS/$p.spec" >"$OUT/$p.log" 2>&1 \

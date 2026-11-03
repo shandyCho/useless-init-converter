@@ -316,8 +316,30 @@ autologin fails into `gnome-session-shutdown.target`; the test checks the
 record in `/run/uinitconverter-user/1000`, `systemd --user` in `user@1000`,
 no s6 process left, and the greeter. Tester then logs in at the greeter and
 gets a working session under `systemd --user`. Last, bob lingers, his s6
-manager is killed with SIGSEGV, and the next start of his `user@` runs
+manager is killed with SIGKILL, and the next start of his `user@` runs
 `systemd --user` with the crash recorded.
+
+`tests/vm-s6-boot.sh ~/uinitconverter-vm` boots the VM with s6, installed
+as README steps 2-4 do it: the core RPMs (`packages/build-rpms.sh`; default
+`~/uinitconverter-vm/rpmbuild/core/rpms`, or `CORE_RPMS=`), the standalone
+ones (`STANDALONE_RPMS=`) and the skarnet ones (`SKARNET_RPMS=`, default
+`~/rpmbuild-skarnet/rpms`) with `dnf`, which fetches the dependencies, then
+`initconvert init --yes --default-s6 --selinux=enforcing` (`SELINUX=permissive`
+to change it) and a reboot. On the s6 boot it checks PID 1, initconvertd,
+the SELinux mode, what the runner started for tester's `user@`, tester's
+autologin session (gnome-shell in its unit, the session targets, pipewire,
+no failed user units) and AVC denials, and prints the failed system units.
+The mode says what `user@` must run:
+
+| Mode | Setup | `user@1000` runs |
+|---|---|---|
+| `s6` (default) | `USER_MANAGER=s6`, `uinitconverter-user` installed | `initconvert-user-manager`; then a reboot from the s6 boot and the same checks |
+| `no-package` | `USER_MANAGER=s6`, no `uinitconverter-user` | `systemd --user`, with the runner's "install uinitconverter-user" line |
+| `default` | every package, no `USER_MANAGER=` | `systemd --user` |
+
+For quick rebuilds of the RPMs, `packages/build-rpms.sh --test DIR` (see the
+packages README) and `CORE_RPMS=DIR/rpms`. The console is kept in
+`~/uinitconverter-vm/s6boot-MODE-serial.log`, the screen in `s6boot-MODE.png`.
 
 ## 4. Translation preview (read-only)
 

@@ -280,8 +280,25 @@ disable-linger가 남김없이 멈춤), alice를 로그아웃시킨 뒤 재부�
 그 맨 앞에 `org.gnome.Shell@user.service`를 실패하게 하는 drop-in이 있습니다. 자동 로그인이
 `gnome-session-shutdown.target`으로 실패하면 `/run/uinitconverter-user/1000`의 기록, `user@1000`의
 `systemd --user`, 남은 s6 프로세스가 없는지, 그리터를 확인합니다. 그다음 tester가 그리터에서 로그인해
-`systemd --user` 아래에서 동작하는 세션을 받습니다. 마지막으로 bob을 linger시키고 그의 s6 매니저를 SIGSEGV로
+`systemd --user` 아래에서 동작하는 세션을 받습니다. 마지막으로 bob을 linger시키고 그의 s6 매니저를 SIGKILL로
 죽이면, 다음 `user@` 시작이 충돌을 기록하고 `systemd --user`를 실행합니다.
+
+`tests/vm-s6-boot.sh ~/uinitconverter-vm`은 README 2-4단계처럼 설치해 VM을 s6로 부팅합니다. 코어 RPM
+(`packages/build-rpms.sh`, 기본 `~/uinitconverter-vm/rpmbuild/core/rpms` 또는 `CORE_RPMS=`), 독립 도구 RPM
+(`STANDALONE_RPMS=`), skarnet RPM(`SKARNET_RPMS=`, 기본 `~/rpmbuild-skarnet/rpms`)을 `dnf`로 설치하고(의존성은
+dnf가 받습니다), `initconvert init --yes --default-s6 --selinux=enforcing`(`SELINUX=permissive`로 바꿀 수 있음)을
+실행한 뒤 재부팅합니다. s6 부팅에서 PID 1, initconvertd, SELinux 모드, 러너가 tester의 `user@`에 시작한 것,
+tester의 자동 로그인 세션(자기 유닛 안의 gnome-shell, 세션 타깃, pipewire, 실패한 사용자 유닛 없음), AVC 거부를
+확인하고, 실패한 시스템 유닛을 보여 줍니다. 모드는 `user@`가 무엇을 실행해야 하는지 정합니다:
+
+| 모드 | 설정 | `user@1000`이 실행하는 것 |
+|---|---|---|
+| `s6`(기본) | `USER_MANAGER=s6`, `uinitconverter-user` 설치 | `initconvert-user-manager`. 이어서 s6 부팅에서 재부팅하고 같은 확인 |
+| `no-package` | `USER_MANAGER=s6`, `uinitconverter-user` 없음 | `systemd --user`, 러너의 "install uinitconverter-user" 줄 |
+| `default` | 모든 패키지, `USER_MANAGER=` 없음 | `systemd --user` |
+
+RPM을 빨리 다시 빌드하려면 `packages/build-rpms.sh --test DIR`(packages README 참고)과 `CORE_RPMS=DIR/rpms`.
+콘솔은 `~/uinitconverter-vm/s6boot-MODE-serial.log`에, 화면은 `s6boot-MODE.png`에 남습니다.
 
 ## 4. 변환 미리보기 (읽기 전용)
 

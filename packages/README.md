@@ -31,12 +31,26 @@
 packages/build-rpms.sh            # 결과: ~/rpmbuild-uinitconverter/rpms
 packages/build-rpms.sh DIR        # 다른 위치
 packages/build-rpms.sh --srpm     # 소스 RPM만: ~/rpmbuild-uinitconverter/srpms
+packages/build-rpms.sh --test     # 테스트용 빠른 빌드(아래 참고)
 ```
 
 스크립트는 작업공간(`Cargo.toml`, `Cargo.lock`, `crates`, `dist`)과 `cargo vendor`로
 받은 크레이트를 `uinitconverter-VERSION.tar.gz` 하나로 묶고, spec마다 `rpmbuild -bb`를
 실행합니다. rpmbuild는 네트워크 없이(`--offline`) 빌드합니다. 아무것도 설치하지 않고
 sudo도 쓰지 않습니다. 필요한 것: `rpm-build`, `cargo`, `rust`.
+
+**테스트용 빠른 빌드.** spec마다 자기 트리에서 빌드하므로, 보통 빌드는 모든 크레이트를
+여섯 번 컴파일하고 spec마다 `%check`에서 `cargo test`를 실행합니다. VM 등에서 시험만 할
+RPM이라면 다음 옵션으로 줄일 수 있습니다(기본은 꺼짐):
+
+| 옵션 | 효과 |
+|---|---|
+| `--shared-target` | 모든 spec이 고정된 경로의 소스 사본 하나에서 cargo 타깃 디렉터리 하나로 빌드합니다(둘 다 `OUTDIR/cargo-target` 아래). 그래서 크레이트를 spec마다가 아니라 한 번만 컴파일합니다. 남겨 두므로 다음 빌드는 바뀐 것만 다시 컴파일합니다. debuginfo·debugsource 패키지는 만들지 않습니다 |
+| `--nocheck` | rpmbuild가 `%check`를 건너뜁니다(`cargo test` 없음. 트리에서 직접 실행하세요) |
+| `--test` | 둘 다 |
+
+배포할 RPM에는 쓰지 마세요. 배포용은 `github-release.sh`처럼 두 옵션 없이 빌드합니다.
+패키지 내용은 같지만, spec마다의 빌드가 서로 분리되지 않고 테스트도 실행되지 않습니다.
 
 ## 버전
 

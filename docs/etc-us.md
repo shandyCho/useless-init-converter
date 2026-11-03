@@ -528,7 +528,7 @@ log UNIT`, which also works with `JOURNAL=no`).
 ### The s6 user manager (in progress)
 
 Work is under way to replace `systemd --user` too (the plan is in
-`work_history.md`, parts 136-151). It is the `uinitconverter-user` package
+`work_history.md`, parts 136-153). It is the `uinitconverter-user` package
 (`dnf install uinitconverter-user`). With it, `USER_MANAGER=s6` in
 `uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
 command line, makes the runner start `initconvert-user-manager` (a link to
@@ -631,8 +631,14 @@ in this boot run `systemd --user` at once. The next boot tries the s6
 manager again. `UINITCONVERTER_LOG_JOBS=1` in `user@.service`'s environment
 logs every job request with the caller's process name.
 
-Not done yet: SELinux for confined users, and a run under the s6 boot's own
-system manager. Keep the default until those are done.
+Under the s6 boot's own system manager, the runner starts it for `user@`:
+in the test VM (`tests/vm-s6-boot.sh`), installed from the RPMs, tester's
+GNOME session comes up on it with SELinux enforcing and no denials, also
+after a reboot from the s6 boot. Without `uinitconverter-user`, or with the
+default `USER_MANAGER=systemd`, `user@` runs `systemd --user` there.
+
+Not done yet: SELinux for confined users, and a run on real hardware under
+the s6 boot. Keep the default until those are done.
 
 ## The `s6` command (s6-frontend)
 

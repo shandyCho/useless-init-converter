@@ -7,7 +7,7 @@ versions. Release notes: [packages/release-notes](packages/release-notes).
 
 ## Unreleased
 
-Changes since 0.2.2. Details per step in `work_history.md`, parts 130-151.
+Changes since 0.2.2. Details per step in `work_history.md`, parts 130-153.
 
 ### Added
 - `Accept=yes` sockets: on unix paths through `s6-ipcserverd`, on TCP ports
@@ -30,6 +30,10 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-151.
   See [the s6 user manager](docs/etc-us.md#the-s6-user-manager-in-progress).
 - `UINITCONVERTER_LOG_JOBS=1` in the daemon's environment logs every job
   request with the caller's process name.
+- `packages/build-rpms.sh --test` (`--shared-target`, `--nocheck`): faster
+  RPM builds for testing; see [Building](packages/README-us.md#building).
+- `tests/vm-s6-boot.sh`: the RPMs, `initconvert init` and the s6 boot in
+  the GNOME test VM.
 
 ### Changed
 - **The commands are named `initconvert*`**: `initconvert` (was
@@ -61,10 +65,19 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-151.
   `FileDescriptorName=` (it was always `connection`), so systemd's varlink
   services answer.
 - `Symlinks=` of a socket creates the link's parent directories.
+- The s6 boot works with `/var` (or `/var/lib`) on a filesystem of its own,
+  such as Fedora Cloud's btrfs `var` subvolume: stage 2 mounts it from fstab
+  before it reads the database. It stopped in stage 2 with
+  `s6-rc-init: fatal: unable to open /var/lib/uinitconverter/compiled`.
+- `initconvert init --default-s6` makes the s6 entry the default when
+  `/boot` is a btrfs subvolume and not a partition (grubby then names the
+  kernel `/boot/boot/vmlinuz-…`). It added the entry, but left the default
+  unchanged with `no s6 entry for …`.
 
 ### Known issues
-- The s6 user manager has not run under the s6 boot's own system manager
-  yet, nor for SELinux-confined users; keep `USER_MANAGER=systemd` there.
+- The s6 user manager has not run for SELinux-confined users; keep
+  `USER_MANAGER=systemd` there. Under the s6 boot's own system manager it has
+  run in the test VM only (`tests/vm-s6-boot.sh`), not on real hardware.
 - The system sandbox failed once in a few runs on a dangling scan directory
   entry of an on-demand instance (`quitter@0.service`); not reproduced.
 

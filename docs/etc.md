@@ -457,7 +457,7 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 
 ### s6 사용자 매니저 (진행 중)
 
-`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-151부). 이것은
+`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-153부). 이것은
 `uinitconverter-user` 패키지입니다(`dnf install uinitconverter-user`). 이 패키지가 있으면
 `uinitconverter.conf`의 `USER_MANAGER=s6` 또는 커널 명령줄의 `uinitconverter.user_manager=s6`이
 있을 때 러너가 `user@UID.service`에 `systemd --user` 대신 `initconvert-user-manager`(`initconvertd`로의
@@ -534,7 +534,12 @@ systemd-oomd에 알리고(`io.systemd.oom.ReportManagedOOMCGroups`, `systemd --u
 다음 부팅에는 다시 s6 매니저를 시도합니다. `user@.service` 환경에 `UINITCONVERTER_LOG_JOBS=1`을 두면
 모든 작업 요청을 호출자의 프로세스 이름과 함께 기록합니다.
 
-아직 안 된 것: 제한된 사용자를 위한 SELinux, s6 부팅의 시스템 매니저 아래에서 실행. 이것들이
+s6 부팅의 시스템 매니저 아래에서는 러너가 `user@`에 이 매니저를 시작합니다. 테스트 VM에서
+(`tests/vm-s6-boot.sh`) RPM으로 설치하면 SELinux enforcing에서 AVC 거부 없이 tester의 GNOME 세션이
+이 매니저로 올라오고, s6 부팅에서 재부팅한 뒤에도 마찬가지입니다. `uinitconverter-user`가 없거나 기본값
+`USER_MANAGER=systemd`이면 그 부팅에서도 `user@`는 `systemd --user`를 실행합니다.
+
+아직 안 된 것: 제한된 사용자를 위한 SELinux, 실제 하드웨어의 s6 부팅에서 실행. 이것들이
 끝나기 전까지는 기본값을 유지하세요.
 
 ## `s6` 명령 (s6-frontend)

@@ -62,10 +62,7 @@ pub(super) fn add_grub_entry(ctx: &Ctx, s: &Settings) {
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| die("grubby --default-kernel failed"))
     };
-    let kver = kernel
-        .strip_prefix("/boot/vmlinuz-")
-        .unwrap_or(&kernel)
-        .to_string();
+    let kver = kernel_version(&kernel);
     // The plugin builds the s6 initramfs (--boot-only-s6=yes) while this file
     // exists, for the kernels below and for every later one.
     if s.boot_only_s6 {
@@ -154,4 +151,25 @@ pub(super) fn set_boot_default(ctx: &Ctx, s: &Settings, kver: &str) {
         }
     }
     println!("  '{TITLE}' is the default; the systemd entry stays in the GRUB menu.");
+}
+
+/// The kernel version in grubby's --default-kernel path. Its directory
+/// varies: /boot/vmlinuz-KVER with /boot a partition, /boot/boot/vmlinuz-KVER
+/// with /boot a btrfs subvolume (Fedora Cloud: the BLS entries' linux line is
+/// /boot/vmlinuz-KVER and grubby puts /boot in front).
+fn kernel_version(kernel: &str) -> String {
+    let name = kernel.rsplit('/').next().unwrap_or(kernel);
+    name.strip_prefix("vmlinuz-").unwrap_or(name).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kernel_version;
+
+    #[test]
+    fn kernel_version_from_any_boot_layout() {
+        let k = "7.2.11-300.fc45.x86_64";
+        assert_eq!(kernel_version(&format!("/boot/vmlinuz-{k}")), k);
+        assert_eq!(kernel_version(&format!("/boot/boot/vmlinuz-{k}")), k);
+    }
 }

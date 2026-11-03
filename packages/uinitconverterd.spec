@@ -38,6 +38,17 @@ database itself), transient units and properties.
 %build
 # --version prints the package's version-release.
 export UINITCONVERTER_BUILD=%{version}-%{release}
+%if %{defined uinitconverter_target}
+# build-rpms.sh --shared-target (test builds only): every package builds
+# from one copy of the source at a fixed path into one target directory, so
+# cargo reuses what an earlier package or build compiled (it rebuilds a
+# crate whose source path changed). %%install reads target/ as usual.
+rm -rf %{uinitconverter_target}/src
+cp -a . %{uinitconverter_target}/src
+ln -sfn %{uinitconverter_target}/target target
+export CARGO_TARGET_DIR=%{uinitconverter_target}/target
+cd %{uinitconverter_target}/src
+%endif
 cargo build --release --offline -p uinitconverterd
 
 %check

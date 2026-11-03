@@ -7,7 +7,7 @@
 
 ## 미출시
 
-0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-151부에 있습니다.
+0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-153부에 있습니다.
 
 ### 추가
 - `Accept=yes` 소켓: 유닉스 경로는 `s6-ipcserverd`로, TCP 포트는 `s6-tcpserverd`로(선택 패키지
@@ -24,6 +24,9 @@
   경로, 충돌) 그 부팅 동안은 그 자리에서 `systemd --user`로 넘깁니다(`USER_FALLBACK_ON=`).
   [s6 사용자 매니저](docs/etc.md#s6-사용자-매니저-진행-중) 참고.
 - 데몬 환경의 `UINITCONVERTER_LOG_JOBS=1`은 모든 작업 요청을 호출자의 프로세스 이름과 함께 기록합니다.
+- `packages/build-rpms.sh --test`(`--shared-target`, `--nocheck`): 테스트용 빠른 RPM 빌드.
+  [빌드](packages/README.md#빌드) 참고.
+- `tests/vm-s6-boot.sh`: GNOME 테스트 VM에서 RPM, `initconvert init`, s6 부팅을 확인합니다.
 
 ### 변경
 - **명령의 이름이 `initconvert*`입니다**: `initconvert`(이전 `uinitconverter`), `initconvertd`,
@@ -48,10 +51,17 @@
 - `Accept=yes` 인스턴스의 `LISTEN_FDNAMES=`는 소켓의 `FileDescriptorName=`을 따릅니다(이전에는 항상
   `connection`). 그래서 systemd의 varlink 서비스가 응답합니다.
 - 소켓의 `Symlinks=`가 링크의 상위 디렉터리를 만듭니다.
+- `/var`(또는 `/var/lib`)가 Fedora Cloud의 btrfs `var` 서브볼륨처럼 별도 파일 시스템이어도 s6 부팅이
+  됩니다. 2단계가 데이터베이스를 읽기 전에 fstab에 따라 마운트합니다. 이전에는
+  `s6-rc-init: fatal: unable to open /var/lib/uinitconverter/compiled`로 2단계에서 멈췄습니다.
+- `/boot`가 파티션이 아니라 btrfs 서브볼륨이어도(grubby가 커널을 `/boot/boot/vmlinuz-…`로 알려 줌)
+  `initconvert init --default-s6`이 s6 항목을 기본값으로 만듭니다. 이전에는 항목은 추가했지만
+  `no s6 entry for …`를 출력하고 기본값을 바꾸지 않았습니다.
 
 ### 알려진 문제
-- s6 사용자 매니저는 아직 s6 부팅의 시스템 매니저 아래에서나 SELinux로 제한된 사용자에게 실행해 보지
-  않았습니다. 그런 환경에서는 `USER_MANAGER=systemd`를 유지하세요.
+- s6 사용자 매니저는 아직 SELinux로 제한된 사용자에게 실행해 보지 않았습니다. 그런 환경에서는
+  `USER_MANAGER=systemd`를 유지하세요. s6 부팅의 시스템 매니저 아래에서는 테스트 VM에서만
+  (`tests/vm-s6-boot.sh`) 실행했고, 실제 하드웨어에서는 아직입니다.
 - 시스템 샌드박스가 몇 번 중 한 번, 요청 시 인스턴스(`quitter@0.service`)의 스캔 디렉터리 항목이 남는
   문제로 실패했습니다. 재현되지 않았습니다.
 

@@ -32,6 +32,7 @@ executables, so they are used only to build and are not packaged.
 packages/build-rpms.sh            # result: ~/rpmbuild-uinitconverter/rpms
 packages/build-rpms.sh DIR        # somewhere else
 packages/build-rpms.sh --srpm     # source RPMs only: ~/rpmbuild-uinitconverter/srpms
+packages/build-rpms.sh --test     # a faster build for testing (see below)
 ```
 
 The script packs the workspace (`Cargo.toml`, `Cargo.lock`, `crates`, `dist`)
@@ -39,6 +40,21 @@ and the crates fetched with `cargo vendor` into one `uinitconverter-VERSION.tar.
 then runs `rpmbuild -bb` for each spec. rpmbuild builds without network
 (`--offline`). Nothing is installed and no sudo is used. Needs `rpm-build`,
 `cargo` and `rust`.
+
+**Faster builds for testing.** Each spec builds in its own tree, so a
+normal build compiles every crate six times over and runs `cargo test` in each
+spec's `%check`. For RPMs you only test (in a VM, for example), two opt-in
+options cut that down:
+
+| Option | Effect |
+|---|---|
+| `--shared-target` | Every spec builds from one copy of the source at a fixed path into one cargo target directory, both under `OUTDIR/cargo-target`, so cargo compiles each crate once instead of once per spec. It's kept, so the next build recompiles only what changed. No debuginfo or debugsource packages |
+| `--nocheck` | rpmbuild skips `%check` (no `cargo test`; run it in the tree yourself) |
+| `--test` | Both |
+
+Don't use them for RPMs you publish: those are built with neither, as
+`github-release.sh` does. The packages are the same either way, but each
+spec's build is no longer separate from the others, and the tests didn't run.
 
 ## Versions
 

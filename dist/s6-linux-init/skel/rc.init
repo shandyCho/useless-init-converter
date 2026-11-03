@@ -6,6 +6,14 @@ shift
 
 # The initramfs mounts / read-only; the database lives in /var/lib/uinitconverter.
 mount -o remount,rw / || true
+# /var (or /var/lib) can be a filesystem of its own, such as Fedora Cloud's
+# btrfs "var" subvolume, which the initramfs leaves alone: mount it from
+# fstab before s6-rc-init reads the database. mount-fs's `mount -a` skips it.
+for m in /var /var/lib /var/lib/uinitconverter; do
+    if findmnt --fstab -n "$m" >/dev/null 2>&1 && ! mountpoint -q "$m"; then
+        mount "$m" || echo "rc.init: mount $m failed" >&2
+    fi
+done
 
 # The boot database is the set uinitconverter (or `s6 live install`) installed
 # last; nothing is regenerated here. Unit files changed while the system

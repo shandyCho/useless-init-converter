@@ -11315,3 +11315,80 @@ Owner: "update documents in this project". Every document was checked against pa
 - Every language pair has the same headings.
 - The renamed anchors (#what-initconvert-init-does, #moving-to-the-initconvert-commands and the Korean ones) resolve.
 - The CHANGELOG Unreleased section covers parts 130-151.
+
+## 2026-11-03, part 153: the s6 boot in the VM; faster test RPM builds
+
+Owner: "do item 2, the s6 boot in the VM" (part 147's next step 2: the s6 boot's own system manager running the user manager). Later: "add options 1 and 2 as opt-in for test builds" (a shared cargo target directory and no %check in build-rpms.sh).
+
+**New test, tests/vm-s6-boot.sh DIR [s6|no-package|default].**
+- **Setup:** it installs as README steps 2-4 do, on a fresh overlay of the GNOME VM:
+  - the core RPMs (CORE_RPMS=), the standalone and skarnet RPMs with dnf, which fetches the dependencies;
+  - USER_MANAGER=s6 in the s6 and no-package modes;
+  - `initconvert init --yes --default-s6 --selinux=enforcing` (SELINUX= changes it), then a reboot.
+- **Checks on the s6 boot:** PID 1, initconvertd, the SELinux mode, user@1000's main process and init.scope, tester's GNOME session, the session targets, failed user units and AVC denials.
+- **What each mode expects of user@1000:**
+  - s6: initconvert-user-manager, the bus name, app.slice and no fallback; then a reboot from the s6 boot and the same checks again;
+  - no-package: systemd --user, and the runner's "install uinitconverter-user" line in the journal;
+  - default: systemd --user.
+- **SSH time limits:** every wait loop runs ssh under `timeout`. QEMU's port forward accepts the TCP connection even when the guest's sshd isn't up, so ssh then waits for the greeting without end (ConnectTimeout covers only the connect). The first broken boot hung the test this way.
+
+**Bug 1, found by the first run: --default-s6 left systemd the default.** init printed `no s6 entry for /boot/boot/vmlinuz-7.2.11-300.fc45.x86_64: the default is unchanged`.
+- **Cause:** the VM's /boot is a btrfs subvolume (Fedora Cloud: `subvol=boot`, BLS linux line `/boot/vmlinuz-…`), and grubby --default-kernel then prints `/boot/boot/vmlinuz-KVER`. init took KVER by stripping `/boot/vmlinuz-`, which left the whole path, so the search for `KVER~uinitconverter.conf` failed. The entry itself was right.
+- **Fix:** init/boot.rs kernel_version() takes KVER from the file name, with a unit test for both layouts.
+- **Machines with /boot as a partition** (the owner's) were not affected.
+
+**Bug 2, found by the second run: the s6 boot stopped in stage 2.**
+- **Symptom:** `s6-rc-init: fatal: unable to open /var/lib/uinitconverter/compiled: No such file or directory`. Only the early rescue getty ran, restarting every 11 s, with /dev/null and /dev/tty9 still device_t (enforcing denials).
+- **Cause:** /var is a btrfs subvolume of its own in this image's fstab. The initramfs mounts only /, and rc.init ran s6-rc-init before mount-fs.
+- **Fix:** dist/s6-linux-init/skel/rc.init mounts /var, /var/lib or /var/lib/uinitconverter from fstab first, when fstab lists it and it isn't mounted yet. mount-fs's `mount -a` skips it later.
+- **Scope:** any install with a separate /var, not only this VM. The sandbox doesn't run rc.init, so only the VM covers it.
+
+**VM results (RPMs from this tree with both fixes, enforcing):**
+- **s6: 19/19 on the first s6 boot, and 19/19 again after a reboot from the s6 boot.**
+  - user@1000's main process is /usr/libexec/uinitconverter/initconvert-user-manager (exe initconvertd, comm "initconvert-use"), started by the runner.
+  - It owns org.freedesktop.systemd1 on tester's bus, and there is no fallback record.
+  - GNOME is up (screenshot DIR/s6boot-s6.png), with no AVC denials.
+  - SSH came up 21 s and 26 s after the two reboots.
+- **no-package: 17/17.** systemd --user, with the runner's line `user@1000.service: USER_MANAGER=s6, but /usr/libexec/uinitconverter/initconvert-user-manager is missing (install uinitconverter-user): running systemd --user`.
+- **default: 16/16.** systemd --user.
+- **Seen, not failures:**
+  - mcelog.service fails on every boot, the systemd one too (no MCE in the VM).
+  - The s6 manager logged evolution-alarm-notify.service's start in gnome-session@gnome.target's transaction as failed on both boots, and user-dirs-update-gtk.service's on the second. Neither is listed as a failed unit; not compared with systemd --user on the s6 boot.
+- **Not done:** the session/apps/lifecycle checks of vm-user-manager.sh on the s6 boot; a shutdown-time measurement (the test prints only the last journal lines); `--boot-only-s6=yes`.
+
+**build-rpms.sh --shared-target, --nocheck, --test (both), opt-in:**
+- **--nocheck** passes rpmbuild --nocheck, so no cargo test runs in %check.
+- **--shared-target:** each Rust spec's %build, when %{uinitconverter_target} is defined, copies the source to OUTDIR/cargo-target/src, links target to OUTDIR/cargo-target/target and builds there with CARGO_TARGET_DIR. %install reads target/ as before. It also defines debug_package %{nil}: with the sources outside the build directory, debugsource came out empty, which is an rpmbuild error. Without the option, the expanded %build is unchanged (checked with rpmspec -P). github-release.sh calls the script without options.
+- **My first version only linked target and saved nothing:** the second build with the cache kept took 505 s against 528 s for the first, and uinitconverterd still compiled all 67 crates. cargo -v said why: `Dirty proc-macro2 …: the path to the source changed`. Each spec unpacks into BUILD/NAME-VERSION-build/, a different path per package. Hence the fixed source copy; cp -a keeps the mtimes, so unchanged crates stay fresh across builds too.
+- **Times:**
+  - normal build, the six core packages: about 11 min (19:31-19:42);
+  - --test from an empty cache: 253 s. runner compiled 66 crates; then uinitconverterd 5, timers, gen and uinitconverter 1 each.
+  - A --test rebuild with the cache kept was not timed after the fix.
+- **Docs:** the packages README pair's Building section.
+
+**Also:**
+- **TESTING pair:** a vm-s6-boot.sh paragraph and mode table. The fallback paragraph said SIGSEGV, while the script sends SIGKILL (its comment says why); corrected.
+- **docs/etc pair:** the user-manager section says what ran under the s6 boot's manager.
+- **CHANGELOG pair:** Added (the two tools), Fixed (both bugs), Known issues (VM only, no real hardware; confined users).
+- **CLAUDE.md:** the new test.
+
+**Tests.**
+- cargo test 118 (the new kernel_version test), fmt clean; standalone 10/7/6/10.
+- bash -n and shellcheck -S warning on vm-s6-boot.sh, build-rpms.sh and rc.init.
+- System sandbox with SANDBOX_S6NET_BIN: 370/370 (rc.init is not part of it; JOURNAL=no and FDSTORE=no not run, those parts are unchanged).
+- User sandbox not run: user.rs, the runner and the dynamic engine are unchanged.
+
+### Current state
+
+Committed on main with this entry (one commit after cc83c99). The s6 boot has run in the VM, with the user manager under the s6 boot's own system manager, SELinux enforcing, from RPMs. The default stays USER_MANAGER=systemd.
+
+### Next steps
+
+1. The owner's machine: the new RPMs, `sudo initconvert init`, a reboot. This also covers the migration of part 151, still untested on an installed system.
+2. vm-user-manager.sh's session, lifecycle and fallback checks on the s6 boot (they assume a systemd boot: drop-ins and the kernel flag). A measured shutdown on the s6 boot.
+3. SELinux for confined users.
+4. The default and packaging.
+5. Smaller items:
+   - evolution-alarm-notify and user-dirs-update-gtk start failures in the s6 manager on the s6 boot (compare with systemd --user there);
+   - `--boot-only-s6=yes` in the VM, which the btrfs /var layout makes worth a run;
+   - part 147's smaller items: the slow logout path at a reboot, the intermittent quitter@0 failure, job modes and OnFailureJobMode=, the socket-waiting runners, GetAll property order.
