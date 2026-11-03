@@ -49,6 +49,9 @@ pub const COMPAT_VERSION: &str = "259";
 const BUS_NAME: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const UNIT_PREFIX: &str = "/org/freedesktop/systemd1/unit/";
+/// The caller's own unit (systemd's bus_unit_find): systemd-run --scope
+/// reads its InvocationID here once it is in the scope.
+const SELF_UNIT_PATH: &str = "/org/freedesktop/systemd1/unit/self";
 const JOB_PREFIX: &str = "/org/freedesktop/systemd1/job/";
 const PROPS_IFACE: &str = "org.freedesktop.DBus.Properties";
 
@@ -57,6 +60,7 @@ use uinitconverter_client::UINITCONVERTER_IFACE;
 use errors::*;
 use jobs::*;
 use manager::*;
+#[cfg(test)]
 use scopes::*;
 
 pub struct Job {
@@ -881,6 +885,43 @@ mod tests {
         assert_eq!(apply_markers(m, &[]).unwrap(), set(&[]));
         assert!(apply_markers(set(&[]), &words(&["+needs-restart", "needs-reload"])).is_err());
         assert!(apply_markers(set(&[]), &words(&["+bogus"])).is_err());
+    }
+
+    #[test]
+    fn unit_of_cgroup_per_manager() {
+        let sys = "/user.slice/user-1000.slice/user@1000.service/app.slice/ptyxis-spawn-x.scope";
+        assert_eq!(
+            unit_of_cgroup_in(sys, None).as_deref(),
+            Some("user@1000.service")
+        );
+        let base =
+            std::path::Path::new("/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service");
+        let user = |cg: &str| unit_of_cgroup_in(cg, Some(base));
+        assert_eq!(user(sys).as_deref(), Some("ptyxis-spawn-x.scope"));
+        assert_eq!(
+            user("/user.slice/user-1000.slice/user@1000.service/init.scope").as_deref(),
+            Some("init.scope")
+        );
+        assert_eq!(
+            user("/user.slice/user-1000.slice/user@1000.service/session.slice/a.service/sub")
+                .as_deref(),
+            Some("a.service")
+        );
+        assert_eq!(
+            user("/user.slice/user-1000.slice/user@1000.service/app.slice").as_deref(),
+            Some("app.slice")
+        );
+        // Not this manager's: another user's, the session scope, a prefix.
+        assert_eq!(
+            user("/user.slice/user-1001.slice/user@1001.service/app.slice/a.service"),
+            None
+        );
+        assert_eq!(user("/user.slice/user-1000.slice/session-2.scope"), None);
+        assert_eq!(
+            user("/user.slice/user-1000.slice/user@1000.service2/a.service"),
+            None
+        );
+        assert_eq!(user("/user.slice/user-1000.slice/user@1000.service"), None);
     }
 
     #[test]

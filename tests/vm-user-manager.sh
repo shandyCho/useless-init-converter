@@ -383,6 +383,14 @@ echo "$e" | grep -q '^WAYLAND_DISPLAY=' && ok "the leader's environment reached 
 # gnome-session's autostart apps get scopes (app-gnome-NAME-PID.scope).
 n=$(as systemctl --user list-units --no-legend 'app-gnome-*.scope' 2>/dev/null | wc -l)
 [ "$n" -gt 0 ] && ok "$n autostart app scopes" || bad "no app-gnome-*.scope"
+# systemd-run reads InvocationID at unit/self from inside the scope; without
+# that path it failed ("Unknown object") and Ptyxis fell back to no scope.
+out=$(as systemd-run --user --scope --quiet --unit sr-check.scope /bin/sh -c 'cut -d: -f3 /proc/self/cgroup' 2>&1)
+[ "$out" = "/user.slice/user-$u.slice/user@$u.service/app.slice/sr-check.scope" ] && ok "systemd-run --user --scope ran in app.slice/sr-check.scope" || bad "systemd-run --scope: $out"
+# GetUnitByPID answers the manager's own unit, not user@UID.service.
+out=$(as busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager \
+    GetUnitByPID u "$(pgrep -u tester -x gnome-shell | head -1)" 2>&1)
+case $out in */unit/user_40*) bad "GetUnitByPID of gnome-shell: $out" ;; "o \"/org/freedesktop/systemd1/unit/"*) out=${out##*/}; ok "GetUnitByPID of gnome-shell: ${out%\"}" ;; *) bad "GetUnitByPID of gnome-shell: $out" ;; esac
 [ "$(getenforce)" = Enforcing ] && ok "SELinux is enforcing" || bad "SELinux: $(getenforce)"
 n=$(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep -c denied)
 [ "$n" = 0 ] && ok "no AVC denials" || bad "$n AVC denials"

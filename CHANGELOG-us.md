@@ -7,7 +7,7 @@ versions. Release notes: [packages/release-notes](packages/release-notes).
 
 ## Unreleased
 
-Changes since 0.2.2. Details per step in `work_history.md`, parts 130-155.
+Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
 
 ### Added
 - `Accept=yes` sockets: on unix paths through `s6-ipcserverd`, on TCP ports
@@ -74,6 +74,12 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-155.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- The s6 user manager answers `/org/freedesktop/systemd1/unit/self` (the
+  caller's own unit), and `GetUnitByPID` there names the user unit (it named
+  `user@UID.service` for every process). `systemd-run --user --scope`
+  failed with "Failed to request invocation ID for unit: Unknown object", so
+  Ptyxis printed that line for each new terminal and started the shell
+  without its scope.
 - At shutdown the users' `user@` and `user-runtime-dir@` stop at the same
   time, as with systemd. They stopped one user after another, so with the s6
   user manager three users took 8-11 s.

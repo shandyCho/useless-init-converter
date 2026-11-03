@@ -44,6 +44,26 @@ pub(super) fn unit_of_cgroup(cg: &str) -> Option<String> {
         .map(|c| c.to_string())
 }
 
+/// unit_of_cgroup for the manager whose units live under `base` (a user
+/// manager's CGROUP_BASE, below /sys/fs/cgroup): the part of `cg` below it,
+/// so app.slice/x.scope is x.scope, not user@UID.service. None outside it.
+/// Without a base, the whole tree (the system manager).
+pub(super) fn unit_of_cgroup_in(cg: &str, base: Option<&std::path::Path>) -> Option<String> {
+    let Some(base) = base else {
+        return unit_of_cgroup(cg);
+    };
+    let rel = base
+        .strip_prefix(crate::cgroup::CGROUP_ROOT)
+        .ok()?
+        .to_str()?
+        .trim_end_matches('/');
+    let below = cg.strip_prefix('/')?.strip_prefix(rel)?;
+    if !(below.is_empty() || below.starts_with('/')) {
+        return None;
+    }
+    unit_of_cgroup(below)
+}
+
 /// PIDs behind the pidfds of a PIDFDs (ah) property.
 pub(super) fn pids_from_pidfds(v: &OwnedValue) -> Vec<u32> {
     use std::os::fd::AsRawFd;
@@ -468,6 +488,13 @@ impl Daemon {
     /// runs as the caller, as systemd allows: a user manager moves an app
     /// started from an ssh login's session scope (flatpak run) into its
     /// app scope so. Anything else needs manage-units.
+    /// The unit a process belongs to, as this manager sees it
+    /// (GetUnitByPID, unit/self).
+    pub(super) fn unit_of_pid(&self, pid: u32) -> Option<String> {
+        let cg = util::proc_cgroup(pid)?;
+        unit_of_cgroup_in(&cg, self.cfg.cgroup_base.as_deref())
+    }
+
     pub(super) async fn attach_processes(&self, c: &Peer, msg: &Message) -> R<()> {
         let (name, sub, pids): (String, String, Vec<u32>) = Self::args(msg)?;
         let Some(sub) = subcgroup(&sub) else {
@@ -478,14 +505,12 @@ impl Daemon {
         };
         let name = if name.is_empty() {
             let pid = self.caller_pid(c, msg).await.unwrap_or(0);
-            util::proc_cgroup(pid)
-                .and_then(|cg| unit_of_cgroup(&cg))
-                .ok_or_else(|| {
-                    err(
-                        E_NO_UNIT_FOR_PID,
-                        format!("PID {pid} does not belong to any loaded unit."),
-                    )
-                })?
+            self.unit_of_pid(pid).ok_or_else(|| {
+                err(
+                    E_NO_UNIT_FOR_PID,
+                    format!("PID {pid} does not belong to any loaded unit."),
+                )
+            })?
         } else {
             name
         };
@@ -494,7 +519,7 @@ impl Daemon {
         self.mac_check(c, msg, Some(&unit), "start").await?;
         let caller = self.caller_uid(c, msg).await;
         let caller_unit = match self.caller_pid(c, msg).await {
-            Some(p) => util::proc_cgroup(p).and_then(|cg| unit_of_cgroup(&cg)),
+            Some(p) => self.unit_of_pid(p),
             None => None,
         };
         // The user the unit runs as (User=%i of user@UID.service).

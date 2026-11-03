@@ -139,6 +139,17 @@ impl Daemon {
         iface: &str,
         member: &str,
     ) -> R<()> {
+        let own;
+        let path = if path == SELF_UNIT_PATH {
+            let pid = self.caller_pid(c, msg).await.unwrap_or(0);
+            own = self
+                .unit_of_pid(pid)
+                .map(|u| unit_path(&u))
+                .ok_or_else(|| err(E_UNKNOWN_OBJECT, format!("Unknown object '{path}'.")))?;
+            own.as_str()
+        } else {
+            path
+        };
         // systemd's mac_selinux_filter: the built-in interfaces of every
         // object below the manager are checked against the manager.
         let builtin = matches!(

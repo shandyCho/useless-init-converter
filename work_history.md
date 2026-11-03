@@ -11581,3 +11581,47 @@ Committed on main with this entry, one commit after 724ad8c (not pushed).
 2. The elogind plan (part 154).
 3. gnome-shell's exit hang under the s6 user manager on the s6 boot (part 154).
 4. SELinux for confined users; smaller items as in part 153.
+
+## 2026-11-04, part 157: unit/self and GetUnitByPID in the user manager (Ptyxis)
+
+Owner, on their own machine after part 156's guide (systemd boot, every package at eeccb05, `initconvert init --yes`, `initconvert-user-setup on`, logout and login): every new GNOME terminal printed "Failed to request invocation ID for unit: Unknown object '/org/freedesktop/systemd1/unit/self'." several times.
+
+**Cause:**
+- Ptyxis (ptyxis-agent) starts each shell with `systemd-run --user --scope --collect --quiet --same-dir --unit=ptyxis-spawn-ID.scope`.
+- systemd-run (262 on the machine) then reads the `InvocationID` property at `/org/freedesktop/systemd1/unit/self` from inside the new scope. systemd resolves that path to the caller's unit.
+- initconvertd didn't know the path, so systemd-run exited 1 and Ptyxis started the shell without a scope. Reproduced on the machine: `systemd-run --user --scope --quiet true` printed the line and returned 1.
+- **Second bug found on the way:** the PID-to-unit lookup (unit_of_cgroup, the outermost .service/.scope) is the system manager's view. In a user manager it named user@UID.service for every process. That affected GetUnitByPID, GetUnitByPIDFD and AttachProcessesToUnit's caller unit.
+
+**What changed:**
+- **scopes.rs:**
+  - `unit_of_cgroup_in(cg, base)` maps the cgroup below CGROUP_BASE (a user manager's delegated cgroup), so app.slice/x.scope is x.scope; it returns None outside the base. Without a base (the system manager) it keeps the old mapping.
+  - `Daemon::unit_of_pid` wraps it. It is used by GetUnitByPID, GetUnitByPIDFD, AttachProcessesToUnit (the empty name and the caller's unit) and unit/self.
+- **dispatch.rs:** `dispatch` resolves SELF_UNIT_PATH (mod.rs) to the caller's unit path before anything else. With no unit it gives UnknownObject, as systemd does. An empty InvocationID is fine for systemd-run (bus_message_read_id128 accepts 0 bytes).
+- **mod.rs:** `use scopes::*` is now under cfg(test) (only the tests use it unqualified now); new test unit_of_cgroup_per_manager.
+- **tests/user-sandbox.sh:** a systemd-run --scope check. It prints SKIP when the sandbox's manager has no CGROUP_BASE, which is the case unprivileged on this machine (a scope there gets EACCES on /sys/fs/cgroup/app.slice).
+- **tests/vm-user-manager.sh session.sh** (so session and apps): `systemd-run --user --scope` must run in app.slice/sr-check.scope, and GetUnitByPID of gnome-shell must not be user@.
+- **Docs:** the CHANGELOG pair (Fixed), the TESTING pair (session mode's checks).
+
+**Tests:**
+- cargo test 133, fmt clean (no clippy on this machine).
+- tests/user-sandbox.sh: 92 passed, 0 failed, the new check SKIPped.
+- bash -n and shellcheck -S warning on both scripts.
+- --test RPM build (4 m 17 s) into ~/uinitconverter-vm/rpmbuild/core.
+- **VM, BOOT=systemd-rpm, enforcing:**
+  - session: 20 + 2, including both new checks (GetUnitByPID: org_2egnome_2eShell_40user_2eservice); no AVC denials.
+  - session-baseline (stock systemd --user): 20 + 2, the same answers.
+- **Not tested:**
+  - the owner's machine (needs the new RPMs and a new login);
+  - the s6 boot's user manager (same code path, CGROUP_BASE set the same way);
+  - the AttachProcessesToUnit change on its own.
+
+### Current state
+
+Committed on main with this entry, one commit after eeccb05 (not pushed).
+
+### Next steps
+
+1. The owner: build and install the new RPMs, log out and in, open Ptyxis (no message; `systemd-run --user --scope true` returns 0).
+2. The elogind plan (part 154).
+3. gnome-shell's exit hang under the s6 user manager on the s6 boot (part 154).
+4. SELinux for confined users; smaller items as in part 153.

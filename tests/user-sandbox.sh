@@ -619,6 +619,20 @@ until [ "$(SC show -p LoadState --value cf-fail.service)" = not-found ] || [ $t 
 [ "$(SC show -p ActiveState --value cf-keep.service)" = failed ] && ok "without it the failed unit stays" || bad "cf-keep.service: $(SC show -p ActiveState --value cf-keep.service)"
 SC reset-failed cf-keep.service 2>/dev/null || true
 
+echo "== systemd-run --scope (Ptyxis starts each shell this way)"
+# systemd-run (258+) reads InvocationID at unit/self once it is in the scope;
+# without that path it failed with "Unknown object" and Ptyxis fell back.
+# A scope needs a delegated cgroup (CGROUP_BASE), which this sandbox only
+# has when it runs inside one; the GNOME VM's apps mode checks it always.
+if ! grep -q "^CGROUP_BASE=['\"]\?/" "$R/uinitconverter/uinitconverter.conf" 2>/dev/null; then
+    echo "SKIP no delegated cgroup here (tests/vm-user-manager.sh apps checks it)"
+elif env XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" systemd-run --user --scope --quiet \
+    --unit sr-scope.scope /bin/sh -c 'cat /proc/self/cgroup' >"$W/sr-scope.out" 2>&1; then
+    ok "systemd-run --user --scope runs its command"
+else
+    bad "systemd-run --scope: $(cat "$W/sr-scope.out")"
+fi
+
 echo "== a session"
 call StartUnit ss sess@gnome.target fail
 expect_state sess@gnome.target active/active

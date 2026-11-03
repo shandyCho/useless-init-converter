@@ -178,7 +178,7 @@ impl Daemon {
                 if pid == 0 {
                     pid = self.caller_pid(c, msg).await.unwrap_or(0);
                 }
-                match util::proc_cgroup(pid).and_then(|cg| unit_of_cgroup(&cg)) {
+                match self.unit_of_pid(pid) {
                     Some(u) => {
                         self.mac_unit(c, msg, &u, "status").await?;
                         self.reply(c, msg, &(op(unit_path(&u)),)).await
@@ -203,7 +203,7 @@ impl Daemon {
                     .filter(|&p| p > 0)
                     .ok_or_else(|| err(E_NO_UNIT_FOR_PID, "Not a pidfd of a running process."))?
                     as u32;
-                match util::proc_cgroup(pid).and_then(|cg| unit_of_cgroup(&cg)) {
+                match self.unit_of_pid(pid) {
                     Some(u) => {
                         self.mac_unit(c, msg, &u, "status").await?;
                         let inv = state::for_unit(&self.cfg.run_dir, &u)

@@ -7,7 +7,7 @@
 
 ## 미출시
 
-0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-155부에 있습니다.
+0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-157부에 있습니다.
 
 ### 추가
 - `Accept=yes` 소켓: 유닉스 경로는 `s6-ipcserverd`로, TCP 포트는 `s6-tcpserverd`로(선택 패키지
@@ -58,6 +58,10 @@
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
+- s6 사용자 매니저가 `/org/freedesktop/systemd1/unit/self`(호출한 프로세스 자신의 유닛)에 응답하고,
+  거기서 `GetUnitByPID`가 사용자 유닛을 알려 줍니다(이전에는 모든 프로세스에 `user@UID.service`).
+  `systemd-run --user --scope`가 "Failed to request invocation ID for unit: Unknown object"로
+  실패해서, Ptyxis가 새 터미널마다 이 줄을 출력하고 셸을 스코프 없이 시작했습니다.
 - 종료할 때 사용자들의 `user@`와 `user-runtime-dir@`가 systemd처럼 동시에 멈춥니다. 이전에는 사용자마다
   차례로 멈춰서, s6 사용자 매니저로는 사용자 셋에 8-11초가 걸렸습니다.
 - `Accept=yes` 인스턴스의 `LISTEN_FDNAMES=`는 소켓의 `FileDescriptorName=`을 따릅니다(이전에는 항상

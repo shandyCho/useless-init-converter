@@ -250,7 +250,8 @@ AVC 거부를 확인합니다. 이어서 그리터의 경고와 메모리를 출
 GDM 자동 로그인은 그대로 두어서, tester의 GNOME 세션이 그 위에서 뜨게 합니다. `gnome-vm.sh wait`와
 `check`를 실행한 뒤, gnome-shell의 cgroup(`session.slice/org.gnome.Shell@user.service`)과 ambient
 capability, 배경(bwrap 샌드박스 안에서 도는 GNOME 이미지 로더), 실패한 유닛과 작업, 세션 타깃과
-서비스, `is-system-running`, 리더의 환경, 자동 시작 앱 scope, SELinux와 AVC 거부를 확인합니다.
+서비스, `is-system-running`, 리더의 환경, 자동 시작 앱 scope, `systemd-run --user --scope`(Ptyxis가
+셸마다 이렇게 시작합니다)와 `GetUnitByPID`, SELinux와 AVC 거부를 확인합니다.
 이어서 QMP 키로 GNOME Shell에서 계산기를 열어 자기 `app-gnome-*.scope`에서 도는지 확인하고
 `~/uinitconverter-vm/session-session.png`를 저장합니다. `session-baseline`은 같은 것을 기본
 `systemd --user`에서 실행합니다. `VM_KEEP=yes`이면 끝난 뒤에도 VM을 켜 두어
