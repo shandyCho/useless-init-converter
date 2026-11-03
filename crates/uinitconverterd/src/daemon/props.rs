@@ -584,7 +584,13 @@ impl Daemon {
             .filter_map(|i| u8::from_str_radix(&inv[i * 2..i * 2 + 2], 16).ok())
             .collect();
         p.insert("InvocationID".into(), Value::from(inv_bytes));
-        p.insert("CollectMode".into(), s("inactive"));
+        p.insert(
+            "CollectMode".into(),
+            Value::from(
+                unit.get("Unit", "CollectMode")
+                    .unwrap_or_else(|| "inactive".into()),
+            ),
+        );
         p.insert("Refs".into(), strv(Vec::new()));
         p.insert(
             "ActivationDetails".into(),

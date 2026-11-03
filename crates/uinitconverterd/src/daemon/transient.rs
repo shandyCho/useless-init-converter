@@ -84,8 +84,9 @@ const UNIT_KEYS: &[&str] = &[
     "SourcePath",
     "RequiresMountsFor",
     "JoinsNamespaceOf",
+    "CollectMode",
 ];
-const IGNORED: &[&str] = &["AddRef", "CollectMode", "PIDs", "PIDFDs", "JobTimeoutUSec"];
+const IGNORED: &[&str] = &["AddRef", "PIDs", "PIDFDs", "JobTimeoutUSec"];
 
 /// Quote one word for a unit file (no specifier expansion of literal '%').
 fn quote(w: &str) -> String {
@@ -511,9 +512,22 @@ impl Daemon {
             let elapsed_timer = unit.utype() == "timer"
                 && rs.has(crate::timer::ELAPSED)
                 && !unit.get_bool("Timer", "RemainAfterElapse", true);
-            let idle = cur.0 == "inactive"
+            // CollectMode=inactive-or-failed (dbus-broker's transient
+            // services, gnome-desktop's app scopes): a failed one goes too,
+            // instead of staying in `systemctl --failed`.
+            let collect_failed = cur.0 == "failed"
+                && unit.get("Unit", "CollectMode").as_deref() == Some("inactive-or-failed");
+            let since = if collect_failed && since == 0 {
+                rs.get_u64(keys::ACTIVE_EXIT)
+            } else {
+                since
+            };
+            // An inactive one waits 10 s (systemd-run --wait reads it); a
+            // failed one to collect goes at once, as systemd does.
+            let grace = if collect_failed { 0 } else { 10_000_000 };
+            let idle = (cur.0 == "inactive" || collect_failed)
                 && since > 0
-                && crate::util::now_realtime_usec().saturating_sub(since) > 10_000_000
+                && crate::util::now_realtime_usec().saturating_sub(since) >= grace
                 && !triggered.contains(&id);
             if idle || elapsed_timer {
                 self.dyn_stop(&id, &unit).await;

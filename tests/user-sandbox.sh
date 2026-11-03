@@ -476,6 +476,18 @@ else
     bad "handover.service: $(SC status handover.service 2>&1 | tail -3)"
 fi
 
+echo "== slice E: CollectMode=inactive-or-failed (dbus-broker's transient services)"
+env XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" systemd-run --user --unit cf-fail.service \
+    -p CollectMode=inactive-or-failed /bin/sh -c 'sleep 2; exit 1' >/dev/null 2>&1 || true
+[ "$(SC show -p CollectMode --value cf-fail.service)" = inactive-or-failed ] && ok "CollectMode= is kept" || bad "CollectMode: $(SC show -p CollectMode --value cf-fail.service)"
+env XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" systemd-run --user --unit cf-keep.service /bin/false >/dev/null 2>&1 || true
+waitfor '[ "$(SC show -p ActiveState --value cf-keep.service)" = failed ]' || true
+t=0
+until [ "$(SC show -p LoadState --value cf-fail.service)" = not-found ] || [ $t -ge 30 ]; do sleep 1; t=$((t + 1)); done
+[ "$(SC show -p LoadState --value cf-fail.service)" = not-found ] && [ $t -le 5 ] && ok "a failed inactive-or-failed unit is collected at once (${t} s)" || bad "cf-fail.service: $(SC show -p ActiveState,LoadState --value cf-fail.service | paste -sd/)"
+[ "$(SC show -p ActiveState --value cf-keep.service)" = failed ] && ok "without it the failed unit stays" || bad "cf-keep.service: $(SC show -p ActiveState --value cf-keep.service)"
+SC reset-failed cf-keep.service 2>/dev/null || true
+
 echo "== a session"
 call StartUnit ss sess@gnome.target fail
 expect_state sess@gnome.target active/active
@@ -521,6 +533,7 @@ if [ "$(grep -c "stopped, its socket listens again" "$W/daemon.log")" -gt 1 ]; t
 else
     ok "the bus was not armed again while exiting"
 fi
+
 
 echo
 echo "passed: $pass  failed: $fail"
