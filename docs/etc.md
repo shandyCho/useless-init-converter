@@ -119,7 +119,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - `DEP_MAP`은 systemd 유닛을 직접 작성한 s6 서비스에 대응시킵니다. 예: `dbus.service` → `dbus`.
 - 활성화된 `.socket`은 자신의 서비스도 함께 포함합니다. 소켓은 러너가 바인드하며, 이름 또는 `Service=`로 짝을 찾습니다. 부팅에서 소켓을 통해서만 포함되는 서비스(sockets.target이 `virtlogd.socket`을 요구하고 `virtlogd.service`를 요구하는 유닛은 없음)는 요청 시(on-demand) 서비스입니다. 러너는 소켓만 바인드하고 기다립니다(`run --on-demand`, `uinitconverter plan`의 "on demand").
 - `Conflicts=`: 두 유닛이 모두 부팅 시 시작될 경우, 충돌 대상은 타깃에서 빠집니다(예: `getty@tty1.service`보다 `gdm.service`). 실행 중에는 유닛을 시작하거나 재시작할 때 충돌하는 유닛과, 자기 `Conflicts=`에 그 유닛을 적은 유닛을 멈춥니다.
-- systemd와 같은 작업 부수 효과: 유닛을 멈추면 `PartOf=`, `BindsTo=`, `Requires=`로 그 유닛을 가리키는 실행 중인 유닛도 멈추고(데이터베이스 유닛과 요청 시 인스턴스 모두), 재시작하면 `PartOf=`로 가리키는 유닛도 재시작합니다. `StopWhenUnneeded=yes`인 실행 중 유닛은 그것을 필요로 하는(`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`) 실행 중 유닛이 없어지면 멈추며, 작업으로 직접 시작한 직후에도 마찬가지입니다. 타깃의 상태는 타깃 자신의 것입니다. 멈춘 타깃은 그것이 불러온 유닛이 아직 실행 중이어도 비활성이고, 다시 시작하면 더 이상 활성이 아닌 원하는 유닛(이미 실행된 oneshot)을 다시 시작합니다. `STOPPING=1`을 보낸 `Type=notify` 서비스는 거기에 묶인 유닛과 함께 멈춥니다(gnome-session의 monitor가 세션을 이렇게 끝냅니다). `NotifyAccess=all`인 `Type=notify` 서비스는 podman의 quadlet 유닛처럼 `MAINPID=`로 주 프로세스를 넘길 수 있습니다(`podman run -d`는 conmon이 컨테이너를 실행하면 끝납니다). 이때 러너가 s6의 프로세스로 남아 현재 주 프로세스에 시그널을 전달하고, 그 프로세스가 끝나면 서비스도 끝납니다. systemd와 달리 재시작은 `Requires=`를 따라 전파되지 않습니다(dbus를 재시작하면 그것이 필요한 모든 것이 재시작되기 때문입니다).
+- systemd와 같은 작업 부수 효과: 유닛을 멈추면 `PartOf=`, `BindsTo=`, `Requires=`로 그 유닛을 가리키는 실행 중인 유닛도 멈추고(데이터베이스 유닛과 요청 시 인스턴스 모두), 재시작하면 `PartOf=`로 가리키는 유닛도 재시작합니다. `StopWhenUnneeded=yes`인 실행 중 유닛은 그것을 필요로 하는(`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`) 실행 중 유닛이 없어지면 멈추며, 작업으로 직접 시작한 직후에도 마찬가지입니다. 타깃의 상태는 타깃 자신의 것입니다. 멈춘 타깃은 그것이 불러온 유닛이 아직 실행 중이어도 비활성이고, 다시 시작하면 더 이상 활성이 아닌 원하는 유닛(이미 실행된 oneshot)을 다시 시작합니다. `STOPPING=1`을 보낸 `Type=notify` 서비스는 거기에 묶인 유닛과 함께 멈춥니다(gnome-session의 monitor가 세션을 이렇게 끝냅니다). `NotifyAccess=all`인 `Type=notify` 서비스는 podman의 quadlet 유닛처럼 `MAINPID=`로 주 프로세스를 넘길 수 있습니다(`podman run -d`는 conmon이 컨테이너를 실행하면 끝납니다). 이때 러너가 s6의 프로세스로 남아 현재 주 프로세스에 시그널을 전달하고, 그 프로세스가 끝나면 서비스도 끝납니다. 어떤 유닛의 시작이 대기 중일 때 같은 유닛을 또 시작하면 systemd처럼 그 작업에 합쳐져서, 다시 실행하지 않고 같은 결과를 받습니다(GNOME 리더와 `gnome-session-ctl` 둘이 `gnome-session-shutdown.target`을 동시에 시작합니다). systemd와 달리 재시작은 `Requires=`를 따라 전파되지 않습니다(dbus를 재시작하면 그것이 필요한 모든 것이 재시작되기 때문입니다).
 
 **마운트, 스왑, path 유닛**
 - `.mount`와 `.swap` 유닛은 `mount(8)`/`swapon(8)`을 실행합니다. 상태는 커널(`mountinfo`, `/proc/swaps`)에서 읽으므로, 누가 마운트했든 `systemctl status tmp.mount`가 정확합니다. `RequiresMountsFor=`는 해당 경로를 덮는 마운트 유닛에 대한 의존성이 됩니다.
@@ -456,7 +456,7 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 
 ### s6 사용자 매니저 (진행 중)
 
-`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-144부).
+`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-145부).
 `uinitconverter.conf`의 `USER_MANAGER=s6` 또는 커널 명령줄의 `uinitconverter.user_manager=s6`이
 있으면 러너가 `user@UID.service`에 `systemd --user` 대신 `uinitconverterd user-manager`를
 실행합니다. 유닛 파일은 바꾸지 않습니다. `USER_MANAGER=systemd`(기본값)나
@@ -508,8 +508,29 @@ systemd-oomd에 알리고(`io.systemd.oom.ReportManagedOOMCGroups`, `systemd --u
 실행되고 앱 그리드에 나옴), `app.slice`, `background.slice`, `session.slice`에 대한 oomd의 감시가
 `systemd --user`와 같이 동작합니다.
 
-아직 안 된 것: 로그아웃과 두 번째 사용자, 제한된 사용자를 위한 SELinux, s6 부팅의 시스템 매니저
-아래에서 실행. 이것들이 끝나기 전까지는 기본값을 유지하세요.
+세션의 생애 주기도 테스트 VM에서 `systemd --user`와 같이 동작합니다. 로그아웃
+(`gnome-session-shutdown.target`, `gnome-session-ctl --restart-dbus`로 버스가 한 번 재시작되고, 실패로
+남는 유닛 없음), 그리터에서 다시 로그인, 두 세션이 함께 도는 사용자 전환, RPM 업데이트 도우미
+(`systemctl --user -M UID@`의 marker와 `enqueue-marked`), linger 사용자, 재부팅(사용자 매니저마다 1초쯤에
+멈춤). 정지는 systemd처럼 트랜잭션입니다. 그 유닛과 함께 멈춰야 하는 것(그 유닛에 대한 `Requires=`,
+`BindsTo=`, `Requisite=`, 그리고 `PartOf=`)을 `After=`/`Before=` 순서의 단계로 나눠 함께 멈춥니다. 종료
+중인 사용자 매니저는 아무것도 더 시작하지 않습니다. `systemctl --user exit`(`SuccessAction=exit`)로
+끝나고, 전원 동작은 `systemd --user`처럼 거부합니다. `CollectMode=inactive-or-failed`인 임시
+유닛(dbus-broker의 것)은 실패하면 내려갑니다.
+
+**대체(fallback).** s6 사용자 매니저가 사용자를 제대로 받지 못하면 같은 프로세스에서 `systemd --user`로
+넘겨서 `user@UID.service`가 계속됩니다. 유닛을 멈추고, 위임된 cgroup을 `init.scope`만 남기고 비운 뒤
+`systemd --user`를 exec합니다. 이렇게 되는 경우: `OnFailure=`로 `USER_FALLBACK_ON=`의 유닛에 실패가
+이어질 때(GNOME 51의 세션 유닛은 `gnome-session-shutdown.target`으로 이어집니다. 로그아웃이 이미 그것을
+시작했다면 아님), 그런 유닛의 시작 작업이 실패할 때(GNOME 리더의 `gnome-session@NAME.target`), 데몬이
+오류로 끝나거나 panic할 때, 이번 부팅에서 그 사용자의 이전 s6 매니저가 멈추지 않고 끝났을 때(충돌).
+이유는 `/run/uinitconverter-user/UID`(패키지의 tmpfiles.d가 만드는 sticky 디렉터리. 사용자 자신의
+파일만 인정)에 기록되고, 이번 부팅 동안 그 사용자의 다음 매니저는 바로 `systemd --user`를 실행합니다.
+다음 부팅에는 다시 s6 매니저를 시도합니다. `user@.service` 환경에 `UINITCONVERTER_LOG_JOBS=1`을 두면
+모든 작업 요청을 호출자의 프로세스 이름과 함께 기록합니다.
+
+아직 안 된 것: 제한된 사용자를 위한 SELinux, s6 부팅의 시스템 매니저 아래에서 실행. 이것들이
+끝나기 전까지는 기본값을 유지하세요.
 
 ## `s6` 명령 (s6-frontend)
 
@@ -604,7 +625,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `INIT`: 유닛을 변환할 대상 init 시스템. 지금은 `s6`만 있고, 다른 값이면 모든 도구가 설정 오류로 멈춥니다.
 - `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `uinitconverter init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
-- `USER_MANAGER`, `USER_EXCLUDE`: `user@UID.service`가 실행할 것, `systemd`(기본값) 또는 `s6`([s6 사용자 매니저](#s6-사용자-매니저-진행-중) 참고. 커널 명령줄의 `uinitconverter.user_manager=`가 우선), 그리고 s6 쪽이 실행하지 않을 사용자 유닛.
+- `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: `user@UID.service`가 실행할 것, `systemd`(기본값) 또는 `s6`([s6 사용자 매니저](#s6-사용자-매니저-진행-중) 참고. 커널 명령줄의 `uinitconverter.user_manager=`가 우선), s6 쪽이 실행하지 않을 사용자 유닛, 그리고 실패 경로가 사용자를 `systemd --user`로 넘기는 사용자 유닛(기본값 `gnome-session-shutdown.target gnome-session@*.target`).
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 요청하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
 - `INCLUDE`: 기본값으로 uinitconverter에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight(화면·키보드 밝기를 부팅 사이에 유지), 절전 서비스)를 포함합니다. 무선 상태(rfkill)는 systemd-rfkill 대신 `rfkill` s6 oneshot이 유지합니다. 부팅 때 util-linux `rfkill`로 장치마다 soft block을 복원하고, 종료할 때 상태를 systemd-rfkill 자신의 파일(`/var/lib/systemd/rfkill/ID_PATH:TYPE`)에 저장하므로 systemd 부팅 항목과 상태를 공유합니다. systemd-rfkill과 달리 정상 종료할 때만 저장하며, 부팅 중 udev settle 뒤에 나타난 장치는 상태를 그대로 둡니다.
 

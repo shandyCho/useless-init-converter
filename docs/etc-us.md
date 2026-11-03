@@ -127,7 +127,7 @@ How each one is built, installed and run: [standalone/uinitconverter-fdstore](..
 - `DEP_MAP` maps systemd units to hand-written s6 services. For example, `dbus.service` → `dbus`.
 - An enabled `.socket` pulls in its service. The runner binds the sockets, matched by name or by `Service=`. A service the boot pulls in only through its sockets (sockets.target wants `virtlogd.socket`, nothing wants `virtlogd.service`) is on demand: its runner only binds the sockets and waits (`run --on-demand`, "on demand" in `uinitconverter plan`).
 - `Conflicts=`: if both units would start at boot, the conflicted one is dropped from the targets (for example `gdm.service` over `getty@tty1.service`). At runtime, starting or restarting a unit stops the units it conflicts with, and those that list it in their own `Conflicts=`.
-- Job side effects as with systemd: stopping a unit also stops the running units that have it in `PartOf=`, `BindsTo=` or `Requires=` (database units and on-demand instances alike), and restarting it restarts those with `PartOf=`. A running unit with `StopWhenUnneeded=yes` is stopped once no running unit needs it (`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`), also right after a job started it directly. A target's state is its own: a stopped target is inactive even while units it pulled in still run, and starting it again starts its wanted units that are no longer active (a oneshot that already ran). A `Type=notify` service that sends `STOPPING=1` is stopped, with what is bound to it (gnome-session's monitor ends a session this way). A `Type=notify` service with `NotifyAccess=all` may hand its main process over with `MAINPID=`, as podman's quadlet units do (`podman run -d` exits once conmon runs the container): its runner then stays as s6's process, forwards signals to the current main process, and the service ends when that one does. Unlike systemd, a restart does not propagate along `Requires=` (restarting dbus would restart everything that needs it).
+- Job side effects as with systemd: stopping a unit also stops the running units that have it in `PartOf=`, `BindsTo=` or `Requires=` (database units and on-demand instances alike), and restarting it restarts those with `PartOf=`. A running unit with `StopWhenUnneeded=yes` is stopped once no running unit needs it (`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`), also right after a job started it directly. A target's state is its own: a stopped target is inactive even while units it pulled in still run, and starting it again starts its wanted units that are no longer active (a oneshot that already ran). A `Type=notify` service that sends `STOPPING=1` is stopped, with what is bound to it (gnome-session's monitor ends a session this way). A `Type=notify` service with `NotifyAccess=all` may hand its main process over with `MAINPID=`, as podman's quadlet units do (`podman run -d` exits once conmon runs the container): its runner then stays as s6's process, forwards signals to the current main process, and the service ends when that one does. A start of a unit while another start of it is pending merges into that one, as systemd merges jobs: it gets the same result without running again (the GNOME leader and two `gnome-session-ctl` start `gnome-session-shutdown.target` at once). Unlike systemd, a restart does not propagate along `Requires=` (restarting dbus would restart everything that needs it).
 
 **Mounts, swap, path units**
 - `.mount` and `.swap` units run `mount(8)`/`swapon(8)`. Their state comes from the kernel (`mountinfo`, `/proc/swaps`), so `systemctl status tmp.mount` is correct whoever mounted it. `RequiresMountsFor=` becomes a dependency on the covering mount units.
@@ -527,7 +527,7 @@ log UNIT`, which also works with `JOURNAL=no`).
 ### The s6 user manager (in progress)
 
 Work is under way to replace `systemd --user` too (the plan is in
-`work_history.md`, parts 136-144). `USER_MANAGER=s6` in
+`work_history.md`, parts 136-145). `USER_MANAGER=s6` in
 `uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
 command line, makes the runner start `uinitconverterd user-manager` for
 `user@UID.service` instead of `systemd --user`; the unit file is not changed.
@@ -595,9 +595,38 @@ flatpak app (in `app-flatpak-*.scope`, the apps in the grid) and oomd's
 watch over `app.slice`, `background.slice` and `session.slice` work as with
 `systemd --user`.
 
-Not done yet: logout and a second user, SELinux for confined users, and a
-run under the s6 boot's own system manager. Keep the default until those
-are done.
+The session's life cycle works as with `systemd --user` in the test VM:
+logout (`gnome-session-shutdown.target`, the bus restarted once by
+`gnome-session-ctl --restart-dbus`, no unit left failed), a new login at the
+greeter, a user switch with two sessions at once, the RPM update helper
+(`systemctl --user -M UID@` markers and `enqueue-marked`), lingering users,
+and a reboot (each user manager stops in about a second). A stop is a
+transaction as in systemd: the unit and what must go with it (`Requires=`,
+`BindsTo=`, `Requisite=` on it, `PartOf=`), stopped together in waves by
+`After=`/`Before=`. An exiting user manager starts nothing more.
+`systemctl --user exit` (`SuccessAction=exit`) ends it; power actions are
+refused, as by `systemd --user`. Transient units with
+`CollectMode=inactive-or-failed` (dbus-broker's) are unloaded when they
+fail.
+
+**The fallback.** If the s6 user manager fails a user, it hands over to
+`systemd --user` in the same process, so `user@UID.service` goes on: it
+stops its units, empties its delegated cgroup but for `init.scope`, and
+execs `systemd --user`. That happens when a unit fails into a unit in
+`USER_FALLBACK_ON=` through `OnFailure=` (GNOME 51's session units fail into
+`gnome-session-shutdown.target`; not while a logout already started it),
+when a start job of such a unit fails (the GNOME leader's
+`gnome-session@NAME.target`), when its daemon exits with an error or
+panics, or when the user's previous s6 manager of this boot ended without
+stopping (a crash). The reason is recorded in
+`/run/uinitconverter-user/UID` (a sticky directory from the package's
+tmpfiles.d; only the user's own file counts), and the user's later managers
+in this boot run `systemd --user` at once. The next boot tries the s6
+manager again. `UINITCONVERTER_LOG_JOBS=1` in `user@.service`'s environment
+logs every job request with the caller's process name.
+
+Not done yet: SELinux for confined users, and a run under the s6 boot's own
+system manager. Keep the default until those are done.
 
 ## The `s6` command (s6-frontend)
 
@@ -705,7 +734,7 @@ and defaults). The most important keys:
 - `INIT`: the init system units are translated for. Only `s6` exists yet; any other value stops every tool with a configuration error.
 - `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `uinitconverter init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. The shell scripts and s6 service definitions in `dist/` still run them by name.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
-- `USER_MANAGER`, `USER_EXCLUDE`: what `user@UID.service` runs, `systemd` (default) or `s6` (see [the s6 user manager](#the-s6-user-manager-in-progress); `uinitconverter.user_manager=` on the kernel command line wins), and the user units the s6 one leaves out.
+- `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: what `user@UID.service` runs, `systemd` (default) or `s6` (see [the s6 user manager](#the-s6-user-manager-in-progress); `uinitconverter.user_manager=` on the kernel command line wins), the user units the s6 one leaves out, and the user units whose failure path hands a user over to `systemd --user` (default `gnome-session-shutdown.target gnome-session@*.target`).
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
 - `INCLUDE`: by default lets through the systemd services that work under uinitconverter: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight (screen/keyboard brightness kept across boots) and the sleep services. The radio state (rfkill) is kept by the `rfkill` s6 oneshot instead of systemd-rfkill: util-linux `rfkill` restores each device's soft block at boot and the state is saved at shutdown, in systemd-rfkill's own files (`/var/lib/systemd/rfkill/ID_PATH:TYPE`), so the systemd boot entry shares it. Unlike systemd-rfkill it saves only at a clean shutdown, and a device that appears after the boot's udev settle keeps its state.
 

@@ -259,6 +259,24 @@ flatpak 앱(오버레이에 약 3 GB, 네트워크 필요)이 자기 `app-flatpa
 gnome-shell의 `XDG_DATA_DIRS`에 flatpak exports가 있는지를 봅니다. `apps-baseline`은 같은 것을 기본
 `systemd --user`에서 실행합니다.
 
+`tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`(slice E)은 tester와 새 사용자 alice에게 비밀번호를
+주고 bob을 추가합니다. 세션 검사 뒤 tester를 로그아웃시키고(세션 유닛이 멈추고, 버스가 재시작되고, 작업이
+남지 않고, 세션 유닛이 실패하지 않음), QMP 키로 그리터에서 tester를 다시 로그인시키고, GDM에 두 번째
+그리터를 요청해(`CreateTransientDisplay`, 사용자 전환과 같음) 거기서 alice를 로그인시킵니다(두 세션이 함께
+돔). 이어서 RPM 업데이트 도우미를 실행하고(두 매니저에서 pipewire 재시작, marker 지워짐, `user@`는 그
+자리에서 reload), bob을 linger시키고(매니저가 시작되고, `systemctl --user -M bob@`가 동작하고,
+disable-linger가 남김없이 멈춤), alice를 로그아웃시킨 뒤 재부팅합니다. 지난 부팅의 저널에서 모든 `user@`가
+5초 안에 멈췄고 강제 종료되거나 실패하지 않았어야 합니다. `lifecycle-baseline`은 같은 것을 기본
+`systemd --user`에서 실행합니다.
+
+`tests/vm-user-manager.sh ~/uinitconverter-vm fallback`은 s6 매니저에서만 tester의 세션을 일부러
+망가뜨립니다. `user@1000` drop-in이 런처에 유닛 경로(`systemd --user`는 무시하는 테스트용 재정의)를 주는데,
+그 맨 앞에 `org.gnome.Shell@user.service`를 실패하게 하는 drop-in이 있습니다. 자동 로그인이
+`gnome-session-shutdown.target`으로 실패하면 `/run/uinitconverter-user/1000`의 기록, `user@1000`의
+`systemd --user`, 남은 s6 프로세스가 없는지, 그리터를 확인합니다. 그다음 tester가 그리터에서 로그인해
+`systemd --user` 아래에서 동작하는 세션을 받습니다. 마지막으로 bob을 linger시키고 그의 s6 매니저를 SIGSEGV로
+죽이면, 다음 `user@` 시작이 충돌을 기록하고 `systemd --user`를 실행합니다.
+
 ## 4. 변환 미리보기 (읽기 전용)
 
 아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 uinitconverter가 어떻게 변환할지 보여줍니다.

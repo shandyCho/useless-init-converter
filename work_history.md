@@ -11015,3 +11015,120 @@ Slices A to D pass in the VM (a systemd boot opted in with the kernel flag). The
   - parallel starts in a transaction
   - job modes; OnFailure=
   - the gsd-smartcard race
+
+## 2026-11-03, part 145: slice E (lifecycle and the fallback)
+
+Owner: "do slice E", then "commit this separate by step": six commits.
+- 46deab3: CollectMode
+- 2d669c3: job merging
+- 657634d: stop transactions
+- 64f74c1: exit and power actions
+- 66937b8: the fallback
+- the commit after them: the VM modes, the docs and this entry
+
+The exit check in the user sandbox comes with the fallback commit, which adds restarting the manager in the sandbox. Each step was checked on its own: build, fmt, cargo test, user sandbox, and the plain system sandbox for the steps touching shared code.
+
+**Result.** In the VM with every user@ on the s6 manager, `tests/vm-user-manager.sh DIR lifecycle` passes the session's 18/18, then slice E's 53/53:
+- logout: the session units stop, the bus restarts once, no jobs left, no unit failed
+- a new login at the greeter
+- a user switch to alice, both sessions running
+- the RPM update helper: pipewire restarted in both managers, the marker cleared, user@ reloaded in place
+- a lingering user: started, reachable with `-M bob@`, stopped with nothing left
+- alice's logout
+- a reboot: every user@ stopped in 0.65-1.5 s; none killed or failed
+
+`lifecycle-baseline` (stock) passes 18 + 51 with the final test (the no-fallback checks are s6 only). `tests/vm-user-manager.sh DIR fallback` passes 18/18:
+- tester's session, broken for the s6 manager only, hands over to systemd --user
+- the next login works under systemd --user
+- a SIGKILLed manager is detected at the next start
+
+**The fallback** (user.rs, daemon):
+- **Triggers:**
+  - a unit failing with OnFailure= into a unit in `USER_FALLBACK_ON=`. Default `gnome-session-shutdown.target gnome-session@*.target`: GNOME 51 has no gnome-session-failed; 7 session units have OnFailure=gnome-session-shutdown.target.
+  - a failed start job of such a unit (the leader's gnome-session@NAME.target)
+  - the daemon returning non-zero, or panicking (catch_unwind)
+  - a setup error in the launcher
+  - a stale running stamp: the previous s6 manager of this boot is gone without stopping (a crash, a SIGKILL)
+- **The OnFailure= trigger is checked by the runner before it starts the OnFailure= unit:**
+  - If that unit is already active, activating or deactivating, a logout is under way and there is no fallback. Checked later in the daemon, the very OnFailure= start made it "activating", a race found by reasoning.
+  - The runner leaves RUN_DIR/fallback-request ("unit\nreason"), and the daemon's watcher takes it.
+- **The hand-over:** the units stop (as on SIGTERM), s6-svscan ends, and the delegated cgroup is emptied except init.scope (cgroup.kill, rmdir deepest first; other init.scope processes are killed). CAP_WAKE_ALARM goes back into the ambient set, then `systemd --user` is exec'd in the same process, so user@UID.service goes on.
+- **The record:** `/run/uinitconverter-user/UID` holds the reason and `UID.running` the PID of the running s6 manager.
+  - A tmpfiles.d `d /run/uinitconverter-user 1777` is new in the uinitconverterd package, created in %post too.
+  - Only files owned by the user count. If the name is taken by another user, or the directory is missing, the record goes to $XDG_RUNTIME_DIR/uinitconverter-fallback, which lasts until the user's last session ends.
+  - Later starts in this boot exec systemd --user at once. The next boot tries s6 again.
+- Tests can override the systemd binary and the record directory: UINITCONVERTER_SYSTEMD_USER and UINITCONVERTER_USER_FALLBACK_DIR.
+- **Not verified in the VM:** the OnFailure= trigger. gnome-shell failed at its start, so the session start's failure triggered first. The OnFailure= trigger is covered by the sandbox.
+
+**Other changes:**
+- **Manager.Exit in user mode, and SuccessAction=/FailureAction= exit/exit-force (runner).** They exit the user manager, as `systemctl --user exit` needs (exit.target, systemd-exit.service SuccessAction=exit-force).
+  - **Bug:** before, the runner turned `exit` into the system's poweroff command.
+  - Other actions are refused in user mode. PowerOff/Reboot/Halt/KExec/SoftReboot/SwitchRoot on a user manager answer NotSupported, as systemd; before, a user's call would run the poweroff command.
+- **An exiting user manager starts nothing more:** check_job refuses (TransactionIsDestructive), and dyn_start_one cancels inside a running transaction.
+  - Found: GDM ends the greeter's session as user@ stops, and the leader's gnome-session-shutdown.target then still started gnome-session-restart-dbus. The bus went while gnome-session-monitor needed it, and its stop waited 5 s (TimeoutStopSec).
+- **Job merging (system side too):** a start while another start of the same unit is pending gets that job's result without running again (last_start per unit).
+  - Decided once the unit's lock is held: a start of the unit that finished since this job was created (start_seq) was pending.
+  - The first version compared job ids, but jobs run in lock order, which isn't always id order. The sandbox's merge check then failed about one run in four (a later-numbered job ran first, and the earlier one ran again). Found while splitting this part into commits; fixed in the commit that adds merging.
+  - Found with UINITCONVERTER_LOG_JOBS: the leader and two gnome-session-ctl start gnome-session-shutdown.target within 50 ms. Run three times, it re-ran restart-dbus, so the bus restarted three times in one logout.
+- **Stop transactions (user mode):** dyn_stop takes the unit and, transitively, the running units with Requires=, BindsTo= or Requisite= on it or PartOf= it. They stop in waves by After=/Before=, each wave at once (stop_in_waves).
+  - Found: dyn_stop_seen stopped needing units one at a time and silently (4.7 s). gnome-shell exited while xdg-desktop-portal-gtk (PartOf=graphical-session.target) still ran; it died on the closed display and stayed failed.
+  - gnome-session-monitor (PartOf= gnome-session-pre.target, which Requires= the stopped target) was never stopped, and started the shutdown target again after the bus restart.
+  - The system side keeps dyn_stop_seen; the per-unit tail is dyn_stop_alone, shared.
+- **stop_all_user:** all units but the bus as one set in waves (no locks: nothing starts while exiting, and taking them all could deadlock with a running transaction); then dbus.service, then dbus.socket.
+  - One at a time before: a greeter's manager took 12 s at a reboot.
+  - A per-unit transaction concurrently overlapped: a socket's stop removed its service under the service's own stop, which waited 5 s. That was seen in up to 4 of 6 managers in one run.
+- **CollectMode= is kept for transient units and honoured:** inactive-or-failed units are unloaded when they fail, at the next watcher tick (the 10 s grace stays for inactive ones, for systemd-run --wait). The CollectMode property reports it.
+  - dbus-broker's `dbus-:1.N-…@0.service` was left failed after a logout.
+- **Debugging aids:**
+  - `UINITCONVERTER_LOG_JOBS=1`, in the daemon's environment (user@.service's for a user manager), logs every job request with the caller's comm.
+  - Any dyn_stop and any stop wave taking at least 1 s, and a reverse() scan taking at least 1 s, are logged.
+- tests/vm-user-manager.sh:
+  - modes lifecycle, lifecycle-baseline, fallback
+  - setup gives tester/alice passwords and adds bob, and installs the tmpfiles.d file
+  - the fallback mode's break is a user@1000 drop-in setting the launcher's unit path override, which only it reads, with a drop-in making org.gnome.Shell@user.service fail
+
+**Test bugs of my own, fixed:**
+- a bare `wait` in the sandbox waited for the manager
+- `wait` under set -e on a killed process
+- `kill -SEGV` doesn't kill a Rust program (its handler returns for a sent signal); SIGKILL now
+- the password was typed before the greeter was ready after the failed autologin
+- the fallback reason check was too narrow
+- the CollectMode check read a unit already collected
+- the linger check looked while bob's user@ was still deactivating
+
+**Tests.**
+- cargo test 117 (new: the fallback record). fmt clean.
+- User sandbox 90/90. New:
+  - unit-generator and earlier slices' checks kept
+  - systemctl --user exit
+  - the fallback: in place (same PID), recorded, s6 units stopped first, then straight to systemd --user, a stale stamp, a failed fallback target's start, and no fallback during a logout
+  - job merging (fails with merging off)
+  - a unit PartOf= a Requires= dependent stopped (fails with the old stop)
+  - CollectMode=inactive-or-failed
+- System sandbox with SANDBOX_S6NET_BIN: 370/370, SANDBOX_JOURNAL=no 377/377, SANDBOX_FDSTORE=no 358/358.
+  - **Intermittent:** plain failed once in 3 runs on "dangling scan directory entry: quitter@0.service" (after StopUnit of an on-demand instance) and passed twice right after. The code path is the system's dyn_stop_seen, unchanged in behaviour. Not investigated further.
+- VM: lifecycle 18 + 53 (the last of several runs; earlier runs found the bugs above), fallback 18/18, lifecycle-baseline 18 + 51. These ran before the merge fix (start_seq). That fix changes only how a merge is decided, and the user sandbox passed 7 times with it, but it has not run in the VM.
+
+**Still open:**
+- At the reboot, tester's GNOME logout path (the leader's shutdown target racing the stop) took 11.8 s for graphical-session.target, 5.3 s of it gnome-shell's stop. user@ itself stopped in 0.72 s, so the test passes. Stock timing for that path wasn't measured.
+- At the reboot stock stopped its user@s in 0.03-0.43 s (one greeter 1.76 s), ours in 0.65-1.5 s.
+
+### Current state
+
+Slices A to E pass in the VM (a systemd boot opted in with the kernel flag). The default stays USER_MANAGER=systemd.
+
+### Next steps (the plan's "Then")
+
+1. The owner's machine, with the flag for one boot at a time.
+2. A run under the s6 boot's own system manager (the runner execs the launcher there): never tested. Also: oomd's subscription to the system manager; the record directory on an s6 boot (dist/early runs systemd-tmpfiles, so it should exist; not checked).
+3. SELinux for confined users (user_t/staff_t), including /run/uinitconverter-user's label; the s6-native admin story (per-user s6-rc store, s6-frontend config).
+4. Switching the default; packaging.
+
+Smaller items:
+- the slow logout path at a reboot
+- the remaining stop-time gap
+- the system sandbox's intermittent quitter@0 failure
+- parallel starts in a transaction
+- job modes; OnFailureJobMode=
+- the socket-waiting runners (memory)
+- GetAll property order

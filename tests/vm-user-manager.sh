@@ -27,6 +27,15 @@
 #                                        # the fedora remote: ~3 GB, network) in
 #                                        # its app-flatpak-*.scope
 #   tests/vm-user-manager.sh DIR apps-baseline # the same on systemd --user
+#   tests/vm-user-manager.sh DIR lifecycle # slice E: the session, logout, a new
+#                                        # login at the greeter, a user switch to
+#                                        # alice, the RPM update helper, a lingering
+#                                        # user, alice's logout, a reboot
+#   tests/vm-user-manager.sh DIR lifecycle-baseline # the same on systemd --user
+#   tests/vm-user-manager.sh DIR fallback # tester's session broken on purpose for
+#                                        # the s6 manager only: systemd --user takes
+#                                        # over, the next login works; a crashed
+#                                        # manager (a lingering user) too
 #
 # Copies target/debug's uinitconverterd, -runner and -timers (cargo build
 # first) and the skalibs and s6 RPMs from SKARNET_RPMS (default
@@ -35,9 +44,9 @@ set -euo pipefail
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 VM=$TOP/tests/gnome-vm.sh
-D=${1:?usage: tests/vm-user-manager.sh DIR [user|greeter|baseline|session|session-baseline|apps|apps-baseline]}
+D=${1:?usage: tests/vm-user-manager.sh DIR [user|greeter|baseline|session|session-baseline|apps|apps-baseline|lifecycle|lifecycle-baseline|fallback]}
 MODE=${2:-user}
-case $MODE in user | greeter | baseline | session | session-baseline | apps | apps-baseline) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
+case $MODE in user | greeter | baseline | session | session-baseline | apps | apps-baseline | lifecycle | lifecycle-baseline | fallback) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
 RPMS=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/RPMS/x86_64}
 S=$(mktemp -d)
 # The VM goes down however this ends (VM_KEEP=yes: it stays up, for
@@ -70,11 +79,22 @@ if [ "$1" = greeter ] || [ "$1" = baseline ]; then
     # The greeter is what comes up.
     sed -i 's/^AutomaticLoginEnable=True/AutomaticLoginEnable=False/' /etc/gdm/custom.conf
 fi
+# Slice E: passwords for the greeter, a second user, a lingering one.
+case $1 in
+    lifecycle* | fallback)
+        echo tester:s6Tester1 | chpasswd 2>/dev/null
+        for u in alice bob; do id "$u" >/dev/null 2>&1 || useradd -m "$u"; done
+        echo alice:s6Alice1 | chpasswd 2>/dev/null
+        ;;
+esac
 case $1 in *baseline) exit 0 ;; esac
 # Built locally, so unsigned.
 rpm -Uvh --nodeps --nosignature --replacepkgs ./skalibs-*.rpm ./execline-*.rpm ./s6-*.rpm
 install -d /usr/local/libexec/uinitconverter
 install -m 0755 uinitconverterd uinitconverter-runner uinitconverter-timers /usr/local/libexec/uinitconverter/
+# The fallback's record directory, as the package's tmpfiles.d makes it.
+install -Dm0644 uinitconverter-user.conf /etc/tmpfiles.d/uinitconverter-user.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/uinitconverter-user.conf
 mkdir -p /etc/uinitconverter
 echo "USER_MANAGER=s6" >/etc/uinitconverter/uinitconverter.conf
 for u in s6test s6ref; do
@@ -83,13 +103,26 @@ done
 uid=$(id -u s6test)
 # greeter: every user's manager.
 dir=/etc/systemd/system/user@$uid.service.d
-case $1 in greeter | session | apps) dir=/etc/systemd/system/user@.service.d ;; esac
+case $1 in greeter | session | apps | lifecycle | fallback) dir=/etc/systemd/system/user@.service.d ;; esac
 mkdir -p "$dir"
 cat >"$dir/90-uinitconverter.conf" <<EOF
 [Service]
 ExecStart=
 ExecStart=/usr/local/libexec/uinitconverter/uinitconverterd user-manager
 EOF
+if [ "$1" = fallback ]; then
+    # Broken for the s6 manager only: a unit path that only it reads (the
+    # launcher's test override) starts with a drop-in making tester's
+    # gnome-shell fail; systemd --user never sees it.
+    mkdir -p "/etc/uinitconverter-break/org.gnome.Shell@user.service.d"
+    printf '[Service]\nExecStart=\nExecStart=/bin/false\n' >"/etc/uinitconverter-break/org.gnome.Shell@user.service.d/50-break.conf"
+    t=/run/user/1000 h=/home/tester
+    mkdir -p /etc/systemd/system/user@1000.service.d
+    cat >/etc/systemd/system/user@1000.service.d/95-break.conf <<EOF
+[Service]
+Environment=UINITCONVERTER_USER_UNIT_PATH=/etc/uinitconverter-break:$t/systemd/transient:$t/systemd/generator.early:$h/.config/systemd/user:/etc/xdg/systemd/user:/etc/systemd/user:$t/systemd/user:/run/systemd/user:$t/systemd/generator:$h/.local/share/systemd/user:/usr/local/share/systemd/user:/usr/share/systemd/user:/usr/local/lib/systemd/user:/usr/lib/systemd/user:$t/systemd/generator.late
+EOF
+fi
 # A unit of the user's own, wanted by default.target.
 h=/home/s6test/.config/systemd/user
 mkdir -p "$h/default.target.wants"
@@ -409,7 +442,197 @@ echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
 EOS
 
-cp "$TOP/target/$BUILD/uinitconverterd" "$TOP/target/$BUILD/uinitconverter-runner" "$TOP/target/$BUILD/uinitconverter-timers" "$skalibs" "$execline" "$s6" "$S/"
+cat >"$S/life.sh" <<'EOS'
+#!/bin/bash
+# As root in the VM: slice E's steps. life.sh STEP MANAGER, MANAGER being
+# the comm of the user managers expected (uinitconverterd or systemd).
+set -uo pipefail
+step=$1 want=${2:-uinitconverterd}
+pass=0 fail=0
+ok() { pass=$((pass + 1)); echo "PASS $*"; }
+bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+until_ok() { local t=0; until eval "$1"; do t=$((t + 1)); [ $t -ge "$2" ] && return 1; sleep 1; done; }
+as() {
+    local u=$1 id
+    shift
+    id=$(id -u "$u")
+    runuser -u "$u" -- env HOME="/home/$u" XDG_RUNTIME_DIR="/run/user/$id" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$id/bus" "$@"
+}
+seat_session() { loginctl list-sessions --no-legend | awk -v u="$1" '$3 == u && $4 == "seat0" {print $1}' | head -1; }
+mgr_comm() { cat "/proc/$(systemctl show -p MainPID --value "user@$(id -u "$1").service")/comm" 2>/dev/null; }
+greeter_up() { pgrep -f -u "$(getent passwd | awk -F: '/^gdm-greeter/ {print $1}' | paste -sd,)" '^/usr/bin/gnome-shell' >/dev/null 2>&1; }
+no_fallback() {
+    [ "$want" = uinitconverterd ] || return 0
+    [ ! -e "/run/uinitconverter-user/$(id -u "$1")" ] && ok "no fallback for $1" || bad "$1 fell back: $(cat "/run/uinitconverter-user/$(id -u "$1")")"
+}
+session_up() {
+    local u=$1 s x
+    until_ok '[ -n "$(seat_session '"$u"')" ] && pgrep -u '"$u"' -x gnome-shell >/dev/null' 90 \
+        && ok "$u's GNOME session is up" || { bad "$u: no GNOME session after 90 s"; return; }
+    s=$(seat_session "$u")
+    until_ok '[ "$(loginctl show-session '"$s"' -p Active --value)" = yes ]' 30 && ok "$u's session $s is active" || bad "$u's session $s is not active"
+    [ "$(mgr_comm "$u")" = "$want" ] && ok "$u's user manager is $want" || bad "$u's user manager: $(mgr_comm "$u")"
+    sleep 5
+    for x in gnome-session@gnome.target org.gnome.Shell@user.service gnome-session-manager@gnome.service; do
+        st=$(as "$u" systemctl --user is-active "$x" 2>&1)
+        [ "$st" = active ] && ok "$u: $x is active" || bad "$u: $x: $st"
+    done
+    x=$(cut -d: -f3 "/proc/$(pgrep -n -u "$u" -x gnome-shell)/cgroup")
+    case $x in */user@"$(id -u "$u")".service/session.slice/org.gnome.Shell@user.service) ok "$u's gnome-shell is in its unit" ;; *) bad "$u's gnome-shell: $x" ;; esac
+    no_fallback "$u"
+}
+logout() {
+    local u=$1 s old x f
+    s=$(seat_session "$u")
+    old=$(as "$u" systemctl --user show -p MainPID --value dbus-broker.service)
+    as "$u" gnome-session-quit --logout --no-prompt &
+    until_ok '! loginctl show-session '"$s"' >/dev/null 2>&1 || [ "$(loginctl show-session '"$s"' -p State --value)" = closing ]' 60 \
+        && ok "$u's session $s ended" || bad "$u's session $s still: $(loginctl show-session "$s" -p State --value)"
+    sleep 5
+    x=$(systemctl is-active "user@$(id -u "$u").service")
+    echo "   user@$(id -u "$u").service: $x (an ssh login or logind's stop delay keeps it)"
+    if [ "$x" = active ]; then
+        for x in gnome-session@gnome.target org.gnome.Shell@user.service gnome-session-manager@gnome.service gnome-session-monitor.service; do
+            st=$(as "$u" systemctl --user is-active "$x" 2>&1)
+            [ "$st" != active ] && ok "$u: $x is $st" || bad "$u: $x is still active"
+        done
+        echo "   dbus-broker: $old -> $(as "$u" systemctl --user show -p MainPID --value dbus-broker.service) (gnome-session-ctl --restart-dbus)"
+        j=$(as "$u" systemctl --user list-jobs --no-legend 2>&1)
+        [ -z "$j" ] && ok "$u: no jobs left" || bad "$u: jobs: $j"
+        f=$(as "$u" systemctl --user list-units --failed --no-legend 2>&1)
+        echo "   failed after logout: ${f:-none}"
+        case $f in *gnome-session* | *org.gnome.Shell*) bad "$u: session units failed: $f" ;; *) ok "$u: no session unit failed" ;; esac
+    fi
+    no_fallback "$u"
+}
+case $step in
+    logout) logout tester
+        until_ok greeter_up 60 && ok "the greeter is back" || bad "no greeter after the logout" ;;
+    login-tester) session_up tester ;;
+    switch)
+        out=$(as tester gdbus call --system --dest org.gnome.DisplayManager --object-path /org/gnome/DisplayManager/LocalDisplayFactory \
+            --method org.gnome.DisplayManager.LocalDisplayFactory.CreateTransientDisplay 2>&1) && ok "a new greeter was asked for ($out)" || bad "CreateTransientDisplay: $out"
+        until_ok '[ -n "$(loginctl list-sessions --no-legend | awk '"'"'$6 == "greeter"'"'"')" ]' 60 && ok "the switch greeter runs" || bad "no greeter session"
+        sleep 10 ;;
+    login-alice)
+        session_up alice
+        t=$(seat_session tester)
+        [ -n "$t" ] && pgrep -u tester -x gnome-shell >/dev/null && ok "tester's session $t goes on beside alice's" || bad "tester's session is gone"
+        [ "$(loginctl show-session "$t" -p Active --value)" = no ] && ok "tester's session is in the background" || bad "tester's session is active" ;;
+    update)
+        p1=$(as tester systemctl --user show -p MainPID --value pipewire.service)
+        p2=$(as alice systemctl --user show -p MainPID --value pipewire.service)
+        m1=$(systemctl show -p MainPID --value user@1000.service)
+        /usr/lib/systemd/systemd-update-helper mark-restart-user-units pipewire.service
+        until_ok '[ "$(systemctl --user -M tester@ show -p Markers --value pipewire.service 2>/dev/null)" = needs-restart ]' 10 \
+            && ok "systemctl --user -M tester@ set-property Markers= reached tester's manager" || bad "Markers: $(systemctl --user -M tester@ show -p Markers --value pipewire.service 2>&1)"
+        /usr/lib/systemd/systemd-update-helper user-reload-restart
+        sleep 8
+        n1=$(as tester systemctl --user show -p MainPID --value pipewire.service)
+        n2=$(as alice systemctl --user show -p MainPID --value pipewire.service)
+        [ "$n1" != "$p1" ] && [ "$n1" != 0 ] && ok "tester's pipewire restarted ($p1 -> $n1)" || bad "tester's pipewire: $p1 -> $n1"
+        [ "$n2" != "$p2" ] && [ "$n2" != 0 ] && ok "alice's pipewire restarted ($p2 -> $n2)" || bad "alice's pipewire: $p2 -> $n2"
+        [ -z "$(as tester systemctl --user show -p Markers --value pipewire.service)" ] && ok "the marker is cleared" || bad "Markers left"
+        [ "$(systemctl show -p MainPID --value user@1000.service)" = "$m1" ] && [ "$(systemctl is-active user@1000.service)" = active ] \
+            && ok "user@1000 reloaded in place (main PID $m1)" || bad "user@1000: $(systemctl is-active user@1000.service), main $(systemctl show -p MainPID --value user@1000.service) (was $m1)" ;;
+    linger)
+        b=$(id -u bob)
+        loginctl enable-linger bob
+        until_ok '[ "$(systemctl is-active user@'"$b"'.service)" = active ]' 30 && ok "lingering: user@$b started without a session" || bad "user@$b: $(systemctl is-active "user@$b.service")"
+        [ "$(mgr_comm bob)" = "$want" ] && ok "bob's manager is $want" || bad "bob's manager: $(mgr_comm bob)"
+        st=$(systemctl --user -M bob@ is-active default.target 2>&1)
+        [ "$st" = active ] && ok "systemctl --user -M bob@: default.target active" || bad "-M bob@: $st"
+        loginctl disable-linger bob
+        until_ok '[ "$(systemctl is-active user@'"$b"'.service)" = inactive ]' 60 && ok "disable-linger stopped user@$b" || bad "user@$b: $(systemctl is-active "user@$b.service")"
+        [ -z "$(pgrep -u bob)" ] && ok "no process of bob is left" || bad "bob's processes: $(pgrep -a -u bob)" ;;
+    alice-logout)
+        logout alice
+        t=$(seat_session tester)
+        loginctl activate "$t"
+        until_ok '[ "$(loginctl show-session '"$t"' -p Active --value)" = yes ]' 30 && ok "back to tester's session" || bad "tester's session is not active" ;;
+    after-reboot)
+        n=0
+        while read -r u; do
+            a=$(journalctl -b -1 -o short-unix --no-pager "_PID=1" | awk -v u="$u" '$0 ~ "Stopping " u "\\.service" {print $1; exit}')
+            z=$(journalctl -b -1 -o short-unix --no-pager "_PID=1" | awk -v u="$u" '$0 ~ "Stopped " u "\\.service" {print $1; exit}')
+            [ -n "$a" ] && [ -n "$z" ] || continue
+            n=$((n + 1))
+            d=$(awk -v a="$a" -v z="$z" 'BEGIN {printf "%.2f", z - a}')
+            awk -v d="$d" 'BEGIN {exit !(d < 5)}' && ok "$u stopped in $d s at the reboot" || bad "$u took $d s to stop"
+        done < <(journalctl -b -1 --no-pager -o cat "_PID=1" | sed -n 's/^Stopping \(user@[0-9]*\)\.service.*/\1/p' | sort -u)
+        [ "$n" -gt 0 ] || bad "no user@ stop in the last boot's journal"
+        x=$(journalctl -b -1 --no-pager -o cat "_PID=1" | grep -E "user@[0-9]+\.service: (State 'stop-sigterm' timed out|Killing process|Failed with result)" | head -3)
+        [ -z "$x" ] && ok "no user@ was killed or failed at the reboot" || bad "$x" ;;
+esac
+echo "passed: $pass  failed: $fail"
+[ "$fail" -eq 0 ]
+EOS
+
+cat >"$S/fallback.sh" <<'EOS'
+#!/bin/bash
+# As root in the VM: the fallback, after tester's broken autologin.
+set -uo pipefail
+step=$1
+pass=0 fail=0
+ok() { pass=$((pass + 1)); echo "PASS $*"; }
+bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+until_ok() { local t=0; until eval "$1"; do t=$((t + 1)); [ $t -ge "$2" ] && return 1; sleep 1; done; }
+mgr_comm() { cat "/proc/$(systemctl show -p MainPID --value "user@$1.service")/comm" 2>/dev/null; }
+case $step in
+    broken)
+        until_ok '[ -e /run/uinitconverter-user/1000 ]' 120 && ok "tester's s6 manager fell back: $(cat /run/uinitconverter-user/1000)" || bad "no fallback record after 120 s"
+        # gnome-shell failing at its start fails the leader's start of the
+        # session target; failing later, it fails into the shutdown target.
+        case $(cat /run/uinitconverter-user/1000 2>/dev/null) in
+            *"org.gnome.Shell@user.service failed (OnFailure=gnome-session-shutdown.target)"* | *"the start of gnome-session@gnome.target ended"*) ok "for GNOME's failure path" ;;
+            *) bad "reason: $(cat /run/uinitconverter-user/1000 2>&1)" ;;
+        esac
+        [ "$(stat -c %U /run/uinitconverter-user/1000)" = tester ] && ok "the record is tester's own file" || bad "owner: $(stat -c %U /run/uinitconverter-user/1000)"
+        until_ok '[ "$(systemctl is-active user@1000.service)" != active ] || [ "$(mgr_comm 1000)" = systemd ]' 30
+        echo "   user@1000.service: $(systemctl is-active user@1000.service), main $(mgr_comm 1000)"
+        [ -z "$(pgrep -u tester -x s6-svscan)$(pgrep -u tester -x s6-supervise)$(pgrep -u tester -f '^uinitconverter-runner|/uinitconverter-runner ')" ] \
+            && ok "no s6 process of tester is left" || bad "left: $(pgrep -a -u tester -x s6-svscan; pgrep -a -u tester -x s6-supervise)"
+        if [ "$(systemctl is-active user@1000.service)" = active ]; then
+            cg=/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service
+            [ ! -e "$cg/app.slice/uinitconverter" ] && ok "user@1000 is systemd --user's now" || bad "cgroup: $(ls "$cg")"
+        fi
+        journalctl -b _UID=1000 --no-pager -o cat | grep -E "^uinitconverterd.*(handing over|fallback|fell back)" | sed 's/^/   /'
+        until_ok 'pgrep -f -u "$(getent passwd | awk -F: '"'"'/^gdm-greeter/ {print $1}'"'"' | paste -sd,)" "^/usr/bin/gnome-shell" >/dev/null' 90 \
+            && ok "the greeter is back" || bad "no greeter" ;;
+    relogin)
+        until_ok 'pgrep -u tester -x gnome-shell >/dev/null' 90 && ok "tester's GNOME session is up after the fallback" || bad "no gnome-shell for tester"
+        [ "$(mgr_comm 1000)" = systemd ] && ok "under systemd --user" || bad "user@1000's main: $(mgr_comm 1000)"
+        sleep 5
+        x=$(cut -d: -f3 "/proc/$(pgrep -n -u tester -x gnome-shell)/cgroup")
+        case $x in */user@1000.service/session.slice/org.gnome.Shell@user.service) ok "gnome-shell in its unit" ;; *) bad "gnome-shell: $x" ;; esac
+        st=$(runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active gnome-session@gnome.target 2>&1)
+        [ "$st" = active ] && ok "gnome-session@gnome.target is active" || bad "gnome-session@gnome.target: $st" ;;
+    crash)
+        b=$(id -u bob)
+        loginctl enable-linger bob
+        until_ok '[ "$(systemctl is-active user@'"$b"'.service)" = active ]' 30
+        [ "$(mgr_comm "$b")" = uinitconverterd ] && ok "bob's manager is the s6 one" || bad "bob's manager: $(mgr_comm "$b")"
+        [ -e "/run/uinitconverter-user/$b.running" ] && ok "its running stamp is there" || bad "no running stamp"
+        # SIGKILL (the OOM killer): a Rust program ignores a SIGSEGV sent
+        # with kill (its handler only acts on a real fault).
+        kill -KILL "$(systemctl show -p MainPID --value "user@$b.service")"
+        until_ok '[ "$(systemctl is-active user@'"$b"'.service)" != active ]' 30
+        echo "   after the crash: user@$b.service $(systemctl is-active "user@$b.service")"
+        systemctl reset-failed "user@$b.service" 2>/dev/null
+        systemctl start "user@$b.service"
+        until_ok '[ "$(mgr_comm '"$b"')" = systemd ]' 30 && ok "the next start of user@$b runs systemd --user" || bad "bob's manager: $(mgr_comm "$b")"
+        case $(cat "/run/uinitconverter-user/$b" 2>/dev/null) in *"ended without stopping"*) ok "recorded as a crash" ;; *) bad "record: $(cat "/run/uinitconverter-user/$b" 2>&1)" ;; esac
+        st=$(systemctl --user -M bob@ is-active default.target 2>&1)
+        [ "$st" = active ] && ok "and it works (default.target active)" || bad "-M bob@: $st"
+        loginctl disable-linger bob ;;
+esac
+n=$(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep -c denied)
+[ "$n" = 0 ] && ok "no AVC denials" || bad "$n AVC denials: $(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep denied | head -2)"
+echo "passed: $pass  failed: $fail"
+[ "$fail" -eq 0 ]
+EOS
+
+cp "$TOP/target/$BUILD/uinitconverterd" "$TOP/target/$BUILD/uinitconverter-runner" "$TOP/target/$BUILD/uinitconverter-timers" "$skalibs" "$execline" "$s6" "$TOP/dist/tmpfiles.d/uinitconverter-user.conf" "$S/"
 "$VM" start "$D"
 "$VM" wait "$D"
 "$VM" copy "$D" "$S"/*
@@ -423,6 +646,55 @@ if [ "$MODE" = user ]; then
     exit
 fi
 case $MODE in
+    lifecycle | lifecycle-baseline)
+        want=uinitconverterd
+        [ "$MODE" = lifecycle-baseline ] && want=systemd
+        rc=0
+        "$VM" wait "$D" || rc=$?
+        sleep 20
+        "$VM" ssh "$D" sudo bash in/session.sh || rc=$?
+        echo "== logout"
+        "$VM" ssh "$D" sudo bash in/life.sh logout $want || rc=$?
+        echo "== a new login at the greeter"
+        "$VM" key "$D" ret; sleep 2; "$VM" type "$D" s6Tester1; "$VM" key "$D" ret
+        "$VM" ssh "$D" sudo bash in/life.sh login-tester $want || rc=$?
+        echo "== a user switch to alice"
+        "$VM" ssh "$D" sudo bash in/life.sh switch $want || rc=$?
+        "$VM" key "$D" down; sleep 1; "$VM" key "$D" ret; sleep 2; "$VM" type "$D" s6Alice1; "$VM" key "$D" ret
+        "$VM" ssh "$D" sudo bash in/life.sh login-alice $want || rc=$?
+        "$VM" screenshot "$D" "$D/lifecycle-$MODE.png"
+        echo "== a package update of a user unit (the RPM helper)"
+        "$VM" ssh "$D" sudo bash in/life.sh update $want || rc=$?
+        echo "== a lingering user"
+        "$VM" ssh "$D" sudo bash in/life.sh linger $want || rc=$?
+        echo "== alice logs out"
+        "$VM" ssh "$D" sudo bash in/life.sh alice-logout $want || rc=$?
+        echo "== a reboot with tester's session open"
+        "$VM" ssh "$D" 'sudo systemctl reboot' || true
+        sleep 30
+        "$VM" wait "$D" || rc=$?
+        "$VM" ssh "$D" sudo bash in/life.sh after-reboot $want || rc=$?
+        exit $rc
+        ;;
+    fallback)
+        rc=0
+        t=0
+        until "$VM" ssh "$D" true 2>/dev/null; do
+            t=$((t + 5)); [ $t -lt 300 ] || { echo "no SSH after 5 min" >&2; exit 1; }; sleep 5
+        done
+        echo "== tester's autologin, broken for the s6 manager"
+        "$VM" ssh "$D" sudo bash in/fallback.sh broken || rc=$?
+        "$VM" screenshot "$D" "$D/fallback-greeter.png"
+        echo "== tester logs in again"
+        # The greeter settles after the failed autologin first.
+        sleep 20
+        "$VM" key "$D" ret; sleep 3; "$VM" type "$D" s6Tester1; "$VM" key "$D" ret
+        "$VM" ssh "$D" sudo bash in/fallback.sh relogin || rc=$?
+        "$VM" screenshot "$D" "$D/fallback-session.png"
+        echo "== a crashed manager (lingering bob)"
+        "$VM" ssh "$D" sudo bash in/fallback.sh crash || rc=$?
+        exit $rc
+        ;;
     apps | apps-baseline)
         rc=0
         "$VM" wait "$D" || rc=$?

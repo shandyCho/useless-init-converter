@@ -288,6 +288,30 @@ and stopped, and a flatpak app installed for tester from the fedora remote
 `app-flatpak-*.scope`, with the flatpak exports in gnome-shell's
 `XDG_DATA_DIRS`. `apps-baseline` runs the same on stock `systemd --user`.
 
+`tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle` (slice E) gives
+tester and a new user alice passwords and adds bob. After the session
+checks it logs tester out (the session's units stop, the bus restarts, no
+jobs, no session unit failed), logs tester in again at the greeter with QMP
+keys, asks GDM for a second greeter (`CreateTransientDisplay`, as Switch
+User does) and logs alice in there (both sessions run). It then runs the
+RPM update helper (pipewire restarted in both managers, the marker
+cleared, `user@` reloaded in place), lets bob linger (his manager starts,
+`systemctl --user -M bob@` works, disable-linger stops it with nothing
+left), logs alice out, and reboots: from the last boot's journal every
+`user@` must have stopped within 5 s, none killed or failed.
+`lifecycle-baseline` runs the same on stock `systemd --user`.
+
+`tests/vm-user-manager.sh ~/uinitconverter-vm fallback` breaks tester's
+session on purpose for the s6 manager only: a `user@1000` drop-in gives the
+launcher a unit path (its test override, which `systemd --user` ignores)
+that starts with a drop-in making `org.gnome.Shell@user.service` fail. The
+autologin fails into `gnome-session-shutdown.target`; the test checks the
+record in `/run/uinitconverter-user/1000`, `systemd --user` in `user@1000`,
+no s6 process left, and the greeter. Tester then logs in at the greeter and
+gets a working session under `systemd --user`. Last, bob lingers, his s6
+manager is killed with SIGSEGV, and the next start of his `user@` runs
+`systemd --user` with the crash recorded.
+
 ## 4. Translation preview (read-only)
 
 This shows how uinitconverter would translate this machine's own units, without
