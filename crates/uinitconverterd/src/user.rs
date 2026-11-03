@@ -409,15 +409,12 @@ fn write_config(
 /// Make the directories, start s6-svscan, and run the daemon in user mode.
 pub fn main(sys: &Config, args: &[String]) -> i32 {
     let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
-    // On a systemd boot, systemd's own user manager unless the kernel
-    // command line asks for this one (tests/vm-user-manager.sh does).
-    let systemd_boot = fs::read_to_string("/proc/1/comm")
-        .map(|c| c.trim() == "systemd")
-        .unwrap_or(false);
-    let asked = cmdline
-        .split_whitespace()
-        .any(|w| w == "uinitconverter.user_manager=s6");
-    if (systemd_boot && !asked) || chosen(sys, &cmdline) == "systemd" {
+    // USER_MANAGER= decides, on either boot (uinitconverter.user_manager=
+    // on the kernel command line wins: =systemd is the way back from GRUB).
+    // A systemd boot only runs this at all after `initconvertd
+    // user-manager-setup on` wrote user@.service's drop-in; before part 155
+    // it also needed uinitconverter.user_manager=s6 on the command line.
+    if chosen(sys, &cmdline) == "systemd" {
         let err = Command::new(SYSTEMD_USER).arg("--user").args(args).exec();
         eprintln!(
             "initconvertd user-manager: {SYSTEMD_USER}: {err}; running the s6 user manager instead"
@@ -781,6 +778,46 @@ fn hand_over(cgroup: Option<&Path>, args: &[String]) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The user manager's file, as write_config makes it, sets only keys the
+    /// parser knows (config::KEYS): the contract between the user mode and
+    /// Config::load, checked without loading it (that would switch this
+    /// test process to user mode).
+    #[test]
+    fn user_config_sets_known_keys() {
+        let dir =
+            std::env::temp_dir().join(format!("uinitconverter-userconf-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("uinitconverter.conf");
+        write_config(
+            &Config::defaults(),
+            &path,
+            &dir,
+            "/run/user/1000",
+            Some(Path::new("/sys/fs/cgroup/x")),
+        )
+        .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let keys: Vec<&str> = text
+            .lines()
+            .filter_map(|l| l.split_once('=').map(|(k, _)| k))
+            .collect();
+        assert!(keys.len() > 10, "{text}");
+        for k in &keys {
+            assert!(
+                crate::config::KEYS.contains(k),
+                "the user config sets {k}, which Config::load doesn't know"
+            );
+        }
+        for k in crate::config::INTERNAL_KEYS {
+            assert!(
+                keys.contains(k),
+                "the user config doesn't set the internal {k}"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// The fallback record: the reason and the running stamp, read back;
     /// a stamp naming a process that is gone is stale;

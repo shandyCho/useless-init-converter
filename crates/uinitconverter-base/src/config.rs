@@ -157,6 +157,111 @@ const JOURNAL_UNITS: &[&str] = &[
 /// The values SYSLOG= accepts.
 pub const SYSLOGS: &[&str] = &["rsyslog", "syslog-ng"];
 
+/// Every key uinitconverter.conf may set: the contract between the parser
+/// (Config::load), dist/uinitconverter.conf (documents them), `initconvert
+/// init` (writes some) and the user mode (writes the user manager's own
+/// file). The tests check each side against these lists.
+pub const KEYS: &[&str] = &[
+    "INIT",
+    "TOOLS",
+    "UNIT_PATH",
+    "RUNTIME_UNIT_DIR",
+    "PRESET_PATH",
+    "EXTRA_SOURCE",
+    "STATE_DIR",
+    "REPO_DIR",
+    "STORE_DIR",
+    "SET",
+    "LIVE_DIR",
+    "RUN_DIR",
+    "LOG_DIR",
+    "EXCLUDE",
+    "USER_MANAGER",
+    "USER_EXCLUDE",
+    "USER_FALLBACK_ON",
+    "EXCLUDE_ADD",
+    "INCLUDE",
+    "DEP_MAP",
+    "DEP_MAP_ADD",
+    "SYSINIT_BUNDLE",
+    "DEFAULT_BUNDLE",
+    "DAEMON_SERVICE",
+    "BOOTED_FLAG",
+    "PRIVATE_SOCKET",
+    "BUS_ADDRESS",
+    "RUNNER",
+    "TIMER_RUNNER",
+    "POWEROFF_CMD",
+    "REBOOT_CMD",
+    "HALT_CMD",
+    "JOURNAL",
+    "SYSLOG",
+    "AUTO_MASK",
+    "RESOLVED",
+    "BUS",
+    "TRANSIENT_DIR",
+    "JOURNAL_STDOUT",
+    "UDEV_DIR",
+    "UDEV_MONITOR",
+    "CGROUP_BASE",
+    "USER_MODE",
+    "ALLOW_UIDS",
+];
+/// Keys only the user mode writes, into the user manager's generated file.
+pub const INTERNAL_KEYS: &[&str] = &["USER_MODE", "CGROUP_BASE"];
+/// Removed keys still accepted (ignored), so an older file still loads.
+pub const REMOVED_KEYS: &[&str] = &["AUTO_MASK"];
+
+/// initconvert-runner's commands: the contract between the runner (parses
+/// them into its Cmd), initconvert-gen (writes them into the service
+/// scripts), initconvertd (runs them) and dist/s6's run scripts (confine).
+/// Write these constants, not literals; tests on each side check the rest.
+pub mod runner_cmd {
+    /// A longrun's `run` script.
+    pub const RUN: &str = "run";
+    /// A longrun's `finish` script.
+    pub const FINISH: &str = "finish";
+    /// A oneshot's (mount's, swap's) `up` script.
+    pub const UP: &str = "up";
+    /// A oneshot's `down` script.
+    pub const DOWN: &str = "down";
+    /// ExecStop= with $MAINPID, run by initconvertd.
+    pub const STOP_EXEC: &str = "stop-exec";
+    /// The `down` of UNIT.stop: ExecStop= when s6-rc stops a longrun.
+    pub const STOP_ATOM: &str = "stop-atom";
+    /// ExecReload= with $MAINPID, run by initconvertd.
+    pub const RELOAD_EXEC: &str = "reload-exec";
+    /// Run a command with a unit's confinement (dist/s6's run scripts).
+    pub const CONFINE: &str = "confine";
+    /// An Accept=yes socket's `run` script.
+    pub const ACCEPT: &str = "accept";
+    /// An Accept=yes socket's `finish` script.
+    pub const ACCEPT_FINISH: &str = "accept-finish";
+    /// One connection's instance, run by s6-ipcserverd or s6-tcpserverd.
+    pub const CONNECTION: &str = "connection";
+    pub const ALL: &[&str] = &[
+        RUN,
+        FINISH,
+        UP,
+        DOWN,
+        STOP_EXEC,
+        STOP_ATOM,
+        RELOAD_EXEC,
+        CONFINE,
+        ACCEPT,
+        ACCEPT_FINISH,
+        CONNECTION,
+    ];
+}
+
+/// initconvert-timers' commands, written by initconvert-gen into a .timer's
+/// or .path unit's `run` script.
+pub mod timers_cmd {
+    pub const TIMER_RUN: &str = "timer-run";
+    pub const PATH_RUN: &str = "path-run";
+    pub const ALL: &[&str] = &[TIMER_RUN, PATH_RUN];
+}
+
 /// Units added to EXCLUDE and mapped to the s6 "syslog" service when
 /// JOURNAL=no: the distribution's syslog daemons, whichever SYSLOG= picks.
 const SYSLOG_UNITS: &[&str] = &["rsyslog.service", "syslog-ng.service", "syslog.service"];
@@ -398,7 +503,10 @@ impl Config {
                         .filter_map(|s| s.parse().ok())
                         .collect()
                 }
-                other => eprintln!("uinitconverter: {}: unknown key {other}", path.display()),
+                other => {
+                    eprintln!("uinitconverter: {}: unknown key {other}", path.display());
+                    debug_assert!(!KEYS.contains(&other), "{other} is in KEYS but not parsed");
+                }
             }
         }
         if !INITS.contains(&cfg.init.as_str()) {
@@ -606,5 +714,129 @@ mod tests {
             assert!(cfg.is_excluded(u), "{u}");
         }
         assert!(!cfg.is_excluded("systemd-logind.service"));
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::{runner_cmd, timers_cmd};
+    use std::path::Path;
+
+    /// gen writes the runner's commands into scripts and initconvertd runs
+    /// them: with the constants, never a literal, or a renamed command
+    /// would build and fail only at run time.
+    #[test]
+    fn runner_commands_are_written_as_constants() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let mut bad = Vec::new();
+        let mut files = 0;
+        let mut todo = vec![
+            crates.join("uinitconverter-gen/src"),
+            crates.join("uinitconverterd/src"),
+        ];
+        while let Some(d) = todo.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    todo.push(p);
+                    continue;
+                }
+                if p.extension().is_none_or(|x| x != "rs") {
+                    continue;
+                }
+                files += 1;
+                for (n, line) in std::fs::read_to_string(&p).unwrap().lines().enumerate() {
+                    let literal = runner_cmd::ALL.iter().chain(timers_cmd::ALL).any(|c| {
+                        line.contains(&format!("{{runner}} {c}"))
+                            || line.contains(&format!("{{timer_runner}} {c}"))
+                            || line.contains(&format!("run_runner(\"{c}\""))
+                            || line.contains(&format!("runner_cmd(\"{c}\""))
+                    });
+                    if literal {
+                        bad.push(format!("{}:{}: {}", p.display(), n + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        assert!(files > 10, "no sources under {}", crates.display());
+        assert!(
+            bad.is_empty(),
+            "write config::runner_cmd / timers_cmd:\n{}",
+            bad.join("\n")
+        );
+    }
+
+    fn read(rel: &str) -> String {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+    }
+
+    /// KEYS is what the parser's match takes: no key parsed but unlisted,
+    /// none listed but not parsed.
+    #[test]
+    fn keys_are_the_parsers() {
+        let src = read("src/config.rs");
+        let start = src.find("        for (k, v) in vars {").unwrap();
+        let end = src[start..].find("                other => {").unwrap() + start;
+        let mut parsed = std::collections::BTreeSet::new();
+        for line in src[start..end].lines() {
+            let t = line.trim_start();
+            if !t.starts_with('"') || !t.contains("=>") {
+                continue;
+            }
+            let arm = &t[..t.find("=>").unwrap()];
+            for k in arm.split('|') {
+                let k = k.trim().trim_matches('"');
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+                    parsed.insert(k.to_string());
+                }
+            }
+        }
+        let listed: std::collections::BTreeSet<String> =
+            super::KEYS.iter().map(|k| k.to_string()).collect();
+        assert_eq!(parsed, listed);
+    }
+
+    /// dist/uinitconverter.conf documents every key a user may set, and
+    /// names no key the parser doesn't know.
+    #[test]
+    fn dist_conf_documents_the_keys() {
+        let conf = read("../../dist/uinitconverter.conf");
+        for line in conf.lines() {
+            let l = line.trim_start_matches('#');
+            if let Some((k, _)) = l.split_once('=') {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+                    assert!(
+                        super::KEYS.contains(&k),
+                        "dist/uinitconverter.conf: {k} is not a key"
+                    );
+                }
+            }
+        }
+        let words: std::collections::BTreeSet<&str> = conf
+            .split(|c: char| !(c.is_ascii_uppercase() || c == '_'))
+            .collect();
+        for k in super::KEYS {
+            if super::INTERNAL_KEYS.contains(k) || super::REMOVED_KEYS.contains(k) {
+                continue;
+            }
+            assert!(
+                words.contains(k),
+                "{k} is not documented in dist/uinitconverter.conf"
+            );
+        }
+    }
+
+    #[test]
+    fn command_names_are_unique() {
+        let mut all: Vec<&str> = runner_cmd::ALL
+            .iter()
+            .chain(timers_cmd::ALL)
+            .copied()
+            .collect();
+        let n = all.len();
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), n);
     }
 }

@@ -20,7 +20,7 @@ use crate::install;
 use crate::loader::{LoadState, Loader, Unit};
 use crate::sandbox::{self, Sandbox};
 use crate::socket;
-use crate::state::{keys, UnitState};
+use crate::state::{keys, result, UnitState};
 use crate::supervisor;
 use crate::tools;
 use crate::util::{self, UserInfo};
@@ -177,7 +177,7 @@ impl Runner {
             }
             let failed = st
                 .get(keys::RESULT)
-                .map(|r| !matches!(r.as_str(), "success" | "running"))
+                .map(|r| result::is_failure(&r))
                 .unwrap_or(false);
             if failed && st.get_u64(keys::INACTIVE_ENTER) >= st.get_u64(keys::INACTIVE_EXIT) {
                 return Some(d);
@@ -407,7 +407,7 @@ impl Runner {
                 }
             }
             Err(e) => {
-                self.st.set(keys::RESULT, "exit-code");
+                self.st.set(keys::RESULT, result::EXIT_CODE);
                 self.soft_fail(&e);
                 return 1;
             }
@@ -418,7 +418,7 @@ impl Runner {
             self.st.set(
                 keys::RESULT,
                 if self.timed_out.get() {
-                    "timeout"
+                    result::TIMEOUT
                 } else {
                     result_for(st)
                 },
@@ -440,7 +440,7 @@ impl Runner {
         self.deadline.set(None);
 
         if let Err(e) = self.setup_listen_fds() {
-            self.st.set(keys::RESULT, "resources");
+            self.st.set(keys::RESULT, result::RESOURCES);
             self.soft_fail(&e);
             return 1;
         }
@@ -725,22 +725,22 @@ impl Runner {
         let clean_exit =
             self.is_clean(status) || (stopping && status == Status::Killed(kill_signal));
         let mut result = if clean_exit {
-            "success"
+            result::SUCCESS
         } else {
             match status {
-                Status::Killed(_) => "signal",
-                Status::Exited(_) => "exit-code",
+                Status::Killed(_) => result::SIGNAL,
+                Status::Exited(_) => result::EXIT_CODE,
             }
         }
         .to_string();
         if let Some(r) = self.st.get(keys::RESULT) {
-            if r != "success" && !stopping {
+            if r != result::SUCCESS && !stopping {
                 result = r;
             }
         }
         // A start timeout or failed ExecStartPost= ends in our own SIGTERM,
         // which on its own would count as clean.
-        let clean = clean_exit && result == "success";
+        let clean = clean_exit && result == result::SUCCESS;
 
         self.cleanup(&result, status, stopping);
 
@@ -752,7 +752,7 @@ impl Runner {
             return 0;
         }
         if self.st.has(keys::ASSERT_FAILED) {
-            self.st.set(keys::RESULT, "exit-code");
+            self.st.set(keys::RESULT, result::EXIT_CODE);
             return 125;
         }
 
@@ -765,7 +765,7 @@ impl Runner {
             "on-success" => clean,
             "on-failure" => !clean,
             "on-abnormal" | "on-watchdog" => {
-                result == "timeout" || matches!(status, Status::Killed(_)) && !clean_exit
+                result == result::TIMEOUT || matches!(status, Status::Killed(_)) && !clean_exit
             }
             "on-abort" => matches!(status, Status::Killed(_)) && !clean_exit,
             _ => false,
@@ -818,7 +818,7 @@ impl Runner {
             );
             if limited && times.len() > burst {
                 log(self.id(), "start request repeated too quickly, giving up");
-                self.st.set(keys::RESULT, "start-limit-hit");
+                self.st.set(keys::RESULT, result::START_LIMIT_HIT);
                 self.st.stamp(keys::INACTIVE_ENTER);
                 self.on_result(false);
                 return 125;
@@ -839,8 +839,8 @@ impl Runner {
         }
         self.st.set(keys::RESULT, &result);
         self.st.stamp(keys::INACTIVE_ENTER);
-        self.on_result(result == "success");
-        if result == "success" && self.has_held_sockets() {
+        self.on_result(result == result::SUCCESS);
+        if result == result::SUCCESS && self.has_held_sockets() {
             // Stay up for s6: the next run waits for socket activity.
             self.st.set(keys::SOCKET_WAIT, "1");
             return 0;
@@ -927,7 +927,11 @@ impl Runner {
             self.st.stamp(keys::INACTIVE_EXIT);
             self.st.set(
                 keys::RESULT,
-                if code == 0 { "success" } else { "exit-code" },
+                if code == 0 {
+                    result::SUCCESS
+                } else {
+                    result::EXIT_CODE
+                },
             );
             self.st.set(keys::EXEC_MAIN_STATUS, &code.to_string());
             if code == 0 {
@@ -973,7 +977,7 @@ impl Runner {
         self.enter_cgroup();
         if let Err(e) = self.prepare_start() {
             log(self.id(), &e);
-            self.st.set(keys::RESULT, "resources");
+            self.st.set(keys::RESULT, result::RESOURCES);
             self.st.stamp(keys::INACTIVE_ENTER);
             return 0;
         }
@@ -981,18 +985,18 @@ impl Runner {
             Ok(true) => {}
             Ok(false) => {
                 log(self.id(), "condition check failed, skipped");
-                self.st.set(keys::RESULT, "success");
+                self.st.set(keys::RESULT, result::SUCCESS);
                 return 0;
             }
             Err(e) => {
                 log(self.id(), &e);
-                self.st.set(keys::RESULT, "exit-code");
+                self.st.set(keys::RESULT, result::EXIT_CODE);
                 self.st.stamp(keys::INACTIVE_ENTER);
                 self.on_result(false);
                 return 0;
             }
         }
-        self.st.set(keys::RESULT, "running");
+        self.st.set(keys::RESULT, result::RUNNING);
         self.st.stamp(keys::EXEC_MAIN_START);
         self.deadline
             .set(self.start_timeout().map(|t| std::time::Instant::now() + t));
@@ -1025,12 +1029,12 @@ impl Runner {
         }
         self.st.set(keys::EXEC_MAIN_CODE, "1");
         self.st.set(keys::EXEC_MAIN_STATUS, "0");
-        self.st.set(keys::RESULT, "success");
+        self.st.set(keys::RESULT, result::SUCCESS);
         self.st.stamp(keys::ACTIVE_ENTER);
         if !self.unit.get_bool("Service", "RemainAfterExit", false) {
             // systemd stops a oneshot right after it finished.
             let _ = self.run_list("ExecStop", &[]);
-            self.cleanup("success", Status::Exited(0), true);
+            self.cleanup(result::SUCCESS, Status::Exited(0), true);
             self.st.stamp(keys::INACTIVE_ENTER);
         }
         self.on_result(true);
@@ -1044,7 +1048,7 @@ impl Runner {
         }
         if self.unit.get_bool("Service", "RemainAfterExit", false) {
             let _ = self.run_list("ExecStop", &[]);
-            self.cleanup("success", Status::Exited(0), true);
+            self.cleanup(result::SUCCESS, Status::Exited(0), true);
         }
         self.st.stamp(keys::ACTIVE_EXIT);
         self.st.stamp(keys::INACTIVE_ENTER);

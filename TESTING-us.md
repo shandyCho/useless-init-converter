@@ -337,6 +337,21 @@ The mode says what `user@` must run:
 | `no-package` | `USER_MANAGER=s6`, no `uinitconverter-user` | `systemd --user`, with the runner's "install uinitconverter-user" line |
 | `default` | every package, no `USER_MANAGER=` | `systemd --user` |
 
+`BOOT=systemd-rpm tests/vm-user-manager.sh ~/uinitconverter-vm MODE` runs
+`greeter`, `session`, `apps`, `lifecycle` or `fallback` on the stock systemd
+boot as a user would set it up: only `uinitconverter-user` and what it
+requires (from `CORE_RPMS=` and `SKARNET_RPMS=`), then `sudo
+initconvert-user-setup on`, with no kernel flag. The baselines install the
+package and leave it off, so they also check that installing it changes
+nothing.
+
+`BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm MODE` runs the
+`session` and `lifecycle` checks (and their baselines) on the s6 boot the same
+way: every RPM, `USER_MANAGER=s6` (not in the baselines) and `initconvert
+init`, so the s6 boot's runner starts every `user@`. At the reboot it measures
+each `user@` from "shutdown starts" to the end of its runner's PAM session,
+with the same 5 s limit.
+
 For quick rebuilds of the RPMs, `packages/build-rpms.sh --test DIR` (see the
 packages README) and `CORE_RPMS=DIR/rpms`. The console is kept in
 `~/uinitconverter-vm/s6boot-MODE-serial.log`, the screen in `s6boot-MODE.png`.

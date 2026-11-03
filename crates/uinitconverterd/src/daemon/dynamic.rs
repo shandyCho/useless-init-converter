@@ -15,6 +15,7 @@ use std::time::Duration;
 use tokio::process::Command;
 
 use super::Daemon;
+use crate::config::runner_cmd;
 use crate::gen::Kind;
 use crate::loader::{self, Unit};
 use crate::tools;
@@ -496,7 +497,7 @@ impl Daemon {
                 return "done";
             }
             let started_at = crate::util::now_realtime_usec();
-            let ok = self.run_runner("up", id, None).await
+            let ok = self.run_runner(runner_cmd::UP, id, None).await
                 && self.job_outcome(id, started_at, "done") == "done";
             let remain = unit.get_bool("Service", "RemainAfterExit", false);
             self.set_oneshot_active(id, ok && remain);
@@ -764,7 +765,7 @@ impl Daemon {
                 .map(|d| d.active)
                 .unwrap_or(false);
             if active {
-                self.run_runner("down", id, None).await;
+                self.run_runner(runner_cmd::DOWN, id, None).await;
             }
             self.set_oneshot_active(id, false);
             self.dynamic.lock().unwrap().remove(id);
@@ -772,7 +773,8 @@ impl Daemon {
         }
         let sv = self.svstat(id).await.unwrap_or_default();
         if sv.up && !unit.get_all("Service", "ExecStop").is_empty() {
-            self.run_runner("stop-exec", id, Some(sv.pid)).await;
+            self.run_runner(runner_cmd::STOP_EXEC, id, Some(sv.pid))
+                .await;
         }
         let _ = Command::new(tools::path("s6-svc"))
             .args(["-wD", "-d", "-T", "120000"])
@@ -876,34 +878,56 @@ impl Daemon {
     /// daemon come from load_dynamic().
     pub(super) async fn stop_dynamic_at_shutdown(&self) {
         self.stop_scopes_at_shutdown().await;
-        let ids: Vec<(String, Kind)> = self
+        let ids: Vec<String> = self
             .dynamic
             .lock()
             .unwrap()
             .iter()
             .filter(|(_, d)| d.kind == Kind::Longrun || d.active)
             .map(|(n, d)| (n.clone(), d.kind))
+            .filter(|(n, kind)| {
+                *kind != Kind::Longrun
+                    || !self
+                        .load_unit(n)
+                        .1
+                        .get_all("Service", "ExecStop")
+                        .is_empty()
+            })
+            .map(|(n, _)| n)
             .collect();
-        for (id, kind) in ids {
-            let (_, unit) = self.load_unit(&id);
-            if kind == Kind::Longrun && unit.get_all("Service", "ExecStop").is_empty() {
-                continue;
+        // Groups that share no dependent stop at once, as systemd stops every
+        // user at once (one at a time, each user@ waited for the one before:
+        // three users took 8-11 s at a reboot, work_history part 154). Within
+        // a group one at a time as before: dyn_stop stops the dependents
+        // first, and two stops of one dependent side by side would run its
+        // ExecStop= twice.
+        let groups = shutdown_groups(ids, |id| self.dyn_dependents_closure(id));
+        futures_util::future::join_all(groups.iter().map(|g| async move {
+            for id in g {
+                let (_, unit) = self.load_unit(id);
+                // The bus is still served: a StopUnit for the same unit must
+                // not run its ExecStop= a second time beside us.
+                let lock = self.unit_lock(id);
+                let _guard = lock.lock().await;
+                // dyn_stop logs a slow stop (dependents like user@ included).
+                self.dyn_stop(id, &unit).await;
             }
-            // The bus is still served: a StopUnit for the same unit must not
-            // run its ExecStop= a second time beside us.
-            let lock = self.unit_lock(&id);
-            let _guard = lock.lock().await;
-            let t = std::time::Instant::now();
-            self.dyn_stop(&id, &unit).await;
-            // Says where a slow power-off waited (dependents like user@ included).
-            let took = t.elapsed();
-            if took >= Duration::from_secs(2) {
-                eprintln!(
-                    "initconvertd: stopping {id} took {:.1} s",
-                    took.as_secs_f64()
-                );
+        }))
+        .await;
+    }
+
+    /// `id` and the dynamic units that require it, directly or not.
+    fn dyn_dependents_closure(&self, id: &str) -> BTreeSet<String> {
+        let mut seen = BTreeSet::from([id.to_string()]);
+        let mut todo = vec![id.to_string()];
+        while let Some(n) = todo.pop() {
+            for d in self.dyn_dependents(&n) {
+                if seen.insert(d.clone()) {
+                    todo.push(d);
+                }
             }
         }
+        seen
     }
 
     /// A user manager's exit (SIGTERM from user@UID.service's stop): every
@@ -956,7 +980,8 @@ impl Daemon {
                     return self.dyn_start(id, unit).await;
                 }
                 if !unit.get_all("Service", "ExecStop").is_empty() {
-                    self.run_runner("stop-exec", id, Some(sv.pid)).await;
+                    self.run_runner(runner_cmd::STOP_EXEC, id, Some(sv.pid))
+                        .await;
                 }
                 let started_at = crate::util::now_realtime_usec();
                 let r = self.restart_longrun(id, unit, sv.pid).await;
@@ -1001,5 +1026,71 @@ impl Daemon {
                 }
             }
         }
+    }
+}
+
+/// Split `ids` into groups whose units (by `closure`: a unit and its
+/// dependents) don't overlap; the order of `ids` is kept within a group.
+fn shutdown_groups(
+    ids: Vec<String>,
+    closure: impl Fn(&str) -> BTreeSet<String>,
+) -> Vec<Vec<String>> {
+    let mut groups: Vec<(BTreeSet<String>, Vec<String>)> = Vec::new();
+    for id in ids {
+        let mut units = closure(&id);
+        let mut members = vec![id];
+        // Every group this one touches joins it.
+        let mut k = 0;
+        while k < groups.len() {
+            if groups[k].0.is_disjoint(&units) {
+                k += 1;
+            } else {
+                let (u, m) = groups.remove(k);
+                units.extend(u);
+                members.splice(0..0, m);
+            }
+        }
+        groups.push((units, members));
+    }
+    groups.into_iter().map(|(_, m)| m).collect()
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::shutdown_groups;
+    use std::collections::BTreeSet;
+
+    fn closure(id: &str) -> BTreeSet<String> {
+        // user-runtime-dir@UID is required by user@UID; a.service and
+        // b.service share dep.service.
+        let mut s = BTreeSet::from([id.to_string()]);
+        if let Some(uid) = id.strip_prefix("user-runtime-dir@") {
+            s.insert(format!("user@{uid}"));
+        }
+        if id == "a.service" || id == "b.service" {
+            s.insert("dep.service".into());
+        }
+        s
+    }
+
+    #[test]
+    fn users_stop_apart_and_shared_dependents_together() {
+        let ids = [
+            "user-runtime-dir@1000.service",
+            "a.service",
+            "user-runtime-dir@1001.service",
+            "b.service",
+        ]
+        .map(String::from)
+        .to_vec();
+        let g = shutdown_groups(ids, closure);
+        assert_eq!(
+            g,
+            vec![
+                vec!["user-runtime-dir@1000.service".to_string()],
+                vec!["user-runtime-dir@1001.service".to_string()],
+                vec!["a.service".to_string(), "b.service".to_string()],
+            ]
+        );
     }
 }

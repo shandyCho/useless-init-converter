@@ -16,8 +16,8 @@ Source0:        uinitconverter-%{version}.tar.gz
 BuildRequires:  cargo
 BuildRequires:  rust
 Requires:       s6
-Requires:       s6-rc
-Requires:       dbus-daemon
+# s6-rc and dbus-daemon are the s6 boot's (the uinitconverter package
+# requires them): the user manager (uinitconverter-user) uses neither.
 # Transient services (systemd-run) and the stop/reload commands run it.
 Requires:       uinitconverter-runner = %{version}-%{release}
 # Transient timers (systemd-run --on-calendar) run it.
@@ -66,6 +66,10 @@ install -Dm0644 dist/dbus/uinitconverter.conf %{buildroot}%{_datadir}/dbus-1/sys
 %{_datadir}/dbus-1/system.d/uinitconverter.conf
 
 %changelog
+* Tue Nov 03 2026 uinitconverter developers
+- No longer requires s6-rc and dbus-daemon (the uinitconverter package does):
+  the user manager needs neither
+
 * Mon Nov 02 2026 uinitconverter developers
 - 0.2.2, see CHANGELOG-us.md
 

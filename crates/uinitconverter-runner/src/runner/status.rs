@@ -128,8 +128,8 @@ pub(super) fn describe(st: Status) -> String {
 
 pub(super) fn result_for(st: Status) -> &'static str {
     match st {
-        Status::Exited(_) => "exit-code",
-        Status::Killed(_) => "signal",
+        Status::Exited(_) => crate::state::result::EXIT_CODE,
+        Status::Killed(_) => crate::state::result::SIGNAL,
     }
 }
 

@@ -457,15 +457,26 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 
 ### s6 사용자 매니저 (진행 중)
 
-`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-153부). 이것은
-`uinitconverter-user` 패키지입니다(`dnf install uinitconverter-user`). 이 패키지가 있으면
-`uinitconverter.conf`의 `USER_MANAGER=s6` 또는 커널 명령줄의 `uinitconverter.user_manager=s6`이
-있을 때 러너가 `user@UID.service`에 `systemd --user` 대신 `initconvert-user-manager`(`initconvertd`로의
-링크. 이 이름으로 실행되면 사용자 매니저로 동작하며, `initconvertd user-manager`와 같습니다)를
-실행합니다. 유닛 파일은 바꾸지 않습니다. 패키지가 없으면 `user@`는 `systemd --user`를 그대로 쓰고
-러너가 그 이유를 로그에 남깁니다. `USER_MANAGER=systemd`(기본값)나
-`uinitconverter.user_manager=systemd`이면 `systemd --user`를 그대로 씁니다. systemd로 부팅했을
-때는 커널 명령줄에 `s6`이 없는 한 언제나 `systemd --user`에 넘깁니다.
+`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-155부). 이것은
+`uinitconverter-user` 패키지입니다(`dnf install uinitconverter-user`). s6 부팅 패키지 없이 일반 systemd
+부팅에서도 동작합니다. `uinitconverterd`, `uinitconverter-runner`, `uinitconverter-timers`와 skalibs,
+execline, s6 패키지만 함께 설치됩니다.
+
+- **systemd 부팅에서는** `sudo initconvert-user-setup on`으로 켭니다. `user@.service`의 드롭인
+  `/etc/systemd/system/user@.service.d/90-uinitconverter.conf`와 `USER_MANAGER=s6`을 씁니다.
+  `sudo initconvert-user-setup off`는 `systemd --user`로 되돌리고, `initconvert-user-setup status`는
+  설정과 지금 각 사용자의 `user@`가 무엇을 실행하는지 보여 줍니다. 바뀐 설정은 사용자마다 다음
+  로그인부터 적용됩니다(로그아웃하거나 재부팅). 패키지를 지우면 드롭인도 지워집니다.
+- **s6 부팅에서는** `uinitconverter.conf`의 `USER_MANAGER=s6`(`on`도 이것을 씁니다)이 있으면 러너가
+  `user@UID.service`에 `systemd --user` 대신 `initconvert-user-manager`를 실행합니다. 유닛 파일은
+  바꾸지 않습니다. 패키지가 없으면 `user@`는 `systemd --user`를 그대로 쓰고 러너가 그 이유를 로그에
+  남깁니다.
+- **어느 부팅에서든** 커널 명령줄의 `uinitconverter.user_manager=systemd`는 그 부팅 동안
+  `systemd --user`를 실행합니다(GRUB에서 되돌리는 방법). `uinitconverter.user_manager=s6`은 한
+  부팅 동안 켭니다.
+
+`initconvert-user-manager`는 `initconvertd`로의 링크이고, 이 이름으로 실행되면 사용자 매니저로
+동작합니다(`initconvertd user-manager`와 같습니다).
 
 사용자 매니저는 `$XDG_RUNTIME_DIR/uinitconverter`(자체 `s6-svscan`, 사용자 모드 설정, 유닛
 상태)를 만들고, `$XDG_RUNTIME_DIR/systemd/private`(`systemctl --user`가 먼저 찾는 곳)를 바로
@@ -695,3 +706,21 @@ tests/                     비특권 샌드박스, 시나리오 검사, systemct
                            진단 수집, 메모리와 강화 설정 비교,
                            update-syscall-groups
 ```
+
+### 도구 사이의 약속
+
+도구들은 따로 실행되는 프로그램이고, 실행 중에 아래 형식에 맞춰 서로 통신합니다. 형식마다 정의가
+한 곳에 있고, 한쪽이 거기서 벗어나면 실패하는 테스트가 있습니다. 그래서 한 도구를 고쳐도 다른 도구가
+조용히 망가지지 않습니다. 정의를 바꿀 때는 그 테스트도 함께 바꾸세요.
+
+| 약속 | 정의 위치 | 사이 | 테스트 |
+|---|---|---|---|
+| `result` 상태 값(`success`, `exit-code`, ... 그리고 `success`로 보이는 우리 값 `running`) | `base/state.rs`, `state::result` | 러너가 쓰고 데몬이 읽어 `Result`로 내보냄 | `state::tests`: 러너·데몬·타이머에서 `keys::RESULT` 옆에 리터럴 값이 없는지 |
+| 러너와 타이머의 명령(`run`, `finish`, `up`, `down`, `stop-atom`, `accept`, ..., `timer-run`, `path-run`) | `base/config.rs`, `runner_cmd`, `timers_cmd` | gen의 스크립트, 데몬, `dist/s6` run 스크립트, 러너 | 러너의 `Cmd` 열거형(처리하지 않은 명령은 빌드되지 않음), `cmd_tests`(목록, `dist/s6`), `config::contract_tests`(gen과 데몬에 리터럴 명령이 없는지) |
+| fd 저장소 프로토콜 | `base/fdstore.rs`(맨 위에 설명) | 본체의 클라이언트와 대체 저장소, 독립 도구 `initconvert-fdstore`(공유 코드 없음) | `fdstore::tests::protocol_conformance_*`: 본체의 클라이언트로 같은 경우들을 두 서버에 실행(독립 도구는 빌드되어 있으면, 아니면 메모를 남기고 건너뜀) |
+| `uinitconverter.conf`의 키 | `base/config.rs`, `KEYS`, `INTERNAL_KEYS`, `REMOVED_KEYS` | 파서, `dist/uinitconverter.conf`, `initconvert init`, 사용자 모드가 만드는 파일 | `config::contract_tests`(파서의 키, dist 파일), `init::tests::init_writes_known_keys`, `user::tests::user_config_sets_known_keys` |
+| 생성된 데이터베이스의 색인 | `base/index.rs`, `Index::render`와 `Index::load` | gen이 쓰고 러너와 데몬이 읽음 | `index::tests::render_and_load_round_trip` |
+
+도구들이 부르는 데몬의 D-Bus 메서드(`LoadUnit`, `StartUnit`, `Reload`, `StopInstances` 등)에는 따로
+테스트가 없습니다. 샌드박스 테스트가 실제 데몬을 실제 클라이언트로 실행합니다.
+

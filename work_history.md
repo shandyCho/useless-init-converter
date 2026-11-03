@@ -11392,3 +11392,147 @@ Committed on main with this entry (one commit after cc83c99). The s6 boot has ru
    - evolution-alarm-notify and user-dirs-update-gtk start failures in the s6 manager on the s6 boot (compare with systemd --user there);
    - `--boot-only-s6=yes` in the VM, which the btrfs /var layout makes worth a run;
    - part 147's smaller items: the slow logout path at a reboot, the intermittent quitter@0 failure, job modes and OnFailureJobMode=, the socket-waiting runners, GetAll property order.
+
+## 2026-11-03, part 154: session and lifecycle on the s6 boot; parallel user stops at shutdown; contracts between the tools
+
+Owner: "run the session and lifecycle checks on the s6 boot"; asked whether splitting the repository would make builds faster, then said the aim was also independent development; chose "do the contracts", then "contracts only, keep base as it is" after the usage table.
+
+**tests/vm-user-manager.sh BOOT=s6** (session, session-baseline, lifecycle, lifecycle-baseline):
+- **Setup:** it installs every RPM as vm-s6-boot.sh does, adds USER_MANAGER=s6 except in the baselines, and runs `initconvert init --yes --default-s6 --selinux=enforcing`. There is no drop-in and no kernel flag: the s6 boot's runner starts every user@.
+- **The reboot check** (after-reboot) on the s6 boot measures each user@ from `uinitconverter: shutdown starts` to its runner's `pam_unix(systemd-user:session): session closed for user U`. The 5 s limit is unchanged. It also lists the system daemon's slow stops (`took`, `shutdown scopes`) after the shutdown began. The systemd boot's check reads PID 1's `Stopping/Stopped user@` lines, which don't exist on the s6 boot.
+
+**Results on the s6 boot (VM, enforcing):**
+- **session: 18 + 2, all pass.**
+- **lifecycle: everything before the reboot passes,** 66 checks: logout, a new login, a user switch to alice, the RPM update helper, linger, alice's logout.
+- **lifecycle's reboot fails.** user@ stops took 6.6/8.7/10.9 s, then 3.9/6.1/8.2 s, against 0.7-3.3 s on the systemd boot.
+- **lifecycle-baseline (systemd --user on the s6 boot):** the reboot passes (0.52 s, 0.75 s). Its user switch failed: "alice: no GNOME session after 90 s", then the follow-on checks. Not looked into.
+
+**Cause 1, found and fixed: the shutdown stopped the users one after another.**
+- dynamic.rs stop_dynamic_at_shutdown called dyn_stop for each instance in turn. dyn_stop of user-runtime-dir@UID stops user@UID first, so each user waited for the one before.
+- With the s6 manager, each user's stop costs about 2 s: the stop itself, about 1 s of end_helpers, and user-runtime-dir@'s ExecStop. With systemd --user each costs very little, so the sum stayed small.
+- **Fix:**
+  - shutdown_groups() splits the instances into groups whose dependent closures (dyn_dependents, transitively) don't overlap;
+  - the groups stop at once (join_all), one at a time within a group as before, so a shared dependent's ExecStop= can't run twice;
+  - unit test users_stop_apart_and_shared_dependents_together.
+- **Also:** a duplicate `stopping … took` line from the loop (dyn_stop logs it itself) was removed.
+- **Run after the fix:** after the scopes ended at +7.02 s, user-runtime-dir@1000 and @60580 stopped side by side (+8.99, +9.20 s). The check still fails, on cause 2.
+
+**Cause 2, not explained: gnome-shell sometimes doesn't exit.**
+- **Evidence:** a sampler wrote the cgroup of org.gnome.Shell@user.service to /dev/kmsg, from the root cgroup so it survived the session stop.
+  - In one reboot gnome-shell was the only process left, from the shutdown's start for 6.5 s, until the unit's TimeoutStopSec=5 (Fedora's org.gnome.Shell@.service) killed it.
+  - In another it exited in 1.5 s, with its threads in poll/futex during the wait.
+- The system daemon's wait for the session scopes (the GNOME leader waits for gnome-session-shutdown) took 7.0, 2.2 and 7.0 s in three runs.
+- Under systemd --user on the same boot, it never hung.
+- Next: what gnome-shell waits for on exit, with the s6 manager only (the scope's leader, logind, gdm's display?). Then the 1 s end_helpers grace (a helper in init.scope that ignores SIGTERM) and user-runtime-dir@'s 2 s.
+
+**Repository split (asked, not done):**
+- **History:** of the last 86 commits touching crates/, 46 changed two or more crates, mostly daemon + runner + base (+gen).
+- **Build time:** a split would compile base once per repository, and the per-binary LTO link (most of a --test build: uinitconverterd 1m19s with 2 crates left to compile) stays.
+- **The base usage table:** every module is used by 2-8 crates. config, loader, util, unit, state, envfile and tools depend on each other (config<->loader, util<->state), so base can't shrink by moving code to a single user. Splitting off leaf groups (timer specs, runner protocol) would move about 2,000 of 4,500 lines and touch little that changes often.
+- **The owner chose:** contracts only, base kept as it is.
+
+**Contracts (all with one definition in base, and tests):**
+1. **The result values.**
+   - state::result: systemd's Result names, plus our RUNNING, with is_failure() and exported() (RUNNING -> success).
+   - Every literal in the runner and the daemon was replaced. reset_failed now leaves RUNNING alone (it overwrote it with success; harmless, now consistent).
+   - Tests: semantics, and a source scan (no literal value on a keys::RESULT line in the runner, the daemon or the timers).
+   - I first took props.rs:1061 for a bug exporting "running". It isn't: that is the socket path, and the service path already mapped it (props.rs:835).
+2. **The fd store protocol.**
+   - fdstore::tests::protocol_conformance_core_store and _standalone_store run one set of cases through the core's client against both servers. The standalone is found under standalone/uinitconverter-fdstore/target or via UINITCONVERTER_FDSTORE_BIN=; when it isn't built, the test is skipped with a note.
+   - The cases: PUT with <max>, same-file dedupe, full, GET order and END, #stdio kept twice, DEL by name and key, bad request, no fd, #sockets without <max>, and each server's documented no-<max> rule.
+   - A planted reply change in the standalone failed the test. The first version leaked the child on a failed assertion, which kept cargo waiting on its stdout; it is now killed in Drop, with null stdio.
+   - The two protocol comments differ on a PUT without <max>, but each correctly describes its own server.
+3. **The runner's and the timers' commands.**
+   - config::runner_cmd and timers_cmd. The runner parses into an enum Cmd, with exhaustive matches; an unknown command is now refused before the config and unit are loaded, still exit 1.
+   - gen, the daemon (run_runner) and initconvert-timers use the constants.
+   - Tests: Cmd matches the list, dist/s6 scripts use only listed commands, a source scan finds no literal command next to {runner}/{timer_runner}/run_runner(" in gen or the daemon (it caught a planted one), and the names are unique.
+4. **The private D-Bus methods: no new test.** The only private method (StopInstances) is called from the daemon's own crate, and the tools' Manager calls run against the real daemon in the sandbox.
+5. **The config keys.**
+   - config::KEYS (44, equal to the parser's arms, checked by a source test), INTERNAL_KEYS (USER_MODE, CGROUP_BASE) and REMOVED_KEYS (AUTO_MASK). The parser's unknown-key arm debug_asserts the key isn't in KEYS.
+   - Tests: dist/uinitconverter.conf names only KEYS and documents all but internal and removed ones; init's writers (configure_uinitconverter, set_conf_*) write only KEYS; user.rs write_config writes only KEYS, including both internal ones. That last one is tested without Config::load, which would switch the test process to user mode.
+6. **The index.** Index::render (gen's writer, moved from s6.rs) next to Index::load; same order (all BTreeMaps); round-trip test including a masked unit.
+
+**Docs:**
+- **docs/etc pair:** a "Contracts between the tools" section after the source layout.
+- **CLAUDE.md:** a rule to use the constants and change a definition with its tests.
+- **CHANGELOG pair:** Fixed (parallel user stops), Added (tests, BOOT=s6), Known issues (the s6 boot's reboot delay).
+- **TESTING pair:** BOOT=s6.
+
+**Build times (--test, scratch OUTDIR):** a rebuild with the cache kept took 198 s (runner 2 crates compiled, uinitconverterd 1m19s, timers and gen about 30 s each, mostly the LTO links), against 253 s from an empty cache and about 11 min for a normal build.
+
+**Tests.**
+- cargo test 132, fmt clean; standalone 10/7/6/10.
+- System sandbox with SANDBOX_S6NET_BIN 370/370, SANDBOX_JOURNAL=no 377/377, SANDBOX_FDSTORE=no 358/358.
+- User sandbox 92/92.
+- **Found while running it, fixed:** tests/user-sandbox.sh exited 1 after "failed: 0", the committed code too (checked with git stash). Its cleanup trap's `[ -s pids ] && kill …` failed on a pid already reaped (the last manager), and a failing last command of an && list ends the trap under set -e. Fixed with `|| true` there and on the s6-svscanctl line; exit 0 now. Earlier entries' "92/92" read the count, not the exit status.
+
+### Current state
+
+Committed with part 155, in one commit after c04ebd2: the shutdown change, BOOT=s6, the contracts, the user-sandbox fix, the docs and this entry. The s6 boot's reboot with the s6 user manager is still slower than with systemd --user (gnome-shell's exit).
+
+### Next steps
+
+1. **The owner chose (after this entry's answer on a standalone user manager):** first make the s6 user manager a supported opt-in replacement for systemd --user on a systemd boot (a setting instead of the kernel flag, the package's user@ drop-in off by default, fewer Requires); later the elogind plan (a login launcher like turnstile, a delegated cgroup per user, logging without journald, no systemd --user fallback). A standalone/ project was advised against: it would duplicate about 30,000 lines of the core.
+2. **gnome-shell's exit hang under the s6 user manager on the s6 boot,** then end_helpers' 1 s and user-runtime-dir@'s 2 s per user; lifecycle-baseline's failed user switch on the s6 boot.
+3. **The owner's machine:** the new RPMs, `sudo initconvert init`, a reboot.
+4. **SELinux for confined users.**
+5. **Smaller items** as in part 153.
+
+## 2026-11-03, part 155: the s6 user manager as an opt-in on a normal systemd boot
+
+Owner, after part 154's answer (a separate package built from the workspace, not a standalone/ project; first the systemd boot, then elogind): "ok.. I follow your recommandation."
+
+**What changed:**
+- **The launcher (user.rs main)** follows USER_MANAGER= on a systemd boot too. Before, a systemd boot handed over to systemd --user unless the kernel command line had uinitconverter.user_manager=s6. The kernel option still wins either way (=systemd is the way back from GRUB).
+  - On a systemd boot the launcher only runs once user@.service's drop-in exists, and only `initconvert-user-setup on` writes it, so nothing changes there until someone opts in.
+  - USER_MANAGER=s6 written for the s6 boot doesn't reach the systemd boot without the drop-in.
+- **dist/user/initconvert-user-setup** (/usr/bin, in uinitconverter-user, which stays noarch):
+  - `on`: refuses without the manager link; writes /etc/systemd/system/user@.service.d/90-uinitconverter.conf (ExecStart= reset, then the link) and USER_MANAGER=s6 (it replaces an uncommented line or appends; commented defaults stay); daemon-reload.
+  - `off`: removes the drop-in, writes USER_MANAGER=systemd, daemon-reload.
+  - `status`: the drop-in, USER_MANAGER, the kernel option, each user@'s manager from init.scope's first process's exe, and the fallback record.
+  - UINITCONVERTER_SETUP_ROOT= runs it under a directory, without systemctl (tried by hand; there is no automated test of the script itself).
+  - **Why a script, not an initconvertd subcommand:** initconvertd is in /usr/libexec, not on PATH, and /usr/bin/initconvert belongs to the boot package.
+- **Packages:**
+  - **uinitconverter-user:** Requires uinitconverter-timers (user timers); `%preun` on erase removes the drop-in (rm, not the script) and runs daemon-reload; USER_MANAGER= stays, harmless without the package.
+  - **uinitconverterd:** no longer Requires s6-rc and dbus-daemon. User mode never calls s6-rc (active_atoms returns early), and the systemd-boot VM tests always ran without s6-rc. The uinitconverter package still requires both.
+  - rpm -qpR: uinitconverter-user needs s6, systemd, runner, timers and uinitconverterd; uinitconverterd needs s6 and the runner.
+- **tests/vm-user-manager.sh BOOT=systemd-rpm** (greeter, session, apps, lifecycle, fallback and the baselines; not mode user):
+  - it installs only uinitconverterd, -runner, -timers, -user and skalibs, execline, s6 with dnf, then `initconvert-user-setup on` and `status`, with no kernel flag;
+  - it warns if an s6 boot package came along;
+  - the baselines install the package and leave it off.
+- **Docs:** the docs/etc pair (three cases: systemd boot, s6 boot, either boot's kernel option), the packages README pair (table rows), the CHANGELOG pair (Added, Changed), the TESTING pair, CLAUDE.md (packaging: it must keep working without the s6 boot packages; the VM test option).
+
+**Tests:**
+- cargo test 132, fmt clean; bash -n and shellcheck on the script, vm-user-manager.sh and user-sandbox.sh.
+- --test RPM build 204 s.
+- **VM with BOOT=systemd-rpm, enforcing; no s6 boot package came along:**
+  - session 18 + 2: user@1000's main process is initconvertd after the reboot; `status` before it still showed systemd --user (correct: from the next login).
+  - lifecycle 18 + 9 + 8 + 2 + 10 + 5 + 5 + 9 + 7: tester's and alice's managers are initconvertd; at the reboot every user@ stopped in 0.69-3.18 s.
+  - fallback 7 + 5 + 6: tester handed over to systemd --user ("the start of gnome-session@gnome.target ended dependency").
+  - session-baseline 18 + 2: installed and off, user@1000 runs systemd.
+- **Not tested:**
+  - the systemd boot with the uinitconverter package (and its SELinux module, which labels /usr/libexec/uinitconverter) installed and the user manager turned on;
+  - `off` followed by a login;
+  - the package removal's %preun;
+  - an upgrade from a package without the script.
+
+**Later in this part, docs:** owner asked for the test build and release build steps and commands "in PACKAGEBUILD.md file in '/doc' directory". The project's directory is docs/, and docs come in pairs, so: docs/PACKAGEBUILD.md (Korean) and docs/PACKAGEBUILD-us.md (English). They cover:
+- an overview of the three package sets and a test-versus-release table;
+- step 0 (build tools, skarnet RPMs);
+- the test build (--test and its two options, the kept cache, times, the tests --nocheck skips, the VM runs, installing and upgrading);
+- the release build (version, README VERSION=, CHANGELOG, release notes, six spec changelogs, the full suite, commit, github-release.sh, sha256sum -c, gh release create where credentials are);
+- source RPMs, and a troubleshooting table.
+
+Both are linked from the packages README pair and listed in CLAUDE.md's docs item. Found while writing them: the packages README pair still said `sudo uinitconverter init --yes` after an upgrade (missed by part 151's rename); now `initconvert init --yes`.
+
+### Current state
+
+Committed on main with this entry, one commit after c04ebd2 for parts 154 and 155 (not pushed).
+
+### Next steps
+
+1. The rest of part 155's "Not tested", above all the SELinux module on a systemd boot with the user manager on.
+2. The elogind plan (part 154's next step 1).
+3. gnome-shell's exit hang under the s6 user manager on the s6 boot (part 154).
+4. The owner's machine: the new RPMs, `sudo initconvert init`, a reboot.
+5. SELinux for confined users; smaller items as in part 153.

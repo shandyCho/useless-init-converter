@@ -49,11 +49,14 @@ waitfor() {
 call() { $B call $MGR "$@" >/dev/null 2>"$W/last-error" || { cat "$W/last-error"; return 1; }; }
 cleanup() {
     # shellcheck disable=SC2046 # one pid per word
-    [ -s "$W/pids" ] && kill $(cat "$W/pids") 2>/dev/null
+    # Some have ended already (the last manager is killed and reaped before
+    # this): a failed kill must not end the trap under set -e, which made the
+    # script exit 1 after "failed: 0".
+    [ -s "$W/pids" ] && kill $(cat "$W/pids") 2>/dev/null || true
     sleep 1
     # s6-svscan's children (supervisors, services) go with -t, if the
     # launcher did not end it.
-    [ -d "$R/uinitconverter/scan/.s6-svscan" ] && s6-svscanctl -t "$R/uinitconverter/scan" 2>/dev/null
+    [ -d "$R/uinitconverter/scan/.s6-svscan" ] && s6-svscanctl -t "$R/uinitconverter/scan" 2>/dev/null || true
     sleep 0.5
     true
 }

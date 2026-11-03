@@ -79,9 +79,10 @@ fn main() {
     }
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
     let unit = unit_arg(&args[1..]);
+    use config::timers_cmd;
     let code = match cmd.as_str() {
-        "timer-run" => timer::cmd_timer_run(cfg, &unit),
-        "path-run" => pathunit::cmd_path_run(cfg, &unit),
+        timers_cmd::TIMER_RUN => timer::cmd_timer_run(cfg, &unit),
+        timers_cmd::PATH_RUN => pathunit::cmd_path_run(cfg, &unit),
         other => die(&format!(
             "unknown command {other} (see initconvert-timers help)"
         )),

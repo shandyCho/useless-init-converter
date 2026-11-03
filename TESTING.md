@@ -297,6 +297,16 @@ tester의 자동 로그인 세션(자기 유닛 안의 gnome-shell, 세션 타�
 | `no-package` | `USER_MANAGER=s6`, `uinitconverter-user` 없음 | `systemd --user`, 러너의 "install uinitconverter-user" 줄 |
 | `default` | 모든 패키지, `USER_MANAGER=` 없음 | `systemd --user` |
 
+`BOOT=systemd-rpm tests/vm-user-manager.sh ~/uinitconverter-vm MODE`는 `greeter`, `session`, `apps`, `lifecycle`,
+`fallback`을 사용자가 설정하는 그대로 일반 systemd 부팅에서 실행합니다. `uinitconverter-user`와 그것이 요구하는
+패키지만(`CORE_RPMS=`, `SKARNET_RPMS=`에서) 설치하고 `sudo initconvert-user-setup on`을 실행하며, 커널 플래그는
+없습니다. baseline은 패키지를 설치하고 끈 채로 두므로, 설치만으로는 아무것도 바뀌지 않는지도 확인합니다.
+
+`BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm MODE`는 `session`과 `lifecycle` 확인(과 그 baseline)을
+같은 방식으로 s6 부팅에서 실행합니다. 모든 RPM, `USER_MANAGER=s6`(baseline 제외), `initconvert init`을 쓰므로
+s6 부팅의 러너가 모든 `user@`를 시작합니다. 재부팅 때는 각 `user@`를 "shutdown starts"부터 러너의 PAM 세션이
+끝날 때까지 재며, 한도는 같은 5초입니다.
+
 RPM을 빨리 다시 빌드하려면 `packages/build-rpms.sh --test DIR`(packages README 참고)과 `CORE_RPMS=DIR/rpms`.
 콘솔은 `~/uinitconverter-vm/s6boot-MODE-serial.log`에, 화면은 `s6boot-MODE.png`에 남습니다.
 

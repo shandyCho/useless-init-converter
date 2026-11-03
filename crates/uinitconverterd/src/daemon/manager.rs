@@ -97,7 +97,7 @@ impl Daemon {
             let st = state::for_unit(&self.cfg.run_dir, &id);
             if st
                 .get(keys::RESULT)
-                .map(|r| !matches!(r.as_str(), "success" | "running"))
+                .map(|r| result::is_failure(&r))
                 .unwrap_or(false)
             {
                 candidates.push(id);

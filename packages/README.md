@@ -11,8 +11,8 @@
 | 패키지 | 들어 있는 것 | 실행할 때 필요한 패키지 (`Requires`) |
 |---|---|---|
 | `uinitconverter-runner` | `initconvert-runner` | s6, shadow-utils. `uinitconverterd`는 권장(`OnFailure=`/`OnSuccess=` 유닛을 데몬으로 시작) |
-| `uinitconverterd` | `initconvertd`, D-Bus 정책(`uinitconverter.conf`) | s6, s6-rc, dbus-daemon, `uinitconverter-runner`. `uinitconverter-timers`는 권장(`systemd-run --on-calendar`), `uinitconverter-user`는 제안 |
-| `uinitconverter-user` (noarch) | `initconvert-user-manager`(`initconvertd`로의 링크. 이 이름으로 실행되면 사용자 매니저로 동작), `/run/uinitconverter-user`(대체 기록)용 tmpfiles.d 항목 | `uinitconverterd`, `uinitconverter-runner`, s6, systemd(`systemd --user`가 기본값이자 대체). 이 패키지가 없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다 |
+| `uinitconverterd` | `initconvertd`, D-Bus 정책(`uinitconverter.conf`) | s6, `uinitconverter-runner`. `uinitconverter-timers`는 권장(`systemd-run --on-calendar`), `uinitconverter-user`는 제안 |
+| `uinitconverter-user` (noarch) | `initconvert-user-manager`(`initconvertd`로의 링크. 이 이름으로 실행되면 사용자 매니저로 동작), `initconvert-user-setup`(systemd 부팅에서 켜기/끄기/상태), `/run/uinitconverter-user`(대체 기록)용 tmpfiles.d 항목 | `uinitconverterd`, `uinitconverter-runner`, `uinitconverter-timers`, s6, systemd(`systemd --user`가 기본값이자 대체). s6 부팅 패키지는 필요 없습니다. 이 패키지가 없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다 |
 | `uinitconverter-timers` | `initconvert-timers` | `uinitconverterd` (타이머가 유닛을 데몬으로 시작) |
 | `uinitconverter-gen` | `initconvert-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (생성된 서비스가 실행) |
 | `uinitconverter` | `initconvert` 명령(부팅 설정 `initconvert init` 포함), `early`, 설정, s6 서비스, s6-linux-init 골격, SELinux 모듈, kernel-install 플러그인, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, 그리고 위의 도구 패키지 네 개. `uinitconverter-user`는 제안 |
@@ -26,6 +26,9 @@
   `uinitconverter`는 이들을 `Recommends`/`Suggests`로만 가리킵니다.
 
 ## 빌드
+
+테스트 빌드와 릴리스 빌드를 나란히 놓은 단계별 설명은 [docs/PACKAGEBUILD.md](../docs/PACKAGEBUILD.md)에
+있습니다.
 
 ```sh
 packages/build-rpms.sh            # 결과: ~/rpmbuild-uinitconverter/rpms
@@ -124,7 +127,7 @@ sudo initconvert init
 
 rsyslog, earlyoom 같은 다른 의존 패키지는 dnf가 Fedora 저장소에서 가져옵니다. GitHub에는
 저장소가 없으므로 `dnf upgrade`만으로는 새 릴리스를 알 수 없습니다. 다음 릴리스의 파일을
-받아 `sudo dnf upgrade ./*.rpm`을 실행한 뒤 `sudo uinitconverter init --yes`를 실행하세요. skarnet
+받아 `sudo dnf upgrade ./*.rpm`을 실행한 뒤 `sudo initconvert init --yes`를 실행하세요. skarnet
 패키지는 `dist/skarnet.versions`가 바뀔 때만 다시 빌드하면 됩니다.
 
 spec에는 아직 `License: TBD`라고 되어 있습니다. 공개하기 전에 라이선스를 정하세요.

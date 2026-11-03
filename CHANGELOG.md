@@ -7,7 +7,7 @@
 
 ## 미출시
 
-0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-153부에 있습니다.
+0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-155부에 있습니다.
 
 ### 추가
 - `Accept=yes` 소켓: 유닉스 경로는 `s6-ipcserverd`로, TCP 포트는 `s6-tcpserverd`로(선택 패키지
@@ -23,12 +23,22 @@
   flatpak 앱이 동작합니다. 트랜잭션의 유닛은 병렬로 시작합니다. 사용자를 제대로 받지 못하면(GNOME의 실패
   경로, 충돌) 그 부팅 동안은 그 자리에서 `systemd --user`로 넘깁니다(`USER_FALLBACK_ON=`).
   [s6 사용자 매니저](docs/etc.md#s6-사용자-매니저-진행-중) 참고.
+- **일반 systemd 부팅에서 s6 사용자 매니저**(선택): `sudo initconvert-user-setup on`(패키지
+  `uinitconverter-user`. 이제 s6 부팅 패키지가 필요 없습니다)이 모든 `user@`에 이 매니저를 씁니다.
+  `off`는 `systemd --user`로 되돌리고, `status`는 사용자마다 무엇이 실행되는지 보여 줍니다. 그 부팅에서도
+  커널 플래그 `uinitconverter.user_manager=s6`이 더 이상 필요 없고, `uinitconverter.user_manager=systemd`는
+  여전히 한 부팅 동안 끕니다.
 - 데몬 환경의 `UINITCONVERTER_LOG_JOBS=1`은 모든 작업 요청을 호출자의 프로세스 이름과 함께 기록합니다.
 - `packages/build-rpms.sh --test`(`--shared-target`, `--nocheck`): 테스트용 빠른 RPM 빌드.
   [빌드](packages/README.md#빌드) 참고.
 - `tests/vm-s6-boot.sh`: GNOME 테스트 VM에서 RPM, `initconvert init`, s6 부팅을 확인합니다.
+  `BOOT=s6`이면 `tests/vm-user-manager.sh`의 session·lifecycle 확인을 s6 부팅에서 실행합니다.
+- 도구들이 함께 쓰는 형식(`result` 값, 러너의 명령, 독립 fd 저장소와의 프로토콜, 설정 키, 색인)의
+  테스트. [도구 사이의 약속](docs/etc.md#도구-사이의-약속) 참고.
 
 ### 변경
+- `uinitconverterd`는 더 이상 s6-rc와 dbus-daemon을 요구하지 않습니다. s6 부팅에 필요한
+  `uinitconverter` 패키지가 여전히 요구합니다.
 - **명령의 이름이 `initconvert*`입니다**: `initconvert`(이전 `uinitconverter`), `initconvertd`,
   `initconvert-gen`, `initconvert-runner`, `initconvert-timers`, `initconvert-user-manager`, 그리고
   독립 도구 `initconvert-fdstore`, `-notify`, `-journal-relay`, `-linkwatch`. 패키지, 경로, s6 서비스,
@@ -48,6 +58,8 @@
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
+- 종료할 때 사용자들의 `user@`와 `user-runtime-dir@`가 systemd처럼 동시에 멈춥니다. 이전에는 사용자마다
+  차례로 멈춰서, s6 사용자 매니저로는 사용자 셋에 8-11초가 걸렸습니다.
 - `Accept=yes` 인스턴스의 `LISTEN_FDNAMES=`는 소켓의 `FileDescriptorName=`을 따릅니다(이전에는 항상
   `connection`). 그래서 systemd의 varlink 서비스가 응답합니다.
 - 소켓의 `Symlinks=`가 링크의 상위 디렉터리를 만듭니다.
@@ -62,6 +74,10 @@
 - s6 사용자 매니저는 아직 SELinux로 제한된 사용자에게 실행해 보지 않았습니다. 그런 환경에서는
   `USER_MANAGER=systemd`를 유지하세요. s6 부팅의 시스템 매니저 아래에서는 테스트 VM에서만
   (`tests/vm-s6-boot.sh`) 실행했고, 실제 하드웨어에서는 아직입니다.
+- s6 부팅에서 s6 사용자 매니저를 쓰면 GNOME 세션이 열린 채 재부팅할 때 사용자들이 멈추는 데 6-9초가
+  걸릴 수 있습니다. gnome-shell이 가끔 유닛의 `TimeoutStopSec=5`까지 끝나지 않고, 사용자마다 마지막에
+  `user-runtime-dir@`에 2초쯤 걸립니다. 같은 부팅에서 `systemd --user`는 1초 안에 끝납니다. 원인은 아직
+  모릅니다.
 - 시스템 샌드박스가 몇 번 중 한 번, 요청 시 인스턴스(`quitter@0.service`)의 스캔 디렉터리 항목이 남는
   문제로 실패했습니다. 재현되지 않았습니다.
 

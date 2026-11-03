@@ -261,10 +261,10 @@ impl Daemon {
         let st = state::for_unit(&self.cfg.run_dir, &id);
         if st
             .get(keys::RESULT)
-            .map(|r| r != "success")
+            .map(|r| result::is_failure(&r))
             .unwrap_or(false)
         {
-            st.set(keys::RESULT, "success");
+            st.set(keys::RESULT, result::SUCCESS);
         }
         // A soft-failed start: inactive from now on, but still restarted by
         // the next start like any parked unit.

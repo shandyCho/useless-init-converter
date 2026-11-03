@@ -528,17 +528,30 @@ log UNIT`, which also works with `JOURNAL=no`).
 ### The s6 user manager (in progress)
 
 Work is under way to replace `systemd --user` too (the plan is in
-`work_history.md`, parts 136-153). It is the `uinitconverter-user` package
-(`dnf install uinitconverter-user`). With it, `USER_MANAGER=s6` in
-`uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
-command line, makes the runner start `initconvert-user-manager` (a link to
-`initconvertd`, which runs as the user manager under that name; also
-`initconvertd user-manager`) for `user@UID.service` instead of
-`systemd --user`; the unit file is not changed. Without the package, `user@`
-keeps `systemd --user` and the runner logs why.
-`USER_MANAGER=systemd` (the default) or `uinitconverter.user_manager=systemd`
-keeps `systemd --user`. On a systemd boot the command always hands over to
-`systemd --user`, unless the kernel command line names `s6`.
+`work_history.md`, parts 136-155). It is the `uinitconverter-user` package
+(`dnf install uinitconverter-user`), which also works on a normal systemd boot
+without any of the s6 boot packages: it pulls in only `uinitconverterd`,
+`uinitconverter-runner`, `uinitconverter-timers` and the skalibs, execline and
+s6 packages.
+
+- **On a systemd boot**, `sudo initconvert-user-setup on` turns it on: it
+  writes `user@.service`'s drop-in
+  `/etc/systemd/system/user@.service.d/90-uinitconverter.conf` and
+  `USER_MANAGER=s6`. `sudo initconvert-user-setup off` goes back to
+  `systemd --user`, and `initconvert-user-setup status` shows the setting
+  and what each user's `user@` runs now. A change applies from each user's
+  next login (log out, or reboot). Removing the package removes the drop-in.
+- **On the s6 boot**, `USER_MANAGER=s6` in `uinitconverter.conf` (which
+  `on` also writes) makes the runner start `initconvert-user-manager` for
+  `user@UID.service` instead of `systemd --user`; the unit file is not
+  changed. Without the package, `user@` keeps `systemd --user` and the
+  runner logs why.
+- **On either boot**, `uinitconverter.user_manager=systemd` on the kernel
+  command line runs `systemd --user` for that boot, the way back from GRUB;
+  `uinitconverter.user_manager=s6` turns it on for one boot.
+
+`initconvert-user-manager` is a link to `initconvertd`, which runs as the
+user manager under that name (also `initconvertd user-manager`).
 
 The user manager makes `$XDG_RUNTIME_DIR/uinitconverter` (its own
 `s6-svscan`, a configuration in user mode, the units' state), serves
@@ -806,3 +819,23 @@ tests/                     unprivileged sandbox, scenario checks, systemctl wrap
                            diagnostics, memory and hardening comparison,
                            update-syscall-groups
 ```
+
+### Contracts between the tools
+
+The tools run as separate programs and agree on these formats at run time. Each
+has one definition and tests that fail when one side drifts from it, so a fix
+in one tool can't silently break another. Change the definition and its tests
+together.
+
+| Contract | Defined in | Between | Tests |
+|---|---|---|---|
+| The `result` state values (`success`, `exit-code`, ... and our `running`, shown as `success`) | `base/state.rs`, `state::result` | the runner writes, the daemon reads and exports `Result` | `state::tests`: no literal value beside `keys::RESULT` in the runner, the daemon or the timers |
+| The runner's and the timers' commands (`run`, `finish`, `up`, `down`, `stop-atom`, `accept`, ..., `timer-run`, `path-run`) | `base/config.rs`, `runner_cmd`, `timers_cmd` | gen's scripts, the daemon, `dist/s6` run scripts and the runners | the runner's `Cmd` enum (an unhandled command doesn't build); `cmd_tests` (the list, `dist/s6`); `config::contract_tests` (no literal command in gen or the daemon) |
+| The fd store protocol | `base/fdstore.rs` (documented at the top) | the core's client and fallback store, and the standalone `initconvert-fdstore` (no shared code) | `fdstore::tests::protocol_conformance_*`: the same cases through the core's client against both servers (the standalone one if built, else skipped with a note) |
+| The keys of `uinitconverter.conf` | `base/config.rs`, `KEYS`, `INTERNAL_KEYS`, `REMOVED_KEYS` | the parser, `dist/uinitconverter.conf`, `initconvert init`, the user mode's generated file | `config::contract_tests` (the parser's keys, the dist file); `init::tests::init_writes_known_keys`; `user::tests::user_config_sets_known_keys` |
+| The index of a generated database | `base/index.rs`, `Index::render` and `Index::load` | gen writes, the runner and the daemon read | `index::tests::render_and_load_round_trip` |
+
+The daemon's D-Bus methods that the tools call (`LoadUnit`, `StartUnit`,
+`Reload`, `StopInstances`, ...) have no test of their own: the sandbox suite
+runs the real daemon with the real clients.
+

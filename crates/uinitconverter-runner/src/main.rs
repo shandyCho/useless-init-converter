@@ -48,6 +48,61 @@ fn die(msg: &str) -> ! {
     exit(1)
 }
 
+/// The commands, from config::runner_cmd (the list gen, the daemon and
+/// dist/s6 use): every match on Cmd is exhaustive, so a command added there
+/// and not handled here fails to build (Cmd::ALL's test checks the list).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cmd {
+    Run,
+    Finish,
+    Up,
+    Down,
+    StopExec,
+    StopAtom,
+    ReloadExec,
+    Confine,
+    Accept,
+    AcceptFinish,
+    Connection,
+}
+
+impl Cmd {
+    const ALL: [Cmd; 11] = [
+        Cmd::Run,
+        Cmd::Finish,
+        Cmd::Up,
+        Cmd::Down,
+        Cmd::StopExec,
+        Cmd::StopAtom,
+        Cmd::ReloadExec,
+        Cmd::Confine,
+        Cmd::Accept,
+        Cmd::AcceptFinish,
+        Cmd::Connection,
+    ];
+
+    fn name(self) -> &'static str {
+        use config::runner_cmd as c;
+        match self {
+            Cmd::Run => c::RUN,
+            Cmd::Finish => c::FINISH,
+            Cmd::Up => c::UP,
+            Cmd::Down => c::DOWN,
+            Cmd::StopExec => c::STOP_EXEC,
+            Cmd::StopAtom => c::STOP_ATOM,
+            Cmd::ReloadExec => c::RELOAD_EXEC,
+            Cmd::Confine => c::CONFINE,
+            Cmd::Accept => c::ACCEPT,
+            Cmd::AcceptFinish => c::ACCEPT_FINISH,
+            Cmd::Connection => c::CONNECTION,
+        }
+    }
+
+    fn parse(s: &str) -> Option<Cmd> {
+        Cmd::ALL.into_iter().find(|c| c.name() == s)
+    }
+}
+
 struct Internal {
     unit: String,
     main_pid: Option<u32>,
@@ -106,18 +161,18 @@ fn parse_internal(args: &[String]) -> Internal {
 /// failure, reports ready and waits like a unit whose requirement failed;
 /// `finish` says "don't restart" instead of failing every second; `up`
 /// records it and succeeds.
-fn setup_failed(cfg: &Config, cmd: &str, unit: &str, e: &str) -> i32 {
-    use state::keys;
+fn setup_failed(cfg: &Config, cmd: Cmd, unit: &str, e: &str) -> i32 {
+    use state::{keys, result};
     eprintln!("initconvert-runner: {unit}: {e}");
     let st = state::for_unit(&cfg.run_dir, &loader::Loader::new(cfg).load(unit).id);
     match cmd {
-        "run" | "up" => {
+        Cmd::Run | Cmd::Up => {
             st.stamp(keys::INACTIVE_EXIT);
-            st.set(keys::RESULT, "resources");
+            st.set(keys::RESULT, result::RESOURCES);
             st.set(keys::START_FAILED, e);
             st.clear(keys::PARKED);
             st.stamp(keys::INACTIVE_ENTER);
-            if cmd == "up" {
+            if cmd == Cmd::Up {
                 return 0;
             }
             unsafe {
@@ -130,9 +185,14 @@ fn setup_failed(cfg: &Config, cmd: &str, unit: &str, e: &str) -> i32 {
                 }
             }
         }
-        "finish" => 125,
-        "down" | "stop-atom" => 0,
-        _ => 1,
+        Cmd::Finish => 125,
+        Cmd::Down | Cmd::StopAtom => 0,
+        Cmd::StopExec
+        | Cmd::ReloadExec
+        | Cmd::Confine
+        | Cmd::Accept
+        | Cmd::AcceptFinish
+        | Cmd::Connection => 1,
     }
 }
 
@@ -167,40 +227,86 @@ fn main() {
     if cmd == "notify-helper" {
         exit(runner::notify_helper_main(&args[1..]));
     }
+    let Some(cmd) = Cmd::parse(&cmd) else {
+        die(&format!(
+            "unknown command {cmd} (see initconvert-runner help)"
+        ))
+    };
     let cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| die(&e));
     let a = parse_internal(&args[1..]);
     // Accept=yes sockets: UNIT is the .socket, not a service.
-    match cmd.as_str() {
-        "accept" => exit(runner::accept_main(&cfg, &a.unit)),
-        "accept-finish" => exit(runner::accept_finish(&cfg, &a.unit)),
-        "connection" => exit(runner::connection_main(&cfg, &a.unit)),
+    match cmd {
+        Cmd::Accept => exit(runner::accept_main(&cfg, &a.unit)),
+        Cmd::AcceptFinish => exit(runner::accept_finish(&cfg, &a.unit)),
+        Cmd::Connection => exit(runner::connection_main(&cfg, &a.unit)),
         _ => {}
     }
     let mut r = match runner::Runner::new(
         cfg.clone(),
         &a.unit,
-        matches!(cmd.as_str(), "run" | "up" | "confine"),
+        matches!(cmd, Cmd::Run | Cmd::Up | Cmd::Confine),
     ) {
         Ok(r) => r,
-        Err(e) => exit(setup_failed(&cfg, &cmd, &a.unit, &e)),
+        Err(e) => exit(setup_failed(&cfg, cmd, &a.unit, &e)),
     };
     r.on_demand = a.on_demand;
-    let code = match cmd.as_str() {
-        "run" => r.cmd_run(),
-        "finish" => {
+    let code = match cmd {
+        Cmd::Run => r.cmd_run(),
+        Cmd::Finish => {
             let code = a.rest.first().and_then(|c| c.parse().ok()).unwrap_or(0);
             let sig = a.rest.get(1).and_then(|c| c.parse().ok()).unwrap_or(0);
             r.cmd_finish(code, sig)
         }
-        "up" => r.cmd_up(),
-        "down" => r.cmd_down(),
-        "stop-exec" => r.cmd_stop_exec(a.main_pid),
-        "stop-atom" => r.cmd_stop_atom(),
-        "reload-exec" => r.cmd_reload(a.main_pid),
-        "confine" => r.cmd_confine(&a.rest),
-        other => die(&format!(
-            "unknown command {other} (see initconvert-runner help)"
-        )),
+        Cmd::Up => r.cmd_up(),
+        Cmd::Down => r.cmd_down(),
+        Cmd::StopExec => r.cmd_stop_exec(a.main_pid),
+        Cmd::StopAtom => r.cmd_stop_atom(),
+        Cmd::ReloadExec => r.cmd_reload(a.main_pid),
+        Cmd::Confine => r.cmd_confine(&a.rest),
+        Cmd::Accept | Cmd::AcceptFinish | Cmd::Connection => unreachable!("handled above"),
     };
     exit(code);
+}
+
+#[cfg(test)]
+mod cmd_tests {
+    use super::{config, Cmd};
+
+    /// The enum and the shared list name the same commands, in the same order.
+    #[test]
+    fn every_listed_command_is_handled() {
+        let names: Vec<&str> = Cmd::ALL.iter().map(|c| c.name()).collect();
+        assert_eq!(names, config::runner_cmd::ALL);
+        for n in config::runner_cmd::ALL {
+            assert_eq!(Cmd::parse(n).map(Cmd::name), Some(*n));
+        }
+        assert_eq!(Cmd::parse("nope"), None);
+    }
+
+    /// dist/s6's hand-written run scripts call the runner too (confine).
+    #[test]
+    fn dist_scripts_use_listed_commands() {
+        let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/s6");
+        let mut seen = 0;
+        let mut bad = Vec::new();
+        for svc in std::fs::read_dir(&dist).unwrap().flatten() {
+            for f in ["run", "finish", "up", "down"] {
+                let Ok(text) = std::fs::read_to_string(svc.path().join(f)) else {
+                    continue;
+                };
+                for (n, line) in text.lines().enumerate() {
+                    let Some(rest) = line.split("initconvert-runner ").nth(1) else {
+                        continue;
+                    };
+                    seen += 1;
+                    let cmd = rest.split_whitespace().next().unwrap_or("");
+                    if Cmd::parse(cmd).is_none() {
+                        bad.push(format!("{}/{f}:{}: {cmd}", svc.path().display(), n + 1));
+                    }
+                }
+            }
+        }
+        assert!(seen > 0, "no runner calls found under {}", dist.display());
+        assert!(bad.is_empty(), "not runner commands:\n{}", bad.join("\n"));
+    }
 }

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 
 use super::Daemon;
+use crate::config::runner_cmd;
 use crate::gen::{self, Kind};
 use crate::loader::Unit;
 use crate::state::{self, keys};
@@ -330,8 +331,10 @@ impl Daemon {
         unit: &Unit,
     ) -> Status {
         let st = state::for_unit(&self.cfg.run_dir, id);
-        let result = st.get(keys::RESULT).unwrap_or_else(|| "success".into());
-        let failed_result = !matches!(result.as_str(), "success" | "running");
+        let result = st
+            .get(keys::RESULT)
+            .unwrap_or_else(|| state::result::SUCCESS.into());
+        let failed_result = state::result::is_failure(&result);
         let condition_ok = !st.has(keys::CONDITION_FAILED);
         // Soft failures: reported to s6-rc as "up", but failed or never run.
         let dep_failed = st.has(keys::DEPENDENCY_FAILED) || st.has(keys::PARKED);
@@ -1087,7 +1090,7 @@ impl Daemon {
                         if st.active == "active" {
                             return "done";
                         }
-                        return if self.run_runner("up", id, None).await {
+                        return if self.run_runner(runner_cmd::UP, id, None).await {
                             "done"
                         } else {
                             "failed"
@@ -1098,7 +1101,7 @@ impl Daemon {
                         return "done";
                     }
                     // Not active, failed, or skipped for a dependency: run it again.
-                    return if self.run_runner("up", id, None).await {
+                    return if self.run_runner(runner_cmd::UP, id, None).await {
                         "done"
                     } else {
                         "failed"
@@ -1192,13 +1195,13 @@ impl Daemon {
         }
         let failed = st
             .get(keys::RESULT)
-            .map(|r| !matches!(r.as_str(), "success" | "running"))
+            .map(|r| state::result::is_failure(&r))
             .unwrap_or(false);
         if failed
             && st.get_u64(keys::INACTIVE_EXIT) >= started_at
             && st.get_u64(keys::INACTIVE_ENTER) >= st.get_u64(keys::INACTIVE_EXIT)
         {
-            return if st.get(keys::RESULT).as_deref() == Some("timeout") {
+            return if st.get(keys::RESULT).as_deref() == Some(state::result::TIMEOUT) {
                 "timeout"
             } else {
                 "failed"
@@ -1255,7 +1258,7 @@ impl Daemon {
                 if !active.contains(id) {
                     // Mounted outside s6-rc (fstab, by hand): still unmount it.
                     if matches!(unit.utype(), "mount" | "swap") {
-                        return if self.run_runner("down", id, None).await {
+                        return if self.run_runner(runner_cmd::DOWN, id, None).await {
                             "done"
                         } else {
                             "failed"
@@ -1272,7 +1275,7 @@ impl Daemon {
                     && !unit.get_all("Service", "ExecStop").is_empty()
                 {
                     let pid = self.svstat(id).await.map(|s| s.pid).filter(|&p| p > 0);
-                    self.run_runner("stop-exec", id, pid).await;
+                    self.run_runner(runner_cmd::STOP_EXEC, id, pid).await;
                 }
                 let r = if kind == Kind::Longrun && self.stop_beside(id, unit).await {
                     "done"
@@ -1319,14 +1322,15 @@ impl Daemon {
                     return self.do_start(id, unit, false).await;
                 }
                 if !unit.get_all("Service", "ExecStop").is_empty() {
-                    self.run_runner("stop-exec", id, Some(sv.pid)).await;
+                    self.run_runner(runner_cmd::STOP_EXEC, id, Some(sv.pid))
+                        .await;
                 }
                 let r = self.restart_longrun(id, unit, sv.pid).await;
                 self.job_outcome(id, started_at, r)
             }
             Some(Kind::Oneshot) if active.contains(id) => {
-                self.run_runner("down", id, None).await;
-                let r = if self.run_runner("up", id, None).await {
+                self.run_runner(runner_cmd::DOWN, id, None).await;
+                let r = if self.run_runner(runner_cmd::UP, id, None).await {
                     "done"
                 } else {
                     "failed"
@@ -1340,7 +1344,7 @@ impl Daemon {
 
     pub(super) async fn do_reload(&self, id: &str) -> &'static str {
         let pid = self.svstat(id).await.map(|s| s.pid).filter(|&p| p > 0);
-        if self.run_runner("reload-exec", id, pid).await {
+        if self.run_runner(runner_cmd::RELOAD_EXEC, id, pid).await {
             "done"
         } else {
             "failed"

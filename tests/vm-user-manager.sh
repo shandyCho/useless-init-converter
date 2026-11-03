@@ -41,6 +41,19 @@
 # Copies target/debug's initconvertd, -runner and -timers (cargo build
 # first) and the skalibs and s6 RPMs from SKARNET_RPMS (default
 # ~/rpmbuild-skarnet/RPMS/x86_64, the newest of each) into a fresh overlay.
+#
+# BOOT=s6 (session, session-baseline, lifecycle, lifecycle-baseline): the
+# same checks on the s6 boot instead, installed as tests/vm-s6-boot.sh does
+# it: every RPM (CORE_RPMS=, STANDALONE_RPMS=, SKARNET_RPMS= default
+# ~/rpmbuild-skarnet/rpms), USER_MANAGER=s6 (not in the baselines), and
+# `initconvert init --yes --default-s6 --selinux=enforcing`. The s6 boot's
+# runner then starts every user@: no drop-in, no kernel flag.
+#
+# BOOT=systemd-rpm (greeter, session, apps, lifecycle, fallback and the
+# baselines): the stock systemd boot with only uinitconverter-user and what
+# it requires (CORE_RPMS=, SKARNET_RPMS=), turned on with
+# `initconvert-user-setup on`: no kernel flag. The baselines install it and
+# leave it off.
 set -euo pipefail
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
@@ -48,7 +61,15 @@ VM=$TOP/tests/gnome-vm.sh
 D=${1:?usage: tests/vm-user-manager.sh DIR [user|greeter|baseline|session|session-baseline|apps|apps-baseline|lifecycle|lifecycle-baseline|fallback]}
 MODE=${2:-user}
 case $MODE in user | greeter | baseline | session | session-baseline | apps | apps-baseline | lifecycle | lifecycle-baseline | fallback) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
+BOOT=${BOOT:-systemd}
+case $BOOT/$MODE in
+    systemd/* | s6/session | s6/session-baseline | s6/lifecycle | s6/lifecycle-baseline) ;;
+    systemd-rpm/user) echo "BOOT=systemd-rpm: not with mode user (it turns the manager on for every user@)" >&2; exit 2 ;;
+    systemd-rpm/*) ;;
+    *) echo "BOOT=$BOOT: not with mode $MODE" >&2; exit 2 ;;
+esac
 RPMS=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/RPMS/x86_64}
+[ "$BOOT" != systemd ] && RPMS=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/rpms}
 S=$(mktemp -d)
 # The VM goes down however this ends (VM_KEEP=yes: it stays up, for
 # `gnome-vm.sh ssh DIR`).
@@ -66,14 +87,38 @@ s6=$(pick s6)
 # BUILD=release for the memory figure (debug binaries are several times
 # larger): cargo build --release first.
 BUILD=${BUILD:-debug}
-for b in initconvertd initconvert-runner initconvert-timers; do
-    [ -x "$TOP/target/$BUILD/$b" ] || { echo "build first: target/$BUILD/$b" >&2; exit 1; }
-done
+if [ "$BOOT" = systemd ]; then
+    for b in initconvertd initconvert-runner initconvert-timers; do
+        [ -x "$TOP/target/$BUILD/$b" ] || { echo "build first: target/$BUILD/$b" >&2; exit 1; }
+    done
+else
+    # Every package, the newest build of each (as tests/vm-s6-boot.sh);
+    # systemd-rpm: only the user manager's packages and what they require.
+    mkdir "$S/rpms"
+    newest() { find "$1" -maxdepth 1 -name "$2-[0-9]*.rpm" | sort | tail -1; }
+    CORE=${CORE_RPMS:-$D/rpmbuild/core/rpms} STANDALONE=${STANDALONE_RPMS:-$D/rpmbuild/standalone/rpms}
+    if [ "$BOOT" = systemd-rpm ]; then
+        pkgs="core:uinitconverterd core:uinitconverter-runner core:uinitconverter-timers core:uinitconverter-user
+            skarnet:skalibs skarnet:execline skarnet:s6"
+    else
+        pkgs="core:uinitconverter core:uinitconverterd core:uinitconverter-gen core:uinitconverter-runner
+            core:uinitconverter-timers core:uinitconverter-user standalone:uinitconverter-fdstore
+            standalone:uinitconverter-notify standalone:uinitconverter-linkwatch standalone:uinitconverter-journal-relay
+            skarnet:skalibs skarnet:execline skarnet:s6 skarnet:s6-rc skarnet:s6-linux-init skarnet:s6-frontend
+            skarnet:mdevd skarnet:s6-dns skarnet:s6-networking"
+    fi
+    for p in $pkgs; do
+        case ${p%%:*} in core) dir=$CORE ;; standalone) dir=$STANDALONE ;; *) dir=$RPMS ;; esac
+        f=$(newest "$dir" "${p#*:}")
+        [ -n "$f" ] || { echo "no ${p#*:} RPM in $dir" >&2; exit 1; }
+        cp "$f" "$S/rpms/"
+    done
+fi
 
 cat >"$S/setup.sh" <<'EOS'
 #!/bin/bash
 # As root in the VM: install, add the users, the drop-in and the flag.
-# $1: the mode.
+# $1: the mode, $2: the boot (systemd or s6).
 set -euo pipefail
 cd ~tester/in
 if [ "$1" = greeter ] || [ "$1" = baseline ]; then
@@ -88,31 +133,49 @@ case $1 in
         echo alice:s6Alice1 | chpasswd 2>/dev/null
         ;;
 esac
-case $1 in *baseline) exit 0 ;; esac
-# Built locally, so unsigned.
-rpm -Uvh --nodeps --nosignature --replacepkgs ./skalibs-*.rpm ./execline-*.rpm ./s6-*.rpm
-install -d /usr/local/libexec/uinitconverter
-install -m 0755 initconvertd initconvert-runner initconvert-timers /usr/local/libexec/uinitconverter/
-# As the uinitconverter-user package installs it.
-ln -sf initconvertd /usr/local/libexec/uinitconverter/initconvert-user-manager
-# The fallback's record directory, as the package's tmpfiles.d makes it.
-install -Dm0644 uinitconverter-user.conf /etc/tmpfiles.d/uinitconverter-user.conf
-systemd-tmpfiles --create /etc/tmpfiles.d/uinitconverter-user.conf
-mkdir -p /etc/uinitconverter
-echo "USER_MANAGER=s6" >/etc/uinitconverter/uinitconverter.conf
-for u in s6test s6ref; do
-    id "$u" >/dev/null 2>&1 || useradd -m "$u"
-done
-uid=$(id -u s6test)
-# greeter: every user's manager.
-dir=/etc/systemd/system/user@$uid.service.d
-case $1 in greeter | session | apps | lifecycle | fallback) dir=/etc/systemd/system/user@.service.d ;; esac
-mkdir -p "$dir"
-cat >"$dir/90-uinitconverter.conf" <<EOF
+if [ "${2:-systemd}" = s6 ]; then
+    # The RPMs and init, as tests/vm-s6-boot.sh; built locally, so unsigned.
+    dnf -y -q install --nogpgcheck ./*.rpm || { dnf clean metadata && dnf -y -q install --refresh --nogpgcheck ./*.rpm; }
+    case $1 in *baseline) ;; *) echo "USER_MANAGER=s6" >>/etc/uinitconverter/uinitconverter.conf ;; esac
+    initconvert init --yes --default-s6 --selinux=enforcing
+    exit 0
+fi
+if [ "${2:-systemd}" = systemd-rpm ]; then
+    # uinitconverter-user and what it pulls in, on the stock systemd boot.
+    dnf -y -q install --nogpgcheck ./*.rpm || { dnf clean metadata && dnf -y -q install --refresh --nogpgcheck ./*.rpm; }
+    rpm -q uinitconverter uinitconverter-gen s6-rc s6-linux-init >/dev/null 2>&1 \
+        && echo "setup: an s6 boot package came along: $(rpm -q uinitconverter uinitconverter-gen s6-rc s6-linux-init | grep -v 'not installed' | tr '\n' ' ')" >&2
+    # Installed but left off: the baselines check that this changes nothing.
+    case $1 in *baseline) exit 0 ;; esac
+    initconvert-user-setup on
+    initconvert-user-setup status
+else
+    case $1 in *baseline) exit 0 ;; esac
+    # Built locally, so unsigned.
+    rpm -Uvh --nodeps --nosignature --replacepkgs ./skalibs-*.rpm ./execline-*.rpm ./s6-*.rpm
+    install -d /usr/local/libexec/uinitconverter
+    install -m 0755 initconvertd initconvert-runner initconvert-timers /usr/local/libexec/uinitconverter/
+    # As the uinitconverter-user package installs it.
+    ln -sf initconvertd /usr/local/libexec/uinitconverter/initconvert-user-manager
+    # The fallback's record directory, as the package's tmpfiles.d makes it.
+    install -Dm0644 uinitconverter-user.conf /etc/tmpfiles.d/uinitconverter-user.conf
+    systemd-tmpfiles --create /etc/tmpfiles.d/uinitconverter-user.conf
+    mkdir -p /etc/uinitconverter
+    echo "USER_MANAGER=s6" >/etc/uinitconverter/uinitconverter.conf
+    for u in s6test s6ref; do
+        id "$u" >/dev/null 2>&1 || useradd -m "$u"
+    done
+    uid=$(id -u s6test)
+    # greeter: every user's manager.
+    dir=/etc/systemd/system/user@$uid.service.d
+    case $1 in greeter | session | apps | lifecycle | fallback) dir=/etc/systemd/system/user@.service.d ;; esac
+    mkdir -p "$dir"
+    cat >"$dir/90-uinitconverter.conf" <<EOF
 [Service]
 ExecStart=
 ExecStart=/usr/local/libexec/uinitconverter/initconvert-user-manager
 EOF
+fi
 if [ "$1" = fallback ]; then
     # Broken for the s6 manager only: a unit path that only it reads (the
     # launcher's test override) starts with a drop-in making tester's
@@ -126,16 +189,20 @@ if [ "$1" = fallback ]; then
 Environment=UINITCONVERTER_USER_UNIT_PATH=/etc/uinitconverter-break:$t/systemd/transient:$t/systemd/generator.early:$h/.config/systemd/user:/etc/xdg/systemd/user:/etc/systemd/user:$t/systemd/user:/run/systemd/user:$t/systemd/generator:$h/.local/share/systemd/user:/usr/local/share/systemd/user:/usr/share/systemd/user:/usr/local/lib/systemd/user:/usr/lib/systemd/user:$t/systemd/generator.late
 EOF
 fi
-# A unit of the user's own, wanted by default.target.
-h=/home/s6test/.config/systemd/user
-mkdir -p "$h/default.target.wants"
-cat >"$h/hello.service" <<EOF
+if [ "${2:-systemd}" = systemd ]; then
+    # A unit of the user's own, wanted by default.target.
+    h=/home/s6test/.config/systemd/user
+    mkdir -p "$h/default.target.wants"
+    cat >"$h/hello.service" <<EOF
 [Service]
 ExecStart=/usr/bin/sleep infinity
 EOF
-ln -sf ../hello.service "$h/default.target.wants/hello.service"
-chown -R s6test:s6test /home/s6test/.config
-grubby --update-kernel=ALL --args=uinitconverter.user_manager=s6
+    ln -sf ../hello.service "$h/default.target.wants/hello.service"
+    chown -R s6test:s6test /home/s6test/.config
+    # Until part 155 the launcher also needed the kernel flag on a systemd
+    # boot; BOOT=systemd-rpm checks that it doesn't any more.
+    grubby --update-kernel=ALL --args=uinitconverter.user_manager=s6
+fi
 systemctl daemon-reload
 EOS
 
@@ -565,6 +632,24 @@ case $step in
         until_ok '[ "$(loginctl show-session '"$t"' -p Active --value)" = yes ]' 30 && ok "back to tester's session" || bad "tester's session is not active" ;;
     after-reboot)
         n=0
+        if journalctl -b -1 --no-pager -o cat -t uinitconverter 2>/dev/null | grep -qx "shutdown starts"; then
+            # The s6 boot (BOOT=s6): from "shutdown starts" to the end of
+            # each user@'s PAM session in its runner (pam_unix's close line).
+            a=$(journalctl -b -1 -o short-unix --no-pager -t uinitconverter | awk '/shutdown starts/ {print $1; exit}')
+            while read -r z u; do
+                n=$((n + 1))
+                d=$(awk -v a="$a" -v z="$z" 'BEGIN {printf "%.2f", z - a}')
+                awk -v d="$d" 'BEGIN {exit !(d < 5)}' && ok "user@ of $u stopped $d s after the shutdown began" || bad "user@ of $u took $d s to stop"
+            done < <(journalctl -b -1 -o short-unix --no-pager _COMM=initconvert-run | awk -v a="$a" '$1 >= a && /session closed for user/ {print $1, $NF}')
+            [ "$n" -gt 0 ] || bad "no user@ session close after the shutdown began"
+            x=$(journalctl -b -1 --no-pager -o cat | grep -E "user@[0-9]+\.service.*(SIGKILL|timed out|failed)" | head -3)
+            [ -z "$x" ] && ok "no user@ was killed or failed at the reboot" || bad "$x"
+            echo "-- the system manager's slow stops at the reboot:"
+            journalctl -b -1 -o short-unix --no-pager _COMM=initconvertd | awk -v a="$a" '$1 >= a && /took|shutdown scopes/ {printf "   +%.2f s ", $1 - a; $1 = ""; $2 = ""; print substr($0, 3)}' | cut -c1-160
+            echo "passed: $pass  failed: $fail"
+            [ "$fail" -eq 0 ]
+            exit
+        fi
         while read -r u; do
             a=$(journalctl -b -1 -o short-unix --no-pager "_PID=1" | awk -v u="$u" '$0 ~ "Stopping " u "\\.service" {print $1; exit}')
             z=$(journalctl -b -1 -o short-unix --no-pager "_PID=1" | awk -v u="$u" '$0 ~ "Stopped " u "\\.service" {print $1; exit}')
@@ -645,11 +730,18 @@ echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
 EOS
 
-cp "$TOP/target/$BUILD/initconvertd" "$TOP/target/$BUILD/initconvert-runner" "$TOP/target/$BUILD/initconvert-timers" "$skalibs" "$execline" "$s6" "$TOP/dist/tmpfiles.d/uinitconverter-user.conf" "$S/"
+if [ "$BOOT" = systemd ]; then
+    cp "$TOP/target/$BUILD/initconvertd" "$TOP/target/$BUILD/initconvert-runner" "$TOP/target/$BUILD/initconvert-timers" "$skalibs" "$execline" "$s6" "$TOP/dist/tmpfiles.d/uinitconverter-user.conf" "$S/"
+fi
 "$VM" start "$D"
 "$VM" wait "$D"
-"$VM" copy "$D" "$S"/*
-"$VM" ssh "$D" sudo bash in/setup.sh "$MODE"
+"$VM" copy "$D" "$S"/*.sh
+if [ "$BOOT" != systemd ]; then
+    "$VM" copy "$D" "$S"/rpms/*.rpm
+else
+    "$VM" copy "$D" "$S"/*.rpm "$S"/initconvertd "$S"/initconvert-runner "$S"/initconvert-timers "$S"/uinitconverter-user.conf
+fi
+"$VM" ssh "$D" sudo bash in/setup.sh "$MODE" "$BOOT"
 # The flag needs a boot; the overlay is kept.
 "$VM" stop "$D"
 "$VM" start "$D" --keep

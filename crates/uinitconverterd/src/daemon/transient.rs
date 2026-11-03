@@ -550,6 +550,7 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::result;
 
     fn prop(k: &str, v: Value<'_>) -> (String, OwnedValue) {
         (k.to_string(), v.try_to_owned().unwrap())
@@ -613,7 +614,7 @@ mod tests {
         };
         save_scope(&run, "gone.slice", &gone);
         // Ordinary unit state is not a scope record.
-        state::for_unit(&run, "x.service").set(keys::RESULT, "success");
+        state::for_unit(&run, "x.service").set(keys::RESULT, result::SUCCESS);
         let got = load_scopes(&run);
         assert_eq!(got.len(), 1);
         let (n, t) = &got[0];

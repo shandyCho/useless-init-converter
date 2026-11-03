@@ -7,7 +7,7 @@ versions. Release notes: [packages/release-notes](packages/release-notes).
 
 ## Unreleased
 
-Changes since 0.2.2. Details per step in `work_history.md`, parts 130-153.
+Changes since 0.2.2. Details per step in `work_history.md`, parts 130-155.
 
 ### Added
 - `Accept=yes` sockets: on unix paths through `s6-ipcserverd`, on TCP ports
@@ -28,14 +28,27 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-153.
   fails a user (GNOME's failure path, a crash), it hands over to
   `systemd --user` in place for the rest of the boot (`USER_FALLBACK_ON=`).
   See [the s6 user manager](docs/etc-us.md#the-s6-user-manager-in-progress).
+- **The s6 user manager on a normal systemd boot**, opt-in:
+  `sudo initconvert-user-setup on` (package `uinitconverter-user`, which no
+  longer needs any s6 boot package) runs it for every `user@`; `off` goes
+  back to `systemd --user`, `status` shows what each user runs. The kernel
+  flag `uinitconverter.user_manager=s6` is no longer needed there;
+  `uinitconverter.user_manager=systemd` still turns it off for one boot.
 - `UINITCONVERTER_LOG_JOBS=1` in the daemon's environment logs every job
   request with the caller's process name.
 - `packages/build-rpms.sh --test` (`--shared-target`, `--nocheck`): faster
   RPM builds for testing; see [Building](packages/README-us.md#building).
 - `tests/vm-s6-boot.sh`: the RPMs, `initconvert init` and the s6 boot in
-  the GNOME test VM.
+  the GNOME test VM. `BOOT=s6` runs `tests/vm-user-manager.sh`'s session
+  and lifecycle checks on the s6 boot.
+- Tests for the formats the tools share (the `result` values, the runner's
+  commands, the fd store protocol against the standalone store, the config
+  keys, the index); see
+  [Contracts between the tools](docs/etc-us.md#contracts-between-the-tools).
 
 ### Changed
+- `uinitconverterd` no longer requires s6-rc and dbus-daemon; the
+  `uinitconverter` package, which the s6 boot needs, still does.
 - **The commands are named `initconvert*`**: `initconvert` (was
   `uinitconverter`), `initconvertd`, `initconvert-gen`, `initconvert-runner`,
   `initconvert-timers`, `initconvert-user-manager`, and the standalone
@@ -61,6 +74,9 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-153.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- At shutdown the users' `user@` and `user-runtime-dir@` stop at the same
+  time, as with systemd. They stopped one user after another, so with the s6
+  user manager three users took 8-11 s.
 - An `Accept=yes` instance gets `LISTEN_FDNAMES=` from the socket's
   `FileDescriptorName=` (it was always `connection`), so systemd's varlink
   services answer.
@@ -78,6 +94,11 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-153.
 - The s6 user manager has not run for SELinux-confined users; keep
   `USER_MANAGER=systemd` there. Under the s6 boot's own system manager it has
   run in the test VM only (`tests/vm-s6-boot.sh`), not on real hardware.
+- On the s6 boot with the s6 user manager, a reboot with GNOME sessions open
+  can take 6-9 s for the users: gnome-shell sometimes doesn't exit until its
+  unit's `TimeoutStopSec=5`, and each user's stop ends with about 2 s for
+  `user-runtime-dir@`. Under `systemd --user` on the same boot it takes under
+  1 s. Not explained yet.
 - The system sandbox failed once in a few runs on a dangling scan directory
   entry of an on-demand instance (`quitter@0.service`); not reproduced.
 

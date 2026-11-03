@@ -831,10 +831,7 @@ impl Daemon {
         p.insert("StatusErrno".into(), Value::from(0i32));
         p.insert("StatusBusError".into(), s(""));
         p.insert("StatusVarlinkError".into(), s(""));
-        let result = match status.result.as_str() {
-            "running" => "success".to_string(),
-            r => r.to_string(),
-        };
+        let result = state::result::exported(&status.result).to_string();
         p.insert("Result".into(), s(result));
         p.insert("ReloadResult".into(), s("success"));
         p.insert("CleanResult".into(), s("success"));
@@ -1058,7 +1055,9 @@ impl Daemon {
         p.insert("MaxConnectionsPerSource".into(), Value::from(per));
         p.insert(
             "Result".into(),
-            s(st.get(keys::RESULT).unwrap_or_else(|| "success".into())),
+            s(st.get(keys::RESULT)
+                .map(|r| state::result::exported(&r).to_string())
+                .unwrap_or_else(|| state::result::SUCCESS.into())),
         );
         self.cgroup_props(&mut p, id, unit);
         p

@@ -9,6 +9,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use uinitconverter_base::config::{runner_cmd, timers_cmd};
+
 use super::*;
 use uinitconverter_base::automask;
 
@@ -26,9 +28,9 @@ pub fn longrun_files(
     let arg = unit_arg(id);
     if id.ends_with(".timer") || id.ends_with(".path") {
         let sub = if id.ends_with(".timer") {
-            "timer-run"
+            timers_cmd::TIMER_RUN
         } else {
-            "path-run"
+            timers_cmd::PATH_RUN
         };
         let timer_runner = cfg.timer_runner.display();
         return vec![
@@ -48,12 +50,18 @@ pub fn longrun_files(
         return vec![
             (
                 "run",
-                format!("#!/bin/sh\nexec {runner} accept{args} {arg}\n"),
+                format!(
+                    "#!/bin/sh\nexec {runner} {}{args} {arg}\n",
+                    runner_cmd::ACCEPT
+                ),
                 true,
             ),
             (
                 "finish",
-                format!("#!/bin/sh\nexec {runner} accept-finish{args} {arg} \"$@\"\n"),
+                format!(
+                    "#!/bin/sh\nexec {runner} {}{args} {arg} \"$@\"\n",
+                    runner_cmd::ACCEPT_FINISH
+                ),
                 true,
             ),
             ("notification-fd", "3\n".into(), false),
@@ -63,12 +71,18 @@ pub fn longrun_files(
     let mut out = vec![
         (
             "run",
-            format!("#!/bin/sh\nexec {runner} run{args}{lazy} {arg}\n"),
+            format!(
+                "#!/bin/sh\nexec {runner} {}{args}{lazy} {arg}\n",
+                runner_cmd::RUN
+            ),
             true,
         ),
         (
             "finish",
-            format!("#!/bin/sh\nexec {runner} finish{args} {arg} \"$@\"\n"),
+            format!(
+                "#!/bin/sh\nexec {runner} {}{args} {arg} \"$@\"\n",
+                runner_cmd::FINISH
+            ),
             true,
         ),
         ("notification-fd", "3\n".into(), false),
@@ -128,12 +142,12 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
                 let arg = unit_arg(&p.id);
                 write_file(
                     &sdir.join("up"),
-                    &format!("{runner} up{args} {arg}\n"),
+                    &format!("{runner} {}{args} {arg}\n", runner_cmd::UP),
                     false,
                 )?;
                 write_file(
                     &sdir.join("down"),
-                    &format!("{runner} down{args} {arg}\n"),
+                    &format!("{runner} {}{args} {arg}\n", runner_cmd::DOWN),
                     false,
                 )?;
                 write_file(
@@ -193,26 +207,17 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
     }
 
     // Index read by the daemon and the runner.
-    let mut idx = String::new();
-    for p in plan.units.values() {
-        let _ = writeln!(
-            idx,
-            "unit\t{}\t{}\t{}",
-            p.id,
-            p.kind.as_str(),
-            p.log_atom.as_deref().unwrap_or("-")
-        );
-    }
-    for (a, id) in &plan.aliases {
-        let _ = writeln!(idx, "alias\t{a}\t{id}");
-    }
-    for (t, u) in &plan.triggers {
-        let _ = writeln!(idx, "trigger\t{t}\t{u}");
-    }
-    if let Some(def) = &plan.default_target {
-        let _ = writeln!(idx, "default\t{def}");
-    }
-    fs::write(dir.join("..").join("index"), idx)?;
+    let idx = Index {
+        units: plan
+            .units
+            .values()
+            .map(|p| (p.id.clone(), (p.kind, p.log_atom.clone())))
+            .collect(),
+        aliases: plan.aliases.clone(),
+        default_target: plan.default_target.clone(),
+        triggers: plan.triggers.clone(),
+    };
+    fs::write(dir.join("..").join("index"), idx.render())?;
     fs::write(dir.join("..").join("report.txt"), report(plan))?;
     Ok(())
 }
@@ -233,7 +238,11 @@ fn write_stop_atom(cfg: &Config, plan: &Plan, p: &Planned, sdir: &Path) -> std::
     write_file(&sdir.join("up"), "", false)?;
     write_file(
         &sdir.join("down"),
-        &format!("{runner} stop-atom{args} {}\n", unit_arg(&p.id)),
+        &format!(
+            "{runner} {}{args} {}\n",
+            runner_cmd::STOP_ATOM,
+            unit_arg(&p.id)
+        ),
         false,
     )?;
     // The runner ends ExecStop= at TimeoutStopSec= and always succeeds; a

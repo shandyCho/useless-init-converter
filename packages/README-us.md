@@ -12,8 +12,8 @@ executables, so they are used only to build and are not packaged.
 | Package | Contains | Needs at run time (`Requires`) |
 |---|---|---|
 | `uinitconverter-runner` | `initconvert-runner` | s6, shadow-utils. Recommends `uinitconverterd` (`OnFailure=`/`OnSuccess=` units are started through the daemon) |
-| `uinitconverterd` | `initconvertd`, the D-Bus policy (`uinitconverter.conf`) | s6, s6-rc, dbus-daemon, `uinitconverter-runner`. Recommends `uinitconverter-timers` (`systemd-run --on-calendar`); suggests `uinitconverter-user` |
-| `uinitconverter-user` (noarch) | `initconvert-user-manager` (a link to `initconvertd`, which runs as the user manager under that name), the tmpfiles.d entry for `/run/uinitconverter-user` (the fallback record) | `uinitconverterd`, `uinitconverter-runner`, s6, systemd (`systemd --user` is the default and the fallback). Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says |
+| `uinitconverterd` | `initconvertd`, the D-Bus policy (`uinitconverter.conf`) | s6, `uinitconverter-runner`. Recommends `uinitconverter-timers` (`systemd-run --on-calendar`); suggests `uinitconverter-user` |
+| `uinitconverter-user` (noarch) | `initconvert-user-manager` (a link to `initconvertd`, which runs as the user manager under that name), `initconvert-user-setup` (on/off/status on a systemd boot), the tmpfiles.d entry for `/run/uinitconverter-user` (the fallback record) | `uinitconverterd`, `uinitconverter-runner`, `uinitconverter-timers`, s6, systemd (`systemd --user` is the default and the fallback). Needs none of the s6 boot packages. Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says |
 | `uinitconverter-timers` | `initconvert-timers` | `uinitconverterd` (timers start units through the daemon) |
 | `uinitconverter-gen` | `initconvert-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (the generated services run them) |
 | `uinitconverter` | the `initconvert` command (with `initconvert init`, the boot setup), `early`, configuration, s6 services, s6-linux-init skeleton, SELinux module, kernel-install plugin, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, and the four tool packages above; suggests `uinitconverter-user` |
@@ -27,6 +27,9 @@ executables, so they are used only to build and are not packaged.
   `uinitconverter` only points at them with `Recommends`/`Suggests`.
 
 ## Building
+
+Step by step, with the test build and the release build side by side:
+[docs/PACKAGEBUILD-us.md](../docs/PACKAGEBUILD-us.md).
 
 ```sh
 packages/build-rpms.sh            # result: ~/rpmbuild-uinitconverter/rpms
@@ -135,7 +138,7 @@ sudo initconvert init
 dnf takes rsyslog, earlyoom and the other dependencies from Fedora's
 repositories. There is no repository on GitHub, so `dnf upgrade` alone
 does not see new releases: download the next release's files and run
-`sudo dnf upgrade ./*.rpm`, then `sudo uinitconverter init --yes`. The skarnet
+`sudo dnf upgrade ./*.rpm`, then `sudo initconvert init --yes`. The skarnet
 packages need rebuilding only when `dist/skarnet.versions` changes.
 
 The specs still say `License: TBD`; choose a license before publishing.

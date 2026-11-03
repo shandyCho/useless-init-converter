@@ -38,7 +38,7 @@ use crate::config::Config;
 use crate::gen::{self, Index, Kind};
 use crate::install;
 use crate::loader::{LoadState, Loader, Unit};
-use crate::state::{self, keys};
+use crate::state::{self, keys, result};
 use crate::unit::UnitFile;
 use crate::util;
 use props::{Ifaces, Props, MANAGER_IFACE, UNIT_IFACE};

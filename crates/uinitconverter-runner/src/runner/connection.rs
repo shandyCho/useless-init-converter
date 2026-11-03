@@ -42,7 +42,7 @@ pub fn accept_main(cfg: &Config, name: &str) -> i32 {
     // doesn't restart it every second (a port sshd.service holds, say).
     let fail = |e: &str| -> i32 {
         log(&id, e);
-        st.set(keys::RESULT, "resources");
+        st.set(keys::RESULT, result::RESOURCES);
         st.set(keys::START_FAILED, e);
         st.stamp(keys::INACTIVE_ENTER);
         unsafe {
@@ -105,7 +105,7 @@ pub fn accept_main(cfg: &Config, name: &str) -> i32 {
     let server = acceptspec::listener(&sock)
         .map(|l| l.server())
         .unwrap_or("s6-ipcserverd");
-    st.set(keys::RESULT, "success");
+    st.set(keys::RESULT, result::SUCCESS);
     st.stamp(keys::ACTIVE_ENTER);
     unsafe {
         libc::dup2(fd, 0);
@@ -372,11 +372,11 @@ impl Runner {
         let (result, status) = match failed {
             None => {
                 let _ = self.run_list("ExecStop", &[]);
-                ("success", Status::Exited(0))
+                (result::SUCCESS, Status::Exited(0))
             }
             Some(st) => {
                 let result = if self.timed_out.get() {
-                    "timeout"
+                    result::TIMEOUT
                 } else {
                     result_for(st)
                 };

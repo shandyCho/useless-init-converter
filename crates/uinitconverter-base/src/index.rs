@@ -104,7 +104,78 @@ impl Index {
         idx
     }
 
+    /// The file load() reads, as initconvert-gen writes it: the format has
+    /// this one writer and that one reader (the round-trip test below).
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        for (id, (kind, log)) in &self.units {
+            out.push_str(&format!(
+                "unit\t{id}\t{}\t{}\n",
+                kind.as_str(),
+                log.as_deref().unwrap_or("-")
+            ));
+        }
+        for (a, id) in &self.aliases {
+            out.push_str(&format!("alias\t{a}\t{id}\n"));
+        }
+        for (t, u) in &self.triggers {
+            out.push_str(&format!("trigger\t{t}\t{u}\n"));
+        }
+        if let Some(d) = &self.default_target {
+            out.push_str(&format!("default\t{d}\n"));
+        }
+        out
+    }
+
     pub fn resolve<'a>(&'a self, name: &'a str) -> &'a str {
         self.aliases.get(name).map(String::as_str).unwrap_or(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What gen renders, the runner and the daemon load back unchanged
+    /// (Index::render is gen's writer; load is their reader).
+    #[test]
+    fn render_and_load_round_trip() {
+        let dir = std::env::temp_dir().join(format!("uinitconverter-index-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut cfg = Config::defaults();
+        cfg.state_dir = dir.join("state");
+        cfg.repo_dir = dir.join("repo");
+        let mut idx = Index::default();
+        idx.units.insert(
+            "a.service".into(),
+            (Kind::Longrun, Some("a.service-log".into())),
+        );
+        idx.units.insert("b.service".into(), (Kind::Oneshot, None));
+        idx.units.insert("x.target".into(), (Kind::Bundle, None));
+        idx.units
+            .insert("gone.service".into(), (Kind::Longrun, None));
+        idx.aliases
+            .insert("dbus.service".into(), "dbus-broker.service".into());
+        idx.triggers.insert("t.timer".into(), "b.service".into());
+        idx.default_target = Some("x.target".into());
+        fs::create_dir_all(cfg.state_dir.join("current")).unwrap();
+        fs::write(cfg.state_dir.join("current/index"), idx.render()).unwrap();
+        // Masked in the s6 set: load leaves it out.
+        let masked = cfg
+            .repo_dir
+            .join("sources")
+            .join(&cfg.set_name)
+            .join("masked");
+        fs::create_dir_all(&masked).unwrap();
+        fs::write(masked.join("gone.service"), "").unwrap();
+
+        let back = Index::load(&cfg);
+        idx.units.remove("gone.service");
+        assert_eq!(back.units, idx.units);
+        assert_eq!(back.aliases, idx.aliases);
+        assert_eq!(back.triggers, idx.triggers);
+        assert_eq!(back.default_target, idx.default_target);
+        assert_eq!(back.resolve("dbus.service"), "dbus-broker.service");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -121,6 +121,117 @@ pub mod keys {
     pub const START_REQUESTED: &str = "start-requested";
 }
 
+/// The values of keys::RESULT, the contract between the runner (writes)
+/// and the daemon (reads, and exports them as systemd's Result property).
+/// Every value is one of systemd's Result names, except RUNNING, which is
+/// ours: a start in progress, exported as SUCCESS. Write these constants,
+/// never a literal: the test below fails on a literal in either crate.
+pub mod result {
+    pub const SUCCESS: &str = "success";
+    pub const EXIT_CODE: &str = "exit-code";
+    pub const SIGNAL: &str = "signal";
+    pub const TIMEOUT: &str = "timeout";
+    pub const RESOURCES: &str = "resources";
+    pub const START_LIMIT_HIT: &str = "start-limit-hit";
+    pub const PROTOCOL: &str = "protocol";
+    /// Ours, not systemd's: the run script is starting the unit.
+    pub const RUNNING: &str = "running";
+    pub const ALL: &[&str] = &[
+        SUCCESS,
+        EXIT_CODE,
+        SIGNAL,
+        TIMEOUT,
+        RESOURCES,
+        START_LIMIT_HIT,
+        PROTOCOL,
+        RUNNING,
+    ];
+
+    /// A failed unit's result: anything but SUCCESS and RUNNING.
+    pub fn is_failure(v: &str) -> bool {
+        v != SUCCESS && v != RUNNING
+    }
+
+    /// As systemd's Result property shows it.
+    pub fn exported(v: &str) -> &str {
+        if v == RUNNING {
+            SUCCESS
+        } else {
+            v
+        }
+    }
+}
+
 pub fn for_unit(run_dir: &Path, unit: &str) -> UnitState {
     UnitState::new(run_dir.join("units").join(&*util::path_component(unit)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::result;
+    use std::path::Path;
+
+    #[test]
+    fn running_is_ours_and_shown_as_success() {
+        assert!(!result::is_failure(result::SUCCESS));
+        assert!(!result::is_failure(result::RUNNING));
+        for v in result::ALL
+            .iter()
+            .filter(|v| **v != result::SUCCESS && **v != result::RUNNING)
+        {
+            assert!(result::is_failure(v), "{v}");
+            assert_eq!(result::exported(v), *v);
+        }
+        assert_eq!(result::exported(result::RUNNING), result::SUCCESS);
+    }
+
+    /// The contract is the constants: a line that reads or writes
+    /// keys::RESULT with a literal value in the runner or the daemon would
+    /// drift from the other side unnoticed.
+    #[test]
+    fn result_values_are_written_as_constants() {
+        fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    rs_files(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let mut files = Vec::new();
+        for c in [
+            "uinitconverter-runner",
+            "uinitconverterd",
+            "uinitconverter-timers",
+        ] {
+            rs_files(&crates.join(c).join("src"), &mut files);
+        }
+        assert!(
+            files.len() > 10,
+            "no sources found under {}",
+            crates.display()
+        );
+        let mut bad = Vec::new();
+        for f in &files {
+            for (n, line) in std::fs::read_to_string(f).unwrap().lines().enumerate() {
+                if !line.contains("keys::RESULT") {
+                    continue;
+                }
+                if result::ALL
+                    .iter()
+                    .any(|v| line.contains(&format!("\"{v}\"")))
+                {
+                    bad.push(format!("{}:{}: {}", f.display(), n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "write state::result constants:\n{}",
+            bad.join("\n")
+        );
+    }
 }

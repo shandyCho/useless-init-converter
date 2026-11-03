@@ -1,0 +1,104 @@
+#!/bin/sh
+# initconvert-user-setup: turn uinitconverter's s6 user manager on or off for
+# user@UID.service on a systemd boot (package uinitconverter-user). On the s6
+# boot USER_MANAGER= alone decides; this writes it too.
+#
+#   initconvert-user-setup on       # the s6 manager from each user's next login
+#   initconvert-user-setup off      # systemd --user from each user's next login
+#   initconvert-user-setup status   # the setting, and what each user@ runs now
+#
+# `on` writes user@.service's drop-in
+# /etc/systemd/system/user@.service.d/90-uinitconverter.conf and
+# USER_MANAGER=s6 in /etc/uinitconverter/uinitconverter.conf; `off` removes the
+# drop-in and writes USER_MANAGER=systemd. Running managers keep running until
+# their user's last session ends (log out, or reboot). For one boot,
+# uinitconverter.user_manager=systemd on the kernel command line runs
+# systemd --user whatever this says. If the s6 manager fails a user, that user
+# gets systemd --user for the rest of the boot.
+#
+# UINITCONVERTER_SETUP_ROOT=DIR works under DIR instead of / and skips
+# systemctl (tests).
+set -eu
+
+ROOT=${UINITCONVERTER_SETUP_ROOT:-}
+MANAGER=/usr/libexec/uinitconverter/initconvert-user-manager
+DROPIN=$ROOT/etc/systemd/system/user@.service.d/90-uinitconverter.conf
+CONF=$ROOT/etc/uinitconverter/uinitconverter.conf
+
+die() { echo "initconvert-user-setup: $*" >&2; exit 1; }
+usage() { sed -n '6,8s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+
+# The USER_MANAGER= line set to $1, replacing an uncommented one or appended.
+set_user_manager() {
+    mkdir -p "$(dirname "$CONF")"
+    [ -e "$CONF" ] || : >"$CONF"
+    if grep -q '^USER_MANAGER=' "$CONF"; then
+        sed -i "s/^USER_MANAGER=.*/USER_MANAGER=$1/" "$CONF"
+    else
+        printf 'USER_MANAGER=%s\n' "$1" >>"$CONF"
+    fi
+}
+
+reload() {
+    [ -n "$ROOT" ] && return 0
+    systemctl daemon-reload || echo "initconvert-user-setup: systemctl daemon-reload failed; run it before the next login" >&2
+}
+
+need_root() {
+    [ -n "$ROOT" ] || [ "$(id -u)" = 0 ] || die "run it as root (sudo initconvert-user-setup $1)"
+}
+
+setting() {
+    sed -n 's/^USER_MANAGER=//p' "$CONF" 2>/dev/null | tail -1
+}
+
+case ${1:-} in
+    on)
+        need_root on
+        [ -e "$ROOT$MANAGER" ] || die "$MANAGER is missing (dnf install uinitconverter-user)"
+        mkdir -p "$(dirname "$DROPIN")"
+        cat >"$DROPIN" <<EOF
+# Written by \`initconvert-user-setup on\`, removed by \`initconvert-user-setup off\`
+# and when uinitconverter-user is removed: uinitconverter's s6 user manager
+# runs user@UID.service. uinitconverter.user_manager=systemd on the kernel
+# command line runs systemd --user for one boot.
+[Service]
+ExecStart=
+ExecStart=$MANAGER
+EOF
+        set_user_manager s6
+        reload
+        echo "The s6 user manager runs each user's manager from their next login (log out, or reboot)."
+        ;;
+    off)
+        need_root off
+        rm -f "$DROPIN"
+        rmdir "$(dirname "$DROPIN")" 2>/dev/null || true
+        [ -e "$CONF" ] && set_user_manager systemd
+        reload
+        echo "systemd --user runs each user's manager from their next login (log out, or reboot)."
+        ;;
+    status)
+        if [ -e "$DROPIN" ]; then echo "drop-in:      $DROPIN"; else echo "drop-in:      none (off on a systemd boot)"; fi
+        echo "USER_MANAGER: $(setting || true)$( [ -z "$(setting || true)" ] && echo 'unset (systemd)')"
+        k=$(tr ' ' '\n' </proc/cmdline | sed -n 's/^uinitconverter\.user_manager=//p' | tail -1)
+        [ -n "$k" ] && echo "this boot:    uinitconverter.user_manager=$k on the kernel command line"
+        for p in /sys/fs/cgroup/user.slice/user-*.slice/user@*.service/init.scope/cgroup.procs; do
+            [ -r "$p" ] || continue
+            uid=${p#*/user@}
+            uid=${uid%%.service*}
+            pid=$(head -1 "$p")
+            [ -n "$pid" ] || continue
+            exe=$(basename "$(readlink "/proc/$pid/exe" 2>/dev/null)" 2>/dev/null || true)
+            case $exe in
+                initconvertd*) m="the s6 user manager" ;;
+                systemd) m="systemd --user" ;;
+                *) m="${exe:-unknown}" ;;
+            esac
+            fb=""
+            [ -s "/run/uinitconverter-user/$uid" ] && fb=" (fell back: $(head -1 "/run/uinitconverter-user/$uid"))"
+            echo "user@$uid:    $m$fb"
+        done
+        ;;
+    *) usage ;;
+esac

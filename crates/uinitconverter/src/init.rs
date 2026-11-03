@@ -509,6 +509,52 @@ pub fn main(args: &[String]) -> ! {
 mod tests {
     use super::*;
 
+    /// The keys init writes into uinitconverter.conf (configure_uinitconverter
+    /// and the set_conf helpers) are keys Config::load knows.
+    #[test]
+    fn init_writes_known_keys() {
+        // Every "KEY" literal: a quote, capitals and _, a quote.
+        fn quoted_keys(src: &str) -> Vec<String> {
+            let b = src.as_bytes();
+            let mut out = Vec::new();
+            let mut i = 0;
+            while i < b.len() {
+                if b[i] == b'"' {
+                    let j = i
+                        + 1
+                        + b[i + 1..]
+                            .iter()
+                            .take_while(|c| c.is_ascii_uppercase() || **c == b'_')
+                            .count();
+                    if j - i > 3 && j < b.len() && b[j] == b'"' {
+                        out.push(src[i + 1..j].to_string());
+                        i = j + 1;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+            out
+        }
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let init = std::fs::read_to_string(dir.join("init.rs")).unwrap();
+        let start = init.find("fn configure_uinitconverter").unwrap();
+        let end = init[start..].find("\n}\n").unwrap() + start;
+        let opts = std::fs::read_to_string(dir.join("init/options.rs")).unwrap();
+        let start2 = opts.find("pub(super) fn set_conf_key").unwrap();
+        let mut keys = quoted_keys(&init[start..end]);
+        keys.extend(quoted_keys(&opts[start2..]));
+        for k in ["JOURNAL", "RESOLVED", "SYSLOG", "BUS"] {
+            assert!(keys.iter().any(|x| x == k), "the scan misses {k}: {keys:?}");
+        }
+        for k in &keys {
+            assert!(
+                uinitconverter_base::config::KEYS.contains(&k.as_str()),
+                "init writes {k}, which Config::load doesn't know"
+            );
+        }
+    }
+
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
     }

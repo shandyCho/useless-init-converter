@@ -306,7 +306,7 @@ impl NotifyHelper {
                     .unwrap_or(false)
             {
                 // TimeoutStartSec=: fail the start and terminate the service.
-                st.set(keys::RESULT, "timeout");
+                st.set(keys::RESULT, result::TIMEOUT);
                 release(Some("start timeout"));
                 unsafe { libc::kill(main_pid as i32, libc::SIGTERM) };
                 ready = true;
@@ -607,7 +607,7 @@ impl Runner {
                 Err(why) => {
                     self.st.set(keys::START_FAILED, why);
                     if why == "start timeout" {
-                        self.st.set(keys::RESULT, "timeout");
+                        self.st.set(keys::RESULT, result::TIMEOUT);
                         unsafe { libc::kill(main_pid as i32, libc::SIGTERM) };
                     }
                 }

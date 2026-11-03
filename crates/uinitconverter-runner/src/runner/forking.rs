@@ -48,7 +48,7 @@ impl Runner {
             self.st.set(
                 keys::RESULT,
                 if self.timed_out.get() {
-                    "timeout"
+                    result::TIMEOUT
                 } else {
                     result_for(st)
                 },
@@ -172,13 +172,13 @@ impl Runner {
                 }
             }
             if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
-                return Err("timeout");
+                return Err(result::TIMEOUT);
             }
             let in_cgroup = self
                 .cgroup_dir()
                 .is_some_and(|d| util::cgroup_pids(&d).iter().any(|&p| p != me as u32));
             if !in_cgroup && self.guess_main_pid(me).is_none() {
-                return Err("protocol");
+                return Err(result::PROTOCOL);
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }

@@ -462,6 +462,139 @@ impl Store {
 mod tests {
     use super::*;
 
+    /// The protocol both servers speak (this Store, which initconvertd runs
+    /// when the fd store service is down, and standalone/uinitconverter-fdstore,
+    /// which may share no code with the core): one set of cases through the
+    /// core's own client, run against each. A change on either side that
+    /// breaks the other fails here.
+    fn conformance(sock: &Path, server: &str) {
+        let files: Vec<std::fs::File> = (0..3)
+            .map(|_| std::fs::File::open("/dev/null").unwrap())
+            .collect();
+        let (fd, fd2, fd3) = (files[0].as_fd(), files[1].as_fd(), files[2].as_fd());
+        let names =
+            |key: &str| -> Vec<String> { get(sock, key).into_iter().map(|(n, _)| n).collect() };
+        // PUT with the client's <max>; the same open file twice is stored once.
+        put(sock, "c.service", "x", fd, 2).unwrap_or_else(|e| panic!("{server}: {e}"));
+        put(sock, "c.service", "y", fd2, 2).unwrap();
+        put(sock, "c.service", "x", fd, 2).unwrap();
+        assert_eq!(
+            put(sock, "c.service", "z", fd3, 2).unwrap_err(),
+            "ERR fd store full",
+            "{server}"
+        );
+        // GET: every fd in the order stored, then END.
+        assert_eq!(names("c.service"), ["x", "y"], "{server}");
+        assert!(names("nothing.service").is_empty(), "{server}");
+        // "#stdio": the same open file under two names is kept twice.
+        put(sock, "c.service#stdio", "stdin", fd, 2).unwrap();
+        put(sock, "c.service#stdio", "stdout", fd, 2).unwrap();
+        assert_eq!(names("c.service#stdio"), ["stdin", "stdout"], "{server}");
+        // DEL one name, then the key.
+        del(sock, "c.service", Some("x"));
+        assert_eq!(names("c.service"), ["y"], "{server}");
+        del(sock, "c.service", None);
+        assert!(names("c.service").is_empty(), "{server}");
+        // Errors.
+        assert_eq!(
+            put_msg(sock, "NOPE\0c.service", fd).unwrap_err(),
+            "ERR bad request",
+            "{server}"
+        );
+        let s = connect(sock).unwrap();
+        send(&s, b"PUT\0c.service\0x\01", None).unwrap();
+        let (reply, _, _) = recv(s.as_raw_fd()).unwrap();
+        assert_eq!(reply, b"ERR no fd", "{server}");
+        // Without <max>: "#sockets" has the protocol's fixed limit on both.
+        assert_eq!(
+            put_msg(sock, "PUT\0c.service#sockets\0l", fd),
+            Ok(()),
+            "{server}"
+        );
+    }
+
+    #[test]
+    fn protocol_conformance_core_store() {
+        let dir = std::env::temp_dir().join(format!(
+            "uinitconverter-fdstore-conf-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sock = dir.join("s");
+        // As initconvertd serves it, the unit's FileDescriptorStoreMax= being 1.
+        Store::default()
+            .serve(&sock, |k| key_limit(k).unwrap_or(1))
+            .unwrap();
+        conformance(&sock, "the core's Store");
+        // Without <max> a plain key gets this server's own limit.
+        let f = std::fs::File::open("/dev/null").unwrap();
+        assert_eq!(put_msg(&sock, "PUT\0old.service\0x", f.as_fd()), Ok(()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The standalone initconvert-fdstore, if it is built (tests/sandbox.sh
+    /// builds it; UINITCONVERTER_FDSTORE_BIN= names another one). The core
+    /// works without it, so a missing binary skips, with a note.
+    #[test]
+    fn protocol_conformance_standalone_store() {
+        let bin = std::env::var_os("UINITCONVERTER_FDSTORE_BIN")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                let top = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../standalone/uinitconverter-fdstore/target");
+                ["debug", "release"]
+                    .iter()
+                    .map(|b| top.join(b).join("initconvert-fdstore"))
+                    .find(|p| p.exists())
+            });
+        let Some(bin) = bin else {
+            eprintln!("skipped: no standalone initconvert-fdstore built (cargo build --manifest-path standalone/uinitconverter-fdstore/Cargo.toml)");
+            return;
+        };
+        let dir =
+            std::env::temp_dir().join(format!("uinitconverter-fdstore-sa-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("s");
+        // Killed however the test ends (a failed assertion panics), and with
+        // no stdio of ours: a leftover child holding the test's output pipe
+        // would keep `cargo test` waiting.
+        struct Server(std::process::Child);
+        impl Drop for Server {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let _server = Server(
+            std::process::Command::new(&bin)
+                .arg("--socket")
+                .arg(&sock)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap_or_else(|e| panic!("{}: {e}", bin.display())),
+        );
+        let t = std::time::Instant::now();
+        while !is_served(&sock) {
+            assert!(
+                t.elapsed().as_secs() < 5,
+                "{} did not listen",
+                bin.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        conformance(&sock, "the standalone store");
+        // Without <max> it reads no unit file: a plain key is refused.
+        let f = std::fs::File::open("/dev/null").unwrap();
+        assert_eq!(
+            put_msg(&sock, "PUT\0old.service\0x", f.as_fd()).unwrap_err(),
+            "ERR fd store full"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn put_get_del() {
         let dir = std::env::temp_dir().join(format!(
