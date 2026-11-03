@@ -11212,3 +11212,10 @@ Owner: "could you update documents in this projects?" Every document was checked
   - The README pair: first install only, still accurate; the user manager is opt-in and lives in docs/etc.
   - The standalone READMEs and release notes: no change in their subjects.
   - CLAUDE.md: the owner's instructions. Its build-and-test line doesn't name tests/user-sandbox.sh or the VM scripts, though tests/all.sh runs the user sandbox. Left for the owner.
+
+## 2026-11-03, part 149: CLAUDE.md's test instructions
+
+Owner: "yes add them to CLAUDE.md". The build-and-test item now also names:
+- SANDBOX_S6NET_BIN (the sysroot after build-skarnet-rpms.sh)
+- tests/user-sandbox.sh for user-manager work
+- the GNOME VM harness: tests/gnome-vm.sh, and tests/vm-user-manager.sh with BUILD=release, SKARNET_RPMS, its modes and their stock baselines, and VM_KEEP

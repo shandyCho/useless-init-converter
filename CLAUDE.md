@@ -33,6 +33,19 @@ if they turned out to be wrong.
   suite: `tests/sandbox.sh DIR && tests/check.sh DIR; tests/sandbox.sh DIR stop`
   (it builds the standalone tools), also with `SANDBOX_JOURNAL=no` and
   `SANDBOX_FDSTORE=no` in front of both scripts when touching those parts.
+  `SANDBOX_S6NET_BIN=~/rpmbuild-skarnet/sysroot/usr/bin` (after
+  `dist/rpm/build-skarnet-rpms.sh`) runs the `Accept=yes` TCP checks instead
+  of skipping them. For the user manager (`USER_MODE`, `user.rs`, the
+  dynamic engine): `tests/user-sandbox.sh DIR`, which stops everything
+  itself. Changes to the user manager's behaviour in a GNOME session are
+  checked in the VM: `tests/gnome-vm.sh` (fetch/provision once into
+  `~/uinitconverter-vm`), then `tests/vm-user-manager.sh ~/uinitconverter-vm
+  MODE` with `BUILD=release` after `cargo build --release` and
+  `SKARNET_RPMS=~/rpmbuild-skarnet/rpms`; modes: `user`, `greeter`,
+  `session`, `apps`, `lifecycle`, `fallback`; `baseline` (for `greeter`)
+  and `session-`, `apps-`, `lifecycle-baseline` run the same on stock
+  `systemd --user` to compare (see the TESTING pair). `VM_KEEP=yes` keeps
+  the VM up for `tests/gnome-vm.sh ssh`.
   Everything runs unprivileged and never touches the host's init system.
 - Never modify skarnet's sources (skalibs, execline, s6, s6-rc,
   s6-linux-init, s6-frontend), and don't add patches for them in
