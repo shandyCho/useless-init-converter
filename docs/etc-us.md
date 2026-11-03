@@ -553,7 +553,8 @@ run.
 
 A start is a transaction, as in systemd: the units it pulls in
 (`Requires=`, `BindsTo=`, `Wants=` and the link directories) are ordered by
-`After=`/`Before=` and started one at a time. `Requisite=` starts nothing;
+`After=`/`Before=`: each starts once those ordered before it have
+finished, and the ones that are ready start at once. `Requisite=` starts nothing;
 the unit must be up, in the same transaction, or being started by another
 one (then the start waits for it). A template named without an instance
 takes the referencing unit's. The user environment generators

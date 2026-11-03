@@ -476,7 +476,8 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 실행하지 않을 사용자 유닛의 glob을 적습니다.
 
 시작은 systemd처럼 트랜잭션입니다. 끌어들이는 유닛(`Requires=`, `BindsTo=`, `Wants=`와 링크
-디렉터리)을 `After=`/`Before=`로 정렬해 하나씩 시작합니다. `Requisite=`는 아무것도 시작하지
+디렉터리)을 `After=`/`Before=`로 정렬합니다. 각 유닛은 그보다 앞에 정렬된 유닛이 끝나면 시작하고,
+준비된 유닛들은 함께 시작합니다. `Requisite=`는 아무것도 시작하지
 않습니다. 그 유닛이 이미 올라와 있거나, 같은 트랜잭션에 있거나, 다른 트랜잭션이 시작하는 중이어야
 합니다(그 경우 기다립니다). 인스턴스 없이 적은 템플릿은 참조하는 유닛의 인스턴스를 받습니다. 사용자
 환경 생성기(`user-environment-generators/`, `environment.d`를 읽습니다)를 시작할 때 실행하고,

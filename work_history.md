@@ -11148,3 +11148,49 @@ This is a real difference from systemd --user, which starts these units in paral
 ### Current state
 
 As in part 145; this part's test change and entry are committed together.
+
+## 2026-11-03, part 147: parallel starts within a user transaction
+
+Owner: "do parallel starts within a transaction".
+
+**What changed** (dynamic.rs user_transaction, transaction_start):
+- The transaction keeps its ordering graph instead of flattening it into one sequence. Every unit whose units ordered before it (After=/Before=) have finished starts at once (FuturesUnordered), and each one that finishes lets the next ones go.
+- Unchanged:
+  - the failure rule: a unit is refused if a unit it Requires=/BindsTo= has failed, judged when it becomes ready
+  - Requisite= (up, in the set, or waited for in another transaction)
+  - the cycle fallback (nothing ready and nothing running: the earliest-found unit starts)
+  - the per-unit lock, and the caller holding the top's lock
+- The per-unit body is transaction_start. User mode only; the system manager's on-demand instances keep their own start.
+
+**Results:**
+- GNOME's session target is active 1-2 s after gnome-shell is up (tester 1 s, alice 2 s), against 5-6 s before (part 146).
+- The greeter's warnings no longer show the gsd-smartcard race noted since part 142 (gnome-shell's GetManagedObjects before the ObjectManager was exported), which one-at-a-time starts made visible. Seen gone in one run; not proven gone.
+
+**Tests:**
+- cargo test 117, fmt clean.
+- User sandbox 92/92. New: three unordered 2 s oneshots start in about 2.0 s (one at a time would be 6 s), and a unit After= one of them starts after it ends.
+
+  Two mistakes in my first version of the test: busctl's StartUnit returns before the job ends (systemctl start now), and `%s`/`%N` in a unit file are specifiers (`%%`).
+- System sandbox with SANDBOX_S6NET_BIN: 370/370, SANDBOX_JOURNAL=no 377/377, SANDBOX_FDSTORE=no 358/358.
+- VM: lifecycle 18 + 53, greeter 10/10, fallback 18/18. Reboot stops 0.69-3.29 s (the greeter after alice's logout the slowest, as in part 146).
+
+Docs pair: the transaction paragraph.
+
+### Current state
+
+Slices A-E in the VM, with parallel starts. Committed with this entry.
+
+### Next steps
+
+Unchanged from part 145:
+1. the owner's machine
+2. the s6 boot's own system manager
+3. SELinux for confined users
+4. the default and packaging
+
+Smaller items:
+- the slow logout path at a reboot
+- the system sandbox's intermittent quitter@0 failure
+- job modes; OnFailureJobMode=
+- the socket-waiting runners
+- GetAll property order

@@ -245,7 +245,8 @@ impl Daemon {
     /// systemd's start transaction, for a user manager. The set is what
     /// `top` pulls in (Requires=, BindsTo=, Wants= and the .requires/.wants
     /// links, through every unit that is not up yet). It is ordered by
-    /// After=/Before= within the set, and started one unit at a time.
+    /// After=/Before= within the set; a unit starts once the units ordered
+    /// before it have finished, those that are ready at once.
     /// Requisite= starts nothing: the unit must be up or in the set. GNOME's
     /// session needs this: gnome-session-pre.target is Requisite= of
     /// gnome-session-initialized.target, which Requires= it, and
@@ -293,29 +294,6 @@ impl Daemon {
                 }
             }
         }
-        let mut order = Vec::new();
-        let mut done = vec![false; set.len()];
-        while order.len() < set.len() {
-            let next = (0..set.len())
-                .find(|&k| !done[k] && after_count[k] == 0)
-                .or_else(|| {
-                    // An ordering cycle: systemd drops a job; here the
-                    // earliest-found unit goes first.
-                    let k = (0..set.len()).find(|&k| !done[k])?;
-                    eprintln!(
-                        "uinitconverterd: {top}: ordering cycle, starting {} first",
-                        ids[k]
-                    );
-                    Some(k)
-                });
-            let Some(k) = next else { break };
-            done[k] = true;
-            order.push(k);
-            for &b in &before[k] {
-                after_count[b] = after_count[b].saturating_sub(1);
-            }
-        }
-
         let in_set: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
         {
             let mut p = self.pending_starts.lock().unwrap();
@@ -323,57 +301,53 @@ impl Daemon {
                 *p.entry(id.clone()).or_default() += 1;
             }
         }
+        // Started as systemd runs a transaction's jobs: every unit whose
+        // units ordered before it (After=/Before=) have finished starts at
+        // once; each one that finishes lets the next ones go. One at a time,
+        // GNOME's session target took about 6 s past gnome-shell (part 146).
         let mut failed: BTreeSet<String> = BTreeSet::new();
         let mut top_result = "done";
-        for k in order {
-            let (id, unit) = &set[k];
-            // What it needs: failed, or (Requisite=) neither up nor here.
-            let mut need = unit.deps("Requires");
-            need.extend(unit.deps("BindsTo"));
-            need.extend(ld.dir_deps(unit, "requires"));
-            let mut why = need
-                .iter()
-                .map(|d| names(d))
-                .find(|d| failed.contains(d))
-                .map(|d| format!("dependency {d} failed"));
-            if why.is_none() {
-                for d in unit.deps("Requisite") {
-                    let (did, du) = self.load_unit(&d);
-                    if in_set.contains(did.as_str()) || self.is_up(&did, &du).await {
-                        continue;
-                    }
-                    // Another transaction is starting it: systemd's job
-                    // would wait for that one (xdg-desktop-portal is
-                    // After= and Requisite= graphical-session.target, which
-                    // gnome-session's transaction starts, and is activated
-                    // over D-Bus meanwhile).
-                    if self.wait_pending(&did, unit).await && self.is_up(&did, &du).await {
-                        continue;
-                    }
-                    why = Some(format!("requisite {did} is not active"));
+        let mut started = vec![false; set.len()];
+        let mut running = futures_util::stream::FuturesUnordered::new();
+        let mut left = set.len();
+        while left > 0 {
+            let mut ready: Vec<usize> = (0..set.len())
+                .filter(|&k| !started[k] && after_count[k] == 0)
+                .collect();
+            if ready.is_empty() && running.is_empty() {
+                // An ordering cycle: systemd drops a job; here the
+                // earliest-found unit goes first.
+                let Some(k) = (0..set.len()).find(|&k| !started[k]) else {
                     break;
-                }
+                };
+                eprintln!(
+                    "uinitconverterd: {top}: ordering cycle, starting {} first",
+                    ids[k]
+                );
+                ready.push(k);
             }
-            let r = match why {
-                Some(w) => {
-                    eprintln!("uinitconverterd: {id}: not started: {w}");
-                    "dependency"
-                }
-                None if id == top => self.dyn_start_one(id, unit).await,
-                None => {
-                    let lock = self.unit_lock(id);
-                    let _guard = lock.lock().await;
-                    if self.is_up(id, unit).await {
-                        "done"
-                    } else {
-                        let r = Box::pin(self.dyn_start_one(id, unit)).await;
-                        if r != "done" {
-                            eprintln!("uinitconverterd: {id}: start ({top}'s transaction): {r}");
-                        }
-                        r
-                    }
-                }
+            for k in ready {
+                started[k] = true;
+                // What it needs and is ordered after has finished by now.
+                let (id, unit) = &set[k];
+                let mut need = unit.deps("Requires");
+                need.extend(unit.deps("BindsTo"));
+                need.extend(ld.dir_deps(unit, "requires"));
+                let why = need
+                    .iter()
+                    .map(|d| names(d))
+                    .find(|d| failed.contains(d))
+                    .map(|d| format!("dependency {d} failed"));
+                let in_set = &in_set;
+                running.push(async move {
+                    (k, self.transaction_start(top, id, unit, why, in_set).await)
+                });
+            }
+            let Some((k, r)) = futures_util::StreamExt::next(&mut running).await else {
+                continue;
             };
+            left -= 1;
+            let id = &ids[k];
             if r != "done" {
                 failed.insert(id.clone());
             }
@@ -381,8 +355,59 @@ impl Daemon {
                 top_result = r;
             }
             self.unpend(id);
+            for &b in &before[k] {
+                after_count[b] = after_count[b].saturating_sub(1);
+            }
         }
         top_result
+    }
+
+    /// One unit's start in `top`'s user transaction: refused with `why`
+    /// (a dependency it needs failed), or when a Requisite= is neither up,
+    /// in the transaction, nor started by another one meanwhile; else
+    /// started under its lock (`top`'s lock is the caller's).
+    async fn transaction_start(
+        &self,
+        top: &str,
+        id: &str,
+        unit: &Unit,
+        mut why: Option<String>,
+        in_set: &BTreeSet<&str>,
+    ) -> &'static str {
+        if why.is_none() {
+            for d in unit.deps("Requisite") {
+                let (did, du) = self.load_unit(&d);
+                if in_set.contains(did.as_str()) || self.is_up(&did, &du).await {
+                    continue;
+                }
+                // Another transaction is starting it: systemd's job would
+                // wait for that one (xdg-desktop-portal is After= and
+                // Requisite= graphical-session.target, which gnome-session's
+                // transaction starts, and is activated over D-Bus meanwhile).
+                if self.wait_pending(&did, unit).await && self.is_up(&did, &du).await {
+                    continue;
+                }
+                why = Some(format!("requisite {did} is not active"));
+                break;
+            }
+        }
+        if let Some(w) = why {
+            eprintln!("uinitconverterd: {id}: not started: {w}");
+            return "dependency";
+        }
+        if id == top {
+            return Box::pin(self.dyn_start_one(id, unit)).await;
+        }
+        let lock = self.unit_lock(id);
+        let _guard = lock.lock().await;
+        if self.is_up(id, unit).await {
+            return "done";
+        }
+        let r = Box::pin(self.dyn_start_one(id, unit)).await;
+        if r != "done" {
+            eprintln!("uinitconverterd: {id}: start ({top}'s transaction): {r}");
+        }
+        r
     }
 
     fn unpend(&self, id: &str) {

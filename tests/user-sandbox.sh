@@ -396,6 +396,29 @@ chmod +x "$W/fake-systemd"
 mkdir -p "$W/fb"
 chmod 1777 "$W/fb"
 
+# Parallel starts in a transaction: three unordered oneshots of 2 s, and
+# one ordered after the first.
+cat >"$U/par.target" <<EOF
+[Unit]
+Wants=par1.service par2.service par3.service parafter.service
+EOF
+for n in 1 2 3; do
+    cat >"$U/par$n.service" <<EOF
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'sleep 2; date +%%s.%%N >$W/par$n.end'
+EOF
+done
+cat >"$U/parafter.service" <<EOF
+[Unit]
+After=par1.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'date +%%s.%%N >$W/parafter.start'
+EOF
+
 # Job merging: gnome-session-shutdown.target's shape (StopWhenUnneeded=,
 # a wanted oneshot), started three times at once.
 cat >"$U/mergetgt.target" <<EOF
@@ -551,6 +574,17 @@ if SC start handover.service; then
     if [ -n "$want" ] && kill -0 "$want" 2>/dev/null; then bad "the announced process $want survived the stop"; else ok "the stop ended the announced process"; fi
 else
     bad "handover.service: $(SC status handover.service 2>&1 | tail -3)"
+fi
+
+echo "== a transaction's unordered units start at once"
+t0=$(date +%s%N)
+SC start par.target || true
+ms=$((($(date +%s%N) - t0) / 1000000))
+[ "$ms" -lt 4500 ] && ok "three 2 s oneshots started in $ms ms (in parallel)" || bad "par.target took $ms ms (one at a time is 6000)"
+if awk -v a="$(cat "$W/par1.end" 2>/dev/null)" -v b="$(cat "$W/parafter.start" 2>/dev/null)" 'BEGIN {exit !(a > 0 && b >= a)}'; then
+    ok "the unit ordered After= one of them started after it ended"
+else
+    bad "order: par1 ended $(cat "$W/par1.end" 2>&1), parafter started $(cat "$W/parafter.start" 2>&1)"
 fi
 
 echo "== slice E: starts of one unit at once merge (systemd's job merging)"
