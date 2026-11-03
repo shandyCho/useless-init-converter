@@ -65,6 +65,10 @@
 - s6 부팅에서 `initconvert-user-setup status`가 s6 사용자 매니저를 알려 줍니다. 이전에는 그곳에서
   `user@`의 첫 프로세스인 `initconvert-runner`를 출력했습니다. "fell back" 표시도 매니저처럼 사용자
   자신이 소유한 기록만 따지고, 사용자의 런타임 디렉터리에 있는 기록도 읽습니다.
+- s6 부팅에서 s6 사용자 매니저가 끝날 때 자신의 `initconvert-runner`(부모 프로세스, PAM 세션을 가짐)와
+  러너의 notify 헬퍼에 더 이상 시그널을 보내지 않습니다. 이전에는 root의 `user@0`(`sudo`로 시작)이
+  실패(`Result=signal`, SIGKILL)로 끝나고 PAM 세션이 닫히지 않았으며, 다른 사용자의 정지도 매번
+  불필요하게 1초를 기다렸습니다.
 - 종료할 때 사용자들의 `user@`와 `user-runtime-dir@`가 systemd처럼 동시에 멈춥니다. 이전에는 사용자마다
   차례로 멈춰서, s6 사용자 매니저로는 사용자 셋에 8-11초가 걸렸습니다.
 - `Accept=yes` 인스턴스의 `LISTEN_FDNAMES=`는 소켓의 `FileDescriptorName=`을 따릅니다(이전에는 항상

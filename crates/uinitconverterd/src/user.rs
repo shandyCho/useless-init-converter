@@ -668,16 +668,57 @@ fn manager_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// The parent of `pid`, from /proc (None for PID 1, or when it is gone).
+fn parent_of(pid: i32) -> Option<i32> {
+    fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("PPid:"))?
+        .trim()
+        .parse()
+        .ok()
+        .filter(|&p| p > 0)
+}
+
+/// Which processes of init.scope (`procs`) end_helpers ends: not this
+/// process or its ancestors, and not initconvert-runner's (comm cut to
+/// "initconvert-run"). On the s6 boot user@'s runner is our parent,
+/// holding the PAM session, and its notify helper is beside it; they end
+/// after us. Signalled, the runner would forward the SIGTERM to us and
+/// then die of the SIGKILL, leaving user@ failed and the session open.
+fn helpers_of(
+    procs: &str,
+    me: i32,
+    ancestors: &[i32],
+    comm: impl Fn(i32) -> Option<String>,
+) -> Vec<i32> {
+    procs
+        .lines()
+        .filter_map(|p| p.trim().parse().ok())
+        .filter(|&p| p != me && !ancestors.contains(&p))
+        .filter(|&p| comm(p).as_deref().map(str::trim) != Some("initconvert-run"))
+        .collect()
+}
+
 /// The other processes in our init.scope: SIGTERM, then SIGKILL after 1 s.
 fn end_helpers(base: &Path) {
-    let me = std::process::id().to_string();
+    let me = std::process::id() as i32;
+    let mut ancestors = Vec::new();
+    let mut p = me;
+    while let Some(pp) = parent_of(p) {
+        if ancestors.contains(&pp) {
+            break;
+        }
+        ancestors.push(pp);
+        p = pp;
+    }
     let others = || -> Vec<i32> {
-        fs::read_to_string(base.join("init.scope/cgroup.procs"))
-            .unwrap_or_default()
-            .lines()
-            .filter(|p| *p != me)
-            .filter_map(|p| p.parse().ok())
-            .collect()
+        helpers_of(
+            &fs::read_to_string(base.join("init.scope/cgroup.procs")).unwrap_or_default(),
+            me,
+            &ancestors,
+            |pid| fs::read_to_string(format!("/proc/{pid}/comm")).ok(),
+        )
     };
     let first = others();
     if first.is_empty() {
@@ -778,6 +819,26 @@ fn hand_over(cgroup: Option<&Path>, args: &[String]) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// end_helpers spares itself, its ancestors (the s6 boot's runner) and
+    /// the runner's notify helper; a job's helper is ended.
+    #[test]
+    fn helpers_spare_the_runner() {
+        let comm = |pid: i32| {
+            Some(match pid {
+                10 => "initconvert-run\n".to_string(),
+                12 => "initconvert-run\n".to_string(),
+                14 => "initconvert-use\n".to_string(),
+                _ => "s6-svunlink\n".to_string(),
+            })
+        };
+        let procs = "10\n12\n14\n20\n";
+        assert_eq!(helpers_of(procs, 14, &[10, 1], comm), vec![20]);
+        // A systemd boot: only us and a helper.
+        assert_eq!(helpers_of("14\n20\n", 14, &[1], comm), vec![20]);
+        // A process gone before its comm was read still counts.
+        assert_eq!(helpers_of("14\n30\n", 14, &[1], |_| None), vec![30]);
+    }
 
     /// The user manager's file, as write_config makes it, sets only keys the
     /// parser knows (config::KEYS): the contract between the user mode and

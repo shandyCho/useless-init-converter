@@ -84,6 +84,11 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   it printed `initconvert-runner`, user@'s first process there. Its
   "fell back" note now counts only the user's own record, as the manager
   does, also the one in their runtime directory.
+- On the s6 boot, the s6 user manager no longer signals its own
+  `initconvert-runner` (its parent, holding the PAM session) and the runner's
+  notify helper when it exits. Root's `user@0` (from `sudo`) ended failed
+  (`Result=signal`, SIGKILL) with its PAM session left unclosed, and every
+  other user's stop waited a needless second.
 - At shutdown the users' `user@` and `user-runtime-dir@` stop at the same
   time, as with systemd. They stopped one user after another, so with the s6
   user manager three users took 8-11 s.

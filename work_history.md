@@ -11658,3 +11658,30 @@ Committed on main with this entry, one commit after 238ca79 (not pushed).
 2. The elogind plan (part 154).
 3. gnome-shell's exit hang under the s6 user manager on the s6 boot (part 154).
 4. SELinux for confined users; the evolution-alarm-notify job result (above); smaller items as in part 153.
+
+## 2026-11-04, part 159: the s6 user manager killed its own runner at exit (user@0 failed)
+
+Owner, on the s6 boot with 0370166's RPMs: `sudo initconvert-user-setup status` printed the drop-in, `USER_MANAGER: s6`, and `user@0` and `user@1000` as the s6 user manager. Part 158's fix holds.
+
+**Bug found behind it:**
+- After that sudo, `systemctl is-failed user@0.service` said failed: Result=signal, ExecMainCode=2, ExecMainStatus=9. The runner exited about 1.0 s after the manager's "shutdown scopes" line.
+- **Cause:** end_helpers (part 155) SIGTERMs every other process of user@'s init.scope, then SIGKILLs them after 1 s. On the s6 boot those include the outer initconvert-runner and its notify helper (ppid 1). The runner is the manager's parent and holds the PAM session (exec_with_pam). It forwards the SIGTERM back to the manager and keeps waiting for it, so the SIGKILL kills it. s6's finish then records killed by 9, and pam close_session never runs.
+- For other users and the greeter, the manager isn't root and gets EPERM, so they ended `success`. But others() never emptied, so every stop waited the full second. That was part 155/156's "about 1 s of end_helpers" per user.
+
+**Fix (user.rs):**
+- `helpers_of` skips this process, its ancestors (walked through /proc/PID/status PPid) and any process with comm `initconvert-run`. Only the outer runner's processes are in init.scope; inner units' runners live in their own cgroups.
+- end_helpers uses it. New test helpers_spare_the_runner. CHANGELOG pair: Fixed.
+
+**Tests:** cargo test, all pass; fmt clean; tests/user-sandbox.sh 92/92. **Not tested:** the owner's machine (needs an RPM build, then `sudo true` and `systemctl is-failed user@0.service`); the VM (lifecycle's reboot timings should drop by about 1 s per user).
+
+**Seen, not looked into:** the greeter's user@60578 log repeats `mkdir: cannot create directory '/run/gdm/home/gdm-greeter': Permission denied` once a second; `s6-svscan: warning: unable to stat pipewire-pulse.service` while user@0 stops (a service directory removed during teardown, likely harmless).
+
+### Current state
+
+Committed on main with this entry, one commit after 0370166 (not pushed).
+
+### Next steps
+
+1. The owner: rebuild the RPMs, reboot into s6, `sudo true`, wait about 10 s, then `systemctl is-failed user@0.service` should say inactive.
+2. The greeter's `/run/gdm/home/gdm-greeter` mkdir errors on the s6 boot.
+3. The elogind plan (part 154); gnome-shell's exit hang (part 154); SELinux for confined users; evolution-alarm-notify's job result (part 158).
