@@ -96,6 +96,9 @@ pub struct Daemon {
     conn: RwLock<Option<Connection>>,
     /// The user manager is exiting: a stopped bus is not armed again.
     pub exiting: AtomicBool,
+    /// A user manager was asked to exit (Manager.Exit, an exit action, a
+    /// fallback): the main loop stops every unit and returns, as on SIGTERM.
+    exit_request: tokio::sync::Notify,
     /// The last start job of each unit, by when it finished (start_seq),
     /// and its result: a start merged into it (execute_job) gets the same.
     last_start: Mutex<HashMap<String, (u64, &'static str)>>,
@@ -301,6 +304,12 @@ impl Daemon {
                 });
             }
         }
+    }
+
+    /// A user manager asks to exit (Manager.Exit, SuccessAction=exit):
+    /// the main loop stops every unit and returns.
+    pub(super) fn request_exit(&self) {
+        self.exit_request.notify_one();
     }
 
     /// user@.service is Type=notify-reload: the reload is announced and
@@ -535,6 +544,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         cfg,
         conn: RwLock::new(first.as_ref().map(|(c, _)| c.clone())),
         exiting: AtomicBool::new(false),
+        exit_request: tokio::sync::Notify::new(),
         last_start: Mutex::new(HashMap::new()),
         start_seq: std::sync::atomic::AtomicU64::new(0),
         pending_starts: Mutex::new(BTreeMap::new()),
@@ -713,6 +723,11 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
                 if let Some(c) = c {
                     current = Some(c);
                 }
+            }
+            _ = daemon.exit_request.notified(), if stopping.is_none() && daemon.cfg.user_mode => {
+                daemon.exiting.store(true, Ordering::Relaxed);
+                let d = daemon.clone();
+                stopping = Some(tokio::spawn(async move { d.stop_all_user().await }));
             }
             _ = term.recv(), if stopping.is_none() => {
                 if daemon.cfg.user_mode {

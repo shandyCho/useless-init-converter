@@ -393,6 +393,21 @@ impl Daemon {
                 self.reload_db().await.map_err(|e| err(E_FAILED, e))?;
                 self.reply(c, msg, &()).await
             }
+            "PowerOff" | "Reboot" | "Halt" | "KExec" | "SoftReboot" | "SwitchRoot"
+                if self.cfg.user_mode =>
+            {
+                Err(err(
+                    E_NOT_SUPPORTED,
+                    format!("{member} is only supported by system managers."),
+                ))
+            }
+            "Exit" if self.cfg.user_mode => {
+                // systemd: a user manager exits (its units stopped).
+                self.require_privileged(c, msg).await?;
+                self.reply(c, msg, &()).await?;
+                self.request_exit();
+                Ok(())
+            }
             "PowerOff" | "Reboot" | "Halt" => {
                 self.mac_check(
                     c,

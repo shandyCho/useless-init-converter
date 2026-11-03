@@ -510,6 +510,30 @@ impl Runner {
         });
     }
 
+    /// A Manager method without arguments, detached like
+    /// start_units_detached.
+    fn call_manager_detached(&self, method: &'static str) {
+        let cfg = self.cfg.clone();
+        let id = self.unit.id.clone();
+        let _ = double_fork(move || {
+            let r = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())
+                .and_then(|rt| {
+                    rt.block_on(async {
+                        let conn = crate::client::connect(&cfg).await?;
+                        crate::client::manager_call(&conn, method, &())
+                            .await
+                            .map(|_| ())
+                    })
+                });
+            if let Err(e) = r {
+                eprintln!("uinitconverter[{id}]: {method}: {e}");
+            }
+        });
+    }
+
     /// Leaving the socket wait: requirements that are on demand too and
     /// still wait for their sockets start with this one, as systemd starts
     /// them (iscsiuio Requires=iscsid). Their sockets already listen, so
@@ -549,6 +573,24 @@ impl Runner {
             .collect();
         self.start_units_detached(units_key, units);
         if let Some(action) = self.unit.get("Unit", action_key) {
+            // A user manager may only exit (systemd allows none, exit and
+            // exit-force there): systemctl --user exit is exit.target's
+            // systemd-exit.service with SuccessAction=exit-force.
+            if self.cfg.user_mode {
+                if action.starts_with("exit") {
+                    log(
+                        self.id(),
+                        &format!("{action_key}={action}: the user manager exits"),
+                    );
+                    self.call_manager_detached("Exit");
+                } else if action != "none" {
+                    log(
+                        self.id(),
+                        &format!("{action_key}={action} is not allowed in a user manager"),
+                    );
+                }
+                return;
+            }
             let cmd = match action.as_str() {
                 "none" => None,
                 a if a.starts_with("reboot") || a == "soft-reboot" || a == "kexec" => {
