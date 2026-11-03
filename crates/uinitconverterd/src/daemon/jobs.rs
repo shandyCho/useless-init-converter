@@ -389,8 +389,27 @@ impl Daemon {
         jtype: &str,
         mode: &str,
     ) -> &'static str {
+        // A start while another start of the unit is pending merges into it,
+        // as systemd merges jobs: it gets that one's result without running
+        // again. GNOME's leader and two gnome-session-ctl started
+        // gnome-session-shutdown.target within 50 ms; run three times, it
+        // restarted the bus three times. Decided once the unit's lock is
+        // ours: a start of it that finished since this job was made was
+        // pending then (jobs run in lock order, which need not be the
+        // order of their ids).
+        let created = self.start_seq.load(std::sync::atomic::Ordering::SeqCst);
         let lock = self.unit_lock(id);
         let _guard = lock.lock().await;
+        let merged_result = (jtype == "start")
+            .then(|| {
+                self.last_start
+                    .lock()
+                    .unwrap()
+                    .get(id)
+                    .filter(|(seq, _)| *seq > created)
+                    .map(|(_, r)| *r)
+            })
+            .flatten();
         let canceled = {
             let mut jobs = self.jobs.lock().unwrap();
             match jobs.get_mut(&job) {
@@ -403,9 +422,21 @@ impl Daemon {
         };
         let result = if canceled {
             "canceled"
+        } else if let Some(r) = merged_result {
+            r
         } else {
             self.run_job(id, unit, jtype, mode).await
         };
+        if jtype == "start" {
+            let seq = self
+                .start_seq
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            self.last_start
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), (seq, result));
+        }
         self.finish_job(job, id, result).await;
         drop(_guard);
         // After the job is gone, so a unit started by it counts too.
@@ -432,6 +463,16 @@ impl Daemon {
         jtype: &str,
     ) -> R<()> {
         Self::valid_name(name)?;
+        // UINITCONVERTER_LOG_JOBS=1: who asks for what (debugging a
+        // session's logout).
+        if std::env::var_os("UINITCONVERTER_LOG_JOBS").is_some() {
+            let pid = self.caller_pid(c, msg).await.unwrap_or(0);
+            let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+            eprintln!(
+                "uinitconverterd: job {jtype} {name} ({mode}) from PID {pid} {}",
+                comm.trim()
+            );
+        }
         let id = self.index.read().unwrap().resolve(name).to_string();
         self.mac_unit(c, msg, &id, access::job_access(jtype))
             .await?;

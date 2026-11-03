@@ -96,6 +96,11 @@ pub struct Daemon {
     conn: RwLock<Option<Connection>>,
     /// The user manager is exiting: a stopped bus is not armed again.
     pub exiting: AtomicBool,
+    /// The last start job of each unit, by when it finished (start_seq),
+    /// and its result: a start merged into it (execute_job) gets the same.
+    last_start: Mutex<HashMap<String, (u64, &'static str)>>,
+    /// Finished start jobs, counted.
+    start_seq: std::sync::atomic::AtomicU64,
     /// Units a user transaction is going to start (count of transactions),
     /// until their start is done: a Requisite= on one waits for it.
     pub pending_starts: Mutex<BTreeMap<String, usize>>,
@@ -530,6 +535,8 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
         cfg,
         conn: RwLock::new(first.as_ref().map(|(c, _)| c.clone())),
         exiting: AtomicBool::new(false),
+        last_start: Mutex::new(HashMap::new()),
+        start_seq: std::sync::atomic::AtomicU64::new(0),
         pending_starts: Mutex::new(BTreeMap::new()),
         jobs: Mutex::new(BTreeMap::new()),
         next_job: AtomicU32::new(0),

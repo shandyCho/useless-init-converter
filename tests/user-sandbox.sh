@@ -338,6 +338,20 @@ NotifyAccess=all
 ExecStart=/usr/bin/python3 $W/handover.py $W/handover.pid
 EOF
 
+# Job merging: gnome-session-shutdown.target's shape (StopWhenUnneeded=,
+# a wanted oneshot), started three times at once.
+cat >"$U/mergetgt.target" <<EOF
+[Unit]
+Wants=counter.service
+Before=counter.service
+StopWhenUnneeded=yes
+EOF
+cat >"$U/counter.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'sleep 3; echo run >>$W/counter'
+EOF
+
 cat >"$W/bus.conf" <<EOF
 <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
@@ -475,6 +489,20 @@ if SC start handover.service; then
 else
     bad "handover.service: $(SC status handover.service 2>&1 | tail -3)"
 fi
+
+echo "== slice E: starts of one unit at once merge (systemd's job merging)"
+calls=()
+for _ in 1 2 3; do
+    $B call $MGR StartUnit ss mergetgt.target replace-irreversibly >/dev/null 2>&1 &
+    calls+=($!)
+done
+wait "${calls[@]}" || true
+waitfor '[ -s "$W/counter" ]' || true
+# A second run would end 3 s after the first.
+sleep 4
+[ "$(wc -l <"$W/counter")" = 1 ] && ok "three starts at once ran the wanted oneshot once" || bad "counter.service ran $(wc -l <"$W/counter") times"
+call StartUnit ss mergetgt.target replace-irreversibly || true
+waitfor '[ "$(wc -l <"$W/counter")" = 2 ]' && ok "a later start runs it again (the next logout)" || bad "counter.service ran $(wc -l <"$W/counter") times"
 
 echo "== slice E: CollectMode=inactive-or-failed (dbus-broker's transient services)"
 env XDG_RUNTIME_DIR="$R" DBUS_SESSION_BUS_ADDRESS="unix:path=$R/bus" systemd-run --user --unit cf-fail.service \
