@@ -11194,3 +11194,21 @@ Smaller items:
 - job modes; OnFailureJobMode=
 - the socket-waiting runners
 - GetAll property order
+
+## 2026-11-03, part 148: documents brought up to date
+
+Owner: "could you update documents in this projects?" Every document was checked against the work since 0.2.2 (parts 130-147).
+- **CHANGELOG pair:** a new "Unreleased" section.
+  - Added: Accept=yes sockets, GetUnitByPIDFD and PropertiesChanged, the opt-in s6 user manager with its fallback, UINITCONVERTER_LOG_JOBS.
+  - Changed: job side effects, job merging, the MAINPID= hand-over, AttachProcessesToUnit, the tmpfiles.d entry.
+  - Fixed: LISTEN_FDNAMES, Symlinks= parents.
+  - Known issues: the user manager not yet run under the s6 boot's system manager or for confined users; the intermittent quitter@0 failure.
+- **docs/etc pair, "Not implemented":**
+  - The generators entry now says the s6 user manager runs the user generators.
+  - New entry: job modes other than replace and isolate (fail, replace-irreversibly, flush, ignore-dependencies, ignore-requirements) run as replace, and OnFailureJobMode= likewise. isolate was checked in jobs.rs: it is handled.
+- **packages/README pair:** the uinitconverterd row names the user manager and the tmpfiles.d entry.
+- **TESTING pair:** the user sandbox paragraph lists the later slices' checks, and SANDBOX_S6NET_BIN gets a concrete example (~/rpmbuild-skarnet/sysroot/usr/bin).
+- **Unchanged:**
+  - The README pair: first install only, still accurate; the user manager is opt-in and lives in docs/etc.
+  - The standalone READMEs and release notes: no change in their subjects.
+  - CLAUDE.md: the owner's instructions. Its build-and-test line doesn't name tests/user-sandbox.sh or the VM scripts, though tests/all.sh runs the user sandbox. Left for the owner.

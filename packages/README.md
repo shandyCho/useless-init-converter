@@ -10,7 +10,7 @@
 | 패키지 | 들어 있는 것 | 실행할 때 필요한 패키지 (`Requires`) |
 |---|---|---|
 | `uinitconverter-runner` | `uinitconverter-runner` | s6, shadow-utils. `uinitconverterd`는 권장(`OnFailure=`/`OnSuccess=` 유닛을 데몬으로 시작) |
-| `uinitconverterd` | `uinitconverterd`, D-Bus 정책(`uinitconverter.conf`) | s6, s6-rc, dbus-daemon, `uinitconverter-runner`. `uinitconverter-timers`는 권장(`systemd-run --on-calendar`) |
+| `uinitconverterd` | `uinitconverterd`(s6 사용자 매니저 `uinitconverterd user-manager` 포함), D-Bus 정책(`uinitconverter.conf`), `/run/uinitconverter-user`(사용자 매니저의 대체 기록)용 tmpfiles.d 항목 | s6, s6-rc, dbus-daemon, `uinitconverter-runner`. `uinitconverter-timers`는 권장(`systemd-run --on-calendar`) |
 | `uinitconverter-timers` | `uinitconverter-timers` | `uinitconverterd` (타이머가 유닛을 데몬으로 시작) |
 | `uinitconverter-gen` | `uinitconverter-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (생성된 서비스가 실행) |
 | `uinitconverter` | `uinitconverter` 명령(부팅 설정 `uinitconverter init` 포함), `early`, 설정, s6 서비스, s6-linux-init 골격, SELinux 모듈, kernel-install 플러그인, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, 그리고 위의 네 패키지 |

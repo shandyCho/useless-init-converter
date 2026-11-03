@@ -5,6 +5,59 @@
 Versions apply to the core packages. The standalone tools have their own
 versions. Release notes: [packages/release-notes](packages/release-notes).
 
+## Unreleased
+
+Changes since 0.2.2. Details per step in `work_history.md`, parts 130-147.
+
+### Added
+- `Accept=yes` sockets: on unix paths through `s6-ipcserverd`, on TCP ports
+  through `s6-tcpserverd` (optional s6-networking package, e.g. `sshd.socket`).
+  Each connection runs a template instance named as systemd names it, and
+  while it runs it is a unit: listed, shown and stoppable.
+- `GetUnitByPIDFD` (polkitd asks it for every caller), and
+  `PropertiesChanged` for every state change, not only a job's own unit.
+- **The s6 user manager, opt-in.** `USER_MANAGER=s6` in
+  `uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
+  command line, runs `uinitconverterd user-manager` for `user@UID.service`
+  instead of `systemd --user`; the default stays `systemd`. In the test VM it
+  runs GDM's greeter and GNOME sessions unmodified: logout, a new login, a
+  user switch, lingering users, the RPM update helper, a reboot, timers and
+  paths, sockets (also `Accept=yes`), systemd-oomd reporting, podman quadlet
+  units and flatpak apps. Its transactions start units in parallel. If it
+  fails a user (GNOME's failure path, a crash), it hands over to
+  `systemd --user` in place for the rest of the boot (`USER_FALLBACK_ON=`).
+  See [the s6 user manager](docs/etc-us.md#the-s6-user-manager-in-progress).
+- `UINITCONVERTER_LOG_JOBS=1` in the daemon's environment logs every job
+  request with the caller's process name.
+
+### Changed
+- Job side effects as with systemd: units that list a starting unit in
+  `Conflicts=` are stopped; stopping a unit stops the running units with
+  `PartOf=`, `BindsTo=` or `Requires=` on it, restarting it restarts those with
+  `PartOf=`; `StopWhenUnneeded=` is honoured; a target's state is its own; a
+  `Type=notify` service that sends `STOPPING=1` is stopped.
+- A start of a unit while another start of it is pending merges into that one,
+  as systemd merges jobs.
+- A `Type=notify` service with `NotifyAccess=all` may hand its main process
+  over with `MAINPID=` (podman's quadlet units): the runner then follows the
+  announced process.
+- `AttachProcessesToUnit` follows systemd's rule for unprivileged callers, and
+  `Delegate=` with a controller list counts as delegation.
+- The `uinitconverterd` package installs a tmpfiles.d entry for
+  `/run/uinitconverter-user` (the user manager's fallback record).
+
+### Fixed
+- An `Accept=yes` instance gets `LISTEN_FDNAMES=` from the socket's
+  `FileDescriptorName=` (it was always `connection`), so systemd's varlink
+  services answer.
+- `Symlinks=` of a socket creates the link's parent directories.
+
+### Known issues
+- The s6 user manager has not run under the s6 boot's own system manager
+  yet, nor for SELinux-confined users; keep `USER_MANAGER=systemd` there.
+- The system sandbox failed once in a few runs on a dangling scan directory
+  entry of an on-demand instance (`quitter@0.service`); not reproduced.
+
 ## 0.2.2 (2026-11-02)
 
 ### Fixed

@@ -193,10 +193,11 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 리스너가 둘 이상이거나 `ListenStream=`이 아닌(또는 `vsock:`인) `Accept=yes`, 그리고 템플릿이 `Type=notify`, `forking`, `dbus`인 경우: 소켓을 건너뛰며 이유는 `uinitconverter plan`에 나옵니다. 인스턴스는 연결이 끝나면 실패했어도 사라집니다. systemd는 실패한 인스턴스를 `systemctl reset-failed`까지 남겨 두지만 여기서는 `systemctl --failed`에 들어가지 않습니다(결과는 소켓의 로그와 `ExecStopPost=`에 남습니다). 실행 중인 연결의 재시작이나 다시 읽기는 실패합니다. 템플릿의 `Wants=`와 `Requires=`는 연결마다가 아니라 소켓과 함께 시작됩니다.
 - `Accept=no`: 실행 중에 `.socket`을 시작하면 여전히 그 서비스가 바로 시작되고, 요청 시 서비스가 요구하는 유닛 중 요청 시 서비스가 아닌 것은 부팅 때 시작됩니다(s6-rc 의존성).
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
-- systemd generator: s6 부팅에서는 하나도 실행되지 않습니다. `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
+- systemd generator: 시스템의 generator는 s6 부팅에서 하나도 실행되지 않습니다(사용자 generator는 s6 사용자 매니저가 실행합니다. [s6 사용자 매니저](#s6-사용자-매니저-진행-중) 참고). `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
 - `AccuracySec=`(타이머를 묶지 않고 정시에 실행), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. 이 타이머 키들은 허용되지만 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.
 - 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=`(systemd에서는 BPF LSM 프로그램), IP 사용량 집계(`IPAccounting=`).
 - 이미 실행 중인 작업의 취소.
+- `replace`와 `isolate`가 아닌 작업 모드(`fail`, `replace-irreversibly`, `flush`, `ignore-dependencies`, `ignore-requirements`)는 받아들이지만 `replace`로 실행합니다. `OnFailureJobMode=`도 마찬가지입니다.
 - `[Socket]`의 `PrivateNetwork=`, `JoinsNamespaceOf=`, `NetworkNamespacePath=`.
 - `dist/s6`에 자체 스크립트가 있는 서비스(`dbus`, `udevd`, `earlyoom`, `syslog`, `coredump`)의 유닛 설정: cgroup, 제한, 샌드박스, 사용자는 유닛에서 가져오지만 명령줄과 재시작, 정지 동작은 스크립트에 있습니다. 그래서 `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=`, `Type=`을 바꾸는 드롭인은 적용되지 않습니다.
 

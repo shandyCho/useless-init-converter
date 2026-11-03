@@ -135,13 +135,18 @@ User mode (a user's service manager without systemd --user, in progress):
 would, with `XDG_RUNTIME_DIR` in a sandbox directory: the private socket,
 `default.target`, `READY=1`, the bus started from `dbus.socket` (dbus-daemon
 here), `systemctl --user`, a GNOME-shaped session and logout, a bus restart
-and the stop on `SIGTERM`. It runs its own checks and stops everything itself
-(`tests/all.sh` includes it).
+and the stop on `SIGTERM`; then the later slices' checks: environment and
+unit generators, transactions (ordering, `Requisite=`, parallel starts, job
+merging), stop transactions, timers and paths, `Accept=yes`, a `MAINPID=`
+hand-over, `CollectMode=`, `systemctl --user exit`, and the fallback to
+`systemd --user` (a fake one records that it ran). It runs its own checks and
+stops everything itself (`tests/all.sh` includes it).
 
 The `Accept=yes` TCP checks need `s6-tcpserverd`. Without it in `PATH`, `check.sh`
 checks that the TCP socket is skipped and prints a SKIP line. To run them, put
-`SANDBOX_S6NET_BIN=DIR` (a directory with `s6-tcpserverd`, e.g. a local build of
-s6-networking) in front of both scripts.
+`SANDBOX_S6NET_BIN=DIR` (a directory with `s6-tcpserverd`, e.g.
+`~/rpmbuild-skarnet/sysroot/usr/bin` after `dist/rpm/build-skarnet-rpms.sh`)
+in front of both scripts.
 
 To test the system bus with dbus-broker instead of dbus-daemon, run
 `sandbox.sh` and `check.sh` with `SANDBOX_BUS=broker` in front (needs

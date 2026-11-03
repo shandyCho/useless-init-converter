@@ -5,6 +5,50 @@
 버전은 본체 패키지의 버전입니다. 독립 도구는 버전이 따로 있습니다.
 릴리스 노트: [packages/release-notes](packages/release-notes).
 
+## 미출시
+
+0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-147부에 있습니다.
+
+### 추가
+- `Accept=yes` 소켓: 유닉스 경로는 `s6-ipcserverd`로, TCP 포트는 `s6-tcpserverd`로(선택 패키지
+  s6-networking, 예: `sshd.socket`). 연결마다 systemd와 같은 이름의 템플릿 인스턴스가 실행되고, 실행되는
+  동안 유닛으로 목록에 나오고 상태를 보고 멈출 수 있습니다.
+- `GetUnitByPIDFD`(polkitd가 호출자마다 묻습니다), 그리고 작업 대상 유닛만이 아니라 모든 상태 변화에 대한
+  `PropertiesChanged`.
+- **s6 사용자 매니저(선택).** `uinitconverter.conf`의 `USER_MANAGER=s6`이나 커널 명령줄의
+  `uinitconverter.user_manager=s6`이 있으면 `user@UID.service`에 `systemd --user` 대신
+  `uinitconverterd user-manager`를 실행합니다. 기본값은 계속 `systemd`입니다. 테스트 VM에서 GDM 그리터와
+  GNOME 세션을 수정 없이 실행합니다. 로그아웃, 다시 로그인, 사용자 전환, linger 사용자, RPM 업데이트
+  도우미, 재부팅, 타이머와 path 유닛, 소켓(`Accept=yes` 포함), systemd-oomd 보고, podman quadlet 유닛,
+  flatpak 앱이 동작합니다. 트랜잭션의 유닛은 병렬로 시작합니다. 사용자를 제대로 받지 못하면(GNOME의 실패
+  경로, 충돌) 그 부팅 동안은 그 자리에서 `systemd --user`로 넘깁니다(`USER_FALLBACK_ON=`).
+  [s6 사용자 매니저](docs/etc.md#s6-사용자-매니저-진행-중) 참고.
+- 데몬 환경의 `UINITCONVERTER_LOG_JOBS=1`은 모든 작업 요청을 호출자의 프로세스 이름과 함께 기록합니다.
+
+### 변경
+- systemd와 같은 작업 부수 효과: 시작하는 유닛을 `Conflicts=`에 적은 유닛을 멈추고, 유닛을 멈추면
+  `PartOf=`, `BindsTo=`, `Requires=`로 그 유닛을 가리키는 실행 중 유닛도 멈추며, 재시작하면 `PartOf=`인
+  유닛도 재시작합니다. `StopWhenUnneeded=`를 따르고, 타깃의 상태는 타깃 자신의 것이며, `STOPPING=1`을
+  보낸 `Type=notify` 서비스는 멈춥니다.
+- 어떤 유닛의 시작이 대기 중일 때 같은 유닛을 또 시작하면 systemd처럼 그 작업에 합쳐집니다.
+- `NotifyAccess=all`인 `Type=notify` 서비스는 `MAINPID=`로 주 프로세스를 넘길 수 있고(podman의 quadlet
+  유닛), 러너는 알려진 프로세스를 따라갑니다.
+- `AttachProcessesToUnit`은 권한 없는 호출자에 대해 systemd의 규칙을 따르고, 컨트롤러 목록을 적은
+  `Delegate=`도 위임으로 봅니다.
+- `uinitconverterd` 패키지가 `/run/uinitconverter-user`(사용자 매니저의 대체 기록)용 tmpfiles.d 항목을
+  설치합니다.
+
+### 수정
+- `Accept=yes` 인스턴스의 `LISTEN_FDNAMES=`는 소켓의 `FileDescriptorName=`을 따릅니다(이전에는 항상
+  `connection`). 그래서 systemd의 varlink 서비스가 응답합니다.
+- 소켓의 `Symlinks=`가 링크의 상위 디렉터리를 만듭니다.
+
+### 알려진 문제
+- s6 사용자 매니저는 아직 s6 부팅의 시스템 매니저 아래에서나 SELinux로 제한된 사용자에게 실행해 보지
+  않았습니다. 그런 환경에서는 `USER_MANAGER=systemd`를 유지하세요.
+- 시스템 샌드박스가 몇 번 중 한 번, 요청 시 인스턴스(`quitter@0.service`)의 스캔 디렉터리 항목이 남는
+  문제로 실패했습니다. 재현되지 않았습니다.
+
 ## 0.2.2 (2026-11-02)
 
 ### 수정

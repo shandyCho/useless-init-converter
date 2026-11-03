@@ -132,11 +132,15 @@ uinitconverter의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-up
 `uinitconverterd user-manager`를 `user@`처럼 실행하되 `XDG_RUNTIME_DIR`을 샌드박스 디렉터리로
 둡니다. private 소켓, `default.target`, `READY=1`, `dbus.socket`에서 시작되는 버스(여기서는
 dbus-daemon), `systemctl --user`, GNOME 모양의 세션과 로그아웃, 버스 재시작, `SIGTERM`에 의한
-정지를 확인합니다. 자체 검사를 실행하고 끝나면 모두 멈춥니다(`tests/all.sh`에 포함).
+정지를 확인합니다. 이어서 이후 단계의 검사가 있습니다. 환경 generator와 유닛 generator, 트랜잭션(순서,
+`Requisite=`, 병렬 시작, 작업 합치기), 정지 트랜잭션, 타이머와 path 유닛, `Accept=yes`, `MAINPID=`로
+주 프로세스 넘기기, `CollectMode=`, `systemctl --user exit`, `systemd --user`로의 대체(가짜
+`systemd --user`가 실행 여부를 기록)입니다. 자체 검사를 실행하고 끝나면 모두 멈춥니다(`tests/all.sh`에 포함).
 
 `Accept=yes` TCP 검사에는 `s6-tcpserverd`가 필요합니다. `PATH`에 없으면 `check.sh`는 TCP 소켓을
 건너뛰었는지만 확인하고 SKIP 줄을 출력합니다. 실행하려면 두 스크립트 앞에
-`SANDBOX_S6NET_BIN=DIR`(`s6-tcpserverd`가 있는 디렉터리, 예: s6-networking을 직접 빌드한 곳)를 붙이세요.
+`SANDBOX_S6NET_BIN=DIR`(`s6-tcpserverd`가 있는 디렉터리, 예: `dist/rpm/build-skarnet-rpms.sh` 뒤의
+`~/rpmbuild-skarnet/sysroot/usr/bin`)를 붙이세요.
 
 시스템 버스를 dbus-daemon 대신 dbus-broker로 테스트하려면 `SANDBOX_BUS=broker`를 앞에 붙여
 `sandbox.sh`와 `check.sh`를 실행하세요(`dbus-broker`와 `unshare`가 필요합니다).
