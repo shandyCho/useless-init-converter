@@ -80,6 +80,10 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   failed with "Failed to request invocation ID for unit: Unknown object", so
   Ptyxis printed that line for each new terminal and started the shell
   without its scope.
+- `initconvert-user-setup status` on the s6 boot names the s6 user manager;
+  it printed `initconvert-runner`, user@'s first process there. Its
+  "fell back" note now counts only the user's own record, as the manager
+  does, also the one in their runtime directory.
 - At shutdown the users' `user@` and `user-runtime-dir@` stop at the same
   time, as with systemd. They stopped one user after another, so with the s6
   user manager three users took 8-11 s.

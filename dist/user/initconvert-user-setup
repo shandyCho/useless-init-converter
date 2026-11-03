@@ -16,8 +16,8 @@
 # systemd --user whatever this says. If the s6 manager fails a user, that user
 # gets systemd --user for the rest of the boot.
 #
-# UINITCONVERTER_SETUP_ROOT=DIR works under DIR instead of / and skips
-# systemctl (tests).
+# UINITCONVERTER_SETUP_ROOT=DIR works under DIR instead of / (also /proc and
+# /sys for status) and skips systemctl (tests/user-setup.sh).
 set -eu
 
 ROOT=${UINITCONVERTER_SETUP_ROOT:-}
@@ -46,6 +46,18 @@ reload() {
 
 need_root() {
     [ -n "$ROOT" ] || [ "$(id -u)" = 0 ] || die "run it as root (sudo initconvert-user-setup $1)"
+}
+
+# The reason in user $1's fallback record, as initconvertd reads it: the
+# user's own regular file in /run/uinitconverter-user (writable by all), or
+# else in their runtime directory.
+fallback() {
+    for f in "$ROOT/run/uinitconverter-user/$1" "$ROOT/run/user/$1/uinitconverter-fallback/$1"; do
+        if [ -f "$f" ] && [ ! -L "$f" ] && [ "$(stat -c %u "$f" 2>/dev/null)" = "$1" ]; then
+            head -1 "$f"
+            return
+        fi
+    done
 }
 
 setting() {
@@ -81,23 +93,28 @@ EOF
     status)
         if [ -e "$DROPIN" ]; then echo "drop-in:      $DROPIN"; else echo "drop-in:      none (off on a systemd boot)"; fi
         echo "USER_MANAGER: $(setting || true)$( [ -z "$(setting || true)" ] && echo 'unset (systemd)')"
-        k=$(tr ' ' '\n' </proc/cmdline | sed -n 's/^uinitconverter\.user_manager=//p' | tail -1)
+        k=$(tr ' ' '\n' 2>/dev/null <"$ROOT/proc/cmdline" | sed -n 's/^uinitconverter\.user_manager=//p' | tail -1)
         [ -n "$k" ] && echo "this boot:    uinitconverter.user_manager=$k on the kernel command line"
-        for p in /sys/fs/cgroup/user.slice/user-*.slice/user@*.service/init.scope/cgroup.procs; do
+        for p in "$ROOT"/sys/fs/cgroup/user.slice/user-*.slice/user@*.service/init.scope/cgroup.procs; do
             [ -r "$p" ] || continue
             uid=${p#*/user@}
             uid=${uid%%.service*}
-            pid=$(head -1 "$p")
-            [ -n "$pid" ] || continue
-            exe=$(basename "$(readlink "/proc/$pid/exe" 2>/dev/null)" 2>/dev/null || true)
-            case $exe in
-                initconvertd*) m="the s6 user manager" ;;
-                systemd) m="systemd --user" ;;
-                *) m="${exe:-unknown}" ;;
-            esac
-            fb=""
-            [ -s "/run/uinitconverter-user/$uid" ] && fb=" (fell back: $(head -1 "/run/uinitconverter-user/$uid"))"
-            echo "user@$uid:    $m$fb"
+            # On the s6 boot user@'s first process is initconvert-runner and
+            # the manager its child, so every process of init.scope counts.
+            m="" first=""
+            for pid in $(cat "$p"); do
+                exe=$(basename "$(readlink "$ROOT/proc/$pid/exe" 2>/dev/null)" 2>/dev/null || true)
+                exe=${exe% (deleted)}
+                [ -n "$first" ] || first=$exe
+                case $exe in
+                    initconvertd) m="the s6 user manager"; break ;;
+                    systemd) m="systemd --user" ;;
+                esac
+            done
+            [ -n "$first" ] || continue
+            [ -n "$m" ] || m=${first:-unknown}
+            fb=$(fallback "$uid")
+            echo "user@$uid:    $m${fb:+ (fell back: $fb)}"
         done
         ;;
     *) usage ;;

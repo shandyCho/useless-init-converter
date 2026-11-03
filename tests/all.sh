@@ -87,6 +87,16 @@ user_sandbox() {
     return "$rc"
 }
 
+# initconvert-user-setup against a fake /sys and /proc (tests/user-setup.sh).
+user_setup() {
+    local w rc
+    w=$(mktemp -d "${TMPDIR:-/tmp}/sdcs.XXXXXX") || return 1
+    tests/user-setup.sh "$w"
+    rc=$?
+    rm -rf "$w"
+    return "$rc"
+}
+
 # A work directory of its own, under a short path for the suite's sockets.
 sandbox_suite() {
     local w rc
@@ -132,6 +142,7 @@ fast_tests() {
     step "sandbox FDSTORE=no" sandbox_with SANDBOX_FDSTORE=no
     step "sandbox BUS=broker" sandbox_with SANDBOX_BUS=broker
     step "user sandbox" user_sandbox
+    step "user setup" user_setup
 }
 
 vm_test() {

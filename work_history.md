@@ -11625,3 +11625,36 @@ Committed on main with this entry, one commit after eeccb05 (not pushed).
 2. The elogind plan (part 154).
 3. gnome-shell's exit hang under the s6 user manager on the s6 boot (part 154).
 4. SELinux for confined users; smaller items as in part 153.
+
+## 2026-11-04, part 158: initconvert-user-setup status on the s6 boot
+
+Owner pasted their machine's run of part 156's guide with 238ca79's RPMs: the systemd boot (A: `on` and a new login; B: `off`; C: `on`, then `dnf remove uinitconverter-user`; reinstall and `on`), then a reboot into the s6 entry. Asked me to check it, then "yes fix it".
+
+**What the output showed (all fine):**
+- Part 157's fix holds: `systemd-run --user --scope true` returns 0.
+- A, B and C behaved as in the VM (part 156): the s6 manager after a new login, no fallback, `running`, no failed units, no AVC denials; `off` and %preun removed the drop-in.
+- On the s6 boot: PID 1 s6-svscan, enforcing, user@1000 runs the s6 manager (/var/log/uinitconverter/user@1000.service/current; no journal there, so the guide's journalctl grep is empty by design), no AVC denials.
+- Not bugs: the uinitconverter.conf.rpmnew differs only in comments; initconvert-user-manager's `bin_t` in `ls -Z` is the symlink's own label (exec uses initconvertd's `init_exec_t`).
+- **Left open, cosmetic:** each login logs `evolution-alarm-notify.service: start (gnome-session@gnome.target's transaction): failed`, but the unit is inactive (dead) with status 0/SUCCESS: a Type=dbus service that exits 0 without taking its name. systemd would likely finish that job as done; not checked against systemd's code.
+
+**Bug fixed: `status` named `initconvert-runner` on the s6 boot.** It read only the first PID of user@'s init.scope. On the s6 boot that is the runner (then its notify helper, then initconvert-user-manager). Now every process of init.scope counts: initconvertd (also " (deleted)") is the s6 manager, else systemd is systemd --user, else the first process's name.
+
+**Also in `status`:** the "fell back" note read /run/uinitconverter-user/UID whoever owned it (the directory is 1777), and not the record in the user's runtime directory. Now it reads them as initconvertd's Fallback::read does: a regular file, not a link, owned by that UID, in /run/uinitconverter-user, then /run/user/UID/uinitconverter-fallback.
+
+**Testability:** with UINITCONVERTER_SETUP_ROOT, `status` reads $ROOT/sys, $ROOT/proc (cmdline, PID exe links) and $ROOT/run. New tests/user-setup.sh DIR (13 checks: on/off, systemd boot, s6 boot with the runner first, a deleted initconvertd, fallback with its reason, the runtime-directory record, an empty init.scope, a record owned by another user, the kernel flag). Added to tests/all.sh, the TESTING pair, CLAUDE.md. CHANGELOG pair: Fixed.
+
+**Tests:**
+- tests/user-setup.sh: 13 passed, 0 failed.
+- bash -n / sh -n and shellcheck -S warning on initconvert-user-setup, user-setup.sh, all.sh.
+- The new script on the owner's machine (s6 boot), unprivileged: `user@1000:    the s6 user manager`. Not run as root here (no sudo password); not rerun in the VM (vm-user-setup.sh's expected lines are unchanged).
+
+### Current state
+
+Committed on main with this entry, one commit after 238ca79 (not pushed).
+
+### Next steps
+
+1. The owner: `sudo initconvert-user-setup status` on the s6 boot with the next RPM build.
+2. The elogind plan (part 154).
+3. gnome-shell's exit hang under the s6 user manager on the s6 boot (part 154).
+4. SELinux for confined users; the evolution-alarm-notify job result (above); smaller items as in part 153.

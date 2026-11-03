@@ -142,6 +142,11 @@ merging), stop transactions, timers and paths, `Accept=yes`, a `MAINPID=`
 hand-over, `CollectMode=`, `systemctl --user exit`, and the fallback to
 `systemd --user` (a fake one records that it ran). It runs its own checks and
 stops everything itself (`tests/all.sh` includes it).
+`tests/user-setup.sh DIR` runs `initconvert-user-setup` under
+`UINITCONVERTER_SETUP_ROOT=DIR`: `on` and `off`, and `status` against a fake
+`/sys/fs/cgroup` and `/proc` (the systemd boot, the s6 boot with the runner
+in front of the manager, a fallback and its record, a record owned by
+another user). Also in `tests/all.sh`.
 
 The `Accept=yes` TCP checks need `s6-tcpserverd`. Without it in `PATH`, `check.sh`
 checks that the TCP socket is skipped and prints a SKIP line. To run them, put

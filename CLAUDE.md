@@ -48,8 +48,9 @@ if they turned out to be wrong.
   `dist/rpm/build-skarnet-rpms.sh`) runs the `Accept=yes` TCP checks instead
   of skipping them. For the user manager (`USER_MODE`, `user.rs`, the
   dynamic engine): `tests/user-sandbox.sh DIR`, which stops everything
-  itself. Changes to the user manager's behaviour in a GNOME session are
-  checked in the VM: `tests/gnome-vm.sh` (fetch/provision once into
+  itself; for `initconvert-user-setup`: `tests/user-setup.sh DIR`.
+  Changes to the user manager's behaviour in a GNOME session are checked
+  in the VM: `tests/gnome-vm.sh` (fetch/provision once into
   `~/uinitconverter-vm`), then `tests/vm-user-manager.sh ~/uinitconverter-vm
   MODE` with `BUILD=release` after `cargo build --release` and
   `SKARNET_RPMS=~/rpmbuild-skarnet/rpms`; modes: `user`, `greeter`,

@@ -62,6 +62,9 @@
   거기서 `GetUnitByPID`가 사용자 유닛을 알려 줍니다(이전에는 모든 프로세스에 `user@UID.service`).
   `systemd-run --user --scope`가 "Failed to request invocation ID for unit: Unknown object"로
   실패해서, Ptyxis가 새 터미널마다 이 줄을 출력하고 셸을 스코프 없이 시작했습니다.
+- s6 부팅에서 `initconvert-user-setup status`가 s6 사용자 매니저를 알려 줍니다. 이전에는 그곳에서
+  `user@`의 첫 프로세스인 `initconvert-runner`를 출력했습니다. "fell back" 표시도 매니저처럼 사용자
+  자신이 소유한 기록만 따지고, 사용자의 런타임 디렉터리에 있는 기록도 읽습니다.
 - 종료할 때 사용자들의 `user@`와 `user-runtime-dir@`가 systemd처럼 동시에 멈춥니다. 이전에는 사용자마다
   차례로 멈춰서, s6 사용자 매니저로는 사용자 셋에 8-11초가 걸렸습니다.
 - `Accept=yes` 인스턴스의 `LISTEN_FDNAMES=`는 소켓의 `FileDescriptorName=`을 따릅니다(이전에는 항상

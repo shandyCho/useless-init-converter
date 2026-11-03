@@ -137,6 +137,10 @@ dbus-daemon), `systemctl --user`, GNOME 모양의 세션과 로그아웃, 버스
 `Requisite=`, 병렬 시작, 작업 합치기), 정지 트랜잭션, 타이머와 path 유닛, `Accept=yes`, `MAINPID=`로
 주 프로세스 넘기기, `CollectMode=`, `systemctl --user exit`, `systemd --user`로의 대체(가짜
 `systemd --user`가 실행 여부를 기록)입니다. 자체 검사를 실행하고 끝나면 모두 멈춥니다(`tests/all.sh`에 포함).
+`tests/user-setup.sh DIR`은 `initconvert-user-setup`을 `UINITCONVERTER_SETUP_ROOT=DIR`로
+실행합니다. `on`과 `off`, 그리고 가짜 `/sys/fs/cgroup`과 `/proc`에 대한 `status`(systemd 부팅,
+러너 뒤에 매니저가 있는 s6 부팅, 대체와 그 기록, 다른 사용자가 소유한 기록)를 확인합니다.
+`tests/all.sh`에도 포함됩니다.
 
 `Accept=yes` TCP 검사에는 `s6-tcpserverd`가 필요합니다. `PATH`에 없으면 `check.sh`는 TCP 소켓을
 건너뛰었는지만 확인하고 SKIP 줄을 출력합니다. 실행하려면 두 스크립트 앞에
