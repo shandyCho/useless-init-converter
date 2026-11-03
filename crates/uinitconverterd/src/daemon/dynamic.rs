@@ -53,14 +53,16 @@ impl Daemon {
             return matches!(unit.utype(), "service" | "timer" | "path")
                 && !self.cfg.is_excluded(id);
         }
-        // A user manager has no database: every service and target is run
-        // by the dynamic engine.
-        // Accept=no sockets too: their service's runner holds them (see
-        // dyn_start_socket).
+        // A user manager has no database: every service, target, timer
+        // and path unit is run by the dynamic engine.
+        // Sockets too: Accept=no ones are held for their service (see
+        // dyn_start_socket); Accept=yes ones are a longrun of their own
+        // (s6-ipcserverd/s6-tcpserverd, as in the system's database).
         if self.cfg.user_mode {
-            let socket = unit.utype() == "socket" && !unit.get_bool("Socket", "Accept", false);
-            return (socket || matches!(unit.utype(), "service" | "target"))
-                && !self.cfg.is_excluded(id);
+            return matches!(
+                unit.utype(),
+                "socket" | "service" | "target" | "timer" | "path"
+            ) && !self.cfg.is_excluded(id);
         }
         unit.utype() == "service"
             && loader::parse_name(id)
@@ -426,6 +428,9 @@ impl Daemon {
     async fn dyn_start_one(&self, id: &str, unit: &Unit) -> &'static str {
         self.stop_conflicts(id, unit).await;
 
+        if unit.utype() == "socket" && unit.get_bool("Socket", "Accept", false) {
+            return self.dyn_start_longrun(id, unit, false).await;
+        }
         if unit.utype() == "socket" {
             return self.dyn_start_socket(id, unit).await;
         }

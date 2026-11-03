@@ -12,7 +12,8 @@ use crate::acceptspec;
 impl Daemon {
     /// Running connections: (instance, socket, runner pid).
     pub(super) fn connections(&self) -> Vec<(String, String, i32)> {
-        let sockets: Vec<String> = self
+        // The database's sockets, and a user manager's dynamic ones.
+        let mut sockets: Vec<String> = self
             .index
             .read()
             .unwrap()
@@ -21,6 +22,16 @@ impl Daemon {
             .filter(|n| n.ends_with(".socket"))
             .cloned()
             .collect();
+        sockets.extend(
+            self.dynamic
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|n| n.ends_with(".socket"))
+                .cloned(),
+        );
+        sockets.sort();
+        sockets.dedup();
         let mut out = Vec::new();
         for sock in sockets {
             let dir = state::for_unit(&self.cfg.run_dir, &sock)

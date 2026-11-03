@@ -285,6 +285,14 @@ pub fn connection_main(cfg: &Config, name: &str) -> i32 {
     let mark = sst.dir.join(acceptspec::CONNECTIONS_DIR).join(&instance);
     let _ = fs::write(&mark, std::process::id().to_string());
     r.conn = Some(conn);
+    // systemd's varlink services (journalctl, systemd-storage-fs, ...)
+    // serve varlink only when the fd is named "varlink".
+    if let Some(n) = sock
+        .get("Socket", "FileDescriptorName")
+        .filter(|n| !n.is_empty())
+    {
+        r.conn_name = n;
+    }
     let origin = own_cgroup();
     let ok = r.run_connection();
     // Out of the instance's cgroup, so it can go.

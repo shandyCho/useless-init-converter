@@ -19,6 +19,15 @@
 #                                        # GNOME Shell lands in its app-*.scope
 #                                        # (DIR/session-session.png)
 #   tests/vm-user-manager.sh DIR session-baseline # the same on systemd --user
+#   tests/vm-user-manager.sh DIR apps    # the session as above, then slice D: user
+#                                        # timers, every user socket (Accept=yes
+#                                        # too), systemd-oomd watching the user
+#                                        # slices, a podman quadlet container, and a
+#                                        # flatpak app (installed for tester from
+#                                        # the fedora remote: ~3 GB, network) in
+#                                        # its app-flatpak-*.scope
+#   tests/vm-user-manager.sh DIR apps-baseline # the same on systemd --user
+#
 # Copies target/debug's uinitconverterd, -runner and -timers (cargo build
 # first) and the skalibs and s6 RPMs from SKARNET_RPMS (default
 # ~/rpmbuild-skarnet/RPMS/x86_64, the newest of each) into a fresh overlay.
@@ -26,9 +35,9 @@ set -euo pipefail
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 VM=$TOP/tests/gnome-vm.sh
-D=${1:?usage: tests/vm-user-manager.sh DIR [user|greeter|baseline|session|session-baseline]}
+D=${1:?usage: tests/vm-user-manager.sh DIR [user|greeter|baseline|session|session-baseline|apps|apps-baseline]}
 MODE=${2:-user}
-case $MODE in user | greeter | baseline | session | session-baseline) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
+case $MODE in user | greeter | baseline | session | session-baseline | apps | apps-baseline) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
 RPMS=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/RPMS/x86_64}
 S=$(mktemp -d)
 # The VM goes down however this ends (VM_KEEP=yes: it stays up, for
@@ -61,9 +70,7 @@ if [ "$1" = greeter ] || [ "$1" = baseline ]; then
     # The greeter is what comes up.
     sed -i 's/^AutomaticLoginEnable=True/AutomaticLoginEnable=False/' /etc/gdm/custom.conf
 fi
-if [ "$1" = baseline ] || [ "$1" = session-baseline ]; then
-    exit 0
-fi
+case $1 in *baseline) exit 0 ;; esac
 # Built locally, so unsigned.
 rpm -Uvh --nodeps --nosignature --replacepkgs ./skalibs-*.rpm ./execline-*.rpm ./s6-*.rpm
 install -d /usr/local/libexec/uinitconverter
@@ -76,7 +83,7 @@ done
 uid=$(id -u s6test)
 # greeter: every user's manager.
 dir=/etc/systemd/system/user@$uid.service.d
-[ "$1" = greeter ] || [ "$1" = session ] && dir=/etc/systemd/system/user@.service.d
+case $1 in greeter | session | apps) dir=/etc/systemd/system/user@.service.d ;; esac
 mkdir -p "$dir"
 cat >"$dir/90-uinitconverter.conf" <<EOF
 [Service]
@@ -292,6 +299,116 @@ echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
 EOS
 
+cat >"$S/apps.sh" <<'EOS'
+#!/bin/bash
+# As root in the VM, in tester's session: slice D (apps and services).
+set -uo pipefail
+pass=0 fail=0
+ok() { pass=$((pass + 1)); echo "PASS $*"; }
+bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+u=$(id -u tester)
+mgr=/user.slice/user-$u.slice/user@$u.service
+as() { runuser -u tester -- env HOME=/home/tester XDG_RUNTIME_DIR="/run/user/$u" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$u/bus" "$@"; }
+until_ok() { local t=0; until eval "$1"; do t=$((t + 1)); [ $t -ge "$2" ] && return 1; sleep 1; done; }
+
+echo "== timers"
+for x in grub-boot-success.timer systemd-tmpfiles-clean.timer; do
+    # One property each: `show -p A,B` prints them in the manager's order.
+    s=$(as systemctl --user show -p ActiveState --value "$x" 2>&1)/$(as systemctl --user show -p SubState --value "$x" 2>&1)
+    [ "$s" = active/waiting ] && ok "$x is active/waiting" || bad "$x: $s"
+done
+
+echo "== sockets"
+for x in dbus.socket pipewire.socket pipewire-pulse.socket systemd-importd.socket systemd-machined.socket \
+    systemd-ask-password.socket systemd-journalctl.socket systemd-storage-fs.socket; do
+    s=$(as systemctl --user is-active "$x" 2>&1)
+    [ "$s" = active ] && ok "$x is active" || bad "$x: $s"
+done
+for v in io.systemd.StorageProvider/fs io.systemd.JournalAccess io.systemd.AskPassword; do
+    out=$(as timeout 10 varlinkctl info "unix:/run/user/$u/systemd/$v" 2>&1 | sed -n 's/^ *Product: //p')
+    [ -n "$out" ] && ok "Accept=yes $v answers ($out)" || bad "$v: $(as timeout 10 varlinkctl info "unix:/run/user/$u/systemd/$v" 2>&1 | head -2)"
+done
+echo "   list-sockets: $(as systemctl --user list-sockets --no-legend 2>&1 | wc -l) lines"
+
+echo "== systemd-oomd"
+watched() { oomctl 2>/dev/null | sed -n 's/^\tPath: //p'; }
+check_oomd() {
+    local w x
+    until_ok '[ "$(watched | grep -c "^$mgr/")" -ge 3 ]' 15
+    w=$(watched)
+    # user@UID.service itself (the manager's -.slice): systemd --user
+    # reports it only after reconnecting, so it is not required.
+    echo "$w" | grep -qxF "$mgr" && echo "   (also $mgr itself)"
+    for x in "$mgr/app.slice" "$mgr/background.slice" "$mgr/session.slice"; do
+        echo "$w" | grep -qxF "$x" && ok "oomd watches $x$1" || bad "oomd does not watch $x$1: $(echo "$w" | tr '\n' ' ')"
+    done
+}
+check_oomd ""
+systemctl restart systemd-oomd
+check_oomd " (after oomd restarted)"
+oomctl | grep -A2 "Path: $mgr/app.slice$" | sed 's/^/   /'
+
+echo "== podman quadlet"
+r=/home/tester/qroot
+rm -rf "$r"
+mkdir -p "$r/usr/bin" "$r/run" "$r/proc" "$r/sys" "$r/dev" "$r/etc" "$r/tmp"
+cp /usr/bin/sleep "$r/usr/bin/"
+for l in $(ldd /usr/bin/sleep | grep -o '/[^ ]*'); do mkdir -p "$r$(dirname "$l")"; cp "$l" "$r$l"; done
+mkdir -p /home/tester/.config/containers/systemd
+printf '[Container]\nRootfs=%%h/qroot\nExec=/usr/bin/sleep infinity\n' >/home/tester/.config/containers/systemd/qhello.container
+chown -R tester:tester "$r" /home/tester/.config/containers
+# Copied into the home it is user_home_t, which container_t may not map.
+chcon -R -t container_file_t "$r"
+as systemctl --user daemon-reload
+s=$(as systemctl --user show -p LoadState --value qhello.service 2>&1)
+[ "$s" = loaded ] && ok "the quadlet generator made qhello.service" || bad "qhello.service: $s"
+if as systemctl --user start qhello.service; then ok "qhello.service started (Type=notify via conmon)"; else bad "qhello.service: $(as systemctl --user status qhello.service 2>&1 | tail -6)"; fi
+n=$(as podman ps --format '{{.Names}}' 2>&1)
+[ "$n" = systemd-qhello ] && ok "podman runs systemd-qhello" || bad "podman ps: $n"
+grep -q . "/sys/fs/cgroup$mgr/app.slice/qhello.service/cgroup.procs" 2>/dev/null || [ -n "$(find "/sys/fs/cgroup$mgr/app.slice/qhello.service" -name cgroup.procs -exec cat {} + 2>/dev/null)" ] \
+    && ok "the container is in app.slice/qhello.service" || bad "no processes under app.slice/qhello.service"
+as systemctl --user stop qhello.service
+# conmon exits 143 on the stop: systemd --user marks the unit failed, ours
+# inactive (a known difference, work_history part 144). Shown, then cleared.
+echo "   qhello.service after the stop: $(as systemctl --user is-active qhello.service 2>&1)"
+as systemctl --user reset-failed qhello.service 2>/dev/null
+n=$(as podman ps -a --format '{{.Names}}' 2>&1)
+[ -z "$n" ] && ok "stopped: the container is gone" || bad "after the stop: $n"
+
+echo "== flatpak"
+as flatpak --user remote-add --if-not-exists fedora oci+https://registry.fedoraproject.org
+t0=$(date +%s)
+if as flatpak --user install -y --noninteractive fedora org.gnome.TextEditor >/tmp/flatpak-install.log 2>&1; then
+    ok "org.gnome.TextEditor installed for tester ($(( $(date +%s) - t0 )) s)"
+else
+    bad "flatpak install: $(tail -3 /tmp/flatpak-install.log)"
+fi
+d=$(tr '\0' '\n' <"/proc/$(pgrep -u tester -x gnome-shell | head -1)/environ" | sed -n 's/^XDG_DATA_DIRS=//p')
+case $d in *"/home/tester/.local/share/flatpak/exports/share"*"/var/lib/flatpak/exports/share"*) ok "gnome-shell's XDG_DATA_DIRS has the flatpak exports" ;; *) bad "gnome-shell's XDG_DATA_DIRS: $d" ;; esac
+as env WAYLAND_DISPLAY=wayland-0 setsid flatpak run org.gnome.TextEditor >/tmp/flatpak-run.log 2>&1 &
+p=
+until_ok 'p=$(pgrep -n -u tester -f "^gnome-text-editor|/app/bin/gnome-text-editor")' 30
+if [ -n "$p" ]; then
+    cg=$(cut -d: -f3 "/proc/$p/cgroup")
+    case $cg in "$mgr"/app.slice/app-flatpak-org.gnome.TextEditor-*.scope) ok "the flatpak app runs in ${cg##*/}" ;; *) bad "the flatpak app's cgroup: $cg" ;; esac
+    s=$(as systemctl --user is-active "${cg##*/}" 2>&1)
+    [ "$s" = active ] && ok "${cg##*/} is active" || bad "${cg##*/}: $s"
+else
+    bad "the flatpak app did not start: $(tail -5 /tmp/flatpak-run.log)"
+fi
+
+echo "== the whole"
+f=$(as systemctl --user list-units --failed --no-legend 2>&1)
+[ -z "$f" ] && ok "no failed user units" || bad "failed: $f"
+n=$(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep -c denied)
+[ "$n" = 0 ] && ok "no AVC denials" || bad "$n AVC denials: $(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep denied | head -3)"
+echo "-- the manager's own lines:"
+journalctl -b "_UID=$u" --no-pager -o cat | grep -E "^uinitconverter" | cut -c1-160 | tail -30 | sed 's/^/   /'
+echo
+echo "passed: $pass  failed: $fail"
+[ "$fail" -eq 0 ]
+EOS
+
 cp "$TOP/target/$BUILD/uinitconverterd" "$TOP/target/$BUILD/uinitconverter-runner" "$TOP/target/$BUILD/uinitconverter-timers" "$skalibs" "$execline" "$s6" "$S/"
 "$VM" start "$D"
 "$VM" wait "$D"
@@ -306,6 +423,15 @@ if [ "$MODE" = user ]; then
     exit
 fi
 case $MODE in
+    apps | apps-baseline)
+        rc=0
+        "$VM" wait "$D" || rc=$?
+        sleep 20
+        "$VM" ssh "$D" sudo bash in/session.sh || rc=$?
+        "$VM" ssh "$D" sudo bash in/apps.sh || rc=$?
+        "$VM" screenshot "$D" "$D/apps-$MODE.png"
+        exit $rc
+        ;;
     session | session-baseline)
         rc=0
         "$VM" wait "$D" || rc=$?

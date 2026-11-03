@@ -145,7 +145,7 @@ impl Runner {
             unsafe { libc::dup2(fd, 3) };
             with_conn.push(("LISTEN_FDS".into(), "1".into()));
             with_conn.push(("LISTEN_PID".into(), std::process::id().to_string()));
-            with_conn.push(("LISTEN_FDNAMES".into(), "connection".into()));
+            with_conn.push(("LISTEN_FDNAMES".into(), self.conn_name.clone()));
         }
         let extra_env = &with_conn[..];
         if let Err(e) = self.setup_stdio(cmd) {

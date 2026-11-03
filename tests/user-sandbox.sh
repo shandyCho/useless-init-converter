@@ -250,6 +250,94 @@ cat >"$U/autostartx.target" <<EOF
 [Unit]
 EOF
 
+# Slice D: a timer and a path unit, wanted by timers.target/paths.target
+# from default.target as on Fedora; a Persistent= timer, whose stamp goes
+# where systemd --user keeps it.
+cat >>"$U/default.target" <<EOF
+Wants=timers.target paths.target
+EOF
+printf '[Unit]\n' >"$U/timers.target"
+printf '[Unit]\n' >"$U/paths.target"
+mkdir -p "$U/timers.target.wants" "$U/paths.target.wants"
+cat >"$U/tick.timer" <<EOF
+[Timer]
+OnActiveSec=1
+OnUnitActiveSec=1
+AccuracySec=1ms
+EOF
+cat >"$U/tick.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo tick >>$W/ticks'
+EOF
+ln -s ../tick.timer "$U/timers.target.wants/tick.timer"
+cat >"$U/daily.timer" <<EOF
+[Timer]
+OnCalendar=daily
+Persistent=yes
+EOF
+cat >"$U/daily.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo daily >>$W/daily'
+EOF
+ln -s ../daily.timer "$U/timers.target.wants/daily.timer"
+cat >"$U/watch.path" <<EOF
+[Path]
+PathExists=$W/trigger
+EOF
+cat >"$U/watch.service" <<EOF
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo seen >$W/watched; rm -f $W/trigger'
+EOF
+ln -s ../watch.path "$U/paths.target.wants/watch.path"
+# An Accept=yes socket (systemd's varlink sockets in sockets.target are):
+# one service instance per connection.
+cat >"$U/echoer.socket" <<EOF
+[Socket]
+ListenStream=%t/echoer
+Accept=yes
+EOF
+cat >"$U/echoer@.service" <<EOF
+[Service]
+ExecStart=/bin/sh -c 'read -r l; echo "got \$\$l"'
+StandardInput=socket
+EOF
+ln -s ../echoer.socket "$U/sockets.target.wants/echoer.socket"
+# systemd's varlink services serve only on an fd named "varlink".
+cat >"$U/named.socket" <<EOF
+[Socket]
+ListenStream=%t/named
+Accept=yes
+FileDescriptorName=varlink
+EOF
+cat >"$U/named@.service" <<EOF
+[Service]
+ExecStart=/bin/sh -c 'echo "\$\$LISTEN_FDS \$\$LISTEN_FDNAMES" >$W/fdname'
+EOF
+ln -s ../named.socket "$U/sockets.target.wants/named.socket"
+# podman's quadlet shape: the start process forks the real one, which is
+# announced with MAINPID= (NotifyAccess=all), then exits.
+cat >"$W/handover.py" <<'EOF'
+import os, socket, sys
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    os.execv("/bin/sleep", ["sleep", "1000"])
+open(sys.argv[1], "w").write(str(pid))
+a = os.environ["NOTIFY_SOCKET"]
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+s.connect("\0" + a[1:] if a.startswith("@") else a)
+s.send(("MAINPID=%d\nREADY=1" % pid).encode())
+EOF
+cat >"$U/handover.service" <<EOF
+[Service]
+Type=notify
+NotifyAccess=all
+ExecStart=/usr/bin/python3 $W/handover.py $W/handover.pid
+EOF
+
 cat >"$W/bus.conf" <<EOF
 <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
@@ -344,6 +432,49 @@ expect_state app-second@autostart.service active/running
 out=$(SC show -p LoadState --value app-first@autostart.service 2>&1)
 [ "$out" = not-found ] && ok "after a reload the generator's old output is gone" || bad "app-first@autostart.service: $out"
 SC stop autostartx.target app-second@autostart.service
+
+echo "== slice D: timers and paths"
+expect_state timers.target active/active
+expect_state tick.timer active/waiting
+waitfor '[ "$(wc -l <"$W/ticks" 2>/dev/null)" -ge 2 ]' && ok "tick.timer ran tick.service more than once" || bad "ticks: $(cat "$W/ticks" 2>&1)"
+out=$(SC list-timers --all --no-legend 2>&1)
+case $out in *tick.timer*daily.timer* | *daily.timer*tick.timer*) ok "list-timers shows both timers" ;; *) bad "list-timers: $out" ;; esac
+expect_state daily.timer active/waiting
+# The first start of a Persistent= timer with no stamp does not catch up;
+# a stamp from two days ago does (after a restart of the timer).
+mkdir -p "$W/home/.local/share/systemd/timers"
+touch -d '2 days ago' "$W/home/.local/share/systemd/timers/stamp-daily.timer"
+SC restart daily.timer
+waitfor '[ -s "$W/daily" ]' && ok "Persistent=: a missed elapse was caught up" || bad "daily.service did not run: $(SC status daily.timer 2>&1 | tail -3)"
+waitfor '[ "$(stat -c %Y "$W/home/.local/share/systemd/timers/stamp-daily.timer")" -gt "$(date -d "1 day ago" +%s)" ]' \
+    && ok "the stamp is in ~/.local/share/systemd/timers, as systemd --user keeps it" || bad "stamp: $(ls -la "$W/home/.local/share/systemd/timers" 2>&1)"
+expect_state watch.path active/waiting
+touch "$W/trigger"
+waitfor '[ -s "$W/watched" ]' && ok "watch.path started its service" || bad "watch.path: $(SC status watch.path 2>&1 | tail -3)"
+
+expect_state echoer.socket active/listening
+out=$(echo hello | timeout 5 python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
+s.sendall(b"hello\n"); s.shutdown(socket.SHUT_WR)
+print(s.recv(100).decode().strip())' "$R/echoer" 2>&1)
+[ "$out" = "got hello" ] && ok "Accept=yes: a connection got its own instance" || bad "echoer: $out"
+python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.recv(1)' "$R/named" 2>/dev/null
+waitfor '[ -s "$W/fdname" ]'
+[ "$(cat "$W/fdname" 2>/dev/null)" = "1 varlink" ] && ok "Accept=yes: the connection is named after FileDescriptorName=" || bad "LISTEN_FDS/FDNAMES: $(cat "$W/fdname" 2>&1)"
+
+echo "== slice D: MAINPID= hands the service over (podman)"
+if SC start handover.service; then
+    sleep 2
+    want=$(cat "$W/handover.pid" 2>/dev/null)
+    expect_state handover.service active/running
+    got=$(SC show -p MainPID --value handover.service)
+    [ -n "$want" ] && [ "$got" = "$want" ] && ok "MainPID is the announced process ($want)" || bad "MainPID $got, announced ${want:-none}"
+    SC stop handover.service
+    if [ -n "$want" ] && kill -0 "$want" 2>/dev/null; then bad "the announced process $want survived the stop"; else ok "the stop ended the announced process"; fi
+else
+    bad "handover.service: $(SC status handover.service 2>&1 | tail -3)"
+fi
 
 echo "== a session"
 call StartUnit ss sess@gnome.target fail

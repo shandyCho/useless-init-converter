@@ -203,6 +203,137 @@ impl Runner {
         kids.sort();
         kids.first().copied()
     }
+
+    /// Type=notify with NotifyAccess=all: the main process may hand over to
+    /// another with MAINPID= (podman's quadlet units: `podman run -d` exits
+    /// once conmon, which sent MAINPID= and READY=1, runs the container).
+    /// The runner stays as s6's process, forks the command, forwards
+    /// signals to the current main process, and follows MAIN_PID (which
+    /// the notify helper sets) instead of ending with the first process.
+    pub(super) fn run_guarded(&mut self, main: &ExecCommand) -> i32 {
+        unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
+        // Forwarding in place and signals blocked until FORWARD_PID names
+        // the child, as exec_with_pam.
+        let mut old: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            let mut all: libc::sigset_t = std::mem::zeroed();
+            libc::sigfillset(&mut all);
+            libc::sigprocmask(libc::SIG_BLOCK, &all, &mut old);
+            for sig in [
+                libc::SIGTERM,
+                libc::SIGINT,
+                libc::SIGHUP,
+                libc::SIGQUIT,
+                libc::SIGUSR1,
+                libc::SIGUSR2,
+            ] {
+                libc::signal(sig, forward_signal as *const () as libc::sighandler_t);
+            }
+        }
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            let (code, msg) = self.exec_command(main, &[]);
+            log(self.id(), &msg);
+            if let Some(fd) = EXEC_FAIL_PIPE.with(|c| c.get()) {
+                let b = (code as u32).to_ne_bytes();
+                unsafe { libc::write(fd, b.as_ptr() as *const libc::c_void, 4) };
+            }
+            unsafe { libc::_exit(code) };
+        }
+        if child < 0 {
+            log(self.id(), &format!("fork: {}", errno()));
+            unsafe { libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut()) };
+            return EXIT_EXEC;
+        }
+        FORWARD_PID.store(child, std::sync::atomic::Ordering::SeqCst);
+        unsafe { libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut()) };
+        if let Some(fd) = EXEC_FAIL_PIPE.with(|c| c.take()) {
+            unsafe { libc::close(fd) };
+        }
+        self.st.set(keys::MAIN_PID, &child.to_string());
+
+        let alive = |p: i32| unsafe { libc::kill(p, 0) } == 0;
+        let announced = |st: &UnitState| {
+            st.get(keys::MAIN_PID)
+                .and_then(|p| p.parse::<i32>().ok())
+                .filter(|&p| p > 1)
+        };
+        let mut main_pid = child;
+        loop {
+            // Until the current main process ends; MAINPID= may move it
+            // meanwhile (the old one then is an ordinary process).
+            let mut status: Option<i32> = None;
+            let pidfd = |p: i32| unsafe { libc::syscall(libc::SYS_pidfd_open, p, 0) } as i32;
+            let mut fd = pidfd(main_pid);
+            loop {
+                loop {
+                    let mut s = 0;
+                    let r = unsafe { libc::waitpid(-1, &mut s, libc::WNOHANG) };
+                    if r <= 0 {
+                        break;
+                    }
+                    if r == main_pid {
+                        status = Some(s);
+                    }
+                }
+                if status.is_some() || !alive(main_pid) {
+                    break;
+                }
+                if let Some(p) = announced(&self.st).filter(|&p| p != main_pid && alive(p)) {
+                    main_pid = p;
+                    FORWARD_PID.store(p, std::sync::atomic::Ordering::SeqCst);
+                    if fd >= 0 {
+                        unsafe { libc::close(fd) };
+                    }
+                    fd = pidfd(p);
+                    continue;
+                }
+                let mut pfd = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if fd >= 0 {
+                    unsafe { libc::poll(&mut pfd, 1, 200) };
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+            }
+            if fd >= 0 {
+                unsafe { libc::close(fd) };
+            }
+            // Handed over? The MAINPID= may race the old process's exit:
+            // after a clean exit, give it a second.
+            let clean = status.is_none_or(|s| Status::from_wait(s) == Status::Exited(0));
+            let mut next = None;
+            for _ in 0..20 {
+                if let Some(p) = announced(&self.st).filter(|&p| p != main_pid && alive(p)) {
+                    next = Some(p);
+                    break;
+                }
+                if !clean {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if let Some(p) = next {
+                main_pid = p;
+                FORWARD_PID.store(p, std::sync::atomic::Ordering::SeqCst);
+                continue;
+            }
+            return match status.map(Status::from_wait) {
+                Some(Status::Killed(sig)) => {
+                    unsafe {
+                        libc::signal(sig, libc::SIG_DFL);
+                        libc::kill(libc::getpid(), sig);
+                    }
+                    128 + sig
+                }
+                Some(Status::Exited(c)) => c,
+                None => 0,
+            };
+        }
+    }
 }
 
 #[cfg(test)]

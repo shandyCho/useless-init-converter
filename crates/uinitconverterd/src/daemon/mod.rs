@@ -15,6 +15,7 @@ mod errors;
 mod introspect;
 mod jobs;
 mod manager;
+mod oom;
 mod private;
 mod props;
 mod relations;
@@ -606,10 +607,24 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     tokio::spawn(async move {
         let mut last = HashMap::new();
         let mut mtimes = HashMap::new();
+        let mut tick: u32 = 0;
+        // A user manager with its own cgroup reports its slices to
+        // systemd-oomd (oom.rs), every 5 s if anything changed.
+        let mut oomd = (watcher.cfg.user_mode && watcher.cfg.cgroup_base.is_some())
+            .then(|| std::sync::Arc::new(std::sync::Mutex::new(oom::Reporter::default())));
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             watcher.watch_dynamic(&mut last).await;
             watcher.watch_states(&mut mtimes, &mut last).await;
+            tick = tick.wrapping_add(1);
+            if let Some(r) = oomd.as_mut().filter(|_| tick % 5 == 0) {
+                let (cfg, r) = (watcher.cfg.clone(), r.clone());
+                let _ = tokio::task::spawn_blocking(move || {
+                    let now = oom::scan(&cfg, &crate::cgroup::base());
+                    r.lock().unwrap().update(now);
+                })
+                .await;
+            }
         }
     });
 

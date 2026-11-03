@@ -250,6 +250,15 @@ capability, 배경(bwrap 샌드박스 안에서 도는 GNOME 이미지 로더), 
 `systemd --user`에서 실행합니다. `VM_KEEP=yes`이면 끝난 뒤에도 VM을 켜 두어
 `gnome-vm.sh ssh`로 들어갈 수 있습니다.
 
+`tests/vm-user-manager.sh ~/uinitconverter-vm apps`는 세션 검사를 한 뒤 slice D를 검사합니다. 사용자
+타이머, 모든 사용자 소켓(`Accept=yes` varlink 소켓은 `varlinkctl info`에 응답해야 합니다),
+`app.slice`, `background.slice`, `session.slice`에 대한 systemd-oomd의 감시(`systemctl restart
+systemd-oomd` 뒤에도), podman quadlet 컨테이너(복사한 작은 루트에 `Rootfs=`를 써서 아무것도 내려받지
+않습니다)의 시작과 `app.slice/qhello.service` 위치와 정지, fedora 저장소에서 tester용으로 설치한
+flatpak 앱(오버레이에 약 3 GB, 네트워크 필요)이 자기 `app-flatpak-*.scope`에서 실행되는지와
+gnome-shell의 `XDG_DATA_DIRS`에 flatpak exports가 있는지를 봅니다. `apps-baseline`은 같은 것을 기본
+`systemd --user`에서 실행합니다.
+
 ## 4. 변환 미리보기 (읽기 전용)
 
 아무것도 시작하거나 쓰지 않고, 이 머신의 유닛을 uinitconverter가 어떻게 변환할지 보여줍니다.

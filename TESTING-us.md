@@ -277,6 +277,17 @@ keys and checks it runs in its `app-gnome-*.scope`, and saves
 on stock `systemd --user`. `VM_KEEP=yes` leaves the VM running afterwards,
 for `gnome-vm.sh ssh`.
 
+`tests/vm-user-manager.sh ~/uinitconverter-vm apps` runs the session checks,
+then slice D's: the user timers, every user socket (the `Accept=yes`
+varlink ones must answer `varlinkctl info`), systemd-oomd watching
+`app.slice`, `background.slice` and `session.slice` (again after `systemctl
+restart systemd-oomd`), a podman quadlet container (`Rootfs=` on a small
+copied root, so nothing is pulled) started, in `app.slice/qhello.service`,
+and stopped, and a flatpak app installed for tester from the fedora remote
+(about 3 GB in the overlay; needs the network) running in its
+`app-flatpak-*.scope`, with the flatpak exports in gnome-shell's
+`XDG_DATA_DIRS`. `apps-baseline` runs the same on stock `systemd --user`.
+
 ## 4. Translation preview (read-only)
 
 This shows how uinitconverter would translate this machine's own units, without

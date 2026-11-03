@@ -281,7 +281,25 @@ impl Daemon {
         std::fs::create_dir_all(&dir)
             .map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
         for p in &pids {
-            if let Err(e) = std::fs::write(dir.join("cgroup.procs"), p.to_string()) {
+            let mut r = std::fs::write(dir.join("cgroup.procs"), p.to_string());
+            // A user manager may not move a process from outside its own
+            // cgroup (an app started from an ssh login's session scope):
+            // as systemd --user, it asks the system manager to.
+            if self.cfg.user_mode
+                && matches!(
+                    r.as_ref().map_err(|e| e.raw_os_error()),
+                    Err(Some(libc::EACCES | libc::EPERM))
+                )
+            {
+                if let Err(e) = self.attach_via_system(&dir, *p).await {
+                    eprintln!(
+                        "uinitconverterd: {name}: the system manager did not move PID {p}: {e}"
+                    );
+                } else {
+                    r = Ok(());
+                }
+            }
+            if let Err(e) = r {
                 // The scope never existed: its empty cgroup goes (rmdir
                 // fails, harmlessly, if an earlier PID was moved in). A
                 // process that is gone already (an autostart program that
@@ -417,11 +435,41 @@ impl Daemon {
         Ok(())
     }
 
+    /// A user manager's request to the system manager: move `pid` into
+    /// `dir`, which lies inside this manager's own unit (CGROUP_BASE,
+    /// user@UID.service).
+    async fn attach_via_system(&self, dir: &std::path::Path, pid: u32) -> Result<(), String> {
+        let base = crate::cgroup::base();
+        let unit = base
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or("no cgroup of our own")?;
+        let sub = dir
+            .strip_prefix(&base)
+            .map_err(|_| format!("{} is not under {}", dir.display(), base.display()))?;
+        let sub = format!("/{}", sub.display());
+        let conn = zbus::Connection::system()
+            .await
+            .map_err(|e| e.to_string())?;
+        conn.call_method(
+            Some("org.freedesktop.systemd1"),
+            "/org/freedesktop/systemd1",
+            Some("org.freedesktop.systemd1.Manager"),
+            "AttachProcessesToUnit",
+            &(unit.as_str(), sub.as_str(), vec![pid]),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// AttachProcessesToUnit(unit, subcgroup, pids)
     /// As systemd, "" names the caller's own unit (systemd --user moves its
     /// processes within user@UID.service so). An unprivileged caller may
-    /// move its own processes inside its own delegated unit; anything else
-    /// needs manage-units.
+    /// move its own processes into its own delegated unit when that unit
+    /// runs as the caller, as systemd allows: a user manager moves an app
+    /// started from an ssh login's session scope (flatpak run) into its
+    /// app scope so. Anything else needs manage-units.
     pub(super) async fn attach_processes(&self, c: &Peer, msg: &Message) -> R<()> {
         let (name, sub, pids): (String, String, Vec<u32>) = Self::args(msg)?;
         let Some(sub) = subcgroup(&sub) else {
@@ -451,21 +499,33 @@ impl Daemon {
             Some(p) => util::proc_cgroup(p).and_then(|cg| unit_of_cgroup(&cg)),
             None => None,
         };
+        // The user the unit runs as (User=%i of user@UID.service).
+        let unit_uid = ["Service", "Scope"]
+            .iter()
+            .find_map(|sec| unit.get(sec, "User"))
+            .map(|u| crate::loader::expand_specifiers(&u, &unit))
+            .and_then(|u| {
+                u.parse::<u32>()
+                    .ok()
+                    .or_else(|| util::lookup_user(&u).map(|i| i.uid))
+            });
         let own = |pid: &u32| {
             use std::os::unix::fs::MetadataExt;
             std::fs::metadata(format!("/proc/{pid}"))
                 .ok()
                 .map(|m| m.uid())
                 == caller
-                && util::proc_cgroup(*pid)
-                    .and_then(|cg| unit_of_cgroup(&cg))
-                    .as_deref()
-                    == Some(id.as_str())
+                && unit_uid.is_some()
+                && unit_uid == caller
         };
         let delegated = caller.is_some_and(|u| u != 0)
             && caller_unit.as_deref() == Some(id.as_str())
-            && (unit.get_bool("Service", "Delegate", false)
-                || unit.get_bool("Scope", "Delegate", false))
+            // Delegate=yes or a controller list (user@.service's
+            // "pids memory cpu"), as the cgroup setup reads it.
+            && ["Service", "Scope"].iter().any(|sec| {
+                unit.get(sec, "Delegate")
+                    .is_some_and(|v| crate::unit::parse_bool(&v) != Some(false))
+            })
             && pids.iter().all(own);
         if !delegated {
             self.require_privileged(c, msg).await?;

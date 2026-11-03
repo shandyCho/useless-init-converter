@@ -119,7 +119,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - `DEP_MAP`은 systemd 유닛을 직접 작성한 s6 서비스에 대응시킵니다. 예: `dbus.service` → `dbus`.
 - 활성화된 `.socket`은 자신의 서비스도 함께 포함합니다. 소켓은 러너가 바인드하며, 이름 또는 `Service=`로 짝을 찾습니다. 부팅에서 소켓을 통해서만 포함되는 서비스(sockets.target이 `virtlogd.socket`을 요구하고 `virtlogd.service`를 요구하는 유닛은 없음)는 요청 시(on-demand) 서비스입니다. 러너는 소켓만 바인드하고 기다립니다(`run --on-demand`, `uinitconverter plan`의 "on demand").
 - `Conflicts=`: 두 유닛이 모두 부팅 시 시작될 경우, 충돌 대상은 타깃에서 빠집니다(예: `getty@tty1.service`보다 `gdm.service`). 실행 중에는 유닛을 시작하거나 재시작할 때 충돌하는 유닛과, 자기 `Conflicts=`에 그 유닛을 적은 유닛을 멈춥니다.
-- systemd와 같은 작업 부수 효과: 유닛을 멈추면 `PartOf=`, `BindsTo=`, `Requires=`로 그 유닛을 가리키는 실행 중인 유닛도 멈추고(데이터베이스 유닛과 요청 시 인스턴스 모두), 재시작하면 `PartOf=`로 가리키는 유닛도 재시작합니다. `StopWhenUnneeded=yes`인 실행 중 유닛은 그것을 필요로 하는(`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`) 실행 중 유닛이 없어지면 멈추며, 작업으로 직접 시작한 직후에도 마찬가지입니다. 타깃의 상태는 타깃 자신의 것입니다. 멈춘 타깃은 그것이 불러온 유닛이 아직 실행 중이어도 비활성이고, 다시 시작하면 더 이상 활성이 아닌 원하는 유닛(이미 실행된 oneshot)을 다시 시작합니다. `STOPPING=1`을 보낸 `Type=notify` 서비스는 거기에 묶인 유닛과 함께 멈춥니다(gnome-session의 monitor가 세션을 이렇게 끝냅니다). systemd와 달리 재시작은 `Requires=`를 따라 전파되지 않습니다(dbus를 재시작하면 그것이 필요한 모든 것이 재시작되기 때문입니다).
+- systemd와 같은 작업 부수 효과: 유닛을 멈추면 `PartOf=`, `BindsTo=`, `Requires=`로 그 유닛을 가리키는 실행 중인 유닛도 멈추고(데이터베이스 유닛과 요청 시 인스턴스 모두), 재시작하면 `PartOf=`로 가리키는 유닛도 재시작합니다. `StopWhenUnneeded=yes`인 실행 중 유닛은 그것을 필요로 하는(`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`) 실행 중 유닛이 없어지면 멈추며, 작업으로 직접 시작한 직후에도 마찬가지입니다. 타깃의 상태는 타깃 자신의 것입니다. 멈춘 타깃은 그것이 불러온 유닛이 아직 실행 중이어도 비활성이고, 다시 시작하면 더 이상 활성이 아닌 원하는 유닛(이미 실행된 oneshot)을 다시 시작합니다. `STOPPING=1`을 보낸 `Type=notify` 서비스는 거기에 묶인 유닛과 함께 멈춥니다(gnome-session의 monitor가 세션을 이렇게 끝냅니다). `NotifyAccess=all`인 `Type=notify` 서비스는 podman의 quadlet 유닛처럼 `MAINPID=`로 주 프로세스를 넘길 수 있습니다(`podman run -d`는 conmon이 컨테이너를 실행하면 끝납니다). 이때 러너가 s6의 프로세스로 남아 현재 주 프로세스에 시그널을 전달하고, 그 프로세스가 끝나면 서비스도 끝납니다. systemd와 달리 재시작은 `Requires=`를 따라 전파되지 않습니다(dbus를 재시작하면 그것이 필요한 모든 것이 재시작되기 때문입니다).
 
 **마운트, 스왑, path 유닛**
 - `.mount`와 `.swap` 유닛은 `mount(8)`/`swapon(8)`을 실행합니다. 상태는 커널(`mountinfo`, `/proc/swaps`)에서 읽으므로, 누가 마운트했든 `systemctl status tmp.mount`가 정확합니다. `RequiresMountsFor=`는 해당 경로를 덮는 마운트 유닛에 대한 의존성이 됩니다.
@@ -152,7 +152,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - `Runtime/State/Cache/Logs/ConfigurationDirectory=`.
 - `StandardInput/Output/Error=`(null, tty, file:, append:, truncate:), `TTYPath=`, `TTYVHangup=`. `getty@.service`에 필요한 만큼 지원합니다.
 - `Accept=no` 소켓 활성화: `ListenStream/Datagram/SequentialPacket/FIFO/Special`와 `LISTEN_FDS`, `LISTEN_PID`, `LISTEN_FDNAMES`. 소켓이 있는 서비스가 정상 종료하면 systemd처럼 소켓에 다음 활동이 있을 때 다시 시작됩니다(systemd-rfkill은 할 일이 없으면 종료합니다). `.socket`을 시작하면(`systemctl start`, udev의 `SYSTEMD_WANTS`) 그 서비스가 소켓과 함께 시작됩니다.
-- `ListenStream=` 하나인 `Accept=yes`, 유닉스 경로(예: `polkit-agent-helper.socket`)나 IP 포트(예: `sshd.socket`): 소켓이 따로 s6 서비스가 되어 `s6-ipcserverd`(유닉스)나 `s6-tcpserverd`(TCP, 선택 패키지 s6-networking)가 연결을 받고, 연결마다 템플릿의 인스턴스를 systemd와 같은 이름(`NAME@N-PID-UID.service` 또는 `NAME@N-LOCALIP:PORT-REMOTEIP:PORT.service`)으로 하나씩 시작합니다. TCP 인스턴스는 `REMOTE_ADDR`와 `REMOTE_PORT`도 받습니다. 인스턴스는 연결을 fd 3(`LISTEN_FDS=1`, `LISTEN_FDNAMES=connection`)으로 받고, `StandardInput=`/`StandardOutput=socket`이면 표준 입출력으로도 받습니다. 템플릿의 사용자, 샌드박스, cgroup으로 `ExecStartPre=`, `ExecStart=`, `ExecStartPost=`, `ExecStop=`, `ExecStopPost=`를 실행합니다. 템플릿은 `Type=simple`, `exec`, `oneshot`만 됩니다. `MaxConnections=`(기본 64)와 `MaxConnectionsPerSource=`는 서버의 `-c`/`-C`가 되며 최대값은 유닉스 소켓이 1000, TCP가 16384입니다. `s6-tcpserverd`가 없으면 TCP 소켓은 생성되지 않고 `uinitconverter plan`이 그렇게 알려 줍니다. `systemctl status`에 `Accepted:`와 `Connected:`가 나옵니다. 연결이 실행되는 동안 그 인스턴스는 다른 유닛과 같습니다. `systemctl list-units`에 나오고, `systemctl status`에 주 프로세스가 보이며, `systemctl stop`은 `KillSignal=`을 보내고(`TimeoutStopSec=` 뒤에는 SIGKILL) `ExecStopPost=`를 실행합니다. systemd처럼 SIGTERM, SIGHUP, SIGINT, SIGPIPE로 끝난 주 프로세스는 성공으로 칩니다. 소켓을 멈춰도 systemd처럼 실행 중인 연결은 그대로 둡니다. 바인드할 수 없는 소켓(`sshd.service`가 22번 포트를 잡고 있을 때의 `sshd.socket`. `Conflicts=`는 강제되지 않습니다)은 `failed`가 되며, 다시 시작할 때까지 재시도하지 않습니다.
+- `ListenStream=` 하나인 `Accept=yes`, 유닉스 경로(예: `polkit-agent-helper.socket`)나 IP 포트(예: `sshd.socket`): 소켓이 따로 s6 서비스가 되어 `s6-ipcserverd`(유닉스)나 `s6-tcpserverd`(TCP, 선택 패키지 s6-networking)가 연결을 받고, 연결마다 템플릿의 인스턴스를 systemd와 같은 이름(`NAME@N-PID-UID.service` 또는 `NAME@N-LOCALIP:PORT-REMOTEIP:PORT.service`)으로 하나씩 시작합니다. TCP 인스턴스는 `REMOTE_ADDR`와 `REMOTE_PORT`도 받습니다. 인스턴스는 연결을 fd 3(`LISTEN_FDS=1`, `LISTEN_FDNAMES=`는 소켓의 `FileDescriptorName=`이거나 `connection`. `journalctl` 같은 systemd의 varlink 서비스는 이름이 `varlink`인 fd에서만 응답합니다)으로 받고, `StandardInput=`/`StandardOutput=socket`이면 표준 입출력으로도 받습니다. 템플릿의 사용자, 샌드박스, cgroup으로 `ExecStartPre=`, `ExecStart=`, `ExecStartPost=`, `ExecStop=`, `ExecStopPost=`를 실행합니다. 템플릿은 `Type=simple`, `exec`, `oneshot`만 됩니다. `MaxConnections=`(기본 64)와 `MaxConnectionsPerSource=`는 서버의 `-c`/`-C`가 되며 최대값은 유닉스 소켓이 1000, TCP가 16384입니다. `s6-tcpserverd`가 없으면 TCP 소켓은 생성되지 않고 `uinitconverter plan`이 그렇게 알려 줍니다. `systemctl status`에 `Accepted:`와 `Connected:`가 나옵니다. 연결이 실행되는 동안 그 인스턴스는 다른 유닛과 같습니다. `systemctl list-units`에 나오고, `systemctl status`에 주 프로세스가 보이며, `systemctl stop`은 `KillSignal=`을 보내고(`TimeoutStopSec=` 뒤에는 SIGKILL) `ExecStopPost=`를 실행합니다. systemd처럼 SIGTERM, SIGHUP, SIGINT, SIGPIPE로 끝난 주 프로세스는 성공으로 칩니다. 소켓을 멈춰도 systemd처럼 실행 중인 연결은 그대로 둡니다. 바인드할 수 없는 소켓(`sshd.service`가 22번 포트를 잡고 있을 때의 `sshd.socket`. `Conflicts=`는 강제되지 않습니다)은 `failed`가 되며, 다시 시작할 때까지 재시도하지 않습니다.
 - 부팅 때의 요청 시 활성화: 요청 시 서비스는 systemd에서처럼 소켓에 첫 활동이 있을 때까지 `inactive`입니다(iscsid, libvirt 데몬들, cupsd, dmeventd, hostnamed). 그때 자신이 요구하는(`Requires=`/`BindsTo=`/`Wants=`) 요청 시 서비스 중 아직 기다리는 것도 시작합니다. 작업으로 시작하면(`systemctl start`, 의존성, D-Bus 활성화, `.path` 유닛) 바로 실행되고, 한 번 실행된 서비스를 s6가 다시 시작할 때(`Restart=`, `systemctl restart`)도 기다리지 않습니다. `systemctl stop` 뒤에는 이전처럼 소켓이 닫힙니다. 소켓은 `uinitconverter-fdstore`가 보관합니다. 이것이 없으면 uinitconverterd가 시작되기 전에는 소켓을 보관할 곳이 없으므로 서비스가 바로 시작됩니다.
 - `Restart=`(모든 모드), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=`(reboot/poweroff/halt).
@@ -178,7 +178,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 오래 실행되는 서비스의 `ExecStop=`은 s6-rc가 서비스를 직접 멈출 때도 실행됩니다: 종료 시, `s6 live stop`, `s6 live reset`, 패키지 업데이트로 서비스가 없어질 때. 이런 서비스마다 그 서비스에 의존하는 s6-rc oneshot `UNIT.stop`이 생기고(그래서 s6-rc가 이것을 먼저 중지합니다), 그 `down`이 `TimeoutStopSec=` 안에서 `$MAINPID`와 함께 `ExecStop=`을 실행합니다. 데몬은 s6-rc가 서비스를 시작해 두었으면 `UNIT.stop`도 시작하고, `systemctl stop`은 `ExecStop=`을 이것에 맡깁니다(한 번만 실행). `RemainAfterExit=yes`인 oneshot은 원래부터 자신의 `down`에서 실행했습니다. 차이점: 그 서비스에 의존하는 유닛은 `ExecStop=`보다 먼저가 아니라 동시에 멈춥니다(`UNIT.stop`에는 아무것도 의존하지 않습니다. 그렇게 하면 업그레이드 때 s6-rc-update가 새 서비스에 대한 의존성이 생긴 유닛을 모두 다시 시작합니다). 또 `s6 process restart`/`s6-svc`는 프로세스에만 작용하므로 그때는 `ExecStop=`이 실행되지 않습니다. `ExecStop=`이 있는 요청 시 인스턴스(longrun 포함)는 종료할 때 데몬이 멈춥니다.
 - `poweroff.target`, `reboot.target`, `halt.target`을 시작하면(logind가 전원을 끄는 방식) 설정된 종료 명령을 실행합니다.
 - D-Bus 활성화: dbus-daemon의 `ActivationRequest`에 응답하고, 시작이 실패하면 `ActivationFailure`로 응답합니다. `--bus=broker`이면 systemd에서처럼 dbus-broker-launch가 `StartUnit`(`SystemdService=`가 있을 때)이나 `StartTransientUnit`(그 밖에는 transient `dbus-:1.N-NAME@K.service`)으로 서비스를 시작하고, `JobRemoved`와 유닛의 `ActiveState`를 감시합니다.
-- 권한: 상태를 바꾸는 호출에는 root, `ALLOW_UIDS`에 있는 uid, 또는 systemd의 action ID(`manage-units`, `manage-unit-files`, `reload-daemon`, `set-environment`; 정책 파일은 systemd에 포함)에 대한 polkit 허가가 필요합니다. polkit이 없으면 root가 아닌 호출자는 거부됩니다. `ALLOW_UIDS`는 root와 같은 권한입니다. 유닛 하나에 대한 호출은 systemd처럼 polkit에 `unit`과 `verb` 세부 정보를 넘기므로, 그것으로 판단하는 규칙이 동작합니다. systemd와 같이 `AttachProcessesToUnit`의 유닛 이름이 비어 있으면 호출자 자신의 유닛이며, 권한 없는 호출자도 자신의 `Delegate=yes` 유닛 안에서 자기 프로세스는 옮길 수 있습니다(`user@UID.service`의 `systemd --user`).
+- 권한: 상태를 바꾸는 호출에는 root, `ALLOW_UIDS`에 있는 uid, 또는 systemd의 action ID(`manage-units`, `manage-unit-files`, `reload-daemon`, `set-environment`; 정책 파일은 systemd에 포함)에 대한 polkit 허가가 필요합니다. polkit이 없으면 root가 아닌 호출자는 거부됩니다. `ALLOW_UIDS`는 root와 같은 권한입니다. 유닛 하나에 대한 호출은 systemd처럼 polkit에 `unit`과 `verb` 세부 정보를 넘기므로, 그것으로 판단하는 규칙이 동작합니다. systemd와 같이 `AttachProcessesToUnit`의 유닛 이름이 비어 있으면 호출자 자신의 유닛이며, 위임된 유닛(`Delegate=yes`나 컨트롤러 목록)이 호출자로 실행 중이고 호출자가 그 안에 있으면, 권한 없는 호출자도 자기 프로세스를 그 유닛으로, 밖에서도 옮길 수 있습니다(사용자 매니저가 ssh 로그인에서 시작된 앱을 앱 scope로 옮길 때).
 - SELinux 접근 검사를 systemd 262와 같이 polkit보다 먼저, root에게도 합니다. 호출자의 레이블(버스에서, 또는 private 소켓의 `SO_PEERSEC`)이 유닛 파일 레이블에 대해 클래스 `service`의 해당 권한(`start`, `stop`, `reload`, `status`)을, 매니저 호출과 유닛 파일이 없는 유닛은 uinitconverterd 자신의 레이블에 대해 클래스 `system`의 권한(`reload`, `status`, `halt`, `reboot`, `enable`, `start`)을 가져야 합니다. `ListUnits`는 호출자가 볼 수 없는 유닛을 빼고 보여 줍니다. permissive 모드와 permissive 도메인에서는 거부를 기록만 합니다(uinitconverterd의 stderr).
 - D-Bus 활성화 요청은 버스 데몬 자신이 보낸 것만 받아들이며, 활성화 때문에 데이터베이스를 다시 만들지 않습니다.
 - 같은 유닛의 작업은 차례로 실행되며, 대기 중인 작업은 취소할 수 있습니다.
@@ -456,7 +456,7 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 
 ### s6 사용자 매니저 (진행 중)
 
-`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-143부).
+`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-144부).
 `uinitconverter.conf`의 `USER_MANAGER=s6` 또는 커널 명령줄의 `uinitconverter.user_manager=s6`이
 있으면 러너가 `user@UID.service`에 `systemd --user` 대신 `uinitconverterd user-manager`를
 실행합니다. 유닛 파일은 바꾸지 않습니다. `USER_MANAGER=systemd`(기본값)나
@@ -496,9 +496,20 @@ VM에서 이 위에서 동작합니다. GDM 자동 로그인, 세션 타깃, `se
 gnome-shell, 셸에서 연 앱이 자기 `app-gnome-*.scope`에 들어가는 것, SELinux enforcing에 거부 없음까지
 `systemd --user`와 같습니다.
 
-아직 안 된 것: 로그아웃과 두 번째 사용자, 타이머와 path 유닛, `Accept=yes` 소켓, flatpak과
-systemd-oomd 보고, 제한된 사용자를 위한 SELinux, s6 부팅의 시스템 매니저 아래에서 실행. 이것들이
-끝나기 전까지는 기본값을 유지하세요.
+타이머와 path 유닛도 사용자 모드에서 실행합니다(`timers.target`). `Persistent=` 타이머의 기록은
+`systemd --user`와 같은 곳(`~/.local/share/systemd/timers/stamp-NAME`, 수정 시각)에 두므로, 두
+매니저 사이를 오가도 놓친 실행을 따라잡습니다. `Accept=yes` 소켓은 시스템 쪽처럼 자체
+`s6-ipcserverd` 서비스입니다(`systemd-journalctl.socket`, `systemd-storage-fs.socket`,
+`systemd-ask-password.socket`). 매니저는 자기 slice의 `ManagedOOMMemoryPressure=`/`ManagedOOMSwap=`을
+systemd-oomd에 알리고(`io.systemd.oom.ReportManagedOOMCGroups`, `systemd --user`와 같음. Fedora의
+`slice.d` drop-in이 모든 사용자 slice에 설정합니다), oomd가 다시 시작하면 다시 알립니다. 임시 scope로
+직접 옮길 수 없는 프로세스(ssh 로그인에서 실행한 `flatpak run`)는 시스템 매니저가 옮깁니다
+(`AttachProcessesToUnit`). 테스트 VM에서 podman quadlet 컨테이너, flatpak 앱(`app-flatpak-*.scope`에서
+실행되고 앱 그리드에 나옴), `app.slice`, `background.slice`, `session.slice`에 대한 oomd의 감시가
+`systemd --user`와 같이 동작합니다.
+
+아직 안 된 것: 로그아웃과 두 번째 사용자, 제한된 사용자를 위한 SELinux, s6 부팅의 시스템 매니저
+아래에서 실행. 이것들이 끝나기 전까지는 기본값을 유지하세요.
 
 ## `s6` 명령 (s6-frontend)
 

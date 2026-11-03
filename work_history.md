@@ -10928,3 +10928,90 @@ Slices A, B and C pass in the VM (a systemd boot opted in with the kernel flag).
 - **Slice E:** logout (gnome-session-shutdown.target, `--restart-dbus`), a second user, a user switch, lingering, a package update (reload), power off, and the fallback.
 - **Smaller items:** parallel starts within a transaction; job modes fail/replace-irreversibly; OnFailure=/OnFailureJobMode=; the gsd-smartcard race; whether a Type=dbus unit that exits 0 before its name should be logged as a failure (systemd's result there wasn't checked).
 - vm-user-manager.sh's SKARNET_RPMS default (~/rpmbuild-skarnet/RPMS/x86_64) holds the older 2026-10-26 build of the same versions. The new build is in ~/rpmbuild-skarnet/rpms, which is where build-skarnet-rpms.sh writes; the default could point there.
+
+## 2026-11-03, part 144: slice D (apps and services on the s6 user manager)
+
+Owner: "do slice D", then "commit them as two commits": part 143 is 8f2ab19 (slice C), this part the commit after it. The two were split by file: the slice C commit was checked on its own (cargo test 114, user sandbox 49/49, fmt clean).
+
+**Result:** the new mode `tests/vm-user-manager.sh DIR apps` (every user@ on the s6 manager, GDM autologin) passes the session's 18/18, then slice D's 30/30:
+- user timers active/waiting
+- every user socket active; the three Accept=yes varlink sockets answer `varlinkctl info`
+- systemd-oomd watches app.slice, background.slice and session.slice, again after `systemctl restart systemd-oomd`
+- a podman quadlet container starts (in app.slice/qhello.service) and stops
+- a flatpak app installed for tester runs in its `app-flatpak-*.scope`, with the flatpak exports in gnome-shell's XDG_DATA_DIRS
+- no failed units, no AVC denials
+
+`apps-baseline` (stock systemd --user) passes 18/18 and 29/30. Its one failure is the difference described under "Differences".
+
+**Changes:**
+- **Timers and paths in user mode.** can_be_dynamic takes them (the dynamic engine already ran transient ones).
+  - A Persistent= stamp in user mode is systemd --user's file, `$XDG_DATA_HOME/systemd/timers/stamp-NAME` (default ~/.local/share), and the time is its mtime. The system side keeps STATE_DIR/timers/NAME with the time as text.
+  - **Decision, against part 136's "persistent state in $XDG_RUNTIME_DIR or /var/lib, not the home":** $XDG_RUNTIME_DIR is gone at every boot, so Persistent= would never catch up, and a user manager can't write /var/lib. systemd's own file also carries the catch-up over between the two managers. A user without a writable home (greeter users) gets an error line per trigger and no catch-up. Owner: revisit if that matters.
+- **Accept=yes sockets in user mode:** a dynamic longrun with the database's scripts (`runner accept`, s6-ipcserverd).
+  - The status of such a socket's longrun is active/listening.
+  - connections() also lists the dynamic sockets' connections (it read only the database index).
+  - Fedora's user sockets.target wants three of them: systemd-ask-password, -journalctl and -storage-fs.
+- **Bug, system side too:** an Accept=yes instance got `LISTEN_FDNAMES=connection` always. systemd uses the socket's FileDescriptorName= and falls back to "connection" only without one. systemd's varlink services serve only on an fd named "varlink"; otherwise they run their normal CLI, so journalctl printed the journal into the journal.
+- **systemd-oomd reporting** (new daemon/oom.rs). The format was captured from systemd 262 in the VM with strace:
+  - One-way, NUL-terminated `io.systemd.oom.ReportManagedOOMCGroups` to /run/systemd/oom/io.systemd.ManagedOOM.
+  - Entries are {mode: kill, path, property, limit?, duration?}. `limit` is the percentage scaled to UINT32_MAX (80% = 3435973836).
+  - In user mode with a delegated cgroup, every 5 s from the watcher loop: the scan walks the slices under CGROUP_BASE (the base itself is -.slice) plus their services and scopes, and reads ManagedOOMMemoryPressure=/…Limit=/…DurationSec= and ManagedOOMSwap=.
+  - It sends when the set changed or oomd closed the connection (restart: everything again). A path that went away is sent as mode auto, because oomd keeps what it was told.
+  - `Loader::load_implicit` gives slices and scopes without a unit file their drop-ins (slice.d/ for -.slice and app-gnome\x2dsession\x2dmanager.slice), as systemd loads implicit slices.
+  - `UINITCONVERTER_OOMD_SOCKET` overrides the socket path.
+  - The system manager's side (oomd subscribing to PID 1 through io.systemd.ManagedOOM) is not implemented; noted for the s6 boot.
+- **Transient scopes, moving PIDs from outside** (`flatpak run` from an ssh login is in session-N.scope, under root's user-1000.slice). The user manager may not move such a process (EACCES). As systemd --user does, it then asks the system manager with `AttachProcessesToUnit(user@UID.service, /app.slice/X.scope, [pid])`.
+  - **System side:** our AttachProcessesToUnit allowed an unprivileged caller only processes already inside its unit. It now follows systemd's rule: process and unit (User=, specifiers expanded) owned by the caller, the unit delegated, and the caller inside it.
+  - Delegation counts `Delegate=pids memory cpu` (a controller list, Fedora's user@) as on, as cgroup.rs already did. The get_bool read made it off, so systemd --user's own attaches on s6 boots needed manage-units.
+- **MAINPID= handover (runner, system side too).** Found with quadlet: `podman run -d` exits once conmon runs the container, and conmon sends MAINPID= and READY=1.
+  - Before, the run script's process was the main process, so s6 saw the service end and ExecStop= removed the container. The first VM run passed by luck of timing; the second didn't.
+  - Now Type=notify/notify-reload with NotifyAccess=all (the only setting where another process may send MAINPID=) runs guarded (forking.rs run_guarded). The runner stays as s6's process, forks the command and forwards signals to the current main process.
+  - It follows MAIN_PID as the notify helper sets it, and gives a clean exit 1 s for a MAINPID= racing it. The service ends with the main process.
+  - Other notify services keep the exec path (no extra process).
+- tests/vm-user-manager.sh:
+  - modes `apps` and `apps-baseline`
+  - the session mode's embedded scripts unchanged
+  - the quadlet rootfs is a copy of sleep and its libraries, relabelled container_file_t (user_home_t isn't mappable by container_t; stock failed on that too)
+  - Fedora's flatpak remote is added per user (root has no session bus over SSH, and the system remote needs polkit)
+
+**Bugs found in my own steps:**
+- A VM run was started while the release build was still compiling (the script copies target/release at once); it was killed and rerun.
+- An empty `if false; then fi` in the generated setup script; bash -n can't see into the heredoc. The inner scripts are now extracted and checked with shellcheck.
+
+**Differences from systemd --user found, left as they are:**
+1. After `systemctl stop qhello.service`, conmon exits 143 and systemd --user marks the unit failed. Ours did the same in the last run ("after the stop: failed"); in the run before it, the failed-units check that followed was clean, so it apparently ended inactive. That looks timing-dependent (whether conmon dies from our forwarded SIGTERM or from ExecStop='s `podman rm -f` first); not investigated. The test shows the state and clears it.
+2. `systemctl show -p A,B` prints properties in our GetAll order (a HashMap), not systemd's. Scripts that read several values with --value get them in a different order. The test reads one property at a time.
+3. systemd --user leaves user@UID.service itself (-.slice) out of its first oomd report and sends it after a reconnect; ours always sends it.
+
+**Memory** (PSS under user@1000 with the flatpak app running): stock 756,719 KiB, ours 750,822 KiB.
+
+**Not done in slice D:** the plan's memory item, the daemon serving the user sockets without an idle runner each (about 0.65 MiB per waiting service, 3 in the session: importd, machined, gcr-ssh-agent). The fds are already in the daemon's in-process store; only the waiting runner remains.
+
+**Tests.**
+- cargo test 116 (new: the oomd limit scaling, scan with slice.d on implicit slices and the auto removal). fmt clean.
+- User sandbox 64/64. New:
+  - a timer firing repeatedly, list-timers
+  - a Persistent= timer catching up from a stamp two days old, its stamp rewritten
+  - a path unit
+  - an Accept=yes socket answering, with FileDescriptorName= in LISTEN_FDNAMES
+  - a MAINPID= handover: MainPID is the announced process, and the stop ends it
+
+  The handover check fails 5 ways with the guarded path disabled, as it should.
+- System sandbox with SANDBOX_S6NET_BIN: 370/370, SANDBOX_JOURNAL=no 377/377, SANDBOX_FDSTORE=no 358/358.
+- VM: apps 18/18 + 30/30 (twice; the last run with the final script), apps-baseline 18/18 + 29/30 (the qhello failed state, before the test cleared it). shellcheck and bash -n clean.
+
+### Current state
+
+Slices A to D pass in the VM (a systemd boot opted in with the kernel flag). The default stays USER_MANAGER=systemd. Committed: slice C 8f2ab19, slice D the next commit.
+
+### Next steps
+
+- **Slice E:** logout (gnome-session-shutdown.target, `--restart-dbus`), a second user, a user switch, lingering, a package update (reload), power off, and the fallback to systemd --user.
+- **Then:** the s6 boot's own system manager running the user manager (and oomd's subscription to the system manager); SELinux for confined users.
+- **Smaller items:**
+  - the socket-waiting runners
+  - the stop result of a guarded service whose main process exits 143 (difference 1, timing-dependent)
+  - property order in GetAll (difference 2)
+  - parallel starts in a transaction
+  - job modes; OnFailure=
+  - the gsd-smartcard race

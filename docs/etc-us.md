@@ -127,7 +127,7 @@ How each one is built, installed and run: [standalone/uinitconverter-fdstore](..
 - `DEP_MAP` maps systemd units to hand-written s6 services. For example, `dbus.service` → `dbus`.
 - An enabled `.socket` pulls in its service. The runner binds the sockets, matched by name or by `Service=`. A service the boot pulls in only through its sockets (sockets.target wants `virtlogd.socket`, nothing wants `virtlogd.service`) is on demand: its runner only binds the sockets and waits (`run --on-demand`, "on demand" in `uinitconverter plan`).
 - `Conflicts=`: if both units would start at boot, the conflicted one is dropped from the targets (for example `gdm.service` over `getty@tty1.service`). At runtime, starting or restarting a unit stops the units it conflicts with, and those that list it in their own `Conflicts=`.
-- Job side effects as with systemd: stopping a unit also stops the running units that have it in `PartOf=`, `BindsTo=` or `Requires=` (database units and on-demand instances alike), and restarting it restarts those with `PartOf=`. A running unit with `StopWhenUnneeded=yes` is stopped once no running unit needs it (`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`), also right after a job started it directly. A target's state is its own: a stopped target is inactive even while units it pulled in still run, and starting it again starts its wanted units that are no longer active (a oneshot that already ran). A `Type=notify` service that sends `STOPPING=1` is stopped, with what is bound to it (gnome-session's monitor ends a session this way). Unlike systemd, a restart does not propagate along `Requires=` (restarting dbus would restart everything that needs it).
+- Job side effects as with systemd: stopping a unit also stops the running units that have it in `PartOf=`, `BindsTo=` or `Requires=` (database units and on-demand instances alike), and restarting it restarts those with `PartOf=`. A running unit with `StopWhenUnneeded=yes` is stopped once no running unit needs it (`Requires=`, `Requisite=`, `Wants=`, `BindsTo=`), also right after a job started it directly. A target's state is its own: a stopped target is inactive even while units it pulled in still run, and starting it again starts its wanted units that are no longer active (a oneshot that already ran). A `Type=notify` service that sends `STOPPING=1` is stopped, with what is bound to it (gnome-session's monitor ends a session this way). A `Type=notify` service with `NotifyAccess=all` may hand its main process over with `MAINPID=`, as podman's quadlet units do (`podman run -d` exits once conmon runs the container): its runner then stays as s6's process, forwards signals to the current main process, and the service ends when that one does. Unlike systemd, a restart does not propagate along `Requires=` (restarting dbus would restart everything that needs it).
 
 **Mounts, swap, path units**
 - `.mount` and `.swap` units run `mount(8)`/`swapon(8)`. Their state comes from the kernel (`mountinfo`, `/proc/swaps`), so `systemctl status tmp.mount` is correct whoever mounted it. `RequiresMountsFor=` becomes a dependency on the covering mount units.
@@ -163,7 +163,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - `Runtime/State/Cache/Logs/ConfigurationDirectory=`.
 - `StandardInput/Output/Error=` (null, tty, file:, append:, truncate:), `TTYPath=` and `TTYVHangup=`, which are enough for `getty@.service`.
 - Socket activation for `Accept=no`: `ListenStream/Datagram/SequentialPacket/FIFO/Special`, with `LISTEN_FDS`, `LISTEN_PID` and `LISTEN_FDNAMES` set. A service that exits cleanly while it has sockets is started again on the next activity on them, as with systemd (systemd-rfkill exits when idle). Starting a `.socket` (`systemctl start`, udev's `SYSTEMD_WANTS`) starts its service with the socket.
-- `Accept=yes` with one `ListenStream=`, a unix path (e.g. `polkit-agent-helper.socket`) or an IP port (e.g. `sshd.socket`): the socket is an s6 service of its own, where `s6-ipcserverd` (unix) or `s6-tcpserverd` (TCP, from the optional s6-networking package) accepts and starts one instance of the template per connection, named as systemd names it (`NAME@N-PID-UID.service`, or `NAME@N-LOCALIP:PORT-REMOTEIP:PORT.service`). TCP instances also get `REMOTE_ADDR` and `REMOTE_PORT`. The instance gets the connection on fd 3 (`LISTEN_FDS=1`, `LISTEN_FDNAMES=connection`) and, with `StandardInput=`/`StandardOutput=socket`, on stdin/stdout. It runs `ExecStartPre=`, `ExecStart=`, `ExecStartPost=`, `ExecStop=` and `ExecStopPost=` with the template's user, sandbox and cgroup. Templates may be `Type=simple`, `exec` or `oneshot`. `MaxConnections=` (default 64) and `MaxConnectionsPerSource=` become the server's `-c`/`-C`, at most 1000 for unix sockets and 16384 for TCP. Without `s6-tcpserverd` a TCP socket is not generated, and `uinitconverter plan` says so. `systemctl status` shows `Accepted:` and `Connected:`. While a connection runs, its instance is a unit like any other: `systemctl list-units` lists it, `systemctl status` shows its main process, and `systemctl stop` sends it `KillSignal=` (SIGKILL after `TimeoutStopSec=`) and then runs `ExecStopPost=`. A main process ended by SIGTERM, SIGHUP, SIGINT or SIGPIPE counts as success, as with systemd. Stopping the socket leaves running connections alone, as with systemd. A socket that can't be bound (`sshd.socket` while `sshd.service` holds port 22: `Conflicts=` isn't enforced) is `failed` and isn't retried until it is started again.
+- `Accept=yes` with one `ListenStream=`, a unix path (e.g. `polkit-agent-helper.socket`) or an IP port (e.g. `sshd.socket`): the socket is an s6 service of its own, where `s6-ipcserverd` (unix) or `s6-tcpserverd` (TCP, from the optional s6-networking package) accepts and starts one instance of the template per connection, named as systemd names it (`NAME@N-PID-UID.service`, or `NAME@N-LOCALIP:PORT-REMOTEIP:PORT.service`). TCP instances also get `REMOTE_ADDR` and `REMOTE_PORT`. The instance gets the connection on fd 3 (`LISTEN_FDS=1`, and `LISTEN_FDNAMES=` the socket's `FileDescriptorName=` or `connection`: systemd's varlink services such as `journalctl` serve only on an fd named `varlink`) and, with `StandardInput=`/`StandardOutput=socket`, on stdin/stdout. It runs `ExecStartPre=`, `ExecStart=`, `ExecStartPost=`, `ExecStop=` and `ExecStopPost=` with the template's user, sandbox and cgroup. Templates may be `Type=simple`, `exec` or `oneshot`. `MaxConnections=` (default 64) and `MaxConnectionsPerSource=` become the server's `-c`/`-C`, at most 1000 for unix sockets and 16384 for TCP. Without `s6-tcpserverd` a TCP socket is not generated, and `uinitconverter plan` says so. `systemctl status` shows `Accepted:` and `Connected:`. While a connection runs, its instance is a unit like any other: `systemctl list-units` lists it, `systemctl status` shows its main process, and `systemctl stop` sends it `KillSignal=` (SIGKILL after `TimeoutStopSec=`) and then runs `ExecStopPost=`. A main process ended by SIGTERM, SIGHUP, SIGINT or SIGPIPE counts as success, as with systemd. Stopping the socket leaves running connections alone, as with systemd. A socket that can't be bound (`sshd.socket` while `sshd.service` holds port 22: `Conflicts=` isn't enforced) is `failed` and isn't retried until it is started again.
 - On-demand activation at boot: an on-demand service is `inactive` until the first activity on its sockets, as under systemd (iscsid, the libvirt daemons, cupsd, dmeventd, hostnamed). It then also starts the on-demand services it requires (`Requires=`/`BindsTo=`/`Wants=`) that are still waiting. A start by a job (`systemctl start`, a dependency, D-Bus activation, a `.path` unit) runs it at once; s6 restarting one that ran (`Restart=`, `systemctl restart`) doesn't wait either. After `systemctl stop` the sockets are closed, as before. The sockets are held by `uinitconverter-fdstore`; without it nothing can hold them before uinitconverterd is up, so the service starts at once.
 - `Restart=` (all modes), `RestartSec=`, `SuccessExitStatus=`, `RestartPrevent/ForceExitStatus=`, `StartLimitBurst/IntervalSec=`.
 - `OnFailure=`, `OnSuccess=`, `SuccessAction=`, `FailureAction=` (reboot/poweroff/halt).
@@ -202,8 +202,10 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
   Calls on one unit pass polkit the `unit` and `verb` details as systemd does,
   so rules that match on them work. As in systemd, `AttachProcessesToUnit`
   with an empty unit name means the caller's own unit, and an unprivileged
-  caller may move its own processes within its own `Delegate=yes` unit
-  (`systemd --user` in `user@UID.service`).
+  caller in a delegated unit (`Delegate=yes` or a controller list) that runs
+  as the caller may move its own processes into it, also from outside it
+  (a user manager moving an app started from an ssh login into its app
+  scope).
 - SELinux access checks as systemd 262 makes them, before polkit and for
   root too: the caller's label (from the bus, or `SO_PEERSEC` on the private
   socket) needs the method's permission in class `service` on the unit
@@ -525,7 +527,7 @@ log UNIT`, which also works with `JOURNAL=no`).
 ### The s6 user manager (in progress)
 
 Work is under way to replace `systemd --user` too (the plan is in
-`work_history.md`, parts 136-143). `USER_MANAGER=s6` in
+`work_history.md`, parts 136-144). `USER_MANAGER=s6` in
 `uinitconverter.conf`, or `uinitconverter.user_manager=s6` on the kernel
 command line, makes the runner start `uinitconverterd user-manager` for
 `user@UID.service` instead of `systemd --user`; the unit file is not changed.
@@ -576,9 +578,25 @@ on it in the test VM: GDM's autologin, the session targets, gnome-shell in
 `app-gnome-*.scope`, SELinux enforcing and no denials, as with
 `systemd --user`.
 
-Not done yet: logout and a second user, timers and paths, `Accept=yes`
-sockets, flatpak and systemd-oomd reporting, SELinux for confined users, and
-a run under the s6 boot's own system manager. Keep the default until those
+Timers and path units run in user mode too (`timers.target`), and a
+`Persistent=` timer keeps its stamp where `systemd --user` does
+(`~/.local/share/systemd/timers/stamp-NAME`, its modification time), so
+the catch-up carries over between the two managers. `Accept=yes` sockets
+are their own `s6-ipcserverd` service, as on the system side
+(`systemd-journalctl.socket`, `systemd-storage-fs.socket`,
+`systemd-ask-password.socket`). The manager reports its slices'
+`ManagedOOMMemoryPressure=`/`ManagedOOMSwap=` to systemd-oomd
+(`io.systemd.oom.ReportManagedOOMCGroups`, as `systemd --user`; Fedora's
+`slice.d` drop-in sets them for every user slice), and again when oomd
+restarts. A process it may not move into a transient scope itself (`flatpak
+run` from an ssh login) is moved by the system manager
+(`AttachProcessesToUnit`). In the test VM a podman quadlet container, a
+flatpak app (in `app-flatpak-*.scope`, the apps in the grid) and oomd's
+watch over `app.slice`, `background.slice` and `session.slice` work as with
+`systemd --user`.
+
+Not done yet: logout and a second user, SELinux for confined users, and a
+run under the s6 boot's own system manager. Keep the default until those
 are done.
 
 ## The `s6` command (s6-frontend)

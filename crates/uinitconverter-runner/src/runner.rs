@@ -83,6 +83,9 @@ pub struct Runner {
     /// command being started gets it (ExecStart= only).
     conn: Option<i32>,
     conn_main: std::cell::Cell<bool>,
+    /// The connection's fd name (LISTEN_FDNAMES): the socket's
+    /// FileDescriptorName=, "connection" without one, as systemd.
+    conn_name: String,
 }
 
 fn log(unit: &str, msg: &str) {
@@ -131,6 +134,7 @@ impl Runner {
             timed_out: std::cell::Cell::new(false),
             conn: None,
             conn_main: std::cell::Cell::new(false),
+            conn_name: "connection".into(),
         };
         r.build_env()?;
         Ok(r)
@@ -457,6 +461,11 @@ impl Runner {
         }
         if let (Some(service), true) = (self.unit.get("Service", "PAMName"), self.is_root) {
             return self.exec_with_pam(&service, &main);
+        }
+        if matches!(ty.as_str(), "notify" | "notify-reload")
+            && self.unit.get("Service", "NotifyAccess").as_deref() == Some("all")
+        {
+            return self.run_guarded(&main);
         }
         let (code, msg) = self.exec_command(&main, &[]);
         log(self.id(), &msg);

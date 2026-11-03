@@ -430,6 +430,12 @@ impl Daemon {
                 };
                 return s;
             }
+            // A user manager's Accept=yes socket: s6-ipcserverd is the
+            // socket, not a main process.
+            if sv.up && id.ends_with(".socket") {
+                (s.active, s.sub) = ("active", "listening");
+                return s;
+            }
             if sv.up {
                 s.main_pid = st
                     .get(keys::MAIN_PID)
