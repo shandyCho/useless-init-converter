@@ -821,9 +821,18 @@ impl Daemon {
             // Its sockets stay with the store for the next run.
             crate::fdstore::del(&self.cfg.run_dir.join("fdstore"), id, None);
         }
-        // Give s6-supervise a moment to exit before removing its directory.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Give s6-supervise (and its logger's) a moment to exit before
+        // removing its directory: up to 200 ms, but no longer than it
+        // takes. A fixed 200 ms added up per wave of a user manager's exit.
         let dir = self.dyn_dir(id);
+        for _ in 0..20 {
+            if !super::s6::lock_held(&dir.join("supervise/lock"))
+                && !super::s6::lock_held(&dir.join("log/supervise/lock"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         if super::s6::lock_held(&dir.join("supervise/lock")) {
             eprintln!("initconvertd: {id}: s6-svscan did not release its supervisor (look for its warnings)");
         } else if super::s6::lock_held(&dir.join("log/supervise/lock")) {

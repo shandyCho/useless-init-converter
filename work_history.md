@@ -11839,11 +11839,27 @@ Phase 0's reboot on the s6 boot: tester's user@ 7.71 s, the greeter's 7.90 s (li
 - System sandbox: new section "KillMode=control-group": waitkid (database) and waitkid@a (dynamic), a shell that waits for its child on SIGTERM: stop in 133/248 ms (old code: 5.8 s, TimeoutStopSec=8). 371/371; SANDBOX_FDSTORE=no 359/359.
 - User sandbox 108/108, new: waitkid (238 ms; old 13 s), pw.socket → pw.service with pw.service.wants/plumb.service (plumb starts on activation; Wants= lists it; old code fails both), bindhost/bound (BindsTo= dependent restarted with its host, new MainPID; old code leaves it dead).
 - cargo test all pass.
-- VM, `BOOT=s6 lifecycle` with the gdb sampler, after all three fixes: two runs, 71/71 each; reboot: tester 2.69 and 2.77 s, greeter 2.67 and 2.76 s (Phase 0: 7.71/7.90 s); scopes empty after 2.52 and 2.61 s (6.99 s); no gnome-shell left at +2.5 s. After fixes 1 and 2 only: runs passed at 3.54 s and 2.74 s, and one failed at 5.78 s with the sound backtrace (that run's pipewire restart left wireplumber down). `restart pipewire.service` in the VM: wireplumber 1823 → 5399.
+- VM, `BOOT=s6 lifecycle` with the gdb sampler, after all three fixes: two runs, 71/71 each; reboot: tester 2.69 and 2.77 s, greeter 2.67 and 2.76 s (Phase 0: 7.71/7.90 s); scopes empty after 2.52 and 2.61 s (6.99 s); no gnome-shell left at +2.5 s. (Correction, part 168: these times include the sampler itself, which ignores SIGTERM and sleeps 2.5 s in the SSH session's scope; the clean run is in part 168.) After fixes 1 and 2 only: runs passed at 3.54 s and 2.74 s, and one failed at 5.78 s with the sound backtrace (that run's pipewire restart left wireplumber down). `restart pipewire.service` in the VM: wireplumber 1823 → 5399.
 - Step 3's check in the VM: no `transaction): failed` line at login; evolution-alarm-notify inactive with Result=success.
 
-**Still slower than stock:** the scopes empty after ~2.5 s (stock 0.47 s); in the user manager's log `stopping gnome-session-manager@gnome.service took 1.2 s`. Step 5.
+**Still slower than stock:** the scopes empty after ~2.5 s (stock 0.47 s); in the user manager's log `stopping gnome-session-manager@gnome.service took 1.2 s`. Step 5. (Correction, part 168: the 2.5 s was the sampler; see there.)
 
 ### Next steps
 
 Phase 1 step 5 (stop time per user), then 6.
+
+## 2026-11-05, part 168: step 5, stop time per user at a reboot
+
+**user-runtime-dir@ is not a cost.** Its "stopping user-runtime-dir@UID took 1.2 s" lines count user@UID too: dyn_stop stops the dependents first and logs the whole. Alone, in the VM: start/stop of user-runtime-dir@1001 28 ms, `systemd-user-runtime-dir stop` 6 ms; a oneshot with ExecStop= in the sandbox stops in 13 ms. In the reboot it ended 0.2 s after user@'s PAM close.
+
+**The ~2.5 s scope wait of part 167's runs was the sampler.** A scope sampler (every 0.1 s, the processes of each session scope) on a plain `systemctl reboot` of the VM: tester's GNOME session scope (gdm-session-worker, gdm-wayland-session, gnome-session-init) was empty 0.02 s after the shutdown began; the scope still waited for was the SSH session's, holding the sampler (it ignores SIGTERM). The gdb sampler of part 167 does the same for 2.5 s.
+
+**Change:** dyn_remove slept a fixed 200 ms before removing a stopped unit's directory ("give s6-supervise a moment"); a user manager's exit stops its units in waves, so this added up per wave. Now it polls the supervisor's lock (and the logger's) every 10 ms, at most 200 ms (`lock_held` treats a missing lock as free).
+
+**Result, a clean `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle` (no sampler):** 72/72. Reboot: gdm-greeter 0.99 s, tester 1.01 s, alice 1.06 s after the shutdown began (Phase 0: 7.90, 7.71, 5.59 s; stock systemd --user on the s6 boot: 0.48/0.53 s). Session scopes empty after 0.78 s (Phase 0 6.99 s, stock 0.47 s). No slow-stop line for user-runtime-dir@ any more. This also covers part 147's "slow logout path at a reboot". The ~0.5 s left against stock was not looked into further.
+
+**Tests:** cargo test, system sandbox 371/371, user sandbox 108/108 (with this change, before the step 4 commit was split off from it).
+
+### Next steps
+
+Phase 1 step 6 (lifecycle-baseline's failed user switch on the s6 boot).
