@@ -21,6 +21,53 @@ pub type Props = BTreeMap<String, Value<'static>>;
 /// interface name -> properties
 pub type Ifaces = BTreeMap<String, Props>;
 
+/// An a{sv} sent in a given order: GetAll as systemd sends it (see
+/// prop_order.rs). zvariant's maps and Dict sort or hash their keys.
+pub struct OrderedProps(pub Vec<(String, Value<'static>)>);
+
+impl zbus::zvariant::Type for OrderedProps {
+    const SIGNATURE: &'static zbus::zvariant::Signature =
+        <std::collections::HashMap<String, Value<'static>> as zbus::zvariant::Type>::SIGNATURE;
+}
+
+impl serde::Serialize for OrderedProps {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = ser.serialize_map(Some(self.0.len()))?;
+        for (k, v) in &self.0 {
+            m.serialize_entry(k, v)?;
+        }
+        m.end()
+    }
+}
+
+/// The properties of `ifaces` in systemd's GetAll order: the Unit
+/// interface first, then the others by name; within one, its vtable order
+/// (prop_order::ORDER), then any it doesn't list, by name.
+pub fn ordered(ifaces: Ifaces) -> OrderedProps {
+    let mut names: Vec<String> = ifaces.keys().cloned().collect();
+    names.sort_by_key(|n| (n != UNIT_IFACE, n.clone()));
+    let mut out = Vec::new();
+    let mut ifaces = ifaces;
+    for name in names {
+        let Some(props) = ifaces.remove(&name) else {
+            continue;
+        };
+        let order = super::prop_order::ORDER
+            .iter()
+            .find(|(i, _)| *i == name)
+            .map(|(_, o)| *o)
+            .unwrap_or(&[]);
+        let mut v: Vec<(String, Value<'static>)> = props.into_iter().collect();
+        v.sort_by_key(|(k, _)| match order.iter().position(|o| o == k) {
+            Some(i) => (0, i, String::new()),
+            None => (1, 0, k.clone()),
+        });
+        out.extend(v);
+    }
+    OrderedProps(out)
+}
+
 pub const UNIT_IFACE: &str = "org.freedesktop.systemd1.Unit";
 pub const MANAGER_IFACE: &str = "org.freedesktop.systemd1.Manager";
 

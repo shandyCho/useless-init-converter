@@ -79,6 +79,9 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- `GetAll` replies list the properties in systemd's order (they came in hash
+  order), so `systemctl show -p A,B` prints them as on systemd and scripts that
+  read several values with `--value` get the same order.
 - The s6 user manager for SELinux-confined users (`user_u`, `staff_u`) on
   the s6 boot: its READY=1 to the runner was denied (confined domains may not
   send to `init_t`'s datagram sockets), so `user@` timed out after 90 s. The

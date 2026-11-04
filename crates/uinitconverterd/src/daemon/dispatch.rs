@@ -46,15 +46,9 @@ impl Daemon {
         match member {
             "GetAll" => {
                 let (iface,): (String,) = Self::args(msg)?;
-                let all = self.object_props(path, Some(&iface)).await?;
-                let mut out: Props = Props::new();
-                for (name, props) in all {
-                    if iface.is_empty() || iface == name {
-                        out.extend(props);
-                    }
-                }
-                let out: HashMap<String, Value<'static>> = out.into_iter().collect();
-                self.reply(c, msg, &(out,)).await
+                let mut all = self.object_props(path, Some(&iface)).await?;
+                all.retain(|name, _| iface.is_empty() || *name == iface);
+                self.reply(c, msg, &(super::props::ordered(all),)).await
             }
             "Get" => {
                 let (iface, prop): (String, String) = Self::args(msg)?;

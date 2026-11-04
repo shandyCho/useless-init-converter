@@ -17,6 +17,7 @@ mod jobs;
 mod manager;
 mod oom;
 mod private;
+mod prop_order;
 mod props;
 mod relations;
 mod s6;
@@ -41,7 +42,7 @@ use crate::loader::{LoadState, Loader, Unit};
 use crate::state::{self, keys, result};
 use crate::unit::UnitFile;
 use crate::util;
-use props::{Ifaces, Props, MANAGER_IFACE, UNIT_IFACE};
+use props::{Ifaces, MANAGER_IFACE, UNIT_IFACE};
 
 /// systemd version we claim API compatibility with.
 pub const COMPAT_VERSION: &str = "259";
@@ -864,6 +865,34 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// GetAll in systemd's order: the Unit interface first, each in its
+    /// vtable order, properties systemd lacks last by name.
+    #[test]
+    fn getall_order_is_systemds() {
+        use zbus::zvariant::Value;
+        let p = |names: &[&str]| -> props::Props {
+            names
+                .iter()
+                .map(|n| (n.to_string(), Value::from(0u32)))
+                .collect()
+        };
+        let mut ifaces = Ifaces::new();
+        ifaces.insert(
+            "org.freedesktop.systemd1.Service".into(),
+            p(&["MainPID", "ZzOurs", "Type"]),
+        );
+        ifaces.insert(UNIT_IFACE.into(), p(&["ActiveState", "Id", "AaOurs"]));
+        let got: Vec<String> = props::ordered(ifaces)
+            .0
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(
+            got,
+            ["Id", "ActiveState", "AaOurs", "Type", "MainPID", "ZzOurs"]
+        );
+    }
 
     fn set(v: &[&str]) -> BTreeSet<String> {
         v.iter().map(|s| s.to_string()).collect()

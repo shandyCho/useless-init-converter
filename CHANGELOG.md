@@ -62,6 +62,8 @@
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
+- `GetAll` 응답이 속성을 systemd의 순서로 보냅니다(이전에는 해시 순서). 그래서 `systemctl show -p A,B`가
+  systemd에서처럼 출력하고, `--value`로 여러 값을 읽는 스크립트도 같은 순서를 받습니다.
 - s6 부팅에서 SELinux로 제한된 사용자(`user_u`, `staff_u`)의 s6 사용자 매니저: 러너에 보내는 READY=1이
   거부되어(제한된 도메인은 `init_t`의 데이터그램 소켓에 보낼 수 없습니다) `user@`가 90초 뒤 시간 초과로
   실패했습니다. 이제 러너의 notify 소켓은 자체 타입 `uinitconverter_notify_t`를 쓰고,

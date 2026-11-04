@@ -11937,3 +11937,15 @@ Before: every mode but isolate ran as replace, and replace itself cancelled noth
 ### Next steps
 
 Phase 3 step 10 (GetAll property order). Step 8 waits for the owner (A: elogind spike, B: no elogind).
+
+## 2026-11-05, part 173: step 10, GetAll property order
+
+GetAll collected every interface's properties into a HashMap, so the reply came in hash order; `systemctl show -p A,B` prints in the reply's order (part 147: scripts reading several values with --value got them shuffled; the sandboxes read one at a time).
+
+**Change:** `daemon/prop_order.rs`, the property order of systemd 262's GetAll replies per interface (Manager 145, Unit 102, Service 371, Socket 362, Timer 18, Path 7, Slice 93, Scope 102, Automount 5, Device 1, Swap 304, Mount 313; Target has none), recorded in the VM's stock boot with `busctl --json=short call … GetAll s IFACE` on one unit of each type (the file says how to record it again). `props::ordered()` sends the Unit interface first, then the others by name, each in that order, properties systemd lacks after them by name; GetAll(""), which systemd also answers Unit-first (473 = 102 + 371 for a service), the same. `OrderedProps` serializes as a{sv} in that order (zvariant's maps and Dict sort or hash).
+
+**Tests:** unit test getall_order_is_systemds; user sandbox 118/118, new: `systemctl --user show -p ActiveState,Id,MainPID,Type` prints `Id ActiveState Type MainPID` (old code: `Type ActiveState Id MainPID`). cargo test pass; system sandbox 371/371. Docs pair and CHANGELOG pair.
+
+### Next steps
+
+Phase 3 step 11 (the daemon holds the sockets of socket-waiting runners). Step 8 waits for the owner.

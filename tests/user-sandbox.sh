@@ -600,6 +600,8 @@ expect_state bound.service active/running
 b2=$(SC show -p MainPID --value bound.service)
 [ -n "$b2" ] && [ "$b2" != 0 ] && [ "$b2" != "$b1" ] && ok "a BindsTo= dependent was restarted with its host ($b1 -> $b2)" || bad "bound.service: MainPID $b1 -> $b2"
 SC stop bound.service bindhost.service
+out=$(SC show -p ActiveState,Id,MainPID,Type busname.service | cut -d= -f1 | tr '\n' ' ')
+[ "$out" = "Id ActiveState Type MainPID " ] && ok "show -p prints in systemd's order (Unit's, then Service's vtable order)" || bad "show -p order: $out"
 echo "== job modes"
 if call StartUnit ss slowstart.service bogus; then bad "an unknown job mode was accepted"; else
     grep -q "Job mode bogus invalid" "$W/last-error" && ok "an unknown job mode is refused" || bad "unknown mode: $(cat "$W/last-error")"; fi
