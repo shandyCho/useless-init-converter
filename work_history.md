@@ -11717,3 +11717,31 @@ Not checked: user@1000's and the greeter's close at logout after the fix (they w
 1. The VM: `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`; each user's reboot stop should be about 1 s shorter than in part 156. Optionally compare the ReleaseSession line with the VM's stock baseline there.
 2. The greeter's `/run/gdm/home/gdm-greeter` mkdir errors on the s6 boot.
 3. The elogind plan (part 154); gnome-shell's exit hang (part 154); SELinux for confined users; evolution-alarm-notify's job result (part 158).
+
+## 2026-11-04, part 162: the ReleaseSession line on stock systemd; the greeter's mkdir loop
+
+**ReleaseSession (part 161), chased in the VM:** `VM_KEEP=yes tests/vm-user-manager.sh ~/uinitconverter-vm baseline` (stock systemd 262-3, passed 10/10), then in the VM:
+- `sudo` over SSH starts no user@0: it runs inside the SSH logind session. Run from tester's user manager without a tty (`systemd-run --user -P sudo true`) it gets a `background-light` session, which starts no user@0 either. On a pty (`systemd-run --user -P python3 -c 'import pty; pty.spawn(["sudo","true"])'`) it gets `user-early`/tty and starts user@0, like the owner's GNOME terminal (`pts/0`).
+- Stock order at the stop: `Stopping user@0` 14:09:31.744, `Removed session 16` (root's `manager-early` session) .775, `Deactivated` .777. logind drops the manager session itself, as on the s6 boot.
+- Stock never closes user@'s PAM session visibly: in that boot 7 `USER_START` audit records for systemd-user (tester 5, root 1, greeter 1) and no `USER_END`, though tester's and root's user@ stopped several times. There are no `(sd-pam)` lines either. The owner's systemd-boot journal is the same (part 161).
+- **Decision:** leave the line. It comes from pam_systemd in the close that our runner does and stock systemd doesn't reach. Nothing is left behind (part 161), and the only way to drop it would be to skip pam_close_session, which would also skip pam_unix, pam_keyinit and pam_limits cleanup.
+
+**The greeter's mkdir errors (part 159's "seen"):** in the owner's user@60578 log, after each greeter session ends at login: `dbus-broker.service: stopped, its socket listens again`, the bus comes back (`on the bus` again), and then `mkdir: cannot create directory '/run/gdm/home/gdm-greeter': Permission denied` once a second (s6-supervise's restart delay) until the manager stops about 10 s later.
+- **Cause:** in user mode LOG_DIR is `$HOME/.local/state/uinitconverter/log`, and with JOURNAL=no (the owner's setting) every dynamic service has an s6-log logger running `mkdir -p LOG_DIR/ID || exit 1`. GDM 51 removes the greeter's home (`/run/gdm/home/gdm-greeter`, `/run/gdm/home` root-owned) at login. The re-activated bus's service directory is rewritten, its new logger can't create the dir, and it exits and restarts. While the logger is down the service's output stays in the pipe (it blocks once 64 KiB fill).
+- **Fix (383b335):** `uinitconverter_gen::logger_run`, one script for s6-rc's loggers (`-d3`) and the dynamic engine's. In user mode, if `mkdir -p LOG_DIR/ID` fails, the logger prints `logger of ID: cannot create …, logging to …` once and logs to `RUN_DIR/log/ID` (the manager's runtime dir, gone with the user). On the boot the script is byte-for-byte as before: its LOG_DIR may not be mounted yet, so it keeps retrying. The id and paths are passed to printf as quoted arguments (ids can contain `\x2d`). CHANGELOG pair: Fixed.
+- The VM doesn't show this (JOURNAL=yes there), so it wasn't run for the fix.
+
+**Tests:** new `logger_falls_back_in_user_mode` (runs the script with s6-log replaced: fallback dir, one stderr line, the normal dir when it can be made, the boot's script still fails); cargo test passes except `fdstore::tests::hung_up_fds_go` (see below); fmt clean; `tests/user-sandbox.sh` 92/92 (JOURNAL=no, so its loggers use the new script); `SANDBOX_JOURNAL=no tests/sandbox.sh && tests/check.sh` 374/374. **Not tested:** the owner's machine (rebuild the RPMs, log in at the greeter, then `grep -c 'cannot create directory' /var/log/uinitconverter/user@<greeter uid>.service/current` should not grow, and one `logger of dbus-broker.service: cannot create` line, or none if the bus isn't restarted).
+
+**Found, not fixed:** `uinitconverter-base`'s `fdstore::tests::hung_up_fds_go` fails intermittently (2 of 3 runs of `cargo test -p uinitconverter-base`, 2 of 2 full runs; 5 of 5 alone) at fdstore.rs:659, the second `put` right after `drop(b)`: the store hasn't yet seen the hang-up of the first fd, so the key is still full. Unrelated to this part (base untouched); a timing race in the test or the store.
+
+### Current state
+
+383b335 (fix) and this entry on main, not pushed.
+
+### Next steps
+
+1. The owner: rebuild the RPMs, boot s6, log in at the greeter, check user@<greeter uid>'s log as above.
+2. `hung_up_fds_go`'s intermittent failure.
+3. The VM: `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`; each user's reboot stop should be about 1 s shorter than in part 156.
+4. The elogind plan (part 154); gnome-shell's exit hang (part 154); SELinux for confined users; evolution-alarm-notify's job result (part 158).
