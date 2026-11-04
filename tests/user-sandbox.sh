@@ -180,6 +180,24 @@ Type=dbus
 BusName=org.example.UserTest
 ExecStart=/usr/bin/python3 $W/ownname.py
 EOF
+cat >"$U/quick.service" <<EOF
+[Service]
+ExecStart=/bin/true
+EOF
+# Type=dbus units that exit before taking their name (evolution-alarm-notify
+# --autostart with nothing to do): exit 0 is a done job, as in systemd.
+cat >"$U/busquit.service" <<EOF
+[Service]
+Type=dbus
+BusName=org.example.NeverTaken
+ExecStart=/bin/true
+EOF
+cat >"$U/busfail.service" <<EOF
+[Service]
+Type=dbus
+BusName=org.example.NeverTaken
+ExecStart=/bin/false
+EOF
 cat >"$U/notifier.service" <<EOF
 [Service]
 Type=notify
@@ -503,6 +521,19 @@ if SC start busname.service; then
 else
     bad "busname.service did not start: $(SC status busname.service 2>&1 | tail -3)"
 fi
+if SC start busquit.service; then ok "Type=dbus exiting 0 before its name: the start job is done"; else bad "busquit.service's start failed"; fi
+expect_state busquit.service inactive/dead
+[ "$(SC show -p Result --value busquit.service)" = success ] && ok "busquit.service's result is success" \
+    || bad "busquit.service: Result=$(SC show -p Result --value busquit.service)"
+if SC start busfail.service 2>/dev/null; then bad "busfail.service's start succeeded"; else ok "Type=dbus exiting 1 before its name: the start fails"; fi
+[ "$(SC show -p Result --value busfail.service)" = exit-code ] && ok "busfail.service's result is exit-code" \
+    || bad "busfail.service: Result=$(SC show -p Result --value busfail.service)"
+SC reset-failed busfail.service
+# Type=simple exiting at once (user-dirs-update-gtk): its runner's exec
+# helper may stamp it active only after it ended; still a done job.
+n=0
+for _ in 1 2 3 4 5 6 7 8 9 10; do SC start quick.service 2>/dev/null || n=$((n + 1)); done
+[ "$n" -eq 0 ] && ok "Type=simple exiting 0 at once: 10 start jobs done" || bad "Type=simple exiting 0 at once: $n of 10 starts failed"
 SC start notifier.service && [ $(($(date +%s) - t0)) -ge 1 ] && expect_state notifier.service active/running \
     || bad "notifier.service: $(SC status notifier.service 2>&1 | tail -3)"
 

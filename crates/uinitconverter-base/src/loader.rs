@@ -546,6 +546,20 @@ impl Unit {
         unit_type(&self.id)
     }
 
+    /// A service's Type=, with systemd's default: oneshot without
+    /// ExecStart=, dbus with BusName=, simple otherwise.
+    pub fn service_type(&self) -> String {
+        self.get("Service", "Type").unwrap_or_else(|| {
+            if self.file.get("Service", "ExecStart").is_none() {
+                "oneshot".into()
+            } else if self.file.get("Service", "BusName").is_some() {
+                "dbus".into()
+            } else {
+                "simple".into()
+            }
+        })
+    }
+
     /// Section holding type-specific settings ("Service", "Socket", ...).
     pub fn type_section(&self) -> String {
         let t = self.utype();
@@ -646,6 +660,23 @@ mod tests {
         assert_eq!(
             unit("[Service]\nType=notify\nTimeoutStartSec=0\n").start_timeout_usec(),
             u64::MAX
+        );
+        // Type='s default, as systemd's (the runner and the daemon share it).
+        assert_eq!(
+            unit("[Service]\nExecStart=/bin/true\n").service_type(),
+            "simple"
+        );
+        assert_eq!(
+            unit("[Service]\nExecStop=/bin/true\n").service_type(),
+            "oneshot"
+        );
+        assert_eq!(
+            unit("[Service]\nBusName=a.b\nExecStart=/bin/true\n").service_type(),
+            "dbus"
+        );
+        assert_eq!(
+            unit("[Service]\nType=exec\nBusName=a.b\nExecStart=/bin/true\n").service_type(),
+            "exec"
         );
     }
 

@@ -1003,7 +1003,10 @@ impl Daemon {
                     // Like systemd: a service that became active during this
                     // job and died afterwards still completed its start job.
                     let became_active = st.get_u64(keys::ACTIVE_ENTER) >= started_at;
-                    return if st.has(keys::CONDITION_FAILED) || became_active {
+                    return if st.has(keys::CONDITION_FAILED)
+                        || became_active
+                        || Self::exited_cleanly_during(&st, unit, started_at)
+                    {
                         "done"
                     } else {
                         "failed"
@@ -1017,6 +1020,22 @@ impl Daemon {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    /// A service whose main process exited 0 during this job, before the
+    /// job saw it ready: a Type=dbus one before it took its name
+    /// (evolution-alarm-notify --autostart with nothing to do), a
+    /// Type=simple/exec one before the runner's exec helper stamped it
+    /// active (user-dirs-update-gtk). systemd ends these inactive with
+    /// result success and the start job done (dbus: SERVICE_START through
+    /// service_enter_running(); simple/exec are active once forked or
+    /// exec'd). Type=notify stays failed (systemd: protocol), and a
+    /// non-zero exit fails in job_outcome().
+    fn exited_cleanly_during(st: &state::UnitState, unit: &Unit, started_at: u64) -> bool {
+        unit.utype() == "service"
+            && matches!(unit.service_type().as_str(), "simple" | "exec" | "dbus")
+            && st.get(keys::RESULT).as_deref() == Some(state::result::SUCCESS)
+            && st.get_u64(keys::INACTIVE_ENTER) >= started_at
     }
 
     pub(super) async fn do_start(&self, id: &str, unit: &Unit, isolate: bool) -> &'static str {

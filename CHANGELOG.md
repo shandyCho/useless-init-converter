@@ -58,6 +58,10 @@
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
+- 버스 이름을 얻기 전에 프로세스가 0으로 끝나는 `Type=dbus` 서비스(로그인 때의
+  evolution-alarm-notify)와, 시작이 확인되기 전에 0으로 끝나는 `Type=simple`/`exec` 서비스가 이제
+  systemd처럼 결과 `success`로 `inactive (dead)`가 되고 시작 작업도 완료됩니다. 이전에는 작업이
+  실패했고 `Type=dbus` 유닛은 `failed`(`exit-code`)로 남았습니다.
 - `JOURNAL=no`에서 로그 디렉터리를 더는 만들 수 없는 사용자 매니저의 로거는 매니저의 런타임
   디렉터리 아래에 대신 기록하고, 그렇다고 한 번 알립니다. GDM은 로그인할 때 그리터의 홈을 지우는데,
   그리터의 매니저는 그 뒤로도 10초쯤 실행됩니다. 그 사이 다시 시작한 세션 버스의 로거가 매초 실패했고

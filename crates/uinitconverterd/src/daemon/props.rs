@@ -742,15 +742,7 @@ impl Daemon {
         let st = state::for_unit(&self.cfg.run_dir, id);
         let mut p = Props::new();
         let get = |k: &str| unit.get("Service", k).unwrap_or_default();
-        let ty = unit.get("Service", "Type").unwrap_or_else(|| {
-            if unit.file.get("Service", "ExecStart").is_none() {
-                "oneshot".into()
-            } else if unit.file.get("Service", "BusName").is_some() {
-                "dbus".into()
-            } else {
-                "simple".into()
-            }
-        });
+        let ty = unit.service_type();
         p.insert("Type".into(), s(ty));
         p.insert(
             "ExitType".into(),

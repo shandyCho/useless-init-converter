@@ -11800,3 +11800,21 @@ Phase 1 step 2 (the system sandbox's quitter@0), then steps 3 to 6 as in part 16
 ### Next steps
 
 Phase 1 step 3 (Type=dbus job results: evolution-alarm-notify, user-dirs-update-gtk), then 4 to 6 as in part 163.
+
+## 2026-11-05, part 166: step 3, start jobs of services that exit 0 before they are seen ready
+
+**Cause.** The runner's Type=dbus helper set START_FAILED ("exited before acquiring its bus name") whenever the main process died before taking its name, whatever the exit status; job_outcome() then made the job failed, and the unit ended `failed`/`exit-code` even for `/bin/true` (seen in the user sandbox before the fix). user-dirs-update-gtk (Type=simple, exits 0 quickly) has a race instead: the runner execs the command itself and a double-forked helper stamps ACTIVE_ENTER after the exec. A command that exits first leaves wait_ready() with a service down, not wanted up, never active: "failed".
+
+**systemd's rule** (service.c `service_sigchld_event`, `unit_process_job`): a main-process exit in SERVICE_START goes to service_enter_running() for every type but oneshot and notify, so exit 0 ends inactive with result success, and a start job whose unit ends inactive (not failed) finishes `done`. Type=simple/exec are active once forked/exec'd. Type=notify exiting before READY=1 is a protocol failure.
+
+**Fix:**
+- notify.rs: a Type=dbus main process that dies before its name no longer sets START_FAILED; the exit status decides.
+- s6.rs wait_ready(): a down service counts as done also when `exited_cleanly_during()`: Type simple, exec or dbus, RESULT success, INACTIVE_ENTER at or after the job's start. A non-zero exit still fails (job_outcome). Type=notify unchanged.
+- `Unit::service_type()` in base (Type= with systemd's default: oneshot without ExecStart=, dbus with BusName=), replacing the runner's and props.rs's copies; unit test in loader's start_timeouts.
+- CHANGELOG pair: Fixed.
+
+**Tests:** user sandbox 98/98 with new checks: busquit (Type=dbus, BusName never taken, /bin/true): start succeeds, inactive/dead, Result=success; busfail (/bin/false): start fails, Result=exit-code; quick.service (Type=simple /bin/true) started 10 times, all done. On the old code busquit's three checks fail (95/98); the quick.service check passed there too: the race didn't show in 10 starts, so it guards against regressions but didn't reproduce the original failure. cargo test all pass; system sandbox 367/367. **Not yet in the VM:** evolution-alarm-notify's log line at login; checked with step 4's VM runs.
+
+### Next steps
+
+Phase 1 step 4 (gnome-shell's slow exit on the s6 boot), then 5 and 6.

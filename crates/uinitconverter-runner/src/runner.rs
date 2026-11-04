@@ -295,15 +295,7 @@ impl Runner {
     }
 
     fn service_type(&self) -> String {
-        self.unit.get("Service", "Type").unwrap_or_else(|| {
-            if self.unit.file.get("Service", "ExecStart").is_none() {
-                "oneshot".into()
-            } else if self.unit.file.get("Service", "BusName").is_some() {
-                "dbus".into()
-            } else {
-                "simple".into()
-            }
-        })
+        self.unit.service_type()
     }
 
     fn main_command(&self) -> Result<ExecCommand, String> {

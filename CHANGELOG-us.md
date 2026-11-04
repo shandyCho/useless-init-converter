@@ -74,6 +74,11 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- A `Type=dbus` service whose process exits 0 before taking its bus name
+  (evolution-alarm-notify at login), and a `Type=simple`/`exec` one that exits
+  0 before its start was seen, now end `inactive (dead)` with result
+  `success` and a done start job, as in systemd. Before, the job failed and
+  the `Type=dbus` unit was left `failed` (`exit-code`).
 - With `JOURNAL=no`, a user manager's logger whose log directory can't be
   created any more logs under the manager's runtime directory instead, and
   says so once. GDM removes the greeter's home at login while its manager

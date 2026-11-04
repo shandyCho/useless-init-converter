@@ -601,9 +601,10 @@ impl Runner {
             });
             match outcome {
                 Ok(true) => {}
-                Ok(false) => self
-                    .st
-                    .set(keys::START_FAILED, "exited before acquiring its bus name"),
+                // Died before taking its name: as systemd, the exit status
+                // decides (exit 0 ends it inactive with result success, and
+                // its start job is done; see wait_ready()).
+                Ok(false) => {}
                 Err(why) => {
                     self.st.set(keys::START_FAILED, why);
                     if why == "start timeout" {
