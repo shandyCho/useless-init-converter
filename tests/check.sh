@@ -77,8 +77,12 @@ damage() {
     done
     [ "$(ls "$R/live/compiled/servicedirs")" = "$(ls "$R/live/servicedirs")" ] \
         || echo "live service directories differ from the compiled database"
+    # -L then -e is two looks: a stop that removes the link between them
+    # (s6-svunlink, then the directory) looked dangling. A real dangling
+    # entry stays until something repairs it, so look again after a pause.
+    dangling() { [ -L "$1" ] && [ ! -e "$1" ]; }
     for l in "$(readlink -f "$R/live/scandir")"/*; do
-        [ -L "$l" ] && [ ! -e "$l" ] && echo "dangling scan directory entry: ${l##*/}"
+        dangling "$l" && sleep 0.5 && dangling "$l" && echo "dangling scan directory entry: ${l##*/}"
     done
     # s6-rc's own services never stop by themselves (units may: s6-rc
     # doesn't follow deaths, and a failed unit stays "up" for it). After

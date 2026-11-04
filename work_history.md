@@ -11788,3 +11788,15 @@ These are the reference numbers for steps 4 to 6.
 ### Next steps
 
 Phase 1 step 2 (the system sandbox's quitter@0), then steps 3 to 6 as in part 163.
+
+## 2026-11-05, part 165: step 2, the sandbox's "dangling scan directory entry: quitter@0"
+
+**Cause: the check, not the daemon.** check.sh's damage() tested each scan directory entry with `[ -L "$l" ] && [ ! -e "$l" ]`, two separate looks. It runs at the section boundary right after `call StopUnit ss quitter@0.service`, which returns while the stop job still runs. dyn_remove's order is right: `s6-svunlink` unlinks the entry before it waits for the supervisor (s6 2.15.1.1, `s6_supervise_unlink_names.c`: `unlink_void` then the svscan "an" and the wait), and only then is the directory removed. If the unlink falls between `-L` and `-e`, a link that is simply gone is reported as dangling. Every other removal of a dynamic directory goes through dyn_remove (collect_exited, the shutdown stop, the failed-svlink path only when no link exists). A stress loop of the right order (mkdir, ln, rm link, rmdir; 20000 times) gave 2336 false reports with the old check.
+
+**Fix:** a hit is looked at again after 0.5 s; a real dangling entry stays until something repairs it (that was the bug the check was written for: s6-svscan aborted every scan). The same stress loop gives 0, and a planted dangling link is still found. bash -n and shellcheck clean.
+
+**Tests:** system sandbox 3 runs in a row, 367/367 each.
+
+### Next steps
+
+Phase 1 step 3 (Type=dbus job results: evolution-alarm-notify, user-dirs-update-gtk), then 4 to 6 as in part 163.
