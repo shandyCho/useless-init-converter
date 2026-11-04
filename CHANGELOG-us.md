@@ -52,6 +52,11 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   [Contracts between the tools](docs/etc-us.md#contracts-between-the-tools).
 
 ### Changed
+- On the s6 boot the s6 user manager is now the default: with `USER_MANAGER=`
+  unset, `user@UID` runs `initconvert-user-manager` when `uinitconverter-user`
+  is installed, which `uinitconverter` now Recommends (it was Suggested).
+  `USER_MANAGER=systemd` keeps `systemd --user`; a systemd boot is unchanged
+  (`initconvert-user-setup on` turns it on there).
 - `uinitconverterd` no longer requires s6-rc and dbus-daemon; the
   `uinitconverter` package, which the s6 boot needs, still does.
 - **The commands are named `initconvert*`**: `initconvert` (was

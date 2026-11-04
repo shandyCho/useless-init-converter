@@ -41,6 +41,10 @@
   테스트. [도구 사이의 약속](docs/etc.md#도구-사이의-약속) 참고.
 
 ### 변경
+- s6 부팅에서는 이제 s6 사용자 매니저가 기본값입니다. `USER_MANAGER=`가 없으면 `uinitconverter-user`가
+  설치되어 있을 때 `user@UID`가 `initconvert-user-manager`를 실행하며, `uinitconverter`가 이 패키지를
+  Recommends합니다(이전에는 Suggests). `USER_MANAGER=systemd`는 `systemd --user`를 유지합니다. systemd
+  부팅은 그대로입니다(거기서는 `initconvert-user-setup on`으로 켭니다).
 - `uinitconverterd`는 더 이상 s6-rc와 dbus-daemon을 요구하지 않습니다. s6 부팅에 필요한
   `uinitconverter` 패키지가 여전히 요구합니다.
 - **명령의 이름이 `initconvert*`입니다**: `initconvert`(이전 `uinitconverter`), `initconvertd`,

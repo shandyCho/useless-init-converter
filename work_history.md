@@ -11986,3 +11986,21 @@ Phase 3 is done. Step 8 waits for the owner (A: elogind spike, B: no elogind). T
 ### Next steps
 
 The owner: step 8 (A: elogind spike, B: no elogind) and Phase 4 (1, 2 or 3). Then Phase 5.
+
+## 2026-11-05, part 177: the owner's decisions on step 8 and Phase 4; Phase 4 done
+
+**Owner's answers:** step 8: "B: no elogind" (keep the real systemd-logind as an s6 service; only the parts that don't need elogind). Phase 4: "1: s6 boot only".
+
+**Step 8 (B), no code:** the parts that don't need elogind are already there: with JOURNAL=no the user manager logs through s6-log under its state directory (part 162's fallback for a vanished home); its cgroup is user@UID's, delegated (CGROUP_BASE); systemd-logind asks our system manager for user@UID and user-runtime-dir@UID, so no turnstile-like launcher is needed. The systemd --user fallback stays. Decision 3 at the top stands with this addition: elogind was looked at again in part 171 and dropped (not in Fedora, no scopes, GNOME links libsystemd).
+
+**Phase 4 (option 1):**
+- config.rs: USER_MANAGER's default is empty; `user_manager_now()` → `user_manager_on(cmdline, pid1_is_s6())`: the kernel flag, then a set USER_MANAGER=, then unset: s6 on the s6 boot (PID 1 s6-svscan), systemd otherwise. The runner on the s6 boot still falls back to systemd --user without uinitconverter-user (and logs why). A systemd boot is unchanged: there the drop-in comes with `initconvert-user-setup on`, which writes USER_MANAGER=s6. Unit test user_manager_default_follows_the_boot.
+- packages/uinitconverter.spec: Recommends uinitconverter-user (was Suggests).
+- initconvert-user-setup status: "unset (s6, the s6 boot's default)" on the s6 boot, "unset (systemd)" otherwise. dist/uinitconverter.conf's comment, `initconvertd --help`, docs pair, TESTING pair, CHANGELOG pair (Changed).
+- tests/vm-user-manager.sh: the baselines on BOOT=s6 now write USER_MANAGER=systemd (they relied on unset = systemd). tests/vm-s6-boot.sh: `default` (unset) now expects initconvert-user-manager; new mode `systemd` (USER_MANAGER=systemd) expects systemd --user.
+
+**Tests:** cargo test pass; tests/user-setup.sh 13/13; system sandbox 371/371; user sandbox 118/118. VM: `vm-s6-boot.sh default` 19/19 (user@1000 runs initconvert-user-manager with USER_MANAGER unset), `vm-s6-boot.sh systemd` 16/16 (systemd --user).
+
+### Next steps
+
+Phase 5: the full VM run (every vm-user-manager mode with each BOOT, vm-s6-boot's modes with and without BOOT_ONLY_S6, vm-user-setup with OLD_RPMS, the sandbox variants), then one checklist for the owner's machine.

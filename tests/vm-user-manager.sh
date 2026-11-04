@@ -51,7 +51,7 @@
 # BOOT=s6 (session, session-baseline, lifecycle, lifecycle-baseline): the
 # same checks on the s6 boot instead, installed as tests/vm-s6-boot.sh does
 # it: every RPM (CORE_RPMS=, STANDALONE_RPMS=, SKARNET_RPMS= default
-# ~/rpmbuild-skarnet/rpms), USER_MANAGER=s6 (not in the baselines), and
+# ~/rpmbuild-skarnet/rpms), USER_MANAGER=s6 (systemd in the baselines), and
 # `initconvert init --yes --default-s6 --selinux=enforcing`. The s6 boot's
 # runner then starts every user@: no drop-in, no kernel flag.
 #
@@ -148,7 +148,8 @@ esac
 if [ "${2:-systemd}" = s6 ]; then
     # The RPMs and init, as tests/vm-s6-boot.sh; built locally, so unsigned.
     dnf -y -q install --nogpgcheck ./*.rpm || { dnf clean metadata && dnf -y -q install --refresh --nogpgcheck ./*.rpm; }
-    case $1 in *baseline) ;; *) echo "USER_MANAGER=s6" >>/etc/uinitconverter/uinitconverter.conf ;; esac
+    # Unset is s6 on the s6 boot: the baselines say systemd.
+    case $1 in *baseline) echo "USER_MANAGER=systemd" ;; *) echo "USER_MANAGER=s6" ;; esac >>/etc/uinitconverter/uinitconverter.conf
     initconvert init --yes --default-s6 --selinux=enforcing
     exit 0
 fi

@@ -310,7 +310,8 @@ tester의 자동 로그인 세션(자기 유닛 안의 gnome-shell, 세션 타�
 |---|---|---|
 | `s6`(기본) | `USER_MANAGER=s6`, `uinitconverter-user` 설치 | `initconvert-user-manager`. 이어서 s6 부팅에서 재부팅하고 같은 확인 |
 | `no-package` | `USER_MANAGER=s6`, `uinitconverter-user` 없음 | `systemd --user`, 러너의 "install uinitconverter-user" 줄 |
-| `default` | 모든 패키지, `USER_MANAGER=` 없음 | `systemd --user` |
+| `default` | 모든 패키지, `USER_MANAGER=` 없음 | `initconvert-user-manager`(s6 부팅의 기본값) |
+| `systemd` | 모든 패키지, `USER_MANAGER=systemd` | `systemd --user` |
 
 `BOOT=systemd-rpm tests/vm-user-manager.sh ~/uinitconverter-vm MODE`는 `greeter`, `session`, `apps`, `lifecycle`,
 `fallback`을 사용자가 설정하는 그대로 일반 systemd 부팅에서 실행합니다. `uinitconverter-user`와 그것이 요구하는
@@ -324,7 +325,7 @@ enforcing, AVC 거부 없음), `off`와 재부팅, `on` 뒤 `dnf remove uinitcon
 확인합니다. 옛 RPM을 먼저 빌드해야 새 빌드의 릴리스 번호가 더 큽니다. 명령은 스크립트 머리말에 있습니다.
 
 `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm MODE`는 `session`과 `lifecycle` 확인(과 그 baseline)을
-같은 방식으로 s6 부팅에서 실행합니다. 모든 RPM, `USER_MANAGER=s6`(baseline 제외), `initconvert init`을 쓰므로
+같은 방식으로 s6 부팅에서 실행합니다. 모든 RPM, `USER_MANAGER=s6`(baseline에서는 `systemd`), `initconvert init`을 쓰므로
 s6 부팅의 러너가 모든 `user@`를 시작합니다. 재부팅 때는 각 `user@`를 "shutdown starts"부터 러너의 PAM 세션이
 끝날 때까지 재며, 한도는 같은 5초입니다.
 

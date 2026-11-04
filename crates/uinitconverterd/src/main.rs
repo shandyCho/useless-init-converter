@@ -36,7 +36,8 @@ usage: initconvertd [--config PATH] [COMMAND] [ARGS]
   user-manager  what user@UID.service runs: the user's service manager
                 (s6-svscan and this daemon in user mode, under
                 $XDG_RUNTIME_DIR/uinitconverter), or `systemd --user` with
-                USER_MANAGER=systemd / uinitconverter.user_manager=systemd.
+                USER_MANAGER=systemd / uinitconverter.user_manager=systemd
+                (unset: s6 on the s6 boot, systemd on a systemd boot).
                 The uinitconverter-user package runs it as
                 initconvert-user-manager (a link to this program).
   log UNIT [-f] show (or follow) a service's log: journalctl -u, or its

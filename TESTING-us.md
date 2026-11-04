@@ -352,7 +352,8 @@ subvolumes). The mode says what `user@` must run:
 |---|---|---|
 | `s6` (default) | `USER_MANAGER=s6`, `uinitconverter-user` installed | `initconvert-user-manager`; then a reboot from the s6 boot and the same checks |
 | `no-package` | `USER_MANAGER=s6`, no `uinitconverter-user` | `systemd --user`, with the runner's "install uinitconverter-user" line |
-| `default` | every package, no `USER_MANAGER=` | `systemd --user` |
+| `default` | every package, no `USER_MANAGER=` | `initconvert-user-manager` (the s6 boot's default) |
+| `systemd` | every package, `USER_MANAGER=systemd` | `systemd --user` |
 
 `BOOT=systemd-rpm tests/vm-user-manager.sh ~/uinitconverter-vm MODE` runs
 `greeter`, `session`, `apps`, `lifecycle` or `fallback` on the stock systemd
@@ -374,7 +375,7 @@ commands.
 
 `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm MODE` runs the
 `session` and `lifecycle` checks (and their baselines) on the s6 boot the same
-way: every RPM, `USER_MANAGER=s6` (not in the baselines) and `initconvert
+way: every RPM, `USER_MANAGER=s6` (`systemd` in the baselines) and `initconvert
 init`, so the s6 boot's runner starts every `user@`. At the reboot it measures
 each `user@` from "shutdown starts" to the end of its runner's PAM session,
 with the same 5 s limit.
