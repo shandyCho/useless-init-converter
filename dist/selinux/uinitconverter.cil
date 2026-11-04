@@ -173,3 +173,38 @@
 ; /run/systemd/coredumpd. The policy has create on the socket file but nothing
 ; on the directory, as Fedora's boot uses systemd-coredump.socket instead.
 (allow systemd_coredump_t systemd_coredump_var_run_t (dir (getattr search open read write add_name remove_name)))
+
+; The runner's notify sockets (NOTIFY_SOCKET, /run/uinitconverter/notify/*).
+; A user manager runs in the user's domain (user@UID: unconfined_t, user_t,
+; staff_t, ...), and confined user domains may not send to init_t's datagram
+; sockets: the READY=1 of a user_u or staff_u user's manager was denied and
+; user@ timed out after 90 s. systemd's /run/systemd/notify is reachable only
+; because PID 1 brings it over from the initramfs, before any policy, as
+; kernel_t (syslog_client_type may send to that). The runner creates its
+; notify sockets as uinitconverter_notify_t instead (sockcreate), which every
+; domain may send to, as every service may notify its manager; the runner
+; checks each sender's credentials itself. Their sock_files and directory
+; get their own type for the same domains.
+(type uinitconverter_notify_t)
+(roletype system_r uinitconverter_notify_t)
+(allow init_t uinitconverter_notify_t (unix_dgram_socket (create bind getattr setattr getopt setopt read write recvfrom recv_msg ioctl shutdown)))
+(allow domain uinitconverter_notify_t (unix_dgram_socket (sendto)))
+(type uinitconverter_notify_var_run_t)
+(roletype object_r uinitconverter_notify_var_run_t)
+(typeattributeset file_type (uinitconverter_notify_var_run_t))
+(typeattributeset non_security_file_type (uinitconverter_notify_var_run_t))
+(typeattributeset non_auth_file_type (uinitconverter_notify_var_run_t))
+(filecon "/run/uinitconverter/notify(/.*)?" any (system_u object_r uinitconverter_notify_var_run_t ((s0) (s0))))
+(typetransition init_t init_var_run_t dir "notify" uinitconverter_notify_var_run_t)
+(allow init_t uinitconverter_notify_var_run_t (dir (create getattr setattr open read search write add_name remove_name rmdir relabelfrom relabelto)))
+(allow init_t uinitconverter_notify_var_run_t (sock_file (create getattr setattr open write append unlink relabelfrom relabelto)))
+(allow domain init_var_run_t (dir (getattr search)))
+(allow domain uinitconverter_notify_var_run_t (dir (getattr search)))
+(allow domain uinitconverter_notify_var_run_t (sock_file (getattr open write append)))
+;
+; The fallback records of the s6 user manager (/run/uinitconverter-user,
+; 1777, dist/tmpfiles.d/uinitconverter-user.conf): each user's manager
+; writes its own. As var_run_t a confined user's create was denied (the
+; record went to its runtime directory instead, which `initconvert-user-setup
+; status` doesn't read). Like /run/user/UID.
+(filecon "/run/uinitconverter-user(/.*)?" any (system_u object_r user_tmp_t ((s0) (s0))))

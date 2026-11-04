@@ -74,6 +74,11 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- The s6 user manager for SELinux-confined users (`user_u`, `staff_u`) on
+  the s6 boot: its READY=1 to the runner was denied (confined domains may not
+  send to `init_t`'s datagram sockets), so `user@` timed out after 90 s. The
+  runner's notify sockets now have their own type, `uinitconverter_notify_t`,
+  and `/run/uinitconverter-user` is labelled like `/run/user/UID`.
 - A restart now also restarts the running units with `BindsTo=` on it, as
   systemd's restart job does. Restarting pipewire (the RPM update helper does)
   left wireplumber stopped, so sound stopped working until the next login.
@@ -130,16 +135,12 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   unchanged with `no s6 entry for …`.
 
 ### Known issues
-- The s6 user manager has not run for SELinux-confined users; keep
-  `USER_MANAGER=systemd` there. Under the s6 boot's own system manager it has
-  run in the test VM only (`tests/vm-s6-boot.sh`), not on real hardware.
-- On the s6 boot with the s6 user manager, a reboot with GNOME sessions open
-  can take 6-9 s for the users: gnome-shell sometimes doesn't exit until its
-  unit's `TimeoutStopSec=5`, and each user's stop ends with about 2 s for
-  `user-runtime-dir@`. Under `systemd --user` on the same boot it takes under
-  1 s. Not explained yet.
-- The system sandbox failed once in a few runs on a dangling scan directory
-  entry of an on-demand instance (`quitter@0.service`); not reproduced.
+- Under the s6 boot's own system manager the s6 user manager has run in the
+  test VM only (`tests/vm-s6-boot.sh`), not on real hardware.
+- On a systemd boot with only `uinitconverter-user` (no SELinux module), a
+  confined user's manager can't write its record in `/run/uinitconverter-user`
+  (one denial per start); it uses its runtime directory instead, which
+  `initconvert-user-setup status` reads too.
 
 ## 0.2.2 (2026-11-02)
 

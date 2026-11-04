@@ -33,6 +33,12 @@
 #                                        # alice, the RPM update helper, a lingering
 #                                        # user, alice's logout, a reboot
 #   tests/vm-user-manager.sh DIR lifecycle-baseline # the same on systemd --user
+#   tests/vm-user-manager.sh DIR confined # SELinux-confined users: carol (user_u)
+#                                        # and dave (staff_u), lingering: user@ comes
+#                                        # up, the manager and its s6-svscan run in
+#                                        # the user's domain, no denials from it
+#   tests/vm-user-manager.sh DIR confined-baseline # the same on systemd --user
+#                                        # (both with BOOT=s6 or BOOT=systemd-rpm)
 #   tests/vm-user-manager.sh DIR fallback # tester's session broken on purpose for
 #                                        # the s6 manager only: systemd --user takes
 #                                        # over, the next login works; a crashed
@@ -63,12 +69,13 @@ set -euo pipefail
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 VM=$TOP/tests/gnome-vm.sh
-D=${1:?usage: tests/vm-user-manager.sh DIR [user|greeter|baseline|session|session-baseline|apps|apps-baseline|lifecycle|lifecycle-baseline|fallback]}
+D=${1:?usage: tests/vm-user-manager.sh DIR [user|greeter|baseline|session|session-baseline|apps|apps-baseline|lifecycle|lifecycle-baseline|fallback|confined|confined-baseline]}
 MODE=${2:-user}
-case $MODE in user | greeter | baseline | session | session-baseline | apps | apps-baseline | lifecycle | lifecycle-baseline | fallback) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
+case $MODE in user | greeter | baseline | session | session-baseline | apps | apps-baseline | lifecycle | lifecycle-baseline | fallback | confined | confined-baseline) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
 BOOT=${BOOT:-systemd}
 case $BOOT/$MODE in
-    systemd/* | s6/session | s6/session-baseline | s6/lifecycle | s6/lifecycle-baseline) ;;
+    systemd/confined*) echo "mode $MODE: with BOOT=s6 or BOOT=systemd-rpm (BOOT=systemd's drop-in is for tester only)" >&2; exit 2 ;;
+    systemd/* | s6/session | s6/session-baseline | s6/lifecycle | s6/lifecycle-baseline | s6/confined | s6/confined-baseline) ;;
     systemd-rpm/user) echo "BOOT=systemd-rpm: not with mode user (it turns the manager on for every user@)" >&2; exit 2 ;;
     systemd-rpm/*) ;;
     *) echo "BOOT=$BOOT: not with mode $MODE" >&2; exit 2 ;;
@@ -681,6 +688,58 @@ echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
 EOS
 
+cat >"$S/confined.sh" <<'EOS'
+#!/bin/bash
+# As root in the VM: SELinux-confined users' managers. $1: the manager
+# expected (initconvertd or systemd).
+set -uo pipefail
+want=$1
+pass=0 fail=0
+ok() { pass=$((pass + 1)); echo "PASS $*"; }
+bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+until_ok() { local t=0; until eval "$1"; do t=$((t + 1)); [ $t -ge "$2" ] && return 1; sleep 1; done; }
+start=$(date +%s)
+for u in carol:user_u:user_t dave:staff_u:staff_t; do
+    IFS=: read -r n su dom <<<"$u"
+    id "$n" >/dev/null 2>&1 || useradd -m "$n"
+    semanage login -l | grep -q "^$n " || semanage login -a -s "$su" "$n"
+    loginctl enable-linger "$n"
+done
+for u in carol:user_u:user_t dave:staff_u:staff_t; do
+    IFS=: read -r n su dom <<<"$u"
+    uid=$(id -u "$n")
+    if until_ok '[ "$(systemctl is-active "user@$uid.service")" = active ]' 60; then
+        ok "$n ($su): user@$uid is active"
+    else
+        bad "$n ($su): user@$uid is $(systemctl is-active "user@$uid.service") ($(systemctl show -p Result --value "user@$uid.service"))"
+        continue
+    fi
+    pid=$(systemctl show -p MainPID --value "user@$uid.service")
+    exe=$(basename "$(readlink "/proc/$pid/exe")" 2>/dev/null)
+    [ "$exe" = "$want" ] && ok "$n's user manager is $want" || bad "$n's user manager is ${exe:-unknown}, not $want"
+    ctx=$(tr -d '\0' <"/proc/$pid/attr/current")
+    case $ctx in "$su:"*":$dom:"*) ok "$n's manager runs as $ctx" ;; *) bad "$n's manager runs as $ctx, not $dom" ;; esac
+    if [ "$want" = initconvertd ]; then
+        sv=$(pgrep -u "$n" -x s6-svscan | head -1)
+        case $(tr -d '\0' <"/proc/$sv/attr/current" 2>/dev/null) in
+            *":$dom:"*) ok "$n's s6-svscan runs as $dom" ;;
+            *) bad "$n's s6-svscan: $(tr -d '\0' <"/proc/$sv/attr/current" 2>&1)" ;;
+        esac
+    fi
+done
+# Denials from the users' domains (not the usual dontaudit-hidden
+# inheritance ones). Without the SELinux module (BOOT=systemd-rpm) the
+# record in /run/uinitconverter-user is known (CHANGELOG Known issues).
+den=$(ausearch -m AVC,USER_AVC,SELINUX_ERR -ts "$(date -d @"$start" +%T)" 2>/dev/null | grep -E "scontext=(user|staff)_u:" \
+    | grep -vE "\{ (siginh|rlimitinh|noatsecure) \}" || true)
+known=$(printf '%s\n' "$den" | grep -E 'name="[0-9]+\.running".*tcontext=[a-z_]+:object_r:var_run_t' || true)
+other=$(printf '%s\n' "$den" | grep -vE 'name="[0-9]+\.running".*tcontext=[a-z_]+:object_r:var_run_t' | grep . || true)
+[ -n "$known" ] && echo "   known: $(printf '%s\n' "$known" | grep -c .) denial(s) of the fallback record in var_run_t (no SELinux module)"
+if [ -z "$other" ]; then ok "no denials from the confined users"; else bad "denials:"; printf '%s\n' "$other" | cut -c1-300 | sed 's/^/   /'; fi
+echo "passed: $pass  failed: $fail"
+[ "$fail" -eq 0 ]
+EOS
+
 cat >"$S/fallback.sh" <<'EOS'
 #!/bin/bash
 # As root in the VM: the fallback, after tester's broken autologin.
@@ -799,6 +858,14 @@ case $MODE in
         sleep 30
         "$VM" wait "$D" || rc=$?
         "$VM" ssh "$D" sudo bash in/life.sh after-reboot $want || rc=$?
+        exit $rc
+        ;;
+    confined | confined-baseline)
+        want=initconvertd
+        [ "$MODE" = confined-baseline ] && want=systemd
+        rc=0
+        "$VM" wait "$D" || rc=$?
+        "$VM" ssh "$D" sudo bash in/confined.sh $want || rc=$?
         exit $rc
         ;;
     fallback)

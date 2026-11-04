@@ -288,6 +288,13 @@ disable-linger가 남김없이 멈춤), alice를 로그아웃시킨 뒤 재부�
 `systemd --user` 아래에서 동작하는 세션을 받습니다. 마지막으로 bob을 linger시키고 그의 s6 매니저를 SIGKILL로
 죽이면, 다음 `user@` 시작이 충돌을 기록하고 `systemd --user`를 실행합니다.
 
+`BOOT=s6` 또는 `BOOT=systemd-rpm` `tests/vm-user-manager.sh ~/uinitconverter-vm confined`는
+SELinux로 제한된 사용자 둘, carol(`user_u`)과 dave(`staff_u`)를 linger로 추가합니다. 각 `user@`가 활성이
+되어야 하고, 그 매니저와 s6-svscan이 사용자의 도메인(`user_t`, `staff_t`)에서 실행되어야 하며, 그 도메인에서
+나온 거부가 없어야 합니다(`BOOT=systemd-rpm`에서는 SELinux 모듈이 없으므로 `/run/uinitconverter-user`의
+폴백 기록 거부는 알려진 것으로 표시합니다). `confined-baseline`은 같은 것을 기본 `systemd --user`에서
+실행합니다.
+
 `tests/vm-s6-boot.sh ~/uinitconverter-vm`은 README 2-4단계처럼 설치해 VM을 s6로 부팅합니다. 코어 RPM
 (`packages/build-rpms.sh`, 기본 `~/uinitconverter-vm/rpmbuild/core/rpms` 또는 `CORE_RPMS=`), 독립 도구 RPM
 (`STANDALONE_RPMS=`), skarnet RPM(`SKARNET_RPMS=`, 기본 `~/rpmbuild-skarnet/rpms`)을 `dnf`로 설치하고(의존성은

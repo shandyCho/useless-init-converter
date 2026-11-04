@@ -504,5 +504,10 @@ pub fn sd_notify(msg: &str) {
     let (Ok(addr), Ok(sock)) = (addr, UnixDatagram::unbound()) else {
         return;
     };
-    let _ = sock.send_to_addr(msg.as_bytes(), &addr);
+    // Logged: a lost READY=1 leaves the unit "activating" until its start
+    // timeout, with nothing else to show why.
+    if let Err(e) = sock.send_to_addr(msg.as_bytes(), &addr) {
+        let first = msg.lines().next().unwrap_or_default();
+        eprintln!("sd_notify {first} to {path}: {e}");
+    }
 }

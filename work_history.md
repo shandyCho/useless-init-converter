@@ -11873,3 +11873,22 @@ Not bisected (about an hour of VM runs). The candidates are the system-side chan
 ### Next steps
 
 Phase 2 step 7 (SELinux for confined users).
+
+## 2026-11-05, part 170: step 7, SELinux for confined users
+
+**Found (VM, s6 boot, lingering carol = user_u and dave = staff_u):** both user@ ended `failed (Result: timeout)` after 90 s, though their managers logged ready. The manager's READY=1 to the runner's notify socket: `denied { sendto } scontext=staff_u:staff_r:staff_t tcontext=system_u:system_r:init_t tclass=unix_dgram_socket` (EACCES, now logged by util::sd_notify). Confined user domains may not send to init_t's datagram sockets (sesearch: only unconfined, daemon, sysadm_t, systemctl_domain, ... may). Also `denied { create } name="UID.running" tcontext=var_run_t`: the fallback record in /run/uinitconverter-user (it then went to the runtime directory).
+- Stock systemd on the same VM: both user@ active, `systemd --user` as user_t/staff_t, no denial (also with dontaudit off). Its NOTIFY_SOCKET is /run/systemd/notify too; it works because PID 1 brings that socket over from the initramfs, created before any policy, so it is kernel_t, and syslog_client_type (user domains are) may send to kernel_t datagram sockets. Not something to copy.
+- `systemctl --user -M carol@` fails with "Transport endpoint is not connected" on stock too (not ours). The user bus socket is session_dbusd_tmp_t under stock, user_tmp_t under ours; no denial from it, left as is.
+
+**Fix:**
+- dist/selinux/uinitconverter.cil: `uinitconverter_notify_t` for the runner's notify sockets (init_t creates and uses them; every domain may sendto, as every service may notify its manager: the runner checks credentials itself); `uinitconverter_notify_var_run_t` for /run/uinitconverter/notify and its sock_files (typetransition for the dir; every domain may search it and write the sock_files; every domain may search init_var_run_t dirs); `/run/uinitconverter-user` labelled user_tmp_t, like /run/user/UID.
+- Runner (notify.rs): the notify socket is created with sockcreate set to the runner's own context with type uinitconverter_notify_t (`notify_socket_label`, unit test with an MCS range); without the module the kernel refuses the label and the default applies.
+- util::sd_notify logs a failed send.
+- tests/vm-user-manager.sh: modes `confined` and `confined-baseline` (BOOT=s6 or systemd-rpm), TESTING pair.
+- CHANGELOG pair: Fixed; Known issues updated: confined users, the 6-9 s reboot (parts 167/168) and the quitter@0 sandbox failure (part 165) removed; added: on a systemd boot with only uinitconverter-user there is no module, so a confined user's record in /run/uinitconverter-user is denied (it goes to the runtime directory, which `status` reads too). Docs pair: confined users done; real hardware still open.
+
+**Tests:** VM: `BOOT=s6 confined` 9/9; `BOOT=systemd-rpm confined` 9/9 (no denial at all this time); `BOOT=s6 confined-baseline` 7/7 (stock systemd --user under our runner, which needs the same socket type); `BOOT=s6 session` 20/20 + 2/2 with the relabelled notify sockets (system services' notify works). cargo test pass; system sandbox 371/371; user sandbox 108/108. mcelog.service fails in the VM on both boots (stock too).
+
+### Next steps
+
+Phase 2 step 8: the elogind plan, first a design write-up for the owner (it reopens decision 3).

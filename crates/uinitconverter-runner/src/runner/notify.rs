@@ -400,6 +400,17 @@ pub(super) fn double_fork<F: FnOnce()>(f: F) -> Result<(), String> {
 /// May this sender talk to a unit's notify socket? Root, the unit's User=,
 /// the main process, or any process in the main process's cgroup (systemd's
 /// NotifyAccess=all; children may notify via systemd-notify).
+/// The runner's own context with the type of its notify sockets
+/// (user:role:type:level, the level may hold colons itself).
+pub(super) fn notify_socket_label(own: &str) -> Option<String> {
+    let mut f = own.splitn(4, ':');
+    let (u, r, _, l) = (f.next()?, f.next()?, f.next()?, f.next());
+    Some(match l {
+        Some(l) => format!("{u}:{r}:uinitconverter_notify_t:{l}"),
+        None => format!("{u}:{r}:uinitconverter_notify_t"),
+    })
+}
+
 pub(super) fn notify_sender_ok(
     cred: Option<libc::ucred>,
     main_pid: u32,
@@ -488,7 +499,17 @@ impl Runner {
         } else {
             path_s
         };
-        let fd = socket::bind_unix(&path_s, libc::SOCK_DGRAM, &self.unit)?;
+        // As uinitconverter_notify_t (dist/selinux): a user manager in a
+        // confined user's domain (user_t, staff_t) may not send to init_t's
+        // datagram sockets. Without that type (no module, no SELinux) the
+        // kernel refuses the label and the socket gets the default one.
+        let label = crate::selinux::own_context().and_then(|c| notify_socket_label(&c));
+        crate::selinux::set_socket_label(label.as_deref());
+        let bound = socket::bind_unix(&path_s, libc::SOCK_DGRAM, &self.unit);
+        if label.is_some() {
+            crate::selinux::set_socket_label(None);
+        }
+        let fd = bound?;
         // World-writable, as systemd's notify socket: daemons such as chronyd
         // start as root, drop to their own user, and only then send READY=1.
         // Senders are checked by their credentials instead (notify_sender_ok).
@@ -626,6 +647,25 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The notify socket's label keeps the runner's user, role and level
+    /// (an MCS range has colons of its own).
+    #[test]
+    fn notify_socket_label_swaps_the_type() {
+        assert_eq!(
+            notify_socket_label("system_u:system_r:init_t:s0").as_deref(),
+            Some("system_u:system_r:uinitconverter_notify_t:s0")
+        );
+        assert_eq!(
+            notify_socket_label("system_u:system_r:init_t:s0-s0:c0.c1023").as_deref(),
+            Some("system_u:system_r:uinitconverter_notify_t:s0-s0:c0.c1023")
+        );
+        assert_eq!(
+            notify_socket_label("u:r:t").as_deref(),
+            Some("u:r:uinitconverter_notify_t")
+        );
+        assert_eq!(notify_socket_label("garbage"), None);
+    }
 
     /// The notify helper's command line carries every field across exec().
     #[test]

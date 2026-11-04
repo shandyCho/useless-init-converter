@@ -325,6 +325,14 @@ gets a working session under `systemd --user`. Last, bob lingers, his s6
 manager is killed with SIGKILL, and the next start of his `user@` runs
 `systemd --user` with the crash recorded.
 
+`BOOT=s6` or `BOOT=systemd-rpm` `tests/vm-user-manager.sh ~/uinitconverter-vm
+confined` adds two SELinux-confined users, carol (`user_u`) and dave
+(`staff_u`), lingering: each `user@` must become active, its manager and its
+s6-svscan must run in the user's domain (`user_t`, `staff_t`), and no denial
+may come from those domains (on `BOOT=systemd-rpm`, without the SELinux
+module, the fallback record's denial in `/run/uinitconverter-user` is listed
+as known). `confined-baseline` runs the same on stock `systemd --user`.
+
 `tests/vm-s6-boot.sh ~/uinitconverter-vm` boots the VM with s6, installed
 as README steps 2-4 do it: the core RPMs (`packages/build-rpms.sh`; default
 `~/uinitconverter-vm/rpmbuild/core/rpms`, or `CORE_RPMS=`), the standalone

@@ -58,6 +58,10 @@
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
+- s6 부팅에서 SELinux로 제한된 사용자(`user_u`, `staff_u`)의 s6 사용자 매니저: 러너에 보내는 READY=1이
+  거부되어(제한된 도메인은 `init_t`의 데이터그램 소켓에 보낼 수 없습니다) `user@`가 90초 뒤 시간 초과로
+  실패했습니다. 이제 러너의 notify 소켓은 자체 타입 `uinitconverter_notify_t`를 쓰고,
+  `/run/uinitconverter-user`는 `/run/user/UID`처럼 레이블됩니다.
 - 재시작할 때 그 유닛에 `BindsTo=`를 둔 실행 중인 유닛도 systemd의 재시작 작업처럼 다시 시작합니다.
   pipewire를 재시작하면(RPM 업데이트 도우미가 합니다) wireplumber가 멈춘 채로 남아, 다음 로그인까지 소리가
   나지 않았습니다.
@@ -102,15 +106,11 @@
   `no s6 entry for …`를 출력하고 기본값을 바꾸지 않았습니다.
 
 ### 알려진 문제
-- s6 사용자 매니저는 아직 SELinux로 제한된 사용자에게 실행해 보지 않았습니다. 그런 환경에서는
-  `USER_MANAGER=systemd`를 유지하세요. s6 부팅의 시스템 매니저 아래에서는 테스트 VM에서만
-  (`tests/vm-s6-boot.sh`) 실행했고, 실제 하드웨어에서는 아직입니다.
-- s6 부팅에서 s6 사용자 매니저를 쓰면 GNOME 세션이 열린 채 재부팅할 때 사용자들이 멈추는 데 6-9초가
-  걸릴 수 있습니다. gnome-shell이 가끔 유닛의 `TimeoutStopSec=5`까지 끝나지 않고, 사용자마다 마지막에
-  `user-runtime-dir@`에 2초쯤 걸립니다. 같은 부팅에서 `systemd --user`는 1초 안에 끝납니다. 원인은 아직
-  모릅니다.
-- 시스템 샌드박스가 몇 번 중 한 번, 요청 시 인스턴스(`quitter@0.service`)의 스캔 디렉터리 항목이 남는
-  문제로 실패했습니다. 재현되지 않았습니다.
+- s6 부팅의 시스템 매니저 아래에서는 s6 사용자 매니저를 테스트 VM에서만(`tests/vm-s6-boot.sh`) 실행했고,
+  실제 하드웨어에서는 아직입니다.
+- `uinitconverter-user`만 있는(SELinux 모듈이 없는) systemd 부팅에서는 제한된 사용자의 매니저가
+  `/run/uinitconverter-user`에 기록을 쓰지 못합니다(시작할 때마다 거부 하나). 대신 런타임 디렉터리에 쓰며,
+  `initconvert-user-setup status`는 그곳도 읽습니다.
 
 ## 0.2.2 (2026-11-02)
 

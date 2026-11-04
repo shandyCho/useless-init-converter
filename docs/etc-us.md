@@ -651,8 +651,10 @@ GNOME session comes up on it with SELinux enforcing and no denials, also
 after a reboot from the s6 boot. Without `uinitconverter-user`, or with the
 default `USER_MANAGER=systemd`, `user@` runs `systemd --user` there.
 
-Not done yet: SELinux for confined users, and a run on real hardware under
-the s6 boot. Keep the default until those are done.
+Confined users (`user_u`, `staff_u`) get their manager in their own domain
+on both boots, as with `systemd --user` (checked in the VM with lingering
+users). Not done yet: a run on real hardware under the s6 boot. Keep the
+default until that is done.
 
 ## The `s6` command (s6-frontend)
 
