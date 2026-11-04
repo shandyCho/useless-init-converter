@@ -11863,3 +11863,13 @@ Phase 1 step 5 (stop time per user), then 6.
 ### Next steps
 
 Phase 1 step 6 (lifecycle-baseline's failed user switch on the s6 boot).
+
+## 2026-11-05, part 169: step 6, lifecycle-baseline's user switch on the s6 boot
+
+`BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle-baseline` (stock systemd --user, our system manager), on 720f285's RPMs: two runs, 68/68 each. The switch to alice passes (her session up, user manager systemd, tester's session in the background), and so do the follow-on checks that failed with it before (alice's pipewire restart, alice's logout). Reboot: 0.48 s per user. It failed in both earlier runs (part 154, and part 164's Phase 0 on 56a0dbf: "alice: no GNOME session after 90 s").
+
+Not bisected (about an hour of VM runs). The candidates are the system-side changes of parts 166 to 168: socket activation starting the service's Wants=/Requires= (system on-demand services too), KillMode=control-group at stops, BindsTo= dependents restarted, the clean Type=dbus/simple exits. No code change in this part.
+
+### Next steps
+
+Phase 2 step 7 (SELinux for confined users).
