@@ -17,6 +17,8 @@
 # DIR/rpmbuild/standalone/rpms (the newest build of each package);
 # SKARNET_RPMS: default ~/rpmbuild-skarnet/rpms (devel packages left out).
 # SELINUX=permissive|enforcing (default enforcing) is init's --selinux=.
+# BOOT_ONLY_S6=yes: init's --boot-only-s6=yes (uinitconverter's own initramfs,
+# with mdevd; no systemd at all); the checks add that the entry boots it.
 # The overlay is fresh; dnf fetches the dependencies (network). DIR keeps
 # s6boot-MODE.png and s6boot-MODE-serial.log. VM_KEEP=yes keeps the VM up.
 set -euo pipefail
@@ -31,6 +33,7 @@ CORE=${CORE_RPMS:-$D/rpmbuild/core/rpms}
 STANDALONE=${STANDALONE_RPMS:-$D/rpmbuild/standalone/rpms}
 SKARNET=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/rpms}
 SELINUX=${SELINUX:-enforcing}
+BOOT_ONLY_S6=${BOOT_ONLY_S6:-no}
 S=$(mktemp -d)
 if [ "${VM_KEEP:-no}" = yes ]; then
     trap 'cp "$D/serial.log" "$D/s6boot-$MODE-serial.log" 2>/dev/null; rm -rf "$S"' EXIT
@@ -63,7 +66,7 @@ done
 cat >"$S/setup.sh" <<'EOS'
 #!/bin/bash
 # As root in the VM, on the systemd boot: install, configure, init.
-# $1: the mode, $2: --selinux=.
+# $1: the mode, $2: --selinux=, $3: --boot-only-s6=.
 set -euo pipefail
 cd ~tester/in
 # Built locally, so unsigned. The base image's metadata cache can be stale
@@ -74,13 +77,14 @@ mkdir -p /etc/uinitconverter
 case $1 in
     s6 | no-package) echo "USER_MANAGER=s6" >>/etc/uinitconverter/uinitconverter.conf ;;
 esac
-initconvert init --yes --default-s6 --selinux="$2"
+initconvert init --yes --default-s6 --selinux="$2" --boot-only-s6="${3:-no}"
 grubby --default-title
 EOS
 
 cat >"$S/check.sh" <<'EOS'
 #!/bin/bash
-# As root in the VM, on the s6 boot. $1: the mode, $2: a label.
+# As root in the VM, on the s6 boot. $1: the mode, $2: a label, $3: yes
+# for --boot-only-s6=yes.
 set -uo pipefail
 mode=$1
 pass=0 fail=0
@@ -94,6 +98,16 @@ echo "== $2"
 c=$(cat /proc/1/comm)
 [ "$c" = s6-svscan ] && ok "PID 1 is s6-svscan" || bad "PID 1 is $c"
 echo "   kernel: $(uname -r); cmdline: $(cat /proc/cmdline)"
+if [ "${3:-no}" = yes ]; then
+    i=$(grubby --info=DEFAULT 2>/dev/null | sed -n 's/^initrd="\(.*\)"/\1/p')
+    case $i in *-s6.img) ok "the entry boots uinitconverter's initramfs ($i)" ;; *) bad "the entry's initrd: ${i:-none}" ;; esac
+    [ -s "/boot/initramfs-$(uname -r)-s6.img" ] && ok "the image for this kernel exists" || bad "no /boot/initramfs-$(uname -r)-s6.img"
+    # dracut's initramfs runs systemd as PID 1, which logs "(initrd)".
+    n=$(journalctl -b --no-pager -o cat 2>/dev/null | grep -c "Running in initrd" || true)
+    [ "$n" = 0 ] && ok "no systemd ran in the initramfs" || bad "systemd ran in the initramfs ($n lines)"
+    findmnt -no FSTYPE / | grep -q . && ok "root is $(findmnt -no SOURCE,FSTYPE,OPTIONS / | cut -c1-120)" || bad "no root mount"
+    findmnt -no SOURCE /var >/dev/null 2>&1 && ok "/var is mounted: $(findmnt -no SOURCE,FSTYPE /var)" || echo "   /var is on the root file system"
+fi
 pgrep -x initconvertd >/dev/null && ok "initconvertd runs" || bad "no initconvertd"
 s=$(getenforce)
 want=Enforcing
@@ -177,13 +191,13 @@ ssh_up
 "$VM" copy "$D" "$S/setup.sh" "$S/check.sh"
 "$VM" copy "$D" "$S"/rpms/*
 echo "== install and init (systemd boot)"
-"$VM" ssh "$D" sudo bash in/setup.sh "$MODE" "$SELINUX"
+"$VM" ssh "$D" sudo bash in/setup.sh "$MODE" "$SELINUX" "$BOOT_ONLY_S6"
 echo "== reboot into the s6 boot"
 t0=$(date +%s)
 reboot_vm
 echo "   SSH up $(($(date +%s) - t0)) s after the reboot"
 rc=0
-"$VM" ssh "$D" sudo bash in/check.sh "$MODE" "first s6 boot" || rc=$?
+"$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'first s6 boot'" "$BOOT_ONLY_S6" || rc=$?
 "$VM" screenshot "$D" "$D/s6boot-$MODE.png" || true
 if [ "$MODE" = s6 ]; then
     echo "== reboot from the s6 boot, tester's session open"
@@ -192,6 +206,6 @@ if [ "$MODE" = s6 ]; then
     echo "   SSH up $(($(date +%s) - t0)) s after the reboot"
     echo "-- the last boot's shutdown (s6 boot):"
     "$VM" ssh "$D" "sudo journalctl -b -1 --no-pager -o short-monotonic 2>/dev/null | tail -15 | cut -c1-160" | sed 's/^/   /' || true
-    "$VM" ssh "$D" sudo bash in/check.sh "$MODE" "second s6 boot" || rc=$?
+    "$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'second s6 boot'" "$BOOT_ONLY_S6" || rc=$?
 fi
 exit $rc

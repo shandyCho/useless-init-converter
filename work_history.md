@@ -11959,3 +11959,15 @@ Part 147 estimated about 0.65 MiB per idle on-demand runner (2.6 MiB per user) a
 ### Next steps
 
 Phase 3 step 12 (`--boot-only-s6=yes` in the VM). Step 8 waits for the owner.
+
+## 2026-11-05, part 175: step 12, `--boot-only-s6=yes` in the VM
+
+tests/vm-s6-boot.sh: `BOOT_ONLY_S6=yes` passes `--boot-only-s6=yes` to `initconvert init`; check.sh then also checks that the default entry's initrd is `…-s6.img`, that the image for the running kernel exists, that no systemd ran in the initramfs (no "Running in initrd" in the boot's journal), and prints the root and /var mounts. TESTING pair.
+
+**Bug found in the test, fixed:** check.sh's label ("first s6 boot") reached the VM as three words (gnome-vm.sh ssh joins its arguments into one remote command line), so it printed `== first` and anything after it shifted. The labels are quoted for the remote shell now.
+
+**Result** (`BOOT_ONLY_S6=yes tests/vm-s6-boot.sh ~/uinitconverter-vm s6`, a3c568b-era RPMs plus everything since, built from 0e7d768): init built `/boot/initramfs-7.2.11-300.fc45.x86_64-s6.img` (23M); both s6 boots 24/24: the entry boots `/boot/boot/initramfs-…-s6.img` (Fedora's btrfs /boot subvolume layout), no systemd in the initramfs, root `/dev/vda3[/root]` btrfs subvol=/root, `/var` `/dev/vda3[/var]` btrfs, PID 1 s6-svscan, SELinux enforcing, tester's session on the s6 user manager, no AVC denials. The btrfs /var layout (part 153's reason for this run) works.
+
+### Next steps
+
+Phase 3 is done. Step 8 waits for the owner (A: elogind spike, B: no elogind). Then Phase 4 (the default and packaging: a proposal) and Phase 5 (the full VM run, then the owner's machine).
