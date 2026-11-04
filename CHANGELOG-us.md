@@ -74,6 +74,12 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- With `JOURNAL=no`, a user manager's logger whose log directory can't be
+  created any more logs under the manager's runtime directory instead, and
+  says so once. GDM removes the greeter's home at login while its manager
+  still runs for about 10 s; the restarted session bus's logger failed every
+  second (`mkdir: cannot create directory '/run/gdm/home/gdm-greeter'`) and
+  left the bus's output in the pipe. The boot's loggers still retry.
 - The s6 user manager answers `/org/freedesktop/systemd1/unit/self` (the
   caller's own unit), and `GetUnitByPID` there names the user unit (it named
   `user@UID.service` for every process). `systemd-run --user --scope`

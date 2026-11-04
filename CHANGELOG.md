@@ -58,6 +58,11 @@
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
+- `JOURNAL=no`에서 로그 디렉터리를 더는 만들 수 없는 사용자 매니저의 로거는 매니저의 런타임
+  디렉터리 아래에 대신 기록하고, 그렇다고 한 번 알립니다. GDM은 로그인할 때 그리터의 홈을 지우는데,
+  그리터의 매니저는 그 뒤로도 10초쯤 실행됩니다. 그 사이 다시 시작한 세션 버스의 로거가 매초 실패했고
+  (`mkdir: cannot create directory '/run/gdm/home/gdm-greeter'`), 버스의 출력은 파이프에 남았습니다.
+  부팅의 로거는 계속 다시 시도합니다.
 - s6 사용자 매니저가 `/org/freedesktop/systemd1/unit/self`(호출한 프로세스 자신의 유닛)에 응답하고,
   거기서 `GetUnitByPID`가 사용자 유닛을 알려 줍니다(이전에는 모든 프로세스에 `user@UID.service`).
   `systemd-run --user --scope`가 "Failed to request invocation ID for unit: Unknown object"로

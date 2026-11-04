@@ -19,7 +19,6 @@ use crate::config::runner_cmd;
 use crate::gen::Kind;
 use crate::loader::{self, Unit};
 use crate::tools;
-use crate::util;
 
 pub struct Dynamic {
     pub kind: Kind,
@@ -158,11 +157,9 @@ impl Daemon {
         if let Some(log_dir) = self.cfg.log_dir.as_ref().filter(|_| !self.cfg.journal) {
             let ldir = dir.join("log");
             fs::create_dir_all(&ldir).map_err(e)?;
-            let logdir = util::sh_quote(&log_dir.join(id).display().to_string());
-            let s6log = util::sh_quote(&tools::path("s6-log"));
             write(
                 ldir.join("run"),
-                &format!("#!/bin/sh\nmkdir -p {logdir} || exit 1\nexec {s6log} n10 s1000000 T {logdir}\n"),
+                &crate::gen::logger_run(&self.cfg, log_dir, id, false),
                 true,
             )
             .map_err(e)?;

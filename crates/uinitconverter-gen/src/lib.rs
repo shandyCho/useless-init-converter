@@ -25,7 +25,7 @@ use uinitconverter_base::util;
 use uinitconverter_install as install;
 
 mod s6;
-pub use s6::{longrun_files, stores, write_source};
+pub use s6::{logger_run, longrun_files, stores, write_source};
 
 #[derive(Debug, Clone)]
 pub struct Planned {
