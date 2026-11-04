@@ -11687,3 +11687,19 @@ Committed on main with this entry, one commit after 0370166 (not pushed).
 1. The owner: rebuild the RPMs, reboot into s6, `sudo true`, wait about 10 s, then `systemctl is-failed user@0.service` should say inactive.
 2. The greeter's `/run/gdm/home/gdm-greeter` mkdir errors on the s6 boot.
 3. The elogind plan (part 154); gnome-shell's exit hang (part 154); SELinux for confined users; evolution-alarm-notify's job result (part 158).
+
+## 2026-11-04, part 160: part 159's fix verified on the owner's machine
+
+Owner, on the s6 boot (PID 1 `s6-svscan`) with RPMs built from b280b10 (`uinitconverter-user-0.2.2-1.20261104211350.gb280b10`): `sudo true; sleep 15`, then `systemctl is-failed user@0.service` → `inactive`; `systemctl show` → `Result=success`, `ExecMainCode=1` (exited), `ExecMainStatus=0`. Before the fix this was `failed`, `Result=signal`, `ExecMainStatus=9`. The runner now outlives the manager and exits normally. Not checked: that pam close_session ran (no log looked at), and the VM lifecycle timings.
+
+(A first try typed `user@0.service.` with a trailing dot; that names a unit that doesn't exist, and `is-failed` prints `inactive` for those, so it proved nothing.)
+
+### Current state
+
+Part 159's fix holds on the owner's machine. No code changes in this part.
+
+### Next steps
+
+1. The VM: `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`; each user's reboot stop should be about 1 s shorter than in part 156.
+2. The greeter's `/run/gdm/home/gdm-greeter` mkdir errors on the s6 boot.
+3. The elogind plan (part 154); gnome-shell's exit hang (part 154); SELinux for confined users; evolution-alarm-notify's job result (part 158).
