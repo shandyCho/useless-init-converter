@@ -11892,3 +11892,28 @@ Phase 2 step 7 (SELinux for confined users).
 ### Next steps
 
 Phase 2 step 8: the elogind plan, first a design write-up for the owner (it reopens decision 3).
+
+## 2026-11-05, part 171: step 8, the elogind plan: design write-up for the owner (no code)
+
+Part 154's plan: a login launcher like turnstile, a delegated cgroup per user, logging without journald, no systemd --user fallback, elogind in place of systemd-logind. It reopens decision 3 at the top ("elogind was rejected: no user manager, so no GNOME 49"), which the s6 user manager has since answered. The owner confirms the scope before any code.
+
+**Facts checked (2026-11-05):**
+- Fedora 45 doesn't ship elogind (no `elogind` or `libelogind` in fedora/updates). It would be built here, like the skarnet RPMs (dist/rpm), from upstream.
+- elogind's README (github.com/elogind/elogind): "Elogind does not have the concept of a 'scope', internally, as it's the same as a session. Any API that refers to scopes will always return an error code." It places processes in its own cgroups, with its own (limited) controller when no init does. libelogind replaces sd-login, but "any API calls that require to call systemd, or need internal knowledge of systemd, are simple stubs". The PAM module is pam_elogind.so. Not stated there: whether it writes /run/systemd/{sessions,users,seats} (what libsystemd's sd-login reads), and its cgroup paths on v2.
+- Fedora's gdm, gnome-session and gnome-shell link libsystemd.so.0 (gdm also requires `systemd >= 186`). Their sd-login calls (sd_pid_get_session, sd_session_*, sd_seat_*) read logind's state files and parse systemd's cgroup layout (user.slice/user-UID.slice/session-N.scope). GDM's greeter users (gdm-greeter-N) come from nss-systemd/userdb, independent of logind.
+- Today's s6 boot runs the real systemd-logind as an s6 service, and our system manager gives it what it asks PID 1 for (session scopes, user@UID, user-runtime-dir@UID). That works (lifecycle 72/72, confined users, reboot ~1 s per user).
+
+**What the plan would take, in order of risk:**
+1. elogind as an RPM (our spec, upstream source; never patched by us? elogind isn't skarnet, so the no-patch rule doesn't apply, but the owner should decide) and the PAM switch (pam_systemd → pam_elogind in Fedora's PAM stack, which authselect manages).
+2. Compatibility with the unmodified, libsystemd-linked GNOME: the state files and cgroup paths must be what libsystemd expects; scopes don't exist in elogind, while GNOME 49+ moves each app into an app-*.scope through the user manager (that part is ours) and gnome-session asks logind for the session's scope. Unknown until tried; a failure here ends the plan unless GNOME is rebuilt against libelogind (out of Mode A's "packages unmodified").
+3. A launcher (turnstile's role): start user@UID's manager at the first session, stop it after the last, with the PAM session; today systemd-logind asks our system manager for user@UID.
+4. Per-user delegated cgroup and logging without journald: possible with or without elogind (our manager already has CGROUP_BASE and JOURNAL=no).
+
+**Recommendation:** not a straight implementation. Either
+- (A) a time-boxed feasibility spike in the VM: build elogind 257.x, run it on the s6 boot in place of systemd-logind, and check GDM's greeter, a GNOME login, a user switch and a reboot; decide on the result. Or
+- (B) drop elogind and keep systemd-logind as an s6 service (it works, is Fedora's own package, and keeps GNOME unmodified), and do only the parts that don't need elogind: logging without journald for the user manager, the delegated cgroup, possibly the launcher.
+The owner decides; the systemd --user fallback stays until then.
+
+### Next steps
+
+Waiting for the owner on step 8 (A or B). Meanwhile Phase 3 (smaller items), which doesn't depend on it: step 9 job modes and OnFailureJobMode=.
