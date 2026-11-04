@@ -11949,3 +11949,13 @@ GetAll collected every interface's properties into a HashMap, so the reply came 
 ### Next steps
 
 Phase 3 step 11 (the daemon holds the sockets of socket-waiting runners). Step 8 waits for the owner.
+
+## 2026-11-05, part 174: step 11, socket-waiting runners: measured, not changed
+
+Part 147 estimated about 0.65 MiB per idle on-demand runner (2.6 MiB per user) and suggested the daemon hold the sockets instead. Measured now (VM, s6 boot, tester's GNOME session, smaps_rollup): three runners wait (gcr-ssh-agent, systemd-importd, systemd-machined; pipewire and pipewire-pulse are activated by wireplumber now, part 167): Pss 299, 282, 288 KiB each (Pss_Anon ~230 KiB, heap 72 KiB, the rest file-backed and shared). So about 0.87 MiB per user. The five notify helpers of running Type=notify services cost about 0.2 MiB each; they relay notifications for the service's lifetime, as systemd's notify socket does.
+
+**Decision (mine, the owner may overrule):** not done. Holding the sockets in the daemon means a watcher per on-demand unit, a job on the first client, re-arming after a stop and the unit states without SOCKET_WAIT, i.e. reworking the path dbus.socket → dbus-broker takes at every login and logout, for under 1 MiB per user. A smaller option, if wanted later: exec a small waiter that inherits the sockets and execs the runner back on activity (saves ~0.2 MiB per waiting unit, adds a binary).
+
+### Next steps
+
+Phase 3 step 12 (`--boot-only-s6=yes` in the VM). Step 8 waits for the owner.
