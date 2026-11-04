@@ -11745,3 +11745,31 @@ Not checked: user@1000's and the greeter's close at logout after the fix (they w
 2. `hung_up_fds_go`'s intermittent failure.
 3. The VM: `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`; each user's reboot stop should be about 1 s shorter than in part 156.
 4. The elogind plan (part 154); gnome-shell's exit hang (part 154); SELinux for confined users; evolution-alarm-notify's job result (part 158).
+
+## 2026-11-04, part 163: plan for the remaining work (owner: "let's do all")
+
+The owner asked for every open item, in the order fixes, larger work, smaller items, with the real-machine test only at the end. Each step: its own commit(s), tests as in CLAUDE.md, the doc/CHANGELOG pairs, and a work_history part. VM runs are batched where steps share a mode.
+
+**Phase 0, groundwork.** Fresh RPMs (`packages/build-rpms.sh --test`, the standalone RPMs) and reference numbers from `BOOT=s6 … lifecycle` and `lifecycle-baseline` (per-user stop times, the user switch), so later steps compare against the same run.
+
+**Phase 1, fixes.**
+1. `hung_up_fds_go` flake (base; the standalone fdstore has the same test): race between the store noticing the hang-up and the next `put`. Likely fix: `put` drops hung-up fds of that key synchronously (poll, zero timeout) before checking the limit. Done when 200 runs in a row pass, in both projects.
+2. The system sandbox's intermittent `quitter@0` failure (`dangling scan directory entry` after StopUnit of an on-demand instance): reproduce in a loop, then fix dyn_stop_seen's order.
+3. Job results of `Type=dbus` units that exit 0 without taking their name (evolution-alarm-notify), and user-dirs-update-gtk's start failure: match systemd's result, unit test, the VM session check.
+4. gnome-shell's slow exit under the s6 user manager on the s6 boot: catch what it waits for at logout and reboot (stack, fds, D-Bus calls), compared with the baseline; fix on our side.
+5. Stop time per user: user-runtime-dir@'s 2 s and the remaining gap (part 147's "slow logout path at a reboot" too); measure in lifecycle against phase 0.
+6. lifecycle-baseline's failed user switch on the s6 boot (stock systemd --user, so the cause is on the system side).
+
+**Phase 2, larger work.**
+7. SELinux for confined users: user_t and staff_t test users in the VM, on the s6 boot and the systemd boot with the opt-in; domains of the launcher, s6-svscan and the daemon, labels under $XDG_RUNTIME_DIR, AVCs; fixes in the SELinux module.
+8. The elogind plan (part 154: a login launcher like turnstile, a delegated cgroup per user, logging without journald, no systemd --user fallback). First a design write-up for the owner, then increments. It reopens decision 3 ("elogind was rejected"), so the owner confirms its scope before any code.
+
+**Phase 3, smaller items.**
+9. Job modes other than replace/isolate, and OnFailureJobMode=.
+10. GetAll property order as systemd's (`systemctl show -p A,B`).
+11. Socket-waiting runners: the daemon holds the sockets (about 2.6 MiB per user). This changes a runner contract, so base's definition and its tests on every side change together.
+12. `--boot-only-s6=yes` in the VM (btrfs /var).
+
+**Phase 4, the default and packaging.** Last, because it depends on the rest: a proposal (criteria met, what changes in the specs and docs) for the owner to decide.
+
+**Phase 5, full VM run, then the owner's machine.** Every vm-user-manager mode with each BOOT, vm-s6-boot's modes, vm-user-setup (with OLD_RPMS), the sandbox variants. Then one checklist for the owner's machine, including part 162's greeter-log check.
