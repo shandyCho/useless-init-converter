@@ -70,6 +70,9 @@ pub struct Job {
     /// "waiting" (queued behind another job on the same unit) or "running"
     pub state: &'static str,
     pub canceled: bool,
+    /// Queued with mode replace-irreversibly: later conflicting requests
+    /// fail instead of cancelling it.
+    pub irreversible: bool,
 }
 
 /// The connection a request arrived on: the system bus, or a peer-to-peer

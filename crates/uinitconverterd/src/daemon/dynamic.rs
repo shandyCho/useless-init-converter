@@ -448,7 +448,7 @@ impl Daemon {
     }
 
     /// A unit's own start, its dependencies already handled.
-    async fn dyn_start_one(&self, id: &str, unit: &Unit) -> &'static str {
+    pub(super) async fn dyn_start_one(&self, id: &str, unit: &Unit) -> &'static str {
         // An exiting user manager starts nothing more, also inside a
         // transaction already running: GDM ends the greeter's session as
         // user@ stops, and the leader's gnome-session-shutdown.target went

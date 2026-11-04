@@ -83,6 +83,7 @@ impl Daemon {
                 jtype: jtype.into(),
                 state: "waiting",
                 canceled: false,
+                irreversible: false,
             },
         );
         id
@@ -319,6 +320,9 @@ impl Daemon {
                 }
             };
             return match jtype {
+                // Without its dependencies, as systemd's
+                // ignore-dependencies (and here ignore-requirements too).
+                "start" if mode.starts_with("ignore-") => self.dyn_start_one(id, unit).await,
                 "start" => self.dyn_start(id, unit).await,
                 "stop" => {
                     let r = self.dyn_stop(id, unit).await;
@@ -526,7 +530,13 @@ impl Daemon {
             .await?;
         self.require_unit(c, msg, &id, jtype).await?;
         let (id, unit) = self.check_job(name, jtype, true, true).await?;
+        self.apply_job_mode(&id, jtype, mode)?;
         let job = self.new_job(&id, jtype);
+        if mode == "replace-irreversibly" {
+            if let Some(j) = self.jobs.lock().unwrap().get_mut(&job) {
+                j.irreversible = true;
+            }
+        }
         self.reply_job(c, msg, job).await?;
         self.emit(
             MANAGER_PATH,
@@ -600,6 +610,61 @@ impl Daemon {
 
     /// Queued jobs can be cancelled; running ones finish (s6-rc transitions
     /// cannot be interrupted safely).
+    /// The job mode against the jobs already queued, as systemd's
+    /// transaction (jobs here run one after another per unit, so only
+    /// waiting jobs can be cancelled). A job conflicts with another on the
+    /// same unit when one stops and the other starts, restarts or reloads.
+    /// - replace (and isolate, ignore-*): conflicting waiting jobs are
+    ///   cancelled;
+    /// - fail: any conflicting job, waiting or running, fails the request;
+    /// - replace-irreversibly: as replace, and the job itself can't be
+    ///   replaced (an irreversible conflicting job fails any request);
+    /// - flush: every waiting job, of any unit, is cancelled.
+    /// ignore-dependencies and ignore-requirements start the unit alone
+    /// (run_job_once).
+    pub(super) fn apply_job_mode(&self, id: &str, jtype: &str, mode: &str) -> R<()> {
+        if !JOB_MODES.contains(&mode) {
+            return Err(err(E_INVALID_ARGS, format!("Job mode {mode} invalid.")));
+        }
+        let stops = |t: &str| t == "stop";
+        let mut jobs = self.jobs.lock().unwrap();
+        let conflicting: Vec<u32> = jobs
+            .values()
+            .filter(|j| j.unit == id && !j.canceled && stops(&j.jtype) != stops(jtype))
+            .map(|j| j.id)
+            .collect();
+        let destructive = |j: &Job| {
+            err(
+                E_DESTRUCTIVE,
+                format!(
+                    "Transaction for {id}/{jtype} is destructive ({id} has '{}' job queued, but '{jtype}' is included in transaction).",
+                    j.jtype
+                ),
+            )
+        };
+        for c in &conflicting {
+            let j = &jobs[c];
+            if j.irreversible || mode == "fail" {
+                return Err(destructive(j));
+            }
+        }
+        if mode == "flush" {
+            for j in jobs.values_mut() {
+                if j.state == "waiting" && !j.irreversible {
+                    j.canceled = true;
+                }
+            }
+        }
+        for c in conflicting {
+            if let Some(j) = jobs.get_mut(&c) {
+                if j.state == "waiting" {
+                    j.canceled = true;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn cancel_job(&self, id: u32) -> R<()> {
         let mut jobs = self.jobs.lock().unwrap();
         match jobs.get_mut(&id) {
@@ -615,3 +680,14 @@ impl Daemon {
         }
     }
 }
+
+/// systemd's job modes (JOB_MODE_*).
+pub(super) const JOB_MODES: &[&str] = &[
+    "replace",
+    "fail",
+    "isolate",
+    "replace-irreversibly",
+    "flush",
+    "ignore-dependencies",
+    "ignore-requirements",
+];

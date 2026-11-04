@@ -481,12 +481,13 @@ impl Runner {
     /// OnSuccess=/OnFailure= and SuccessAction=/FailureAction= after the unit finished.
     /// StartUnit for each of `units` through the daemon, detached: the
     /// daemon may be busy with the very job that ran us.
-    fn start_units_detached(&self, why: &str, units: Vec<String>) {
+    fn start_units_detached(&self, why: &str, units: Vec<String>, mode: &str) {
         if units.is_empty() {
             return;
         }
         let cfg = self.cfg.clone();
         let id = self.unit.id.clone();
+        let mode = mode.to_string();
         let run = || -> Result<(), String> {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -495,9 +496,12 @@ impl Runner {
             rt.block_on(async {
                 let conn = crate::client::connect(&cfg).await?;
                 for u in &units {
-                    if let Err(e) =
-                        crate::client::manager_call(&conn, "StartUnit", &(u.as_str(), "replace"))
-                            .await
+                    if let Err(e) = crate::client::manager_call(
+                        &conn,
+                        "StartUnit",
+                        &(u.as_str(), mode.as_str()),
+                    )
+                    .await
                     {
                         eprintln!("uinitconverter[{id}]: {why}={u}: {e}");
                     }
@@ -576,7 +580,7 @@ impl Runner {
                 ids.push(id);
             }
         }
-        self.start_units_detached("on demand", ids);
+        self.start_units_detached("on demand", ids, "replace");
     }
 
     fn on_result(&self, success: bool) {
@@ -618,7 +622,19 @@ impl Runner {
                 }
             }
         }
-        self.start_units_detached(units_key, units);
+        // OnFailureJobMode= (OnSuccessJobMode= for OnSuccess=), as
+        // systemd: GNOME's units start gnome-session-shutdown.target
+        // replace-irreversibly, so nothing undoes the logout.
+        let mode_key = if success {
+            "OnSuccessJobMode"
+        } else {
+            "OnFailureJobMode"
+        };
+        let mode = self
+            .unit
+            .get("Unit", mode_key)
+            .unwrap_or_else(|| "replace".into());
+        self.start_units_detached(units_key, units, &mode);
         if let Some(action) = self.unit.get("Unit", action_key) {
             // A user manager may only exit (systemd allows none, exit and
             // exit-force there): systemctl --user exit is exit.target's

@@ -10,6 +10,10 @@
 0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-157부에 있습니다.
 
 ### 추가
+- 작업 모드 `fail`, `replace-irreversibly`, `flush`, `ignore-dependencies`, `ignore-requirements`
+  (이전에는 `replace`로 실행), 그리고 `replace`도 이제 유닛에서 아직 기다리는 충돌 작업을 취소합니다.
+  `OnFailureJobMode=`와 `OnSuccessJobMode=`(GNOME은 종료 타깃을 `replace-irreversibly`로 시작합니다).
+  알 수 없는 모드는 거부합니다. 제한은 docs/etc에 있습니다.
 - `Accept=yes` 소켓: 유닉스 경로는 `s6-ipcserverd`로, TCP 포트는 `s6-tcpserverd`로(선택 패키지
   s6-networking, 예: `sshd.socket`). 연결마다 systemd와 같은 이름의 템플릿 인스턴스가 실행되고, 실행되는
   동안 유닛으로 목록에 나오고 상태를 보고 멈출 수 있습니다.

@@ -11917,3 +11917,23 @@ The owner decides; the systemd --user fallback stays until then.
 ### Next steps
 
 Waiting for the owner on step 8 (A or B). Meanwhile Phase 3 (smaller items), which doesn't depend on it: step 9 job modes and OnFailureJobMode=.
+
+## 2026-11-05, part 172: step 9, job modes and OnFailureJobMode=
+
+Before: every mode but isolate ran as replace, and replace itself cancelled nothing (jobs on a unit run one after another; a stop queued behind a start ran, then the next start). OnFailure= units were started with "replace" whatever OnFailureJobMode= said.
+
+**Change (jobs.rs `apply_job_mode`, run from job_method before the job is made):** two jobs on a unit conflict when one stops and the other starts, restarts or reloads.
+- An unknown mode: InvalidArgs "Job mode X invalid." (systemd's text). `JOB_MODES` lists systemd's seven.
+- replace, isolate, ignore-*: conflicting jobs still waiting are cancelled (result "canceled"). A running one isn't (systemd stops a running start; here jobs can't be interrupted).
+- fail: any conflicting job, waiting or running, fails the request with TransactionIsDestructive.
+- replace-irreversibly: as replace, and the job gets `irreversible`; any later conflicting request fails.
+- flush: every waiting job of any unit is cancelled (not irreversible ones).
+- ignore-dependencies, ignore-requirements: run_job_once starts a dynamic unit (instances, transient, every user unit) with dyn_start_one, without its dependencies. A database unit keeps s6-rc's compiled dependencies (docs).
+- Runner on_result: OnFailure=/OnSuccess= units are started with OnFailureJobMode=/OnSuccessJobMode= (default replace).
+- docs pair "Not implemented": the limits above, in place of "accepted and run as replace"; CHANGELOG pair: Added.
+
+**Tests:** user sandbox 117/117, new "job modes": an unknown mode refused; fail refuses a stop beside a running start; replace (a start running, a stop queued, a start): the stop is cancelled, the first process kept after 4.5 s; replace-irreversibly refuses a later stop; ignore-dependencies starts needer.service without needed.service. On the old code all five fail (109/117). cargo test pass; system sandbox 371/371; VM `fallback` (BUILD=release, the OnFailure= path with replace-irreversibly) 7 + 5 + 6.
+
+### Next steps
+
+Phase 3 step 10 (GetAll property order). Step 8 waits for the owner (A: elogind spike, B: no elogind).

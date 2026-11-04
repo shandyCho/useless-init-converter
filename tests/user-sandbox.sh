@@ -200,6 +200,23 @@ After=bindhost.service
 [Service]
 ExecStart=/bin/sh -c 'p=\$\$(cat $W/bindhost.pid); while kill -0 \$\$p 2>/dev/null; do sleep 0.1; done'
 EOF
+# Job modes: slowstart's start takes 3 s, so jobs queue behind it.
+cat >"$U/slowstart.service" <<EOF
+[Service]
+ExecStartPre=/bin/sleep 3
+ExecStart=/bin/sleep 1000
+EOF
+cat >"$U/needer.service" <<EOF
+[Unit]
+Requires=needed.service
+After=needed.service
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat >"$U/needed.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
 cat >"$U/quick.service" <<EOF
 [Service]
 ExecStart=/bin/true
@@ -583,6 +600,39 @@ expect_state bound.service active/running
 b2=$(SC show -p MainPID --value bound.service)
 [ -n "$b2" ] && [ "$b2" != 0 ] && [ "$b2" != "$b1" ] && ok "a BindsTo= dependent was restarted with its host ($b1 -> $b2)" || bad "bound.service: MainPID $b1 -> $b2"
 SC stop bound.service bindhost.service
+echo "== job modes"
+if call StartUnit ss slowstart.service bogus; then bad "an unknown job mode was accepted"; else
+    grep -q "Job mode bogus invalid" "$W/last-error" && ok "an unknown job mode is refused" || bad "unknown mode: $(cat "$W/last-error")"; fi
+SC start --no-block slowstart.service
+sleep 0.5
+if SC stop --job-mode=fail slowstart.service 2>"$W/jm.err"; then bad "fail: a stop beside the running start was accepted"; else
+    grep -q "destructive" "$W/jm.err" && ok "fail: a stop beside the running start is refused" || bad "fail: $(cat "$W/jm.err")"; fi
+expect_state slowstart.service active/running
+SC stop slowstart.service
+# A start running, a stop queued behind it, then a start: the stop is
+# cancelled, so the first start's process stays (queued in turn, the
+# stop and a new 3 s start would have replaced it by the second look).
+SC start --no-block slowstart.service
+sleep 0.5
+SC stop --no-block slowstart.service
+SC start --no-block slowstart.service
+expect_state slowstart.service active/running
+p1=$(SC show -p MainPID --value slowstart.service)
+sleep 4.5
+p2=$(SC show -p MainPID --value slowstart.service)
+[ -n "$p1" ] && [ "$p1" != 0 ] && [ "$p1" = "$p2" ] && ok "replace: the queued stop was cancelled by the new start ($p1 kept)" || bad "replace: MainPID $p1 -> $p2"
+SC stop slowstart.service
+SC start --no-block --job-mode=replace-irreversibly slowstart.service
+sleep 0.5
+if SC stop slowstart.service 2>"$W/jm.err"; then bad "replace-irreversibly: a stop replaced it"; else
+    grep -q "destructive" "$W/jm.err" && ok "replace-irreversibly: a conflicting stop is refused" || bad "irreversible: $(cat "$W/jm.err")"; fi
+expect_state slowstart.service active/running
+SC stop slowstart.service
+SC start --job-mode=ignore-dependencies needer.service
+expect_state needer.service active/running
+expect_state needed.service inactive/dead
+SC stop needer.service
+
 # Type=simple exiting at once (user-dirs-update-gtk): its runner's exec
 # helper may stamp it active only after it ended; still a done job.
 n=0

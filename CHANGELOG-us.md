@@ -10,6 +10,11 @@ versions. Release notes: [packages/release-notes](packages/release-notes).
 Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
 
 ### Added
+- Job modes `fail`, `replace-irreversibly`, `flush`, `ignore-dependencies`
+  and `ignore-requirements` (they ran as `replace`), and `replace` itself now
+  cancels a conflicting job still waiting on the unit; `OnFailureJobMode=` and
+  `OnSuccessJobMode=` (GNOME starts its shutdown target
+  `replace-irreversibly`). An unknown mode is refused. Limits in docs/etc.
 - `Accept=yes` sockets: on unix paths through `s6-ipcserverd`, on TCP ports
   through `s6-tcpserverd` (optional s6-networking package, e.g. `sshd.socket`).
   Each connection runs a template instance named as systemd names it, and

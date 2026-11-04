@@ -197,7 +197,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - `AccuracySec=`(타이머를 묶지 않고 정시에 실행), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. 이 타이머 키들은 허용되지만 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.
 - 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=`(systemd에서는 BPF LSM 프로그램), IP 사용량 집계(`IPAccounting=`).
 - 이미 실행 중인 작업의 취소.
-- `replace`와 `isolate`가 아닌 작업 모드(`fail`, `replace-irreversibly`, `flush`, `ignore-dependencies`, `ignore-requirements`)는 받아들이지만 `replace`로 실행합니다. `OnFailureJobMode=`도 마찬가지입니다.
+- 작업 모드: 한 유닛의 작업은 차례로 실행되므로 `replace`는 아직 기다리는 충돌 작업만 취소하고 실행 중인 작업은 취소하지 않습니다(systemd는 실행 중인 시작을 멈춥니다). `ignore-dependencies`와 `ignore-requirements`는 s6-rc 밖에서 실행되는 유닛(인스턴스, 임시 유닛, 사용자 유닛)만 의존성 없이 시작합니다. s6-rc 데이터베이스의 유닛은 s6-rc에 컴파일된 의존성을 여전히 따릅니다.
 - `[Socket]`의 `PrivateNetwork=`, `JoinsNamespaceOf=`, `NetworkNamespacePath=`.
 - s6 부팅의 종료 때의 `KillMode=control-group`: 이때는 s6-rc가 데이터베이스의 서비스를 직접 멈추므로, 서비스의 나머지 프로세스는 주 프로세스가 끝난 뒤에야 시그널을 받습니다(데몬을 거치는 정지와 사용자 매니저의 모든 정지는 systemd처럼 함께 보냅니다).
 - `dist/s6`에 자체 스크립트가 있는 서비스(`dbus`, `udevd`, `earlyoom`, `syslog`, `coredump`)의 유닛 설정: cgroup, 제한, 샌드박스, 사용자는 유닛에서 가져오지만 명령줄과 재시작, 정지 동작은 스크립트에 있습니다. 그래서 `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=`, `Type=`을 바꾸는 드롭인은 적용되지 않습니다.
