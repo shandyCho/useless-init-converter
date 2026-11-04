@@ -58,6 +58,17 @@
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
+- 재시작할 때 그 유닛에 `BindsTo=`를 둔 실행 중인 유닛도 systemd의 재시작 작업처럼 다시 시작합니다.
+  pipewire를 재시작하면(RPM 업데이트 도우미가 합니다) wireplumber가 멈춘 채로 남아, 다음 로그인까지 소리가
+  나지 않았습니다.
+- 소켓 활성화가 이제 systemd의 시작 작업처럼 서비스의 `Requires=`, `BindsTo=`, `Wants=`(`.wants/`,
+  `.requires/` 포함)도 시작합니다. s6 사용자 매니저에서 wireplumber(`pipewire.service.wants/`)가 시작되지
+  않아 소리가 나지 않았고, gnome-shell은 종료할 때 재생되지 않은 소리를 기다리느라 로그아웃과 재부팅 때마다
+  `TimeoutStopSec=`(5초)를 기다렸습니다. `Wants=`, `Requires=`, `Upholds=` 속성도 이 디렉터리의 항목을
+  보여 줍니다.
+- `KillMode=control-group`(기본값): 이제 정지할 때 systemd처럼 유닛의 나머지 프로세스에도 주 프로세스와
+  함께 시그널을 보냅니다. 이전에는 주 프로세스가 끝난 뒤에야 보냈습니다(gnome-shell은 SIGTERM을 받으면
+  이미지 로더를 기다립니다).
 - 버스 이름을 얻기 전에 프로세스가 0으로 끝나는 `Type=dbus` 서비스(로그인 때의
   evolution-alarm-notify)와, 시작이 확인되기 전에 0으로 끝나는 `Type=simple`/`exec` 서비스가 이제
   systemd처럼 결과 `success`로 `inactive (dead)`가 되고 시작 작업도 완료됩니다. 이전에는 작업이

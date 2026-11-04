@@ -11818,3 +11818,32 @@ Phase 1 step 3 (Type=dbus job results: evolution-alarm-notify, user-dirs-update-
 ### Next steps
 
 Phase 1 step 4 (gnome-shell's slow exit on the s6 boot), then 5 and 6.
+
+## 2026-11-05, part 167: step 4, gnome-shell's slow exit: three causes on our side
+
+Phase 0's reboot on the s6 boot: tester's user@ 7.71 s, the greeter's 7.90 s (limit 5 s), session scopes empty after 6.99 s. A sampler in the VM and gdb (`thread apply all bt` at +2.5 s, installed in the VM) found:
+
+**1. KillMode=control-group.** s6-supervise signals only the supervised process; the runner's cleanup signalled the rest of the cgroup only after the main process exited. systemd signals the whole cgroup when the stop begins. gnome-shell waits for its glycin loaders (bwrap → glycin-*, in its cgroup) on SIGTERM; signalling both at once by hand ended it in 342 ms.
+- Fix: `signal_rest_at_stop()` (daemon/s6.rs), run beside every stop (dyn_remove, do_stop's `s6-rc -d change` and stop_beside; after `s6-svc -r` in restart_longrun). It waits until s6-supervise has the down request (want up cleared: it has signalled the main process; a second `-d` would signal it again, s6-supervise.c up_d), then sends KillSignal= and SIGCONT to every other process of the cgroup, not the supervised one nor MAIN_PID (a PAMName= runner forwards to it). mixed/process/none: nothing. Without a cgroup (the unprivileged sandbox), the supervised process's descendants (`util::proc_descendants`, with `proc_children` moved from accept.rs).
+- Not covered: the s6 boot's shutdown, where s6-rc stops the database's services itself; documented in the docs pair's "Not implemented".
+
+**2. Socket activation didn't start the service's dependencies.** gdb on a hung gnome-shell: main thread in `meta_sound_player_finalize` → `g_thread_pool_free`, a pool thread in libcanberra's `pulse_driver_play` → `pa_threaded_mainloop_wait`: a sound that never finished. wireplumber wasn't running at all: pipewire.service is socket-activated, and on activation the runner started only requirements that were themselves socket-waiting. `/etc/systemd/user/pipewire.service.wants/wireplumber.service` was never started, so no stream reached a sink (no sound at all in such sessions).
+- Fix (runner.rs `start_waiting_requirements`): every Requires=/BindsTo=/Wants= and .wants/.requires entry gets a StartUnit (a no-op for running ones), as systemd's start job for the service. The Wants=, Requires= and Upholds= properties list the .wants/.requires/.upholds entries too (`systemctl show -p Wants pipewire.service` was empty).
+
+**3. A restart didn't restart BindsTo= dependents.** Still 5.2 s in some runs after fix 2: the hang was the same sound, but the lifecycle's "package update" step restarts pipewire (systemd-update-helper), and wireplumber (BindsTo=pipewire.service) exited with it and stayed down. systemd's restart job adds a try-restart for BindsTo= dependents when the transaction is built. Reproduced: `systemctl --user -M tester@ restart pipewire.service` left wireplumber inactive.
+- Fix (jobs.rs run_job): for restart/try-restart, the running BindsTo= dependents are found before the job and restarted after it. Requires= is still not propagated on restart (relations.rs: restarting dbus would restart everything that needs it).
+
+**Also:** tests/vm-user-manager.sh `PRE_REBOOT_SCRIPT=FILE` (lifecycle): run as root before the reboot, first `FILE prepare` (waited for), then detached; used for the gdb sampler.
+
+**Tests:**
+- System sandbox: new section "KillMode=control-group": waitkid (database) and waitkid@a (dynamic), a shell that waits for its child on SIGTERM: stop in 133/248 ms (old code: 5.8 s, TimeoutStopSec=8). 371/371; SANDBOX_FDSTORE=no 359/359.
+- User sandbox 108/108, new: waitkid (238 ms; old 13 s), pw.socket → pw.service with pw.service.wants/plumb.service (plumb starts on activation; Wants= lists it; old code fails both), bindhost/bound (BindsTo= dependent restarted with its host, new MainPID; old code leaves it dead).
+- cargo test all pass.
+- VM, `BOOT=s6 lifecycle` with the gdb sampler, after all three fixes: two runs, 71/71 each; reboot: tester 2.69 and 2.77 s, greeter 2.67 and 2.76 s (Phase 0: 7.71/7.90 s); scopes empty after 2.52 and 2.61 s (6.99 s); no gnome-shell left at +2.5 s. After fixes 1 and 2 only: runs passed at 3.54 s and 2.74 s, and one failed at 5.78 s with the sound backtrace (that run's pipewire restart left wireplumber down). `restart pipewire.service` in the VM: wireplumber 1823 → 5399.
+- Step 3's check in the VM: no `transaction): failed` line at login; evolution-alarm-notify inactive with Result=success.
+
+**Still slower than stock:** the scopes empty after ~2.5 s (stock 0.47 s); in the user manager's log `stopping gnome-session-manager@gnome.service took 1.2 s`. Step 5.
+
+### Next steps
+
+Phase 1 step 5 (stop time per user), then 6.

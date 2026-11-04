@@ -339,6 +339,23 @@ impl Daemon {
         ] {
             p.insert(k.into(), words(k));
         }
+        // As systemd's: the .wants/, .requires/ and .upholds/ entries too
+        // (pipewire.service Wants=wireplumber.service from
+        // /etc/systemd/user/pipewire.service.wants/).
+        let ld = crate::loader::Loader::new(&self.cfg);
+        for (k, dir) in [
+            ("Wants", "wants"),
+            ("Requires", "requires"),
+            ("Upholds", "upholds"),
+        ] {
+            let mut v = unit.get_words("Unit", k);
+            for d in ld.dir_deps(unit, dir) {
+                if !v.contains(&d) {
+                    v.push(d);
+                }
+            }
+            p.insert(k.into(), strv(v));
+        }
         for k in [
             "RequiredBy",
             "RequisiteOf",

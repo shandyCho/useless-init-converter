@@ -234,6 +234,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - Cancelling a job that is already running.
 - Job modes other than `replace` and `isolate` (`fail`, `replace-irreversibly`, `flush`, `ignore-dependencies`, `ignore-requirements`) are accepted and run as `replace`; `OnFailureJobMode=` likewise.
 - `PrivateNetwork=` in `[Socket]`, `JoinsNamespaceOf=` and `NetworkNamespacePath=`.
+- `KillMode=control-group` at the s6 boot's shutdown: s6-rc stops the database's services itself there, so a service's other processes get the signal only after its main process has exited (stops through the daemon, and every user manager stop, signal them together as systemd does).
 - Unit settings of the services with their own s6 scripts in `dist/s6` (`dbus`, `udevd`, `earlyoom`, `syslog`, `coredump`): they take the cgroup, limits, sandbox and user from the unit, but the command line and the restart and stop behaviour are in the script. So drop-ins that change `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=` or `Type=` don't reach them.
 
 ## Offline updates and kernel updates

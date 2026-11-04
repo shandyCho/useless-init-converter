@@ -333,6 +333,32 @@ pub fn cgroup_pids(cgroup_dir: &Path) -> Vec<u32> {
     out
 }
 
+/// Direct children of a process (/proc/PID/task/*/children).
+pub fn proc_children(pid: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    if let Ok(rd) = fs::read_dir(format!("/proc/{pid}/task")) {
+        for t in rd.flatten() {
+            if let Ok(s) = fs::read_to_string(t.path().join("children")) {
+                out.extend(s.split_whitespace().filter_map(|p| p.parse::<u32>().ok()));
+            }
+        }
+    }
+    out
+}
+
+/// Every descendant of a process, children first (not the process itself).
+pub fn proc_descendants(pid: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut todo = proc_children(pid);
+    while let Some(p) = todo.pop() {
+        if !out.contains(&p) {
+            out.push(p);
+            todo.extend(proc_children(p));
+        }
+    }
+    out
+}
+
 pub fn proc_cmdline(pid: u32) -> String {
     fs::read(format!("/proc/{pid}/cmdline"))
         .map(|b| {

@@ -454,6 +454,18 @@ After=quit@%i.service
 ExecStart=/bin/sleep 1000
 EOF
 
+# KillMode=control-group: a main process that waits for its child on
+# SIGTERM (gnome-shell for its glycin loaders). systemd signals the whole
+# cgroup when the stop begins, so the stop takes no time; signalled alone,
+# it waited for TimeoutStopSec=. waitkid in the database, waitkid@ dynamic.
+for f in waitkid.service waitkid@.service; do
+cat > "$U/$f" <<'EOF'
+[Service]
+ExecStart=/bin/sh -c 'trap "wait; exit 0" TERM; sleep 1000 & wait'
+TimeoutStopSec=8
+EOF
+done
+
 # --- Conflicts= (like gdm.service vs getty@tty1.service) ---
 cat > "$U/winner.service" <<EOF
 [Unit]

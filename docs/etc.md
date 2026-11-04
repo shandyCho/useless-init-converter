@@ -199,6 +199,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 이미 실행 중인 작업의 취소.
 - `replace`와 `isolate`가 아닌 작업 모드(`fail`, `replace-irreversibly`, `flush`, `ignore-dependencies`, `ignore-requirements`)는 받아들이지만 `replace`로 실행합니다. `OnFailureJobMode=`도 마찬가지입니다.
 - `[Socket]`의 `PrivateNetwork=`, `JoinsNamespaceOf=`, `NetworkNamespacePath=`.
+- s6 부팅의 종료 때의 `KillMode=control-group`: 이때는 s6-rc가 데이터베이스의 서비스를 직접 멈추므로, 서비스의 나머지 프로세스는 주 프로세스가 끝난 뒤에야 시그널을 받습니다(데몬을 거치는 정지와 사용자 매니저의 모든 정지는 systemd처럼 함께 보냅니다).
 - `dist/s6`에 자체 스크립트가 있는 서비스(`dbus`, `udevd`, `earlyoom`, `syslog`, `coredump`)의 유닛 설정: cgroup, 제한, 샌드박스, 사용자는 유닛에서 가져오지만 명령줄과 재시작, 정지 동작은 스크립트에 있습니다. 그래서 `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=`, `Type=`을 바꾸는 드롭인은 적용되지 않습니다.
 
 ## 오프라인 업데이트와 커널 업데이트

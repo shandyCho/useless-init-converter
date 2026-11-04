@@ -554,10 +554,13 @@ impl Runner {
         });
     }
 
-    /// Leaving the socket wait: requirements that are on demand too and
-    /// still wait for their sockets start with this one, as systemd starts
-    /// them (iscsiuio Requires=iscsid). Their sockets already listen, so
-    /// this one need not wait for them.
+    /// Leaving the socket wait: as systemd's activation is a start job for
+    /// the service, its Requires=, BindsTo= and Wants= (and .wants/,
+    /// .requires/) start with it: pipewire.service's .wants/wireplumber
+    /// (without it no stream reaches a sink, and gnome-shell waited for an
+    /// unplayed sound at exit), iscsiuio's Requires=iscsid. Those that are
+    /// on demand too have their sockets listening already, so this one
+    /// need not wait; for the others StartUnit is a no-op when they run.
     fn start_waiting_requirements(&self) {
         let ld = Loader::new(&self.cfg);
         let mut names = Vec::new();
@@ -569,10 +572,7 @@ impl Runner {
         let mut ids: Vec<String> = Vec::new();
         for n in names {
             let id = ld.load(&n).id;
-            if id != self.unit.id
-                && !ids.contains(&id)
-                && crate::state::for_unit(&self.cfg.run_dir, &id).has(keys::SOCKET_WAIT)
-            {
+            if id != self.unit.id && !ids.contains(&id) {
                 ids.push(id);
             }
         }

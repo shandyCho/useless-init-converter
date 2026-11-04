@@ -228,12 +228,38 @@ impl Daemon {
         jtype: &str,
         mode: &str,
     ) -> &'static str {
+        // A restart's BindsTo= dependents that run now: systemd's restart
+        // job adds a try-restart for each when the transaction is built, so
+        // they come back after it even if they stopped meanwhile (wireplumber
+        // exits when pipewire goes; left stopped, no sound reached a sink).
+        let bound = if matches!(jtype, "restart" | "try-restart") {
+            self.bound_up(id).await
+        } else {
+            Vec::new()
+        };
         let r = self.run_job_once(id, unit, jtype, mode).await;
         if r == "done" {
-            self.propagate(id, jtype, &mut BTreeSet::from([id.to_string()]))
-                .await;
+            let mut seen = BTreeSet::from([id.to_string()]);
+            for (did, du) in bound {
+                if seen.insert(did.clone()) {
+                    eprintln!("initconvertd: restart {did} (BindsTo={id})");
+                    Box::pin(self.run_job_once(&did, &du, "restart", "replace")).await;
+                }
+            }
+            self.propagate(id, jtype, &mut seen).await;
         }
         r
+    }
+
+    /// The running units with BindsTo= `id`.
+    async fn bound_up(&self, id: &str) -> Vec<(String, Unit)> {
+        let mut out = Vec::new();
+        for (did, du) in self.reverse(id, "BindsTo") {
+            if did != id && self.is_up(&did, &du).await {
+                out.push((did, du));
+            }
+        }
+        out
     }
 
     /// The job on this unit alone.

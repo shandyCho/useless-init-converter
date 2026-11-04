@@ -74,6 +74,19 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- A restart now also restarts the running units with `BindsTo=` on it, as
+  systemd's restart job does. Restarting pipewire (the RPM update helper does)
+  left wireplumber stopped, so sound stopped working until the next login.
+- Socket activation now starts the service's `Requires=`, `BindsTo=` and
+  `Wants=` (with `.wants/` and `.requires/`), as systemd's start job does. Under
+  the s6 user manager wireplumber (`pipewire.service.wants/`) never started,
+  so there was no sound, and gnome-shell waited for an unplayed sound at
+  exit until its `TimeoutStopSec=` (5 s) at logout and reboot. The `Wants=`,
+  `Requires=` and `Upholds=` properties list those directories' entries too.
+- `KillMode=control-group` (the default): a stop now signals the unit's other
+  processes together with its main process, as systemd does, instead of only
+  after the main process exited (gnome-shell waits for its image loaders on
+  SIGTERM).
 - A `Type=dbus` service whose process exits 0 before taking its bus name
   (evolution-alarm-notify at login), and a `Type=simple`/`exec` one that exits
   0 before its start was seen, now end `inactive (dead)` with result

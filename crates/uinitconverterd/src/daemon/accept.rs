@@ -139,15 +139,10 @@ fn alive(pid: i32) -> bool {
             || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
 }
 
-/// Direct children of a process (/proc/PID/task/*/children).
+/// Direct children of a process.
 fn children(pid: i32) -> Vec<i32> {
-    let mut out = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(format!("/proc/{pid}/task")) {
-        for t in rd.flatten() {
-            if let Ok(s) = std::fs::read_to_string(t.path().join("children")) {
-                out.extend(s.split_whitespace().filter_map(|p| p.parse::<i32>().ok()));
-            }
-        }
-    }
-    out
+    util::proc_children(pid as u32)
+        .into_iter()
+        .map(|p| p as i32)
+        .collect()
 }

@@ -839,11 +839,11 @@ impl Daemon {
         }
         let usec = unit.stop_timeout_usec();
         let ms = (usec / 1000).saturating_add(5000).min(u32::MAX as u64);
-        let _ = Command::new(tools::path("s6-svc"))
+        let stop = Command::new(tools::path("s6-svc"))
             .args(["-wD", "-T", &ms.to_string(), "-d"])
             .arg(self.scandir(id))
-            .status()
-            .await;
+            .status();
+        let _ = tokio::join!(stop, self.signal_rest_at_stop(id, unit, true));
         true
     }
 
@@ -865,6 +865,7 @@ impl Daemon {
             .arg(self.scandir(id))
             .status()
             .await;
+        self.signal_rest_at_stop(id, unit, false).await;
         let usec = unit.stop_timeout_usec();
         let mut deadline = (usec != u64::MAX).then(|| Instant::now() + Duration::from_micros(usec));
         let mut killed = false;
@@ -891,6 +892,68 @@ impl Daemon {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         self.wait_ready(id, unit, Some(old_pid)).await
+    }
+
+    /// KillMode=control-group (the default): systemd sends KillSignal= to
+    /// every process of the unit's cgroup when a stop begins, not only to
+    /// the main one. s6-supervise signals only the process it supervises,
+    /// and the runner's cleanup reaches the rest only after that one ended.
+    /// A main process that waits for its children on SIGTERM then waited
+    /// for them until TimeoutStopSec= killed it: gnome-shell for its glycin
+    /// loaders, 5 s at every logout and reboot.
+    ///
+    /// Run beside a stop: `wait_down`, once s6-supervise has the down
+    /// request (want up cleared, so it has signalled the main process);
+    /// otherwise (a restart, `s6-svc -r`) at once. Then the rest of the
+    /// cgroup gets KillSignal= and SIGCONT, as s6-supervise sends its
+    /// process (without a cgroup: the supervised process's descendants).
+    /// Not the supervised process nor MAIN_PID (a PAMName=
+    /// runner forwards to it), so none gets the signal twice. mixed,
+    /// process and none: nothing, as in systemd.
+    pub(super) async fn signal_rest_at_stop(&self, id: &str, unit: &Unit, wait_down: bool) {
+        if unit.utype() != "service"
+            || unit
+                .get("Service", "KillMode")
+                .is_some_and(|m| m != "control-group")
+        {
+            return;
+        }
+        let st = state::for_unit(&self.cfg.run_dir, id);
+        let dir = st.get(keys::CGROUP).map(std::path::PathBuf::from);
+        let mut supervised = 0;
+        for _ in 0..100 {
+            match self.svstat(id).await {
+                Some(sv) if sv.up => {
+                    supervised = sv.pid;
+                    if !wait_down || !sv.wanted_up {
+                        break;
+                    }
+                }
+                // Down already: the runner's cleanup does the rest.
+                _ => return,
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let main = st.get(keys::MAIN_PID).and_then(|p| p.parse::<u32>().ok());
+        let sig = unit
+            .get("Service", "KillSignal")
+            .and_then(|s| util::signal_number(&s))
+            .unwrap_or(libc::SIGTERM);
+        // Without a cgroup (no delegation: the unprivileged sandbox, a user
+        // manager without its own), the supervised process's descendants.
+        let pids = match &dir {
+            Some(d) => util::cgroup_pids(d),
+            None => util::proc_descendants(supervised),
+        };
+        for pid in pids {
+            if pid == 0 || pid == supervised || Some(pid) == main {
+                continue;
+            }
+            unsafe {
+                libc::kill(pid as i32, sig);
+                libc::kill(pid as i32, libc::SIGCONT);
+            }
+        }
     }
 
     pub(super) async fn run_runner(&self, sub: &str, id: &str, main_pid: Option<u32>) -> bool {
@@ -1299,7 +1362,14 @@ impl Daemon {
                 let r = if kind == Kind::Longrun && self.stop_beside(id, unit).await {
                     "done"
                 } else {
-                    match self.s6rc(&["-d", "change"], &[id.to_string()]).await {
+                    let names = [id.to_string()];
+                    let stop = self.s6rc(&["-d", "change"], &names);
+                    let rest = async {
+                        if kind == Kind::Longrun && !waiting {
+                            self.signal_rest_at_stop(id, unit, true).await;
+                        }
+                    };
+                    match tokio::join!(stop, rest).0 {
                         Ok(()) => "done",
                         Err(e) => {
                             eprintln!("initconvertd: stop {id}: {e}");

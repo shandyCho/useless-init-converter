@@ -439,6 +439,20 @@ while [ $tries -gt 0 ] && [ ! -d "$R/run/dyn/quit@0.service" ]; do tries=$((trie
 call StopUnit ss quitter@0.service replace
 call ResetFailedUnit s quit@3.service
 
+section "KillMode=control-group"
+for u in waitkid.service waitkid@a.service; do
+    call StartUnit ss $u replace
+    expect_state $u active/running
+    sleep 0.5
+    t0=$(date +%s%N)
+    call StopUnit ss $u replace
+    tries=50
+    while [ $tries -gt 0 ] && [ "$(state $u)" != inactive/dead ]; do tries=$((tries - 1)); sleep 0.1; done
+    ms=$((($(date +%s%N) - t0) / 1000000))
+    [ "$(state $u)" = inactive/dead ] && [ $ms -lt 3000 ] && ok "$u: its child got SIGTERM with it, stopped in $ms ms" \
+        || bad "$u: $(state $u) after $ms ms (the child got no SIGTERM at the stop's start?)"
+done
+
 section "conflicts"
 expect_state winner.service active/running
 expect_state loser.service inactive/dead

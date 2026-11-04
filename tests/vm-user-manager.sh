@@ -49,6 +49,11 @@
 # `initconvert init --yes --default-s6 --selinux=enforcing`. The s6 boot's
 # runner then starts every user@: no drop-in, no kernel flag.
 #
+# PRE_REBOOT_SCRIPT=FILE (lifecycle, lifecycle-baseline): copied into the VM
+# and run as root just before the reboot: first `FILE prepare` (waited for:
+# installing a tool), then FILE detached (a sampler that records the
+# shutdown to /var/tmp, read after it with `gnome-vm.sh ssh`).
+#
 # BOOT=systemd-rpm (greeter, session, apps, lifecycle, fallback and the
 # baselines): the stock systemd boot with only uinitconverter-user and what
 # it requires (CORE_RPMS=, SKARNET_RPMS=), turned on with
@@ -785,6 +790,11 @@ case $MODE in
         echo "== alice logs out"
         "$VM" ssh "$D" sudo bash in/life.sh alice-logout $want || rc=$?
         echo "== a reboot with tester's session open"
+        if [ -n "${PRE_REBOOT_SCRIPT:-}" ]; then
+            "$VM" copy "$D" "$PRE_REBOOT_SCRIPT"
+            "$VM" ssh "$D" "sudo bash in/${PRE_REBOOT_SCRIPT##*/} prepare" || true
+            "$VM" ssh "$D" "sudo setsid -f bash in/${PRE_REBOOT_SCRIPT##*/} </dev/null >/dev/null 2>&1; sleep 1"
+        fi
         "$VM" ssh "$D" 'sudo systemctl reboot' || true
         sleep 30
         "$VM" wait "$D" || rc=$?

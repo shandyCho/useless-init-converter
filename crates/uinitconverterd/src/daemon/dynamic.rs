@@ -773,11 +773,11 @@ impl Daemon {
             self.run_runner(runner_cmd::STOP_EXEC, id, Some(sv.pid))
                 .await;
         }
-        let _ = Command::new(tools::path("s6-svc"))
+        let stop = Command::new(tools::path("s6-svc"))
             .args(["-wD", "-d", "-T", "120000"])
             .arg(self.scandir(id))
-            .status()
-            .await;
+            .status();
+        let _ = tokio::join!(stop, self.signal_rest_at_stop(id, unit, true));
         if let Ok(scan) = fs::canonicalize(self.cfg.live_dir.join("scandir")) {
             // s6-svunlink waits for s6-svscan to end the supervisors, which
             // it doesn't while any entry in the scan directory can't be

@@ -180,6 +180,26 @@ Type=dbus
 BusName=org.example.UserTest
 ExecStart=/usr/bin/python3 $W/ownname.py
 EOF
+# A main process that waits for its child on SIGTERM (gnome-shell and its
+# glycin loaders): KillMode=control-group signals both at the stop's start.
+cat >"$U/waitkid.service" <<'EOF'
+[Service]
+ExecStart=/bin/sh -c 'trap "wait; exit 0" TERM; sleep 1000 & wait'
+TimeoutStopSec=8
+EOF
+# wireplumber's shape: BindsTo= a service it exits 0 without (pipewire). A
+# restart of the host restarts it too, as systemd's restart job does.
+cat >"$U/bindhost.service" <<EOF
+[Service]
+ExecStart=/bin/sh -c 'echo \$\$\$\$ >$W/bindhost.pid; exec sleep 1000'
+EOF
+cat >"$U/bound.service" <<EOF
+[Unit]
+BindsTo=bindhost.service
+After=bindhost.service
+[Service]
+ExecStart=/bin/sh -c 'p=\$\$(cat $W/bindhost.pid); while kill -0 \$\$p 2>/dev/null; do sleep 0.1; done'
+EOF
 cat >"$U/quick.service" <<EOF
 [Service]
 ExecStart=/bin/true
@@ -357,6 +377,24 @@ cat >"$U/named@.service" <<EOF
 ExecStart=/bin/sh -c 'echo "\$\$LISTEN_FDS \$\$LISTEN_FDNAMES" >$W/fdname'
 EOF
 ln -s ../named.socket "$U/sockets.target.wants/named.socket"
+# pipewire's shape: a socket-activated service whose session manager comes
+# from its .wants/ (/etc/systemd/user/pipewire.service.wants/wireplumber):
+# the activation starts it, as systemd's start job for the service does.
+cat >"$U/pw.socket" <<EOF
+[Socket]
+ListenStream=%t/pw
+EOF
+cat >"$U/pw.service" <<EOF
+[Service]
+ExecStart=/usr/bin/python3 -c 'import socket, time; s = socket.socket(fileno=3); c, _ = s.accept(); c.sendall(b"x"); time.sleep(1000)'
+EOF
+cat >"$U/plumb.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+mkdir -p "$U/pw.service.wants"
+ln -s ../plumb.service "$U/pw.service.wants/plumb.service"
+ln -s ../pw.socket "$U/sockets.target.wants/pw.socket"
 # podman's quadlet shape: the start process forks the real one, which is
 # announced with MAINPID= (NotifyAccess=all), then exits.
 cat >"$W/handover.py" <<'EOF'
@@ -529,6 +567,22 @@ if SC start busfail.service 2>/dev/null; then bad "busfail.service's start succe
 [ "$(SC show -p Result --value busfail.service)" = exit-code ] && ok "busfail.service's result is exit-code" \
     || bad "busfail.service: Result=$(SC show -p Result --value busfail.service)"
 SC reset-failed busfail.service
+SC start waitkid.service
+sleep 0.5
+k0=$(date +%s%N)
+SC stop waitkid.service
+ms=$((($(date +%s%N) - k0) / 1000000))
+[ "$(state waitkid.service)" = inactive/dead ] && [ $ms -lt 3000 ] && ok "KillMode=control-group: the child got SIGTERM with the main process ($ms ms)" \
+    || bad "waitkid.service: $(state waitkid.service) after $ms ms"
+SC start bound.service
+expect_state bound.service active/running
+b1=$(SC show -p MainPID --value bound.service)
+SC restart bindhost.service
+expect_state bindhost.service active/running
+expect_state bound.service active/running
+b2=$(SC show -p MainPID --value bound.service)
+[ -n "$b2" ] && [ "$b2" != 0 ] && [ "$b2" != "$b1" ] && ok "a BindsTo= dependent was restarted with its host ($b1 -> $b2)" || bad "bound.service: MainPID $b1 -> $b2"
+SC stop bound.service bindhost.service
 # Type=simple exiting at once (user-dirs-update-gtk): its runner's exec
 # helper may stamp it active only after it ended; still a done job.
 n=0
@@ -599,6 +653,13 @@ print(s.recv(100).decode().strip())' "$R/echoer" 2>&1)
 python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.recv(1)' "$R/named" 2>/dev/null
 waitfor '[ -s "$W/fdname" ]'
 [ "$(cat "$W/fdname" 2>/dev/null)" = "1 varlink" ] && ok "Accept=yes: the connection is named after FileDescriptorName=" || bad "LISTEN_FDS/FDNAMES: $(cat "$W/fdname" 2>&1)"
+
+expect_state pw.socket active/listening
+expect_state plumb.service inactive/dead
+python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.recv(1)' "$R/pw" 2>/dev/null
+expect_state pw.service active/running
+expect_state plumb.service active/running
+case " $(SC show -p Wants --value pw.service) " in *" plumb.service "*) ok "pw.service's Wants= lists its .wants/ entry" ;; *) bad "pw.service Wants=$(SC show -p Wants --value pw.service)" ;; esac
 
 echo "== slice D: MAINPID= hands the service over (podman)"
 if SC start handover.service; then

@@ -121,9 +121,10 @@ impl Daemon {
     /// After a stop or restart of `id`: the same for the units that depend
     /// on it that way. Stop: PartOf=, BindsTo=, Requires= (s6-rc already
     /// stops its own dependents; the others are found here). Restart:
-    /// PartOf= only. systemd propagates restarts along Requires= too, which
-    /// here would restart everything that needs dbus when dbus restarts;
-    /// left out on purpose.
+    /// PartOf= here, BindsTo= in run_job() (found before the restart).
+    /// systemd propagates restarts along Requires= too, which here would
+    /// restart everything that needs dbus when dbus restarts; left out on
+    /// purpose.
     pub(super) async fn propagate(&self, id: &str, jtype: &str, seen: &mut BTreeSet<String>) {
         let (keys, then): (&[&str], &str) = match jtype {
             "stop" => (&["PartOf", "BindsTo", "Requires"], "stop"),
