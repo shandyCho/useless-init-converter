@@ -11703,3 +11703,17 @@ Part 159's fix holds on the owner's machine. No code changes in this part.
 1. The VM: `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`; each user's reboot stop should be about 1 s shorter than in part 156.
 2. The greeter's `/run/gdm/home/gdm-greeter` mkdir errors on the s6 boot.
 3. The elogind plan (part 154); gnome-shell's exit hang (part 154); SELinux for confined users; evolution-alarm-notify's job result (part 158).
+
+## 2026-11-04, part 161: user@0's PAM session close runs on the s6 boot
+
+Owner's `/var/log/secure` (JOURNAL=no, s6 boot, b280b10's RPMs): both user@0 stops after the fix have `initconvert-runner: pam_unix(systemd-user:session): session closed for user root` at the manager's exit (22:56:25.277, 22:59:10.295; the manager's `shutdown scopes` lines are 22:56:25.275 and 22:59:10.292). `loginctl` shows no session or user left for root. So part 159's fix also gives back the PAM close that the SIGKILL skipped.
+
+**New line, not acted on:** just before each close, `pam_systemd(systemd-user:session): Varlink call io.systemd.Login.ReleaseSession failed: io.systemd.Login.NoSuchSession`. logind had already dropped root's manager-class session when the runner asked to release it (likely its own stop of user 0 about 10 s after sudo; not traced). Nothing is left behind: pam_unix's close and pam_end still run, and logind has no root session. It couldn't show before the fix, since the close never ran. No stock comparison: this machine's systemd-boot journals have stock user@'s `session opened` lines but no close or ReleaseSession lines from `(sd-pam)` at all, so they can't show whether stock systemd logs the same thing.
+
+Not checked: user@1000's and the greeter's close at logout after the fix (they were never SIGKILLed, part 159, so they should be unchanged).
+
+### Next steps
+
+1. The VM: `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`; each user's reboot stop should be about 1 s shorter than in part 156. Optionally compare the ReleaseSession line with the VM's stock baseline there.
+2. The greeter's `/run/gdm/home/gdm-greeter` mkdir errors on the s6 boot.
+3. The elogind plan (part 154); gnome-shell's exit hang (part 154); SELinux for confined users; evolution-alarm-notify's job result (part 158).
