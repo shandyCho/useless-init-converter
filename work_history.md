@@ -11971,3 +11971,18 @@ tests/vm-s6-boot.sh: `BOOT_ONLY_S6=yes` passes `--boot-only-s6=yes` to `initconv
 ### Next steps
 
 Phase 3 is done. Step 8 waits for the owner (A: elogind spike, B: no elogind). Then Phase 4 (the default and packaging: a proposal) and Phase 5 (the full VM run, then the owner's machine).
+
+## 2026-11-05, part 176: Phase 4, the default and packaging: proposal for the owner (no code)
+
+**Today:** `USER_MANAGER` defaults to systemd on both boots; `uinitconverter` (the s6 boot) only Suggests `uinitconverter-user`; on a systemd boot the s6 user manager is turned on with `initconvert-user-setup on`. The fallback to systemd --user (USER_FALLBACK_ON=, a crashed manager) stays in every option.
+
+**Where it stands (VM only):** lifecycle on the s6 boot 72/72 with the reboot at ~1 s per user (stock 0.5 s); lifecycle-baseline 68/68; fallback 18/18; confined users on both boots 9/9; session/apps; `--boot-only-s6=yes` 24/24 twice; vm-user-setup earlier (part 156). Not yet: real hardware (Phase 5), and the elogind decision (step 8) could change the user side.
+
+**Options:**
+1. (proposed) The s6 boot defaults to the s6 user manager: `uinitconverter` Recommends `uinitconverter-user` (instead of Suggests), and an unset USER_MANAGER means s6 on the s6 boot when that package is installed (systemd otherwise, and on a systemd boot as now). Changes: config.rs's default and its tests, the spec's Recommends, `initconvert init`'s report line, README/etc pairs, CHANGELOG, and vm-s6-boot.sh's `default` mode would expect initconvert-user-manager (a new mode keeping USER_MANAGER=systemd for the old check). Only after Phase 5's run on the owner's machine passes.
+2. Keep systemd --user as the default everywhere until step 8 is decided.
+3. The s6 user manager by default on both boots (uinitconverter-user's install turning itself on): not proposed; on a systemd boot the package should not change behaviour by being installed (part 155).
+
+### Next steps
+
+The owner: step 8 (A: elogind spike, B: no elogind) and Phase 4 (1, 2 or 3). Then Phase 5.
