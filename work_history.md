@@ -11773,3 +11773,18 @@ The owner asked for every open item, in the order fixes, larger work, smaller it
 **Phase 4, the default and packaging.** Last, because it depends on the rest: a proposal (criteria met, what changes in the specs and docs) for the owner to decide.
 
 **Phase 5, full VM run, then the owner's machine.** Every vm-user-manager mode with each BOOT, vm-s6-boot's modes, vm-user-setup (with OLD_RPMS), the sandbox variants. Then one checklist for the owner's machine, including part 162's greeter-log check.
+
+## 2026-11-04, part 164: phase 0 reference run; step 1, the fd store tests' fork race
+
+**Phase 0.** Core test RPMs from 56a0dbf (`packages/build-rpms.sh --test ~/uinitconverter-vm/rpmbuild/core`); the standalone RPMs from cc83c99 (no standalone change since). `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle` and `lifecycle-baseline`:
+- s6 user manager: every step passes up to the reboot; the reboot fails the 5 s limit: user@ of alice 5.59 s, tester 7.71 s, gdm-greeter 7.90 s. `shutdown scopes [session-8.scope session-c3.scope]: 0 not empty after 6.992 s` (tester's GNOME session scope: step 4); `stopping user-runtime-dir@1001` and `@60580` took 1.1 s each (step 5). No user@ killed or failed.
+- stock systemd --user on the s6 boot: reboot 0.48 s (greeter) and 0.53 s (tester), session scopes empty after 0.47 s. The user switch fails as in part 154: `alice: no GNOME session after 90 s`, then `tester's session is active`, alice's pipewire and alice's logout fail as follow-ons (step 6).
+These are the reference numbers for steps 4 to 6.
+
+**Step 1: `hung_up_fds_go`.** Not a store bug: the store prunes hung-up fds synchronously at every PUT and GET. The test drops `b` and expects the stored copy of `a` to report POLLHUP at once, but the conformance tests in the same process spawn processes, and a fork in between holds a copy of `b` until its exec. So the hang-up comes late and the second PUT finds the key full. Full-crate runs failed 2 of 3; alone it always passed. `sending_to_a_closed_peer_is_an_error` has the same race (seen once in 120 runs, after the first fix: the send got no EPIPE).
+- Fix: test helper `close_peer(a, b)` drops `b` and waits (up to 10 s) until `a` itself shows POLLHUP, the condition the store relies on. Both tests use it. The standalone fdstore's tests start no processes, so its copy of the test can't race; unchanged.
+- Result: `cargo test -p uinitconverter-base` 200 of 200 full-crate runs pass (with the VM running beside it); `cargo test` all pass; the standalone fdstore 10/10.
+
+### Next steps
+
+Phase 1 step 2 (the system sandbox's quitter@0), then steps 3 to 6 as in part 163.

@@ -643,6 +643,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Close `peer` and wait until `a` sees the hang-up. Another test's fork
+    /// (the conformance tests start processes) holds a copy of `peer` until
+    /// its exec, and the hang-up comes only then.
+    fn close_peer(a: &impl AsFd, peer: std::os::unix::net::UnixStream) {
+        drop(peer);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let mut p = [PollFd::new(a, PollFlags::empty())];
+            let t = Timespec {
+                tv_sec: 0,
+                tv_nsec: 50_000_000,
+            };
+            if matches!(poll(&mut p, Some(&t)), Ok(n) if n > 0)
+                && p[0].revents().contains(PollFlags::HUP)
+            {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "no hang-up");
+        }
+    }
+
     #[test]
     fn hung_up_fds_go() {
         let dir =
@@ -654,7 +675,7 @@ mod tests {
         // hangs up and goes, so the key has room again.
         let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
         put(&sock, "j.service", "stored", a.as_fd(), 1).unwrap();
-        drop(b);
+        close_peer(&a, b);
         let f = std::fs::File::open("/dev/null").unwrap();
         put(&sock, "j.service", "stored", f.as_fd(), 1).unwrap();
         assert_eq!(get(&sock, "j.service").len(), 1);
@@ -700,7 +721,7 @@ mod tests {
     #[test]
     fn sending_to_a_closed_peer_is_an_error() {
         let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
-        drop(b);
+        close_peer(&a, b);
         let e = send(&a, b"x", None).unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe);
     }
