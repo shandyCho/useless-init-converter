@@ -73,6 +73,9 @@ pub struct SvStatus {
     /// Down with its finish script done: not up and the ready flag set
     /// again, what `s6-svc -wD` (s6_svlisten_loop) waits for.
     pub down_done: bool,
+    /// The first TAI64N (bytes 0-12): when the state last changed. Only
+    /// compared with an earlier read, to tell that s6-supervise acted.
+    pub stamp: [u8; 12],
 }
 
 pub const S6_SVSTATUS_SIZE: usize = 35;
@@ -107,6 +110,7 @@ pub fn svstatus_unpack(b: &[u8]) -> SvStatus {
         ready: pid != 0 && flags & 8 != 0,
         pid,
         down_done: !up && flags & 8 != 0,
+        stamp: b[0..12].try_into().unwrap(),
     }
 }
 
@@ -631,8 +635,16 @@ mod svstatus_tests {
                 wanted_up: true,
                 ready: true,
                 pid: 1234,
-                down_done: false
+                down_done: false,
+                stamp: [0; 12],
             }
+        );
+        // The stamp is the first 12 bytes, as s6 writes it.
+        let mut b = pack(0, 0);
+        b[..12].copy_from_slice(&[0x40, 0, 0, 0, 0x6a, 0x1b, 0x2c, 0x3d, 0, 1, 2, 3]);
+        assert_eq!(
+            svstatus_unpack(&b).stamp,
+            [0x40, 0, 0, 0, 0x6a, 0x1b, 0x2c, 0x3d, 0, 1, 2, 3]
         );
         // finishing: not up (s6-svstat's isup), still a pid, not done
         let s = svstatus_unpack(&pack(99, 2));

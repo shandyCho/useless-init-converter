@@ -653,11 +653,7 @@ impl Daemon {
                 .await;
         }
         let started_at = crate::util::now_realtime_usec();
-        let _ = Command::new(tools::path("s6-svc"))
-            .arg("-u")
-            .arg(self.scandir(id))
-            .status()
-            .await;
+        self.svc_up(&self.scandir(id)).await;
         let r = self.wait_ready(id, unit, None).await;
         self.job_outcome(id, started_at, r)
     }

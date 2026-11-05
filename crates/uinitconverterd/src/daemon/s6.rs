@@ -331,6 +331,37 @@ impl Daemon {
         }
     }
 
+    /// `s6-svc -u DIR`, returning once s6-supervise has taken it in: the
+    /// status says wanted up, or changed since the command. s6-supervise
+    /// reads its control FIFO in its own loop, so a status read at once
+    /// could still be s6-svlink -d's "down, not wanted up", which
+    /// wait_ready() took for a start that had already failed. At boot that
+    /// ended logind's start job of user@1000 within milliseconds, so it let
+    /// GDM start the session before the user manager and its bus were
+    /// there, and the session failed (work_history part 193).
+    pub(super) async fn svc_up(&self, dir: &std::path::Path) {
+        use crate::util::{svstatus, SvRead};
+        let before = match svstatus(dir) {
+            SvRead::Status(s) => Some(s.stamp),
+            _ => None,
+        };
+        let _ = Command::new(tools::path("s6-svc"))
+            .arg("-u")
+            .arg(dir)
+            .status()
+            .await;
+        let Some(before) = before else { return };
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(5) {
+            match svstatus(dir) {
+                SvRead::Status(s) if s.wanted_up || s.stamp != before => return,
+                SvRead::Status(_) => {}
+                _ => return,
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+
     pub(super) async fn svstat(&self, atom: &str) -> Option<SvStat> {
         match crate::util::svstatus(&self.scandir(atom)) {
             crate::util::SvRead::NotSupervised => return None,
@@ -731,11 +762,7 @@ impl Daemon {
             }
         }
         self.s6.beside.lock().unwrap().insert(id.to_string());
-        let _ = Command::new(tools::path("s6-svc"))
-            .arg("-u")
-            .arg(self.scandir(id))
-            .status()
-            .await;
+        self.svc_up(&self.scandir(id)).await;
         Some(self.wait_ready(id, unit, None).await)
     }
 
@@ -1270,11 +1297,7 @@ impl Daemon {
                     if sv.up {
                         return self.wait_ready(id, unit, None).await;
                     }
-                    let _ = Command::new(tools::path("s6-svc"))
-                        .arg("-u")
-                        .arg(self.scandir(id))
-                        .status()
-                        .await;
+                    self.svc_up(&self.scandir(id)).await;
                     return self.wait_ready(id, unit, None).await;
                 }
                 if let Some(r) = self.start_beside(id, unit).await {

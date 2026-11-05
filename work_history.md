@@ -12336,6 +12336,26 @@ The old runner's slow ones were gvfs-daemon each time (0.103-0.116) and IBus onc
 
 ### Next steps
 
-1. The missing session: why logind's CreateSession returned before user@UID was up in that boot. Watch the system bus at boot (StartUnit of user@UID from logind, its reply and JobRemoved) in a reboot loop until it shows again, and read logind's `session_send_create_reply` for what it waits on in systemd 262.
+1. The missing session: why logind's CreateSession returned before user@UID was up in that boot (part 193: found and fixed).
+2. Several alternating lifecycle runs, d5ce251 against e6b865b.
+3. The owner: a release.
+
+## 2026-11-06, part 193: why logind didn't wait for user@1000 (part 192): a start read as failed too early
+
+**What logind waits for** (systemd v262 source, src/login): the CreateSession reply (`session_send_create_reply`) waits while `session_job_pending()`: the scope job, `user-runtime-dir@`'s job, and for a class that wants a service manager `user@`'s job (`service_manager_job`, the path from StartUnit's reply). `match_job_removed` clears one when a JobRemoved arrives with that unit and path, whatever its result ("Don't propagate user service failures to the client"). So it skips the wait only if StartUnit failed (logged as "Failed to start user service": not in the failing boot's journal), if it counted the manager as started already, or if JobRemoved for user@1000 came early. The reply came 24 ms after the session was made, and user@1000 went on to start (its PAM session 75 ms after), so its start job ended early.
+
+**Why the job ended early:** `dyn_start_longrun` (every user@UID on the s6 boot; every unit of a user manager) links the service down (`s6-svlink -d`, so a `down` file), runs `s6-svc -u`, and calls `wait_ready`, whose first status read has no delay. s6-svc returns once the command is in the control FIFO; s6-supervise reads it in its own loop (s6 2.15.1's s6-supervise.c: started with `flagwantup = 0` for the `down` file; `trystart` sets the pid and a new stamp). Read before that, the status says down and not wanted up, which `wait_ready` takes as a start that ended: no condition-failed or active marker, so `failed`, at once. Since part 186 the read is a file read (microseconds), where s6-svstat took ~1 ms. Shown on the host: a scratch s6-svscan, link `-d`, `s6-svc -u`, read the status from Python: 1 of 400 reads still down and not wanted up, with nothing else running.
+- The same boot's greeter manager logged `dbus.socket`, `gnome-session-monitor.service` and `org.gnome.Shell@gdm.service` "start: failed" while the bus came up and gnome-shell ran (Shell@gdm "failed" at 6.988, "Running GNOME Shell" at 7.161); the session target then failed on them and the manager fell back to systemd --user.
+- The same path ran `start_beside` and the database longrun start through `s6-svc -u` (s6.rs), also followed by `wait_ready`.
+
+**Change:** `svc_up()` (daemon/s6.rs): read the status, `s6-svc -u`, then poll every 2 ms (up to 5 s) until the status says wanted up or its stamp changed; then `wait_ready` as before. Used in `dyn_start_longrun`, `start_beside` and the database start. `SvStatus` has the status file's first TAI64N (`stamp`, bytes 0-12), compared only with an earlier read; the base unpack test checks it. Logger starts keep `wait_up`, which keeps waiting while down. CHANGELOG pair: Fixed.
+
+**Tests:** cargo test 141 passed; user sandbox 118/0; system sandbox plain 371/0, SANDBOX_JOURNAL=no 378/0, SANDBOX_FDSTORE=no 359/0. VM (kept, e6b865b's RPMs, this tree's release initconvertd and runner copied in): 12 reboots (`ssh 'sleep 20; sudo systemctl reboot'`), the session came up in 12. The only "start: failed" lines in those 13 boots are gnome-session-restart-dbus at the shutdown (7, known: started while the manager exits). The one good boot read in part 192 had logged three at login (ScreensaverProxy, Smartcard, spice-vdagent), none of them in these 13; with one boot to compare, only a hint that those were the same race.
+
+**Not shown:** that the missing session can't come back. It was about 8 of ~50 reboots in parts 184-190 and 1 of 37 since (parts 191-192), so 12 good reboots don't prove it. Parts 184-190's earlier failures were not recorded, so whether all were this is not known.
+
+### Next steps
+
+1. Owner: commit; more reboot loops with the recording script, to see whether the missing session still appears.
 2. Several alternating lifecycle runs, d5ce251 against e6b865b.
 3. The owner: a release.

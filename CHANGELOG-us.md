@@ -84,6 +84,14 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- A dynamic unit's start (`user@UID` on the s6 boot, every unit of a user
+  manager) no longer ends `failed` within milliseconds while the service goes
+  on to start. After `s6-svc -u` the status was read before s6-supervise had
+  taken the command in, and still said "down, not wanted up". At boot that
+  ended logind's start job of `user@1000` early, so GDM started the GNOME
+  session before the user manager and its bus were there, and the session
+  failed (in the VM, some reboots had no session). `initconvertd`
+  now waits until the status shows the command taken in.
 - A service's `finish` no longer takes 0.1 s when its main process leaves
   helpers in its cgroup (ibus-daemon's, gvfsd's): after signalling them the
   runner looked again only after 100 ms; now after 5 ms, doubling up to
