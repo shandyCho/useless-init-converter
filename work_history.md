@@ -12289,3 +12289,17 @@ Kept VM (e6b865b's RPMs, d5ce251's binaries copied in, plus a temporary timing l
 2. The missing GNOME session after some reboots in the VM (part 188).
 3. Several alternating lifecycle runs, d5ce251 against e6b865b.
 4. The owner: a release.
+
+## 2026-11-05, part 191: the missing GNOME session after reboots (part 188): not reproduced
+
+**Before:** in the reboot loops of parts 184–190, `gnome-vm.sh wait` sometimes ended with "no GNOME session for tester after 5 min" (about 8 of ~50 reboots, with every build tried, and once or twice in a row; several right after binaries had been copied over /usr/libexec/uinitconverter/ and the VM rebooted). Those loops recorded nothing about the failing boot. `wait` needs a gnome-shell of tester, `loginctl show-user tester` State=active, and tester's Display session Active=yes.
+
+**Now:** kept VM (e6b865b's RPMs, d5ce251's binaries copied in), a loop that reboots, waits up to 200 s, and on a failure records logind's sessions and their state, the gnome-shell/GDM processes, the boot's gdm/logind/user@1000/gnome-session journal lines and a screenshot (scratch script, not in the repo). 12 reboots with `sudo systemctl reboot` and 12 the way the earlier loops did (`ssh 'sleep 20; sudo systemctl reboot'`, an SSH session open during the shutdown): the session came up in all 24.
+
+**Not known:** what the earlier failures were. Left for when it shows again: run the recording loop then (or `VM_KEEP=yes` and `gnome-vm.sh ssh` into the VM at once) instead of rebooting past it.
+
+### Next steps
+
+1. Optional: a cheaper `finish` (part 190).
+2. Several alternating lifecycle runs, d5ce251 against e6b865b.
+3. The owner: a release.
