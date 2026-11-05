@@ -12032,3 +12032,25 @@ Phases 0 to 5 done in the VM; commits from 3ee1f46 to this entry, not pushed. Th
 
 1. The owner's machine: the checklist given in the session (RPMs from this commit, reboot into s6, the checks).
 2. Later: the GRUB environment-block message on the s6 boot's reboot; the ~0.5 s left per user at a reboot against stock (part 168); vm-user-setup.sh's old-build check could accept a build that already has the script.
+
+## 2026-11-05, part 179: Phase 5 on the owner's machine
+
+The owner's Fedora 45 machine, the RPMs from 6be7122 (core 0.2.2, standalone from eeccb05), booted into s6 (PID 1 s6-svscan). USER_MANAGER=s6 is set explicitly in /etc/uinitconverter/uinitconverter.conf (from an earlier `initconvert-user-setup on`), so status prints "s6", not "unset (s6, the s6 boot's default)"; the drop-in from that `on` is still there.
+
+**Checklist (owner's output, plus unprivileged checks):**
+- `initconvert-user-setup status`: user@0 and user@1000 on the s6 user manager; user@1000 runs initconvert-user-manager with its runners and timers.
+- "cannot create directory" in the user@0 and user@1000 logs: 0 each. The greeter's (user@60578): 44, all from before the fix (the last at 2026-11-04 22:55:32; 383b335 is from 23:15, and the logs keep every line since 10-27); none since this boot (12:41:39), not even the fallback's `logger of …: cannot create` line. Part 162's fix holds on the owner's machine. The greeter's user@ is inactive after the login, as expected.
+- wireplumber running; `systemctl --user restart pipewire.service` → wireplumber active after 3 s.
+- `sudo true`, 15 s later `systemctl is-failed user@0.service` → inactive (stopped, not failed); /var/log/secure: "initconvert-runner: pam_unix(systemd-user:session): session closed for user root".
+- `systemctl show -p ActiveState,Id sshd.service` prints Id before ActiveState (systemd's order, part 173).
+- AVC denials since boot: none.
+- `systemctl --failed` and `systemctl --user --failed`: empty; `systemctl --user is-system-running`: running.
+
+### Current state
+
+Phases 0 to 5 done, in the VM and on the owner's machine; every check passed. Commits not pushed.
+
+### Next steps
+
+1. The GRUB environment-block message on the s6 boot's reboot; the ~0.5 s left per user at a reboot against stock (part 168); vm-user-setup.sh's old-build check could accept a build that already has the script.
+2. Checklist counts over s6-log files should be limited to the current boot (they keep earlier boots' lines).
