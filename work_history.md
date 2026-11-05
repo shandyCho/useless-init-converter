@@ -12022,7 +12022,7 @@ RPMs from bda59d4 (`packages/build-rpms.sh --test`), target/release for BOOT=sys
 
 Not in the VM: sandbox plain 371/371, SANDBOX_JOURNAL=no 378/378, SANDBOX_FDSTORE=no 359/359, SANDBOX_S6NET_BIN 374/374; user sandbox 118/118; tests/user-setup.sh 13/13; cargo test 138; standalone fdstore 10, journal-relay 7, linkwatch 6, notify 10.
 
-**Seen:** the stock-only lifecycle-baseline fails the switch to alice on both systemd boots and passes on the s6 boot; our manager passes it everywhere. Not ours (nothing of ours runs in that mode on a systemd boot), so step 6 (part 169) is corrected above. On the reboot from the s6 boot GRUB printed `loadenv … invalid environment block` and booted on (the s6 entry came up, all checks passed); not looked into. mcelog.service fails in the VM on every boot (stock too).
+**Seen:** the stock-only lifecycle-baseline fails the switch to alice on both systemd boots and passes on the s6 boot; our manager passes it everywhere. Not ours (nothing of ours runs in that mode on a systemd boot), so step 6 (part 169) is corrected above. On the reboot from the s6 boot GRUB printed `loadenv … invalid environment block` and booted on (the s6 entry came up, all checks passed); not looked into. (Corrected in part 180: it is printed on the first boot of every VM run, from the base image, stock boots included; not the s6 boot's.) mcelog.service fails in the VM on every boot (stock too).
 
 ### Current state
 
@@ -12054,3 +12054,23 @@ Phases 0 to 5 done, in the VM and on the owner's machine; every check passed. Co
 
 1. The GRUB environment-block message on the s6 boot's reboot; the ~0.5 s left per user at a reboot against stock (part 168); vm-user-setup.sh's old-build check could accept a build that already has the script.
 2. Checklist counts over s6-log files should be limited to the current boot (they keep earlier boots' lines).
+
+## 2026-11-05, part 180: GRUB's "invalid environment block" (part 178's "seen")
+
+**Where it shows:** every serial log in ~/uinitconverter-vm has `error: ../../grub-core/commands/loadenv.h:read_envblk_file:51: invalid environment block.` before the *first* boot of the run (s6boot-s6/default/no-package/systemd), and serial.log (vm-user-setup, systemd boots only) before both boots. None of the s6 runs show it after `initconvert init`. So it isn't the s6 boot's, and part 178 was wrong to put it at the reboot from the s6 boot.
+
+**Cause (checked in a fresh overlay of base.qcow2):** /boot is btrfs there (`/dev/vda3[/boot]`). GRUB can't write files on btrfs, so Fedora's grubenv carries `env_block=512+1`: GRUB reads (and writes) its variables from sector 512 of the partition, which btrfs leaves unused. In the image that sector is all zeros, hence "invalid". GRUB prints it and boots on (every run came up on the expected entry).
+- Fedora's `grub-boot-success.timer` (user unit, 2 min after login, `grub2-set-bootflag boot_success`) writes only the file: after it, `boot_success=1` in the file and the sector still zero.
+- `grub2-editenv - set …` writes the sector too (a `# GRUB Environment Block` header followed by the variables). `initconvert init` runs `grub2-editenv - set saved_entry=…` (init/boot.rs), which is why the s6 runs' later boots are clean; vm-user-setup runs no grub2-editenv, so both its boots show it.
+
+**Not ours, nothing to change in the core.** The owner's machine has /boot on ext4 (no env_block), so this doesn't apply there. A Fedora install with btrfs /boot whose sector was never written would show the same until anything runs grub2-editenv set. Optional, for the VM: `grub2-editenv - set saved_entry=…` once in `gnome-vm.sh provision` (needs a re-provision); not done.
+
+### Current state
+
+Phases 0 to 5 done, in the VM and on the owner's machine. Commits not pushed.
+
+### Next steps
+
+1. The ~0.5 s left per user at a reboot against stock (part 168); vm-user-setup.sh's old-build check could accept a build that already has the script.
+2. Checklist counts over s6-log files should be limited to the current boot (they keep earlier boots' lines).
+3. Optional: initialize the env block in `gnome-vm.sh provision` (see above).
