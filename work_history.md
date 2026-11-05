@@ -12270,3 +12270,22 @@ Part 188's change with its checks: cargo test 141 (new `s6_control_reports_as_s6
 1. The shell's 0.26–0.42 s exit and IBus's ~0.1 s after SIGTERM against stock; the missing GNOME session after some reboots in the VM (part 188).
 2. Several alternating lifecycle runs, this build against e6b865b.
 3. The owner: a release.
+
+## 2026-11-05, part 190: the shell's and IBus's exit times
+
+Kept VM (e6b865b's RPMs, d5ce251's binaries copied in, plus a temporary timing line in `svc_down_wait`, not committed: per unit the time to s6's `d`, the process gone, and to `D`, its finish done). Then the same VM with USER_MANAGER=systemd for stock. Time = `shutdown starts` to tester's `session closed` in the runner; each reboot after tester's session was up.
+
+**Totals in this VM:** ours 0.591, 0.630, 0.604 s; stock 0.538, 0.553, 0.522 s (exit.target at 0.438, 0.456, 0.431 s). A gap of about 0.07 s per user.
+
+**The chain to the shell** (portals/gvfs → graphical-session.target → gnome-session.target → IBus → gnome-session-initialized.target → the shell → gnome-session-manager@): ours IBus done at 0.172 / 0.081 s, the shell's unit at 0.380 / 0.395 s, gnome-session-manager@ at 0.411 / 0.418 s; stock (part 184's bus captures) IBus ~0.065 s, the shell 0.36–0.38 s, gnome-session-manager@ 0.38–0.40 s. So after parts 182–189 the logout's path is close to stock's.
+- **The shell:** its process takes 0.18–0.25 s after SIGTERM (`d`), its finish 0.013 s. That is gnome-shell's own exit; on stock it is ~0.25 s too (SIGTERM ~0.11 s, unit done 0.36–0.38 s). Nothing of ours.
+- **IBus:** ibus-daemon exits in 8 ms; its finish took 0.006 s in one run and 0.100 s in the other. Finish usually takes 6–17 ms (mean 0.016–0.021 s over all units), but now and then ~0.1 s (also gvfs-daemon 0.109 s, xdg-document-portal 0.112 s in the same run), when many run at once; on the chain that is the visible part.
+
+**The rest of the gap:** the logout ends with gvfs-metadata (activated again during it, PartOf=graphical-session.target) stopped at 0.43 s, then graphical-session-pre.target at 0.465 s, the leader quits and session-1.scope is empty at 0.472 s, where stock's exit.target comes at 0.43–0.46 s. Our exit then takes ~0.12 s (stock ~0.09–0.1 s); its tail is real exits in order: wireplumber 0.518 s, then pipewire 0.550 s, localsearch-3 (0.088 s to exit) 0.575 s, the PAM close 0.591 s.
+
+### Next steps
+
+1. Optional, small: a cheaper `finish` (the runner loads the whole unit for it; the `sh` wrapper adds an exec), which shows on the chain when several finishes run at once.
+2. The missing GNOME session after some reboots in the VM (part 188).
+3. Several alternating lifecycle runs, d5ce251 against e6b865b.
+4. The owner: a release.
