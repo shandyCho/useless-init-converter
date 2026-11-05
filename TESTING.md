@@ -402,7 +402,9 @@ GRUB 메뉴에서 **Fedora (s6 + uinitconverter) …**를 고르세요. 스플�
 
 **GDM 화면이 나오지 않으면** [s6 부팅이 실패할 때](#s6-부팅이-실패할-때)를 보세요.
 
-GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세요.
+GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세요. `/var/log/uinitconverter`의
+로그에는 이전 부팅의 줄도 남아 있으므로, 그 안의 줄을 세는 확인은 이번 부팅만 봅니다:
+`awk -v b="$(uptime -s)" '$0 >= b'`(시각은 `uptime -s`가 출력하는 것과 같은 현지 시각입니다).
 
 | 확인 항목 | 명령 | 기대 결과 |
 |---|---|---|
@@ -420,6 +422,7 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | `PrivateNetwork=` | `sudo nsenter -t "$(pgrep -x polkitd)" -m ls /sys/class/net`, `sudo nsenter -t "$(pgrep -x polkitd)" -m ls -d /sys/fs/cgroup/system.slice /sys/fs/selinux/enforce` | `lo`만 보이고, 두 경로는 그대로 있습니다 |
 | 코어 덤프 | `cat /proc/sys/kernel/core_pattern; grep 'core file' /proc/1/limits; sh -c 'kill -SEGV $$'; sudo ls -l /var/lib/systemd/coredump` | `@@/run/systemd/coredumpd/kernel`, 소프트 한도 `unlimited`, 새 `core.sh.*` 파일 |
 | 로그 디렉터리(`JOURNAL=no`) | `stat -c '%a %U:%G' /var/log/uinitconverter` | `750 root:wheel` |
+| 로그인 화면의 로거(`JOURNAL=no`) | 로그인 화면에서 로그인한 뒤: `sudo awk -v b="$(uptime -s)" '$0 >= b && /cannot create/' /var/log/uinitconverter/user@6*.service/current` | 아무것도 없거나, 서비스마다 `logger of …: cannot create …, logging to …` 한 줄; `mkdir: cannot create directory`는 없습니다 |
 | 요청 시 서비스 | `systemctl status virtlogd.service iscsid.service`와 `ls -l /run/libvirt/virtlogd-sock`. 그다음 `sudo python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect("/run/libvirt/virtlogd-sock")'`을 실행하고 상태를 다시 봅니다 | 소켓 파일은 있고 `inactive (dead)`. 연결한 뒤 `virtlogd`는 `active (running)` |
 | Accept=yes 소켓 | `systemctl status polkit-agent-helper.socket`. 그다음 GNOME 세션의 터미널에서 `pkexec true`를 실행하고 상태를 다시 봅니다 | `Listen: /run/polkit/agent-helper.socket (Stream)`과 함께 `active (listening)`; 암호 대화상자가 동작합니다. `Accepted:`는 polkit 에이전트가 소켓을 쓸 때만 오릅니다. setuid 도우미가 대안이므로 0이어도 오류가 아닙니다 |
 | Accept=yes TCP (선택) | s6-networking을 설치한 상태에서 `sudo systemctl stop sshd.service`, `sudo systemctl start sshd.socket`, `ssh localhost true`, 그다음 `systemctl status sshd.socket`, 다른 터미널에서 `ssh localhost` 세션을 열어 둔 채 `systemctl list-units 'sshd@*'`. 끝나면 `sudo systemctl stop sshd.socket`과 `sudo systemctl start sshd.service` | `Listen: [::]:22 (Stream)`과 함께 `active (listening)`, 로그인이 되고 `Accepted: 1`. 열린 세션은 `sshd@N-...service loaded active running`으로 나옵니다 |

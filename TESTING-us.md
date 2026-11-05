@@ -465,7 +465,10 @@ volumes that the initramfs does not unlock are not opened under s6;
 
 **If it never reaches GDM,** see [If the s6 boot fails](#if-the-s6-boot-fails).
 
-After logging in to GNOME, open a terminal and go through this list:
+After logging in to GNOME, open a terminal and go through this list. The logs under
+`/var/log/uinitconverter` keep the lines of earlier boots, so a check that counts
+lines there looks only at this boot: `awk -v b="$(uptime -s)" '$0 >= b'` (the
+timestamps are local time, as `uptime -s` prints it).
 
 | Check | Command | Expected |
 |---|---|---|
@@ -483,6 +486,7 @@ After logging in to GNOME, open a terminal and go through this list:
 | `PrivateNetwork=` | `sudo nsenter -t "$(pgrep -x polkitd)" -m ls /sys/class/net` and `sudo nsenter -t "$(pgrep -x polkitd)" -m ls -d /sys/fs/cgroup/system.slice /sys/fs/selinux/enforce` | only `lo`; both paths still there |
 | Core dumps | `cat /proc/sys/kernel/core_pattern; grep 'core file' /proc/1/limits; sh -c 'kill -SEGV $$'; sudo ls -l /var/lib/systemd/coredump` | `@@/run/systemd/coredumpd/kernel`; soft limit `unlimited`; a new `core.sh.*` file |
 | Log directory (`JOURNAL=no`) | `stat -c '%a %U:%G' /var/log/uinitconverter` | `750 root:wheel` |
+| Greeter's loggers (`JOURNAL=no`) | after logging in at the login screen: `sudo awk -v b="$(uptime -s)" '$0 >= b && /cannot create/' /var/log/uinitconverter/user@6*.service/current` | nothing, or one `logger of …: cannot create …, logging to …` line per service; no `mkdir: cannot create directory` |
 | On-demand services | `systemctl status virtlogd.service iscsid.service` and `ls -l /run/libvirt/virtlogd-sock`; then `sudo python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect("/run/libvirt/virtlogd-sock")'` and the status again | `inactive (dead)` with the socket file there; after the connection, `virtlogd` is `active (running)` |
 | Accept=yes sockets | `systemctl status polkit-agent-helper.socket`; then `pkexec true` in a terminal of the GNOME session, and the status again | `active (listening)` with `Listen: /run/polkit/agent-helper.socket (Stream)`; the password dialog works. `Accepted:` goes up only if polkit's agent uses the socket: the setuid helper is its fallback, so 0 is not an error |
 | Accept=yes TCP (optional) | With s6-networking installed: `sudo systemctl stop sshd.service`, `sudo systemctl start sshd.socket`, `ssh localhost true`, then `systemctl status sshd.socket`, and with an `ssh localhost` session open in another terminal `systemctl list-units 'sshd@*'`; afterwards `sudo systemctl stop sshd.socket` and `sudo systemctl start sshd.service` | `active (listening)` with `Listen: [::]:22 (Stream)`, the login works, `Accepted: 1`; the open session is listed as `sshd@N-...service loaded active running` |

@@ -6,9 +6,9 @@
 #   B  `off`, a reboot: no drop-in, systemd --user, USER_MANAGER=systemd
 #   C  `on`, then `dnf remove uinitconverter-user`: the drop-in goes,
 #      systemd --user after a reboot
-#   D  a fresh VM with an older build of the same version (OLD_RPMS, from before
-#      initconvert-user-setup) upgraded to CORE_RPMS: nothing turned on by
-#      the upgrade, s6-rc kept, `on` works
+#   D  a fresh VM with an older build of the same version (OLD_RPMS, from
+#      before initconvert-user-setup or after it) upgraded to CORE_RPMS:
+#      nothing turned on by the upgrade, s6-rc kept, `on` works
 #
 #   tests/vm-user-setup.sh DIR       # DIR: the provisioned VM (gnome-vm.sh)
 #
@@ -107,7 +107,9 @@ vs "mkdir -p old && mv in/uinitconverter*-$ver-*.rpm old/"
 T=900 vs 'sudo dnf -y -q install --nogpgcheck ./in/*.rpm ./old/*.rpm || { sudo dnf clean metadata && sudo dnf -y -q install --refresh --nogpgcheck ./in/*.rpm ./old/*.rpm; }' >/dev/null
 T=600 vs 'sudo initconvert init --yes' >"$O/upg-init-D.log" 2>&1 || bad "old initconvert init: $(tail -3 "$O/upg-init-D.log")"
 vs 'rpm -q uinitconverter-user' | sed 's/^/   old: /'
-vs 'test ! -e /usr/bin/initconvert-user-setup' && ok "the old build has no initconvert-user-setup" || bad "the old build has the script"
+# From before initconvert-user-setup or after it: either way nothing is on.
+vs 'test -e /usr/bin/initconvert-user-setup' && echo "   old: has initconvert-user-setup" || echo "   old: from before initconvert-user-setup"
+vs 'test ! -e /etc/systemd/system/user@.service.d/90-uinitconverter.conf' && ok "the old build turned nothing on" || bad "a drop-in before the upgrade"
 "$G" copy "$V" "$NEW"/*.rpm >/dev/null
 T=900 vs "cd in && sudo dnf -y -q upgrade --nogpgcheck ./uinitconverter*-$ver-*.rpm" >"$O/upg-dnf-D.log" 2>&1 || bad "dnf upgrade: $(tail -5 "$O/upg-dnf-D.log")"
 vs 'rpm -qa "uinitconverter*" | sort' | sed 's/^/   new: /'

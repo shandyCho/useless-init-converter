@@ -12074,3 +12074,21 @@ Phases 0 to 5 done, in the VM and on the owner's machine. Commits not pushed.
 1. The ~0.5 s left per user at a reboot against stock (part 168); vm-user-setup.sh's old-build check could accept a build that already has the script.
 2. Checklist counts over s6-log files should be limited to the current boot (they keep earlier boots' lines).
 3. Optional: initialize the env block in `gnome-vm.sh provision` (see above).
+
+## 2026-11-05, part 181: vm-user-setup.sh's old build; boot-limited log checks
+
+**tests/vm-user-setup.sh, case D:** it failed when OLD_RPMS already had initconvert-user-setup (part 178: 21/22 with b280b10's build). Now it prints which kind of old build it got (`old: has initconvert-user-setup` or `old: from before initconvert-user-setup`) and checks what matters before the upgrade: no `user@.service.d/90-uinitconverter.conf`, i.e. the old build turned nothing on. Header comment: OLD_RPMS may be from before the script or after it.
+
+**TESTING pair:** the owner's checklist counted `cannot create directory` over the greeter's whole log (part 179: 44, all from an earlier boot). The intro to the after-login list now says that the logs under /var/log/uinitconverter keep earlier boots' lines and gives the filter `awk -v b="$(uptime -s)" '$0 >= b'` (s6-log's T timestamps are local time, as `uptime -s` prints; checked on the owner's machine). New row "Greeter's loggers (`JOURNAL=no`)": `sudo awk -v b="$(uptime -s)" '$0 >= b && /cannot create/' /var/log/uinitconverter/user@6*.service/current`, expected nothing or one `logger of …: cannot create …, logging to …` line per service.
+
+**Tests:** bash -n and shellcheck -S warning pass. `OLD_RPMS=<b280b10's build, 20261104211350> tests/vm-user-setup.sh ~/uinitconverter-vm` (new: bda59d4's RPMs): 22/22, D printed `old: has initconvert-user-setup` and passed "the old build turned nothing on".
+
+### Current state
+
+Phases 0 to 5 done, in the VM and on the owner's machine. Commits not pushed.
+
+### Next steps
+
+1. The ~0.5 s left per user at a reboot against stock (part 168).
+2. Optional: initialize GRUB's env block in `gnome-vm.sh provision` (part 180).
+3. The owner: a release (0.2.2 is 58+ commits behind; CHANGELOG pair under Unreleased).
