@@ -12124,3 +12124,29 @@ Phases 0 to 5 done; this change in the tree, not committed. Commits not pushed.
 2. The GNOME stalls above: a gdb sampler at a hang (part 167's PRE_REBOOT_SCRIPT), stock runs for comparison.
 3. Optional: initialize GRUB's env block in `gnome-vm.sh provision` (part 180).
 4. The owner: a release.
+
+## 2026-11-05, part 183: lifecycle, new against old, three runs each
+
+`BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`, alternating: new = the RPMs built for part 182 (the tree just before e88e713, same code), old = bda59d4's RPMs (the daemon as before part 182). Reboot with three users at once, from `shutdown starts` to each user@'s PAM close; scopes = the system manager's "shutdown scopes [session-…]: 0 not empty after".
+
+| Run | Result | gdm-greeter | tester | alice | scopes |
+|---|---|---|---|---|---|
+| new 1 | 72/72 | 0.97 | 0.96 | 1.01 | 0.75 |
+| old 1 | 71/72 | 1.02 | 6.05 | 1.09 | 0.81 |
+| new 2 | 72/72 | 0.87 | 0.89 | 0.96 | 0.66 |
+| old 2 | 72/72 | 1.04 | 1.07 | 1.13 | 0.83 |
+| new 3 | 72/72 | 0.88 | 0.90 | 0.94 | 0.66 |
+| old 3 | 72/72 | 0.99 | 1.01 | 1.07 | 0.79 |
+
+New: 0.87–1.01 s per user (mean 0.92), scopes 0.66–0.75 s. Old: 0.99–1.13 s without the stall (mean 1.05), scopes 0.79–0.83 s; old 1 failed "user@ of tester took 6.05 s to stop" (the limit is 5 s), the kind of stall part 182 saw. Part 168 (one run, old code): 0.99/1.01/1.06 s, scopes 0.78 s, which matches old here. So with three managers stopping together the change saves about 0.13 s per user, less than the ~0.15–0.2 s with one (part 182), and the stalls went from 1 in 3 to none in 3. Part 182's single 1.22–1.28 s run was an outlier. Stock systemd --user on this boot (part 168): 0.48/0.53 s; the ~0.4 s left is the per-unit stop cost under load (part 182: 25–33 ms alone, 0.15–0.33 s with ~60 at once).
+
+### Current state
+
+Phases 0 to 5 done; part 182's change committed (e88e713). Commits not pushed.
+
+### Next steps
+
+1. The GNOME stalls of part 182: a gdb sampler at a hang (part 167's PRE_REBOOT_SCRIPT), stock runs for comparison.
+2. The per-unit stop cost under load (runner finish, s6-svc, s6-svunlink per unit).
+3. Optional: initialize GRUB's env block in `gnome-vm.sh provision` (part 180).
+4. The owner: a release.
