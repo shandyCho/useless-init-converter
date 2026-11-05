@@ -295,6 +295,42 @@ impl Daemon {
         self.s6.svstat_cache.lock().unwrap().remove(id);
     }
 
+    /// `s6-svc -wD -d -T LIMIT DIR` without its three processes (s6-svc,
+    /// s6-svlisten, s6-ftrigrd; a shutdown started about 200 of each set,
+    /// work_history part 187): `d` written to supervise/control, then
+    /// supervise/status read every 5 ms until the service is down with its
+    /// finish done. The commands themselves for what this can't do (no
+    /// FIFO, a status file of another format).
+    pub(super) async fn svc_down_wait(&self, dir: &std::path::Path, limit: Duration) {
+        use crate::util::{s6_control, svstatus, CtlWrite, SvRead};
+        let fallback = || async {
+            let _ = Command::new(tools::path("s6-svc"))
+                .args(["-wD", "-d", "-T", &limit.as_millis().to_string()])
+                .arg(dir)
+                .status()
+                .await;
+        };
+        match s6_control(&dir.join("supervise/control"), b"d") {
+            CtlWrite::Written => {}
+            // No s6-supervise: nothing runs (s6-svc fails the same way).
+            CtlWrite::NoReader => return,
+            CtlWrite::Missing | CtlWrite::Failed => return fallback().await,
+        }
+        let t = Instant::now();
+        loop {
+            match svstatus(dir) {
+                SvRead::NotSupervised => return,
+                SvRead::Status(s) if s.down_done => return,
+                SvRead::Status(_) => {}
+                SvRead::Unknown => return fallback().await,
+            }
+            if t.elapsed() >= limit {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     pub(super) async fn svstat(&self, atom: &str) -> Option<SvStat> {
         match crate::util::svstatus(&self.scandir(atom)) {
             crate::util::SvRead::NotSupervised => return None,

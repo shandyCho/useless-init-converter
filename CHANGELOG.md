@@ -66,6 +66,11 @@
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
+- 동적 유닛(사용자 매니저의 모든 유닛)을 멈출 때 `s6-svc -wD`와 `s6-svunlink`(그리고 이들의 `s6-svlisten`,
+  `s6-ftrigrd`, 정지마다 프로세스 다섯 개쯤)를 실행하지 않습니다. `initconvertd`가 s6-supervise와 s6-svscan의
+  제어 FIFO에 직접 쓰고 상태 파일과 감독자의 잠금을 읽으며, 그것들이 없으면 명령으로 돌아갑니다. VM에서
+  재부팅 때 tester의 사용자 매니저가 0.99-1.05초 대신 0.81-0.93초에 멈췄고, `s6-svunlink`의 5초 대기에
+  걸리지 않았습니다.
 - `initconvertd`와 러너가 `s6-svstat`을 실행하지 않고(정지마다 여러 번, 종료 때 초당 100번쯤) 서비스의
   `supervise/status`에서 상태를 읽습니다. 그만큼 CPU가 남아, VM에서 GNOME 재부팅 때 tester의 사용자 매니저가
   10번 모두 0.55-0.68초에 멈춥니다(이전: 10번 중 6번 0.64-0.80초, 4번은 로그아웃이 멈춘 유닛이 D-Bus로 다시

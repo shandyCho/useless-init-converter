@@ -773,33 +773,22 @@ impl Daemon {
             self.run_runner(runner_cmd::STOP_EXEC, id, Some(sv.pid))
                 .await;
         }
-        let stop = Command::new(tools::path("s6-svc"))
-            .args(["-wD", "-d", "-T", "120000"])
-            .arg(self.scandir(id))
-            .status();
-        let _ = tokio::join!(stop, self.signal_rest_at_stop(id, unit, true));
+        let svdir = self.scandir(id);
+        let _ = tokio::join!(
+            self.svc_down_wait(&svdir, Duration::from_secs(120)),
+            self.signal_rest_at_stop(id, unit, true)
+        );
         if let Ok(scan) = fs::canonicalize(self.cfg.live_dir.join("scandir")) {
-            // s6-svunlink waits for s6-svscan to end the supervisors, which
-            // it doesn't while any entry in the scan directory can't be
-            // stat'ed (it aborts the scan). Without a limit this stop, and
-            // every job behind it, hung: logind's user@0 stop, then sudo.
-            // It exits 0 when the limit passes, too.
-            let st = Command::new(tools::path("s6-svunlink"))
-                .args(["-t", "5000"])
-                .arg(&scan)
-                .arg(id)
-                .status()
-                .await;
+            // What s6-svunlink does, without its processes: the link goes,
+            // s6-svscan is told to rescan (`an`), and the wait for its
+            // supervisors to exit is the lock poll below. The link must go
+            // before the directory: a dangling entry makes s6-svscan abort
+            // every scan, and then no supervisor is ended.
             let link = scan.join(id);
-            if !st.map(|s| s.success()).unwrap_or(false) && fs::symlink_metadata(&link).is_ok() {
-                // It failed before removing the link (it couldn't check the
-                // supervisors). Removing the directory under it would leave
-                // a dangling entry, on which s6-svscan aborts every scan.
-                eprintln!(
-                    "initconvertd: {id}: s6-svunlink failed, removing {}",
-                    link.display()
-                );
-                if let Err(e) = fs::remove_file(&link) {
+            match fs::remove_file(&link) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
                     eprintln!(
                         "initconvertd: {id}: {}: {e}; keeping its service directory",
                         link.display()
@@ -807,11 +796,17 @@ impl Daemon {
                     self.drop_stored_fds(id);
                     return "done";
                 }
-                let _ = Command::new(tools::path("s6-svscanctl"))
-                    .arg("-an")
-                    .arg(&scan)
-                    .status()
-                    .await;
+            }
+            use crate::util::{s6_control, CtlWrite};
+            match s6_control(&scan.join(".s6-svscan/control"), b"an") {
+                CtlWrite::Written | CtlWrite::NoReader => {}
+                CtlWrite::Missing | CtlWrite::Failed => {
+                    let _ = Command::new(tools::path("s6-svscanctl"))
+                        .arg("-an")
+                        .arg(&scan)
+                        .status()
+                        .await;
+                }
             }
         }
         if self.exiting.load(std::sync::atomic::Ordering::Relaxed) || self.sockets_of(id).is_empty()
@@ -821,11 +816,13 @@ impl Daemon {
             // Its sockets stay with the store for the next run.
             crate::fdstore::del(&self.cfg.run_dir.join("fdstore"), id, None);
         }
-        // Give s6-supervise (and its logger's) a moment to exit before
-        // removing its directory: up to 200 ms, but no longer than it
-        // takes. A fixed 200 ms added up per wave of a user manager's exit.
+        // Wait for s6-supervise (and its logger's) to exit before removing
+        // its directory, as long as it takes, up to 5 s (s6-svunlink's
+        // limit before, part 187: s6-svscan doesn't end the supervisors
+        // while an entry of the scan directory can't be stat'ed; without a
+        // limit this stop, and every job behind it, hung).
         let dir = self.dyn_dir(id);
-        for _ in 0..20 {
+        for _ in 0..500 {
             if !super::s6::lock_held(&dir.join("supervise/lock"))
                 && !super::s6::lock_held(&dir.join("log/supervise/lock"))
             {

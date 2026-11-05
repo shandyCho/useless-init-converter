@@ -12260,3 +12260,13 @@ So side by side the native version is faster: 0.81–0.93 s against 0.99–1.05 
 1. The native change: the suites (cargo test, user sandbox, system sandbox variants), then commit.
 2. The shell's 0.26–0.42 s exit and IBus's ~0.1 s after SIGTERM against stock; the missing GNOME session after some reboots in the VM.
 3. The owner: a release.
+
+## 2026-11-05, part 189: the native s6-svc/s6-svunlink committed
+
+Part 188's change with its checks: cargo test 141 (new `s6_control_reports_as_s6_svc_write`); user sandbox 118/118; system sandbox 371/371, SANDBOX_JOURNAL=no 378/378, SANDBOX_FDSTORE=no 359/359 (all in 8.5 min: user sandbox 1 min, each system sandbox ~2.5 min). CHANGELOG pair: Fixed. Not run with it: lifecycle (one run per build can't show the difference, part 187; several alternating runs would).
+
+### Next steps
+
+1. The shell's 0.26–0.42 s exit and IBus's ~0.1 s after SIGTERM against stock; the missing GNOME session after some reboots in the VM (part 188).
+2. Several alternating lifecycle runs, this build against e6b865b.
+3. The owner: a release.

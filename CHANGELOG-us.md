@@ -84,6 +84,13 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- Stopping a dynamic unit (every unit of a user manager) no longer starts
+  `s6-svc -wD` and `s6-svunlink` (with their `s6-svlisten` and `s6-ftrigrd`,
+  about five processes per stop): `initconvertd` writes to the control FIFOs
+  of s6-supervise and s6-svscan and reads the status file and the
+  supervisor's lock, falling back to the commands if those aren't there. In
+  the VM a reboot stopped tester's user manager in 0.81-0.93 s against
+  0.99-1.05 s, and the 5 s wait of `s6-svunlink` was not hit.
 - `initconvertd` and the runner read a service's state from its
   `supervise/status` instead of starting `s6-svstat` (several per stop, about
   100 a second at a shutdown). With the CPU that freed, a GNOME reboot in the

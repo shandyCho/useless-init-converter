@@ -70,6 +70,9 @@ pub struct SvStatus {
     /// s6-svstat's `ready`: a pid and the ready flag.
     pub ready: bool,
     pub pid: u32,
+    /// Down with its finish script done: not up and the ready flag set
+    /// again, what `s6-svc -wD` (s6_svlisten_loop) waits for.
+    pub down_done: bool,
 }
 
 pub const S6_SVSTATUS_SIZE: usize = 35;
@@ -97,11 +100,58 @@ pub fn svstatus_unpack(b: &[u8]) -> SvStatus {
     let pid = u64::from_be_bytes(b[24..32].try_into().unwrap());
     let flags = b[34];
     let pid = u32::try_from(pid).unwrap_or(0);
+    let up = pid != 0 && flags & 2 == 0;
     SvStatus {
-        up: pid != 0 && flags & 2 == 0,
+        up,
         wanted_up: flags & 4 != 0,
         ready: pid != 0 && flags & 8 != 0,
         pid,
+        down_done: !up && flags & 8 != 0,
+    }
+}
+
+/// What writing to an s6 control FIFO (`supervise/control`,
+/// `.s6-svscan/control`) did, as s6's s6_svc_write reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CtlWrite {
+    Written,
+    /// No one reads it: its s6-supervise or s6-svscan isn't running.
+    NoReader,
+    /// No FIFO there.
+    Missing,
+    Failed,
+}
+
+/// Write `cmd` to an s6 control FIFO, as s6-svc and s6-svscanctl do
+/// (open without blocking, then a blocking write), without starting them.
+pub fn s6_control(fifo: &Path, cmd: &[u8]) -> CtlWrite {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(fifo);
+    let mut f = match f {
+        Ok(f) => f,
+        Err(e) => {
+            return match e.raw_os_error() {
+                Some(libc::ENXIO) => CtlWrite::NoReader,
+                Some(libc::ENOENT | libc::ENOTDIR | libc::EISDIR) => CtlWrite::Missing,
+                _ => CtlWrite::Failed,
+            }
+        }
+    };
+    use std::os::fd::AsRawFd;
+    let fd = f.as_raw_fd();
+    unsafe {
+        let fl = libc::fcntl(fd, libc::F_GETFL);
+        if fl < 0 || libc::fcntl(fd, libc::F_SETFL, fl & !libc::O_NONBLOCK) < 0 {
+            return CtlWrite::Failed;
+        }
+    }
+    match f.write_all(cmd) {
+        Ok(()) => CtlWrite::Written,
+        Err(_) => CtlWrite::Failed,
     }
 }
 
@@ -580,15 +630,42 @@ mod svstatus_tests {
                 up: true,
                 wanted_up: true,
                 ready: true,
-                pid: 1234
+                pid: 1234,
+                down_done: false
             }
         );
-        // finishing: not up (s6-svstat's isup), still a pid
+        // finishing: not up (s6-svstat's isup), still a pid, not done
         let s = svstatus_unpack(&pack(99, 2));
-        assert!(!s.up && !s.wanted_up && !s.ready);
+        assert!(!s.up && !s.wanted_up && !s.ready && !s.down_done);
+        // finish done: down, ready flag set again
+        assert!(svstatus_unpack(&pack(0, 8)).down_done);
         // down, want up (a restart pending)
         let s = svstatus_unpack(&pack(0, 4 | 8));
         assert!(!s.up && s.wanted_up && !s.ready && s.pid == 0);
+    }
+
+    #[test]
+    fn s6_control_reports_as_s6_svc_write() {
+        let d = std::env::temp_dir().join(format!("s6ctl-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let fifo = d.join("control");
+        assert_eq!(s6_control(&fifo, b"d"), CtlWrite::Missing);
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert_eq!(s6_control(&fifo, b"d"), CtlWrite::NoReader);
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut r = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+            .unwrap();
+        assert_eq!(s6_control(&fifo, b"an"), CtlWrite::Written);
+        let mut got = String::new();
+        r.read_to_string(&mut got).unwrap();
+        assert_eq!(got, "an");
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
