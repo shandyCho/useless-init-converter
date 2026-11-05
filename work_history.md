@@ -12233,3 +12233,30 @@ So the same build gave 0.77–0.84 s once and 1.23–1.29 s once: part 185's run
 1. In progress (not committed): the rest of a stop's processes, `s6-svc -wD` and `s6-svunlink` done natively (control FIFOs, status file and lock polling); measure with part 184's sampler, then the suites.
 2. Then the runner's `finish`; app scopes in the logout's stop transaction.
 3. The owner: a release.
+
+## 2026-11-05, part 188: the native s6-svc -wD / s6-svunlink, and why it looked slower
+
+**The change (not committed):** in `dyn_remove`, `s6-svc -wD -d -T 120000` became `svc_down_wait()` (write `d` to supervise/control, then read supervise/status every 5 ms until down with finish done: not up and the ready flag set, which is when s6-supervise's `set_down_and_ready` announces `D`, read in s6 2.15's source), and `s6-svunlink -t 5000` became: remove the scan-directory link, write `an` to `.s6-svscan/control` (s6_svc_writectl), and the existing supervisor-lock poll, now up to 5 s. Helpers in `uinitconverter_base::util`: `s6_control()` (s6_svc_write's results: no reader, missing, failed) and `SvStatus::down_done`; anything unexpected falls back to the commands. Base tests pass (52, new `s6_control_reports_as_s6_svc_write`); the suites not run yet.
+
+**Why it looked slower:** 10 sampled reboots with it gave 0.78–0.88 s against e6b865b's 0.55–0.68 s (part 186). But the two sets ran in different VM setups (part 186: 3566af1's RPMs plus e6b865b's binaries copied in; here: e6b865b's RPMs plus the native binaries), so a direct comparison was run: both builds with the same per-phase timing lines (e6b865b's code built in a worktree), alternating in one VM, no sampler, each reboot only after tester's session was up:
+
+| Run | Total (s) | IBus done (its down) | Shell done (its down) | mean down / unlink / lock wait |
+|---|---|---|---|---|
+| native 1 | 0.930 | 0.230 (0.103) | 0.662 (0.383) | 0.061 / 0.001 / 0.011 |
+| old 1 | 0.994 | 0.313 (0.146) | 0.731 (0.413) | 0.086 / 0.018 / 0.000 |
+| native 2 | 0.913 | 0.241 (0.096) | 0.679 (0.420) | 0.063 / 0.001 / 0.012 |
+| old 2 | 1.047 | 0.308 (0.082) | 0.763 (0.425) | 0.084 / 0.020 / 0.000 |
+| native 3 | 0.812 | 0.287 (0.171) | 0.559 (0.260) | 0.062 / 0.001 / 0.009 |
+| old 3 | 5.886 | 0.287 (0.114) | 0.661 (0.364) | 0.074 / 0.018 / 0.000 |
+
+So side by side the native version is faster: 0.81–0.93 s against 0.99–1.05 s, a unit's stop 0.06 s down against 0.08 s, unlink 0.001 s against 0.02 s; old 3 hit s6-svunlink's 5 s limit (gcr-ssh-agent.service, part 184's item 5), none of the native runs hit its lock-wait limit. The "slower" came from comparing sets from two VM setups: the difference between setups (0.55–0.68 against 0.9–1.0 s for the same code) is larger than the change's effect, so comparisons have to alternate in one VM, as here.
+
+**Where a logout's time goes now** (native, run 1): the logout's stop ends at ~0.80 s (graphical-session-pre.target stopped, the leader quits, session-1.scope empty at 0.81 s), then the manager's exit (~0.15 s). On the path: IBus (After=gnome-session-initialized.target) down at ~0.23 s, then the shell gets SIGTERM and takes 0.26–0.42 s to exit. Stock: IBus gone at ~0.065 s, the shell's unit done at 0.36–0.38 s, exit.target at 0.41 s.
+
+**Seen:** in this VM, 4 of 12 reboots ended without tester's GNOME session after 5 min (`gnome-vm.sh wait`), with both builds; not looked into.
+
+### Next steps
+
+1. The native change: the suites (cargo test, user sandbox, system sandbox variants), then commit.
+2. The shell's 0.26–0.42 s exit and IBus's ~0.1 s after SIGTERM against stock; the missing GNOME session after some reboots in the VM.
+3. The owner: a release.
