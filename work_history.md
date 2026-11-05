@@ -12359,3 +12359,16 @@ The old runner's slow ones were gvfs-daemon each time (0.103-0.116) and IBus onc
 1. Owner: commit; more reboot loops with the recording script, to see whether the missing session still appears.
 2. Several alternating lifecycle runs, d5ce251 against e6b865b.
 3. The owner: a release.
+
+## 2026-11-06, part 194: 30 more recorded reboots with bd42ed2
+
+Kept VM (e6b865b's RPMs; bd42ed2's release initconvertd and runner copied in during the first s6 boot), then the recording loop of part 191, 30 times (`ssh 'sleep 20; sudo systemctl reboot'`, an SSH session open during the shutdown; on a failure it records logind's sessions, the GDM/gnome-shell processes, the journal and a screenshot).
+
+**Results:** tester's GNOME session came up in 30 of 30; nothing was recorded. Login-time start failures, read from every boot's journal (the known gnome-session-restart-dbus at the shutdown left out): none in the 30 boots with the fix. The first s6 boot, which still ran e6b865b's binaries (they were copied in 27 s into it), logged three: `systemd-journalctl.socket` (system manager), `org.gnome.SettingsDaemon.Power.service` and `user-dirs-update-gtk.service` (tester's manager), the same kind as part 192's good boot (ScreensaverProxy, Smartcard, spice-vdagent).
+
+**So far:** with the fix, 42 reboots (parts 193-194) with no missing session and no login-time start failure; before it, 1 missing session in 37 reboots (parts 191-192) and some such failures in each of the two boots read without it. That fits part 193's cause; it does not prove the missing session can't come back (about 8 of ~50 before part 191).
+
+### Next steps
+
+1. Several alternating lifecycle runs, d5ce251 against bd42ed2.
+2. The owner: a release.
