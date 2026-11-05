@@ -84,6 +84,12 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- `initconvertd` and the runner read a service's state from its
+  `supervise/status` instead of starting `s6-svstat` (several per stop, about
+  100 a second at a shutdown). With the CPU that freed, a GNOME reboot in the
+  VM stops tester's user manager in 0.55-0.68 s in 10 of 10 runs (before: 6 of
+  10 in 0.64-0.80 s, 4 stalled for 3-5.6 s while units the logout had stopped
+  were D-Bus activated again).
 - The s6 user manager no longer stops `graphical-session-pre.target` at a GNOME
   login as unneeded (`StopWhenUnneeded=` was checked between its start and
   that of `gnome-session-pre.target`, which requires it). GNOME's session

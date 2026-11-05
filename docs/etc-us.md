@@ -11,7 +11,7 @@ Everything that isn't needed for a first install: how it works, what is and isn'
               │ org.freedesktop.systemd1 (system bus + /run/systemd/private)
               ▼
    initconvertd ── jobs, unit state, enable/disable/preset, scopes
-              │ s6-rc -u/-d, s6-svc, s6-svstat
+              │ s6-rc -u/-d, s6-svc, supervise/status
               ▼
    s6-rc database  ◄── initconvert-gen reload: unit files → s6-rc store →
               │          repository set "current" (s6 set ...) → commit, install
@@ -760,7 +760,7 @@ and defaults). The most important keys:
 - `BUS`: `daemon` (default) or `broker`, the system bus of the s6 boot (`initconvert init --bus=`); read by the `dbus` s6 service's run script.
 - `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `uinitconverter-sysinit` too, as `initconvert init --resolved=no` does, or DNS breaks).
 - `INIT`: the init system units are translated for. Only `s6` exists yet; any other value stops every tool with a configuration error.
-- `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `initconvert init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. The shell scripts and s6 service definitions in `dist/` still run them by name.
+- `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `initconvert init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. A service's state is read from its `supervise/status` (s6 2.15's format) without starting `s6-svstat`, so `s6-svstat=` only applies when that file has another format. The shell scripts and s6 service definitions in `dist/` still run them by name.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
 - `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: what `user@UID.service` runs, `systemd` or `s6` (unset: `s6` on the s6 boot, `systemd` on a systemd boot) (see [the s6 user manager](#the-s6-user-manager-in-progress); `uinitconverter.user_manager=` on the kernel command line wins), the user units the s6 one leaves out, and the user units whose failure path hands a user over to `systemd --user` (default `gnome-session-shutdown.target gnome-session@*.target`).
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.

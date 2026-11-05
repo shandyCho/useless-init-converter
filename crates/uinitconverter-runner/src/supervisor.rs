@@ -8,6 +8,12 @@ use crate::tools;
 /// s6-svstat on the current directory (finish runs in the service dir):
 /// false once the service was told to stay down (s6-svc -d).
 pub fn wanted_up() -> bool {
+    use uinitconverter_base::util::{svstatus, SvRead};
+    match svstatus(std::path::Path::new(".")) {
+        SvRead::Status(s) => return s.wanted_up,
+        SvRead::NotSupervised => return true,
+        SvRead::Unknown => {}
+    }
     std::process::Command::new(tools::path("s6-svstat"))
         .args(["-o", "wantedup", "."])
         .output()
@@ -18,6 +24,12 @@ pub fn wanted_up() -> bool {
 /// Whether service ID is up (None: down or unknown) and, if so, the PID
 /// s6-supervise runs for it (None when it gives none).
 pub fn up_pid(cfg: &Config, id: &str) -> Option<Option<u32>> {
+    use uinitconverter_base::util::{svstatus, SvRead};
+    match svstatus(&cfg.live_dir.join("scandir").join(id)) {
+        SvRead::Status(s) if s.up => return Some((s.pid > 0).then_some(s.pid)),
+        SvRead::Status(_) | SvRead::NotSupervised => return None,
+        SvRead::Unknown => {}
+    }
     let out = std::process::Command::new(tools::path("s6-svstat"))
         .args(["-o", "up,pid"])
         .arg(cfg.live_dir.join("scandir").join(id))

@@ -12193,3 +12193,24 @@ Parts 182 and 184's changes committed (e88e713, 3566af1). Commits not pushed.
 ### Next steps
 
 As in part 184: the per-unit stop cost under load, app scopes in the logout's stop transaction, the s6-svunlink 5 s limit; the owner: a release.
+
+## 2026-11-05, part 186: the per-unit stop cost under load: s6-svstat
+
+**Measured** (kept VM, 3566af1's RPMs, perf installed; samplers in the root cgroup as in part 184):
+- `perf record -a` over the first 1.5 s after /run/uinitconverter/shutting-down: 2,820 samples of a possible ~6,000 (4 CPUs). initconvert-runner 24% (mostly kernel time: path lookups, open/statx/readlink of unit files, exec and exit), s6-svlisten 7%, s6-svc 5%, s6-ftrigrd 5%, s6-svstat 4%, finish 3%, s6-supervise 3%.
+- `perf record -e sched:sched_process_exec` over 1 s of a stalled run: 366 execs: s6-svstat 96, s6-svc 69, s6-ftrigrd 69, s6-svunlink 34, s6-svlisten 34, initconvert-runner 29, finish 26. (A perf.data written at a shutdown is only readable with `-B --no-buildid-cache` and a window under ~1 s; otherwise its header isn't finished before /var goes read-only.)
+- Every longrun stop ran s6-svstat in dyn_remove and on each 20 ms poll of signal_rest_at_stop, and the runner's `finish` ran it once (`supervisor::wanted_up`).
+
+**Change:** `uinitconverter_base::util::svstatus(dir)`: `NotSupervised` when no one holds `supervise/lock` (s6-svstat's `s6_svc_ok`), else the 35-byte `supervise/status` decoded as s6 2.15's `s6_svstatus_unpack` (pid big-endian at 24, flags at 34: 2 finishing, 4 want up, 8 ready; up = pid and not finishing, ready = pid and the flag, as s6-svstat prints them; read from s6's tarball, nothing changed there); `Unknown` for another size, and then the callers start s6-svstat as before. Used by the daemon's `svstat()` (so svstat_cached, is_up, signal_rest_at_stop, dyn_remove…) and the runner's `wanted_up()` and `up_pid()`. `wake_socket_wait` still runs s6-svstat (it needs `updownfor`). Docs pair (the diagram; TOOLS: `s6-svstat=` only for the fallback), CHANGELOG pair: Fixed.
+
+**Results:** with it no s6-svstat starts during a shutdown. 10 reboots, part 184's sampler: 0.66 0.64 0.55 0.61 0.58 0.57 0.68 0.57 0.68 0.61 s, no stall (3566af1: 0.70 0.71 0.73 3.13 2.98 3.48 5.64 0.80 0.64 0.67; stock 0.46). cargo test 140 (new: svstatus_unpack_matches_s6_svstat, svstatus_without_supervisor_or_with_another_format); user sandbox 118/118; system sandbox 371/371, SANDBOX_JOURNAL=no 378/378, SANDBOX_FDSTORE=no 359/359.
+
+### Current state
+
+This change in the tree, not committed. 3566af1 and earlier not pushed.
+
+### Next steps
+
+1. The rest of a stop's processes: `s6-svc -wD` (with s6-svlisten and s6-ftrigrd), `s6-svunlink` (another pair), the runner's `finish`; lifecycle with this change.
+2. App scopes in the logout's stop transaction; the s6-svunlink 5 s limit.
+3. The owner: a release.

@@ -66,6 +66,10 @@
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
+- `initconvertd`와 러너가 `s6-svstat`을 실행하지 않고(정지마다 여러 번, 종료 때 초당 100번쯤) 서비스의
+  `supervise/status`에서 상태를 읽습니다. 그만큼 CPU가 남아, VM에서 GNOME 재부팅 때 tester의 사용자 매니저가
+  10번 모두 0.55-0.68초에 멈춥니다(이전: 10번 중 6번 0.64-0.80초, 4번은 로그아웃이 멈춘 유닛이 D-Bus로 다시
+  활성화되며 3-5.6초 걸림).
 - s6 사용자 매니저가 GNOME 로그인 때 `graphical-session-pre.target`을 불필요하다며 멈추지 않습니다.
   (`StopWhenUnneeded=`를 이 타깃의 시작과, 이를 요구하는 `gnome-session-pre.target`의 시작 사이에
   확인했습니다.) GNOME의 세션 리더는 로그아웃 때 이 타깃을 기다리는데, 이미 멈춰 있어 곧바로 끝났고,

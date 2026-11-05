@@ -11,7 +11,7 @@
               │ org.freedesktop.systemd1 (시스템 버스 + /run/systemd/private)
               ▼
    initconvertd ── 작업(job), 유닛 상태, enable/disable/preset, scope
-              │ s6-rc -u/-d, s6-svc, s6-svstat
+              │ s6-rc -u/-d, s6-svc, supervise/status
               ▼
    s6-rc 데이터베이스  ◄── initconvert-gen reload: 유닛 파일 → s6-rc 스토어 →
               │          저장소 세트 "current" (s6 set ...) → 커밋, 설치
@@ -647,7 +647,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `BUS`: s6 부팅의 시스템 버스, `daemon`(기본값) 또는 `broker`(`initconvert init --bus=`). `dbus` s6 서비스의 run 스크립트가 읽습니다.
 - `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`initconvert init --resolved=no`처럼 `resolv` s6 서비스도 `uinitconverter-sysinit`에 넣어야 DNS가 동작합니다).
 - `INIT`: 유닛을 변환할 대상 init 시스템. 지금은 `s6`만 있고, 다른 값이면 모든 도구가 설정 오류로 멈춥니다.
-- `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `initconvert init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
+- `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `initconvert init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. 서비스 상태는 `s6-svstat`을 실행하지 않고 `supervise/status`(s6 2.15의 형식)에서 읽으므로, `s6-svstat=`은 그 파일의 형식이 다를 때만 쓰입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
 - `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: `user@UID.service`가 실행할 것, `systemd` 또는 `s6`(없으면 s6 부팅에서는 `s6`, systemd 부팅에서는 `systemd`)([s6 사용자 매니저](#s6-사용자-매니저-진행-중) 참고. 커널 명령줄의 `uinitconverter.user_manager=`가 우선), s6 쪽이 실행하지 않을 사용자 유닛, 그리고 실패 경로가 사용자를 `systemd --user`로 넘기는 사용자 유닛(기본값 `gnome-session-shutdown.target gnome-session@*.target`).
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 요청하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.

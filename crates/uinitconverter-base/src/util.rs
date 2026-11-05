@@ -57,6 +57,54 @@ pub fn lock_held(path: &Path) -> bool {
     r == 0 && fl.l_type != libc::F_UNLCK as libc::c_short
 }
 
+/// A service's state as s6-supervise records it in `DIR/supervise/status`
+/// (s6's s6_svstatus_t: two TAI64N stamps, the pid as 8 bytes big-endian
+/// at 24, the wait status at 32, flags at 34: 2 finishing, 4 want up,
+/// 8 ready), read as s6-svstat reads it, without starting a process (a
+/// shutdown started ~100 s6-svstat a second, work_history part 186).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SvStatus {
+    /// s6-svstat's `up`: a pid, not finishing.
+    pub up: bool,
+    pub wanted_up: bool,
+    /// s6-svstat's `ready`: a pid and the ready flag.
+    pub ready: bool,
+    pub pid: u32,
+}
+
+pub const S6_SVSTATUS_SIZE: usize = 35;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SvRead {
+    /// No s6-supervise holds DIR/supervise/lock (s6-svstat fails then).
+    NotSupervised,
+    Status(SvStatus),
+    /// A status file of another size (another s6 version): ask s6-svstat.
+    Unknown,
+}
+
+pub fn svstatus(dir: &Path) -> SvRead {
+    if !lock_held(&dir.join("supervise/lock")) {
+        return SvRead::NotSupervised;
+    }
+    match fs::read(dir.join("supervise/status")) {
+        Ok(b) if b.len() == S6_SVSTATUS_SIZE => SvRead::Status(svstatus_unpack(&b)),
+        _ => SvRead::Unknown,
+    }
+}
+
+pub fn svstatus_unpack(b: &[u8]) -> SvStatus {
+    let pid = u64::from_be_bytes(b[24..32].try_into().unwrap());
+    let flags = b[34];
+    let pid = u32::try_from(pid).unwrap_or(0);
+    SvStatus {
+        up: pid != 0 && flags & 2 == 0,
+        wanted_up: flags & 4 != 0,
+        ready: pid != 0 && flags & 8 != 0,
+        pid,
+    }
+}
+
 pub fn read_trimmed(path: &Path) -> Option<String> {
     fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }
@@ -509,5 +557,80 @@ pub fn sd_notify(msg: &str) {
     if let Err(e) = sock.send_to_addr(msg.as_bytes(), &addr) {
         let first = msg.lines().next().unwrap_or_default();
         eprintln!("sd_notify {first} to {path}: {e}");
+    }
+}
+
+#[cfg(test)]
+mod svstatus_tests {
+    use super::*;
+
+    fn pack(pid: u64, flags: u8) -> Vec<u8> {
+        let mut b = vec![0u8; S6_SVSTATUS_SIZE];
+        b[24..32].copy_from_slice(&pid.to_be_bytes());
+        b[34] = flags;
+        b
+    }
+
+    #[test]
+    fn svstatus_unpack_matches_s6_svstat() {
+        // up, want up, ready
+        assert_eq!(
+            svstatus_unpack(&pack(1234, 4 | 8)),
+            SvStatus {
+                up: true,
+                wanted_up: true,
+                ready: true,
+                pid: 1234
+            }
+        );
+        // finishing: not up (s6-svstat's isup), still a pid
+        let s = svstatus_unpack(&pack(99, 2));
+        assert!(!s.up && !s.wanted_up && !s.ready);
+        // down, want up (a restart pending)
+        let s = svstatus_unpack(&pack(0, 4 | 8));
+        assert!(!s.up && s.wanted_up && !s.ready && s.pid == 0);
+    }
+
+    #[test]
+    fn svstatus_without_supervisor_or_with_another_format() {
+        let d = std::env::temp_dir().join(format!("svstatus-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("supervise")).unwrap();
+        fs::write(d.join("supervise/status"), pack(1, 4)).unwrap();
+        // No one holds the lock.
+        assert_eq!(svstatus(&d), SvRead::NotSupervised);
+        // Hold it as s6-supervise does (a write lock on supervise/lock).
+        let f = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(d.join("supervise/lock"))
+            .unwrap();
+        use std::os::fd::AsRawFd;
+        let mut fl: libc::flock = unsafe { std::mem::zeroed() };
+        fl.l_type = libc::F_WRLCK as libc::c_short;
+        fl.l_whence = libc::SEEK_SET as libc::c_short;
+        assert_eq!(unsafe { libc::fcntl(f.as_raw_fd(), libc::F_SETLK, &fl) }, 0);
+        // The lock must be held by another process for F_GETLK to see it.
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let r = match svstatus(&d) {
+                SvRead::Status(s) if s.up && s.wanted_up && s.pid == 1 => {
+                    fs::write(d.join("supervise/status"), [0u8; 20]).unwrap();
+                    if svstatus(&d) == SvRead::Unknown {
+                        0
+                    } else {
+                        2
+                    }
+                }
+                _ => 1,
+            };
+            unsafe { libc::_exit(r) };
+        }
+        let mut st = 0;
+        unsafe { libc::waitpid(pid, &mut st, 0) };
+        assert_eq!(libc::WEXITSTATUS(st), 0);
+        let _ = fs::remove_dir_all(&d);
     }
 }

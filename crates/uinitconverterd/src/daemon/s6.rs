@@ -296,6 +296,18 @@ impl Daemon {
     }
 
     pub(super) async fn svstat(&self, atom: &str) -> Option<SvStat> {
+        match crate::util::svstatus(&self.scandir(atom)) {
+            crate::util::SvRead::NotSupervised => return None,
+            crate::util::SvRead::Status(s) => {
+                return Some(SvStat {
+                    up: s.up,
+                    wanted_up: s.wanted_up,
+                    ready: s.ready,
+                    pid: s.pid,
+                })
+            }
+            crate::util::SvRead::Unknown => {}
+        }
         let out = Command::new(tools::path("s6-svstat"))
             .args(["-o", "up,wantedup,ready,pid"])
             .arg(self.scandir(atom))
