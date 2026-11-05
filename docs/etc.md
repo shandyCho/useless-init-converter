@@ -531,7 +531,8 @@ systemd-oomd에 알리고(`io.systemd.oom.ReportManagedOOMCGroups`, `systemd --u
 남는 유닛 없음), 그리터에서 다시 로그인, 두 세션이 함께 도는 사용자 전환, RPM 업데이트 도우미
 (`systemctl --user -M UID@`의 marker와 `enqueue-marked`), linger 사용자, 재부팅(사용자 매니저마다 1초쯤에
 멈춤). 정지는 systemd처럼 트랜잭션입니다. 그 유닛과 함께 멈춰야 하는 것(그 유닛에 대한 `Requires=`,
-`BindsTo=`, `Requisite=`, 그리고 `PartOf=`)을 `After=`/`Before=` 순서의 단계로 나눠 함께 멈춥니다. 종료
+`BindsTo=`, `Requisite=`, 그리고 `PartOf=`)을 함께 멈추며, 각 유닛은 `After=`/`Before=`로 그 뒤에 오는
+유닛들이 멈추는 대로 바로 멈춥니다. 종료
 중인 사용자 매니저는 아무것도 더 시작하지 않습니다. `systemctl --user exit`(`SuccessAction=exit`)로
 끝나고, 전원 동작은 `systemd --user`처럼 거부합니다. `CollectMode=inactive-or-failed`인 임시
 유닛(dbus-broker의 것)은 실패하면 내려갑니다.

@@ -949,10 +949,10 @@ impl Daemon {
             .filter(|id| !bus_units.contains(id))
             .cloned()
             .collect();
-        // Everything but the bus as one set, in waves by After=/Before=
-        // (each wave at once, as systemd stops a whole transaction; one at
-        // a time, a greeter's 40 units took 12 s at a reboot, systemd
-        // --user 0.1 s). One set, not a transaction per unit: overlapping
+        // Everything but the bus as one set, ordered by After=/Before=
+        // (each unit once the ones ordered after it are down, the rest at
+        // once, as systemd stops a whole transaction; one at a time, a
+        // greeter's 40 units took 12 s at a reboot, systemd --user 0.1 s). One set, not a transaction per unit: overlapping
         // ones stopped a socket under its service's own stop, which then
         // waited 5 s. No unit locks: the manager is exiting, so nothing
         // starts any more (check_job, dyn_start_one), and taking them all

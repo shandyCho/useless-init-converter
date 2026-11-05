@@ -25,29 +25,55 @@ fn dir_kind(key: &str) -> Option<&'static str> {
 impl Daemon {
     /// Known units whose `key=` names `id` (any of its names).
     pub(super) fn reverse(&self, id: &str, key: &str) -> Vec<(String, Unit)> {
+        self.reverse_in(&self.reverse_index(&[key]), 0, id)
+    }
+
+    /// The loaded known units, each with the names that its `keys[k]=`
+    /// (and that key's `.wants`/`.requires` entries) refers to. Built once
+    /// per stop transaction: reverse() for each unit of the set and each
+    /// key read every known unit's directories again, 0.5 s before a
+    /// logout's first signal (work_history part 182).
+    fn reverse_index(&self, keys: &[&str]) -> Vec<(String, Unit, Vec<BTreeSet<String>>)> {
+        let ld = Loader::new(&self.cfg);
+        let mut seen = BTreeSet::new();
+        let mut out = Vec::new();
+        for n in self.known_units() {
+            let (uid, u) = self.load_unit(&n);
+            if !u.is_loaded() || !seen.insert(uid.clone()) {
+                continue;
+            }
+            let refs = keys
+                .iter()
+                .map(|key| {
+                    let mut r: BTreeSet<String> = u.deps(key).into_iter().collect();
+                    if let Some(kind) = dir_kind(key) {
+                        r.extend(ld.dir_deps(&u, kind));
+                    }
+                    r
+                })
+                .collect();
+            out.push((uid, u, refs));
+        }
+        out
+    }
+
+    /// The units of `index` whose `keys[k]=` names `id` (any of its names).
+    fn reverse_in(
+        &self,
+        index: &[(String, Unit, Vec<BTreeSet<String>>)],
+        k: usize,
+        id: &str,
+    ) -> Vec<(String, Unit)> {
         let (_, target) = self.load_unit(id);
         let mut names: BTreeSet<String> = target.names.iter().cloned().collect();
         names.insert(id.to_string());
-        let ld = Loader::new(&self.cfg);
-        let mut out = Vec::new();
-        let mut seen = BTreeSet::new();
-        for n in self.known_units() {
-            if !seen.insert(n.clone()) || names.contains(&n) {
-                continue;
-            }
-            let (uid, u) = self.load_unit(&n);
-            if names.contains(&uid) || !u.is_loaded() {
-                continue;
-            }
-            let mut refs = u.deps(key);
-            if let Some(kind) = dir_kind(key) {
-                refs.extend(ld.dir_deps(&u, kind));
-            }
-            if refs.iter().any(|r| names.contains(r)) {
-                out.push((uid, u));
-            }
-        }
-        out
+        index
+            .iter()
+            .filter(|(uid, _, refs)| {
+                !names.contains(uid) && refs[k].iter().any(|r| names.contains(r))
+            })
+            .map(|(uid, u, _)| (uid.clone(), u.clone()))
+            .collect()
     }
 
     /// A start pulls in the targets it requires or wants: those count as
@@ -276,9 +302,9 @@ impl Daemon {
 
     /// A user manager's stop, as systemd's stop transaction: the unit and,
     /// transitively, the running units that must go with it (Requires=,
-    /// BindsTo=, Requisite= on it, and PartOf=), stopped together in waves:
-    /// a unit ordered after another (After=/Before=) stops first, the rest
-    /// of a wave at once. One at a time and only the needing units first,
+    /// BindsTo=, Requisite= on it, and PartOf=), stopped together: a unit
+    /// ordered after another (After=/Before=) stops first, the rest at
+    /// once (stop_in_waves). One at a time and only the needing units first,
     /// a logout took seconds: gnome-shell ended while units PartOf=
     /// graphical-session.target (xdg-desktop-portal-gtk) still ran, and
     /// they failed on the closed display; units PartOf= a dependent
@@ -286,12 +312,14 @@ impl Daemon {
     pub(super) async fn user_stop_transaction(&self, id: &str, unit: &Unit) -> &'static str {
         let mut set: Vec<(String, Unit)> = vec![(id.to_string(), unit.clone())];
         let mut seen: BTreeSet<String> = BTreeSet::from([id.to_string()]);
+        const KEYS: [&str; 4] = ["Requires", "BindsTo", "Requisite", "PartOf"];
+        let index = self.reverse_index(&KEYS);
         let mut i = 0;
         while i < set.len() {
             let cur = set[i].0.clone();
             i += 1;
-            for key in ["Requires", "BindsTo", "Requisite", "PartOf"] {
-                for (d, du) in self.reverse(&cur, key) {
+            for k in 0..KEYS.len() {
+                for (d, du) in self.reverse_in(&index, k, &cur) {
                     if seen.contains(&d) || self.dynamic_kind(&d).is_none() {
                         continue;
                     }
@@ -309,9 +337,9 @@ impl Daemon {
         self.stop_in_waves(set, Some(id)).await.unwrap_or("done")
     }
 
-    /// Stop `set` (each unit alone, dyn_stop_alone) in waves: a unit waits
-    /// while a unit of the set ordered after it (After=/Before=) is still
-    /// to stop; each wave at once; an ordering cycle stops the rest
+    /// Stop `set` (each unit alone, dyn_stop_alone): a unit waits while a
+    /// unit of the set ordered after it (After=/Before=) is still to stop or
+    /// stopping, the others at once; an ordering cycle stops the rest
     /// together. Returns `top`'s result.
     pub(super) async fn stop_in_waves(
         &self,
@@ -336,48 +364,52 @@ impl Daemon {
                 (n.clone(), a)
             })
             .collect();
+        // Each unit as soon as no unit ordered after it is still pending or
+        // stopping, as systemd's jobs; in whole waves, one slow unit held
+        // back every later one (gnome-shell's stop came 0.5 s after the
+        // services it uses had gone, work_history part 182).
+        use futures_util::stream::{FuturesUnordered, StreamExt};
         let mut pending = set;
+        let mut stopping: BTreeSet<String> = BTreeSet::new();
+        let mut running = FuturesUnordered::new();
         let mut result = None;
-        while !pending.is_empty() {
-            // A unit waits while a pending unit is ordered after it.
-            let ready: Vec<usize> = (0..pending.len())
-                .filter(|&k| {
-                    let n = &pending[k].0;
-                    !pending
-                        .iter()
-                        .any(|(m, _)| m != n && after.get(m).is_some_and(|a| a.contains(n)))
-                })
-                .collect();
-            let wave: Vec<usize> = if ready.is_empty() {
-                (0..pending.len()).collect()
-            } else {
-                ready
+        loop {
+            let blocked = |n: &String, pending: &[(String, Unit)], stopping: &BTreeSet<String>| {
+                pending
+                    .iter()
+                    .map(|(m, _)| m)
+                    .chain(stopping.iter())
+                    .any(|m| m != n && after.get(m).is_some_and(|a| a.contains(n)))
             };
-            let t = std::time::Instant::now();
-            let results = futures_util::future::join_all(
-                wave.iter()
-                    .map(|&k| self.dyn_stop_alone(&pending[k].0, &pending[k].1)),
-            )
-            .await;
-            if t.elapsed() >= std::time::Duration::from_secs(1) {
-                let names: Vec<&str> = wave.iter().map(|&k| pending[k].0.as_str()).collect();
+            let mut ready: Vec<usize> = (0..pending.len())
+                .filter(|&k| !blocked(&pending[k].0, &pending, &stopping))
+                .collect();
+            if ready.is_empty() && running.is_empty() {
+                // An ordering cycle: the rest together.
+                ready = (0..pending.len()).collect();
+            }
+            for k in ready.into_iter().rev() {
+                let (n, u) = pending.remove(k);
+                stopping.insert(n.clone());
+                running.push(async move {
+                    let t = std::time::Instant::now();
+                    let r = self.dyn_stop_alone(&n, &u).await;
+                    (n, r, t.elapsed())
+                });
+            }
+            let Some((n, r, took)) = running.next().await else {
+                break;
+            };
+            if took >= std::time::Duration::from_secs(1) {
                 eprintln!(
-                    "initconvertd: stopping {} took {:.1} s",
-                    names.join(" "),
-                    t.elapsed().as_secs_f64()
+                    "initconvertd: stopping {n} took {:.1} s",
+                    took.as_secs_f64()
                 );
             }
-            for (&k, r) in wave.iter().zip(results) {
-                if Some(pending[k].0.as_str()) == top {
-                    result = Some(r);
-                }
+            if Some(n.as_str()) == top {
+                result = Some(r);
             }
-            let mut k = 0;
-            pending.retain(|_| {
-                let keep = !wave.contains(&k);
-                k += 1;
-                keep
-            });
+            stopping.remove(&n);
         }
         result
     }

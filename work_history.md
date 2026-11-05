@@ -12092,3 +12092,35 @@ Phases 0 to 5 done, in the VM and on the owner's machine. Commits not pushed.
 1. The ~0.5 s left per user at a reboot against stock (part 168).
 2. Optional: initialize GRUB's env block in `gnome-vm.sh provision` (part 180).
 3. The owner: a release (0.2.2 is 58+ commits behind; CHANGELOG pair under Unreleased).
+
+## 2026-11-05, part 182: the ~0.5 s per user at a reboot (part 168's rest)
+
+**Measured** in a kept VM on the s6 boot (`VM_KEEP=yes tests/vm-s6-boot.sh … default`, then reboots by hand; from `shutdown starts` to tester's `session closed` in the runner; the same measurement for both managers, USER_MANAGER=systemd for stock). Stock systemd --user: 0.63–0.66 s (3 reboots), gnome-shell's "Shutting down" at 0.20 s. Ours (6a3b308's RPMs): 0.79–0.90 s when nothing stalled, but 4 of 6 took 2.5–4.0 s; the shell got its SIGTERM only at 0.64–0.75 s. (The first measured reboot also had my own SSH polling in it; the reboot script waits 15 s before polling now.)
+
+**Causes, with a temporary timing build (not committed):**
+1. `user_stop_transaction` (relations.rs) built the stop set of graphical-session.target (57 units) in 0.51–0.56 s before any signal: `reverse()` per unit and per key (Requires, BindsTo, Requisite, PartOf) went over every known unit and read its `.requires` dirs again (0.50–0.55 s of it; `is_up` 0.003–0.011 s).
+2. `stop_in_waves` waited for a whole wave before the next: one slow unit (a portal at 0.2–0.3 s under load) held back every later one, and the shell is at the end of a chain (portals → graphical-session.target → gnome-session.target → gsd targets → gsd services → gnome-session-initialized.target → shell).
+
+**Change (relations.rs):** `reverse_index()` reads the loaded known units' references for the transaction's keys once, `reverse_in()` looks them up; `reverse()` is the two for one key. `stop_in_waves` now starts each unit as soon as no unit ordered after it is pending or stopping (FuturesUnordered), the slow-stop line per unit; an ordering cycle still stops the rest together. The manager's exit (dynamic.rs, one set) uses it too. Docs pair (the stop transaction), CHANGELOG pair: Fixed.
+
+**Results (VM, release binary copied over /usr/libexec/uinitconverter/initconvertd):** set built in 0.013–0.019 s. 11 reboots with both changes: 0.66–0.83 s in 10, one at 5.64 s (below). Then `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle` with RPMs from this tree: 72/72; the reboot with three users at once: greeter 1.22 s, tester 1.23 s, alice 1.28 s (part 168: 0.99/1.01/1.06 s; one run each, and three managers stopping together compete for 4 CPUs, so this needs more runs before it says anything). cargo test 138; user sandbox 118/118; system sandbox 371/371.
+
+**Tried and reverted:** a second stop of a unit already being stopped (the logout's transaction and the manager's exit overlap: 24 of 66 units were removed twice) waiting for the first. With it all 5 reboots were slow (1.7–2.3 s, gnome-session-manager@ 1.3–1.4 s in 3); without it 5 of 6 were fast. Not understood; left out.
+
+**Seen, not ours to fix or not found yet (each in some of our runs, none in the 6 stock ones so far):**
+- gnome-shell hangs after "Shutting down GNOME Shell" until its TimeoutStopSec=5 (the 5.64 s run).
+- gnome-session-service takes 1.3–1.6 s to exit (its ExecStopPost `gnome-session-ctl --shutdown` comes after).
+- xdg-desktop-portal-gtk with a new PID during the shutdown, then a 2.4 s stop; what started it is unknown (starts through jobs are refused once the manager is exiting, so likely before SIGTERM or outside the jobs).
+- gnome-shell SIGSEGV at exit in `shell_camera_monitor_finalize` → `g_source_remove` (2 cores, both in slow runs): a GNOME bug, likely reached because services it uses go away before its own SIGTERM.
+- Stops take 25–33 ms alone but 0.15–0.33 s each under the shutdown's load (~60 at once on 4 CPUs: runner finish, s6-svc, s6-svunlink per unit).
+
+### Current state
+
+Phases 0 to 5 done; this change in the tree, not committed. Commits not pushed.
+
+### Next steps
+
+1. More `lifecycle` runs to compare the three-user reboot with part 168's.
+2. The GNOME stalls above: a gdb sampler at a hang (part 167's PRE_REBOOT_SCRIPT), stock runs for comparison.
+3. Optional: initialize GRUB's env block in `gnome-vm.sh provision` (part 180).
+4. The owner: a release.

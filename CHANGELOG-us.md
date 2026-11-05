@@ -84,6 +84,13 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- A user manager's stop at a logout or reboot sends the first signals about
+  0.5 s sooner: the units that must stop with the unit are found from one
+  read of the known units (it read every unit's `.requires` directories again
+  per unit and dependency), and each unit stops as soon as the units ordered
+  after it are down, not in whole waves held back by their slowest unit. In
+  the VM a reboot stops tester's manager in about 0.7 s (`systemd --user`
+  0.65 s).
 - `GetAll` replies list the properties in systemd's order (they came in hash
   order), so `systemctl show -p A,B` prints them as on systemd and scripts that
   read several values with `--value` get the same order.

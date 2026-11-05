@@ -623,8 +623,8 @@ greeter, a user switch with two sessions at once, the RPM update helper
 (`systemctl --user -M UID@` markers and `enqueue-marked`), lingering users,
 and a reboot (each user manager stops in about a second). A stop is a
 transaction as in systemd: the unit and what must go with it (`Requires=`,
-`BindsTo=`, `Requisite=` on it, `PartOf=`), stopped together in waves by
-`After=`/`Before=`. An exiting user manager starts nothing more.
+`BindsTo=`, `Requisite=` on it, `PartOf=`), stopped together: each unit as
+soon as the units ordered after it (`After=`/`Before=`) are down. An exiting user manager starts nothing more.
 `systemctl --user exit` (`SuccessAction=exit`) ends it; power actions are
 refused, as by `systemd --user`. Transient units with
 `CollectMode=inactive-or-failed` (dbus-broker's) are unloaded when they
