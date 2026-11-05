@@ -893,11 +893,14 @@ impl Runner {
             let Some(dir) = self.cgroup_dir() else { return };
             let me = std::process::id();
             if cgroup::kill_all(&dir, libc::SIGTERM, me) > 0 {
-                for _ in 0..20 {
-                    if util::cgroup_pids(&dir).is_empty() {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                // Helpers left behind (ibus-daemon's, gvfsd's) usually exit
+                // within milliseconds; a first look after a full 100 ms
+                // made such a finish take 0.1 s instead of ~10 ms.
+                let limit = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                let mut step = std::time::Duration::from_millis(5);
+                while !util::cgroup_pids(&dir).is_empty() && std::time::Instant::now() < limit {
+                    std::thread::sleep(step);
+                    step = (step * 2).min(std::time::Duration::from_millis(100));
                 }
                 if self.unit.get_bool("Service", "SendSIGKILL", true) {
                     cgroup::kill_all(&dir, libc::SIGKILL, me);

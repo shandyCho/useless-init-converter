@@ -12303,3 +12303,39 @@ Kept VM (e6b865b's RPMs, d5ce251's binaries copied in, plus a temporary timing l
 1. Optional: a cheaper `finish` (part 190).
 2. Several alternating lifecycle runs, d5ce251 against e6b865b.
 3. The owner: a release.
+
+## 2026-11-06, part 192: a cheaper `finish`, and one missing GNOME session caught
+
+**What a `finish` costs alone** (release build on the host, `initconvert-runner finish` of org.freedesktop.IBus.session.GNOME.service against /usr/lib/systemd/user, 200 runs): 2.2 ms; through `sh -c exec` as the generated script does, 2.95 ms; `initconvert-runner --version` 1.2 ms and `/bin/true` 0.7 ms. With a temporary timing line: config 0.03-0.1 ms, `Runner::new` (unit load, credentials, environment) 0.15-0.35 ms, the finish itself ~0.5 ms. So about 1 ms of work and 0.75 ms for the `sh` exec; not where part 190's 0.1 s came from.
+
+**Where the 0.1 s came from:** `cleanup()` (KillMode=control-group/mixed). When processes are left in the unit's cgroup after the main process (ibus-daemon's ibus-dconf/ibus-engine-simple/..., gvfsd's mount daemons; the daemon's `signal_rest_at_stop` has already sent them SIGTERM), it signals them and then looked again only after a 100 ms sleep. They are gone within milliseconds, so such a finish took 0.10-0.12 s, and ~10 ms when they had already gone. That is the "now and then ~0.1 s" of part 190.
+
+**Change:** look again after 5 ms, doubling up to 100 ms, with the same 2 s limit before SIGKILL (runner.rs `cleanup`). CHANGELOG pair: Fixed. The `sh` wrapper and the unit load are left as they are.
+
+**VM** (kept VM, e6b865b's RPMs, d5ce251's initconvertd with a temporary timing line in `svc_down_wait`, not committed: per unit the time from the process gone to `D`, its finish done; the runner alternated, old then new, 3 reboots each). Finishes of the first 1.5 s of the shutdown, all managers:
+
+| run | end (tester's session closed) | IBus finish | finishes: n, mean, max, over 50 ms |
+|---|---|---|---|
+| old 1 | 0.615 | 0.041 | 67, 0.018, 0.113, 1 |
+| new 1 | 0.614 | 0.012 | 67, 0.015, 0.046, 0 |
+| old 2 | 0.669 | 0.100 | 67, 0.018, 0.103, 2 |
+| new 2 | 0.575 | 0.028 | 65, 0.015, 0.043, 0 |
+| old 3 | 0.635 | 0.021 | 65, 0.017, 0.116, 1 |
+| new 3 | 0.649 | 0.023 | 67, 0.014, 0.046, 0 |
+
+The old runner's slow ones were gvfs-daemon each time (0.103-0.116) and IBus once (0.100). The new one had none over 50 ms. The total moves within its usual spread (0.575-0.649 new, 0.615-0.669 old); only old 2, where IBus sat on the chain to the shell, shows the 0.1 s.
+
+**The missing GNOME session (parts 188, 191), caught once.** In this run one boot (the boot before "old 2"'s measured reboot, with the old runner) left `gnome-vm.sh wait` failing for 5 min; the VM was kept, and that boot's journal read afterwards (saved in the scratch directory, not in the repo). What happened:
+- 5.631 logind: New session 1 (tester, wayland). 5.655 gdm-autologin's PAM session is open, so `pam_systemd`'s CreateSession had already returned, 24 ms after the session was made.
+- 5.704/5.706 only then the runner's `user@1000` opens its own PAM session (class manager); 5.825 tester's manager is ready, 6.054 on its bus.
+- 5.728 gdm-wayland-session found no user bus and started its own dbus-daemon; there `org.freedesktop.systemd1` could not be activated. 6.277 gnome-session-init: "Name org.freedesktop.systemd1 does not exist" for the environment upload and the start of gnome-session@gnome.target, then dumped core. 6.338 GDM: "Session never registered, failing"; session 1 logged out, and GDM showed a greeter (whose own manager then fell back to systemd --user after gnome-session-monitor.service and the greeter shell failed to start, and a second greeter followed). tester had no graphical session, which is what `wait` looks for.
+- In the good boots around it, the runner's PAM session opens first and GDM's 0.25-0.3 s later (boot -5: logind 5.540, runner 5.787, GDM 6.068), since logind's CreateSession reply waits for user@UID's start job. In the failing boot that reply did not wait. The system manager logged nothing about user@1000 there; the same "starting it beside" lines (uresourced) appear in good boots too.
+- **Not known yet:** why logind did not wait for user@1000 that once (no StartUnit/job from logind, a job reported done early, or a JobRemoved logind matched to the wrong job). systemd-262-3.fc45 in the VM. Part 191's "not known what the earlier failures were" still stands for those; this one is a GNOME session started before its user manager.
+
+**Tests:** cargo test 141 passed; user sandbox 118/0; system sandbox plain 371/0, SANDBOX_JOURNAL=no 378/0, SANDBOX_FDSTORE=no 359/0.
+
+### Next steps
+
+1. The missing session: why logind's CreateSession returned before user@UID was up in that boot. Watch the system bus at boot (StartUnit of user@UID from logind, its reply and JobRemoved) in a reboot loop until it shows again, and read logind's `session_send_create_reply` for what it waits on in systemd 262.
+2. Several alternating lifecycle runs, d5ce251 against e6b865b.
+3. The owner: a release.

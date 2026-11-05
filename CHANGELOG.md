@@ -66,6 +66,10 @@
   없으면 `USER_MANAGER=`와 상관없이 `user@`는 `systemd --user`를 씁니다.
 
 ### 수정
+- 주 프로세스가 cgroup에 도우미(ibus-daemon의, gvfsd의)를 남기고 끝날 때 서비스의 `finish`가 0.1초 걸리지
+  않습니다. 러너가 이들에 시그널을 보낸 뒤 100ms 뒤에야 다시 확인했는데, 이제 5ms 뒤부터 두 배씩 100ms까지
+  늘려 확인하며 한도는 그대로 2초입니다. VM의 재부팅에서 tester 유닛의 `finish`가 50ms를 넘은 적이 없습니다
+  (이전: 재부팅마다 1-2번, 0.10-0.12초).
 - 동적 유닛(사용자 매니저의 모든 유닛)을 멈출 때 `s6-svc -wD`와 `s6-svunlink`(그리고 이들의 `s6-svlisten`,
   `s6-ftrigrd`, 정지마다 프로세스 다섯 개쯤)를 실행하지 않습니다. `initconvertd`가 s6-supervise와 s6-svscan의
   제어 FIFO에 직접 쓰고 상태 파일과 감독자의 잠금을 읽으며, 그것들이 없으면 명령으로 돌아갑니다. VM에서

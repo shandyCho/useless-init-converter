@@ -84,6 +84,11 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- A service's `finish` no longer takes 0.1 s when its main process leaves
+  helpers in its cgroup (ibus-daemon's, gvfsd's): after signalling them the
+  runner looked again only after 100 ms; now after 5 ms, doubling up to
+  100 ms, with the same 2 s limit. In the VM's reboot no `finish` of
+  tester's units took over 50 ms (before: 1-2 per reboot at 0.10-0.12 s).
 - Stopping a dynamic unit (every unit of a user manager) no longer starts
   `s6-svc -wD` and `s6-svunlink` (with their `s6-svlisten` and `s6-ftrigrd`,
   about five processes per stop): `initconvertd` writes to the control FIFOs
