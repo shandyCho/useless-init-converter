@@ -12214,3 +12214,22 @@ This change in the tree, not committed. 3566af1 and earlier not pushed.
 1. The rest of a stop's processes: `s6-svc -wD` (with s6-svlisten and s6-ftrigrd), `s6-svunlink` (another pair), the runner's `finish`; lifecycle with this change.
 2. App scopes in the logout's stop transaction; the s6-svunlink 5 s limit.
 3. The owner: a release.
+
+## 2026-11-05, part 187: lifecycle with e6b865b; the spread between runs
+
+`BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`, three-user reboot (from `shutdown starts` to each user@'s PAM close; scopes = the system manager's "shutdown scopes [session-…]"):
+
+| RPMs | Run | Result | greeter | tester | alice | scopes |
+|---|---|---|---|---|---|---|
+| e6b865b | 1 (host busy: release build and tests during the reboot) | 72/72 | 1.34 | 1.40 | 1.44 | 1.04 |
+| e6b865b | 2 (host idle) | 72/72 | 1.22 | 1.24 | 1.26 | 0.90 |
+| 3566af1 | again (host idle) | 72/72 | 1.23 | 1.27 | 1.29 | 1.02 |
+| 3566af1 | part 185 | 72/72 | 0.77 | 0.78 | 0.84 | 0.56 |
+
+So the same build gave 0.77–0.84 s once and 1.23–1.29 s once: part 185's run was at the fast end, and one lifecycle run per build can't show a difference this size. e6b865b and 3566af1 are the same in the idle runs here. The single-user reboots with part 184's sampler (10 each, part 186) are the measurement that showed e6b865b's effect (no stall in 10, against 4 of 10). For a three-user comparison: several lifecycle runs per build, alternating, as in part 183.
+
+### Next steps
+
+1. In progress (not committed): the rest of a stop's processes, `s6-svc -wD` and `s6-svunlink` done natively (control FIFOs, status file and lock polling); measure with part 184's sampler, then the suites.
+2. Then the runner's `finish`; app scopes in the logout's stop transaction.
+3. The owner: a release.
