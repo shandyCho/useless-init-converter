@@ -12181,3 +12181,15 @@ Phases 0 to 5 done; part 182's change committed (e88e713). Commits not pushed.
 2. App scopes in the logout's stop transaction when their properties tie them to it (check what gnome-session sets on them on stock).
 3. The s6-svunlink 5 s limit (item 5).
 4. The owner: commit changes 1 and 3 now, or after 1-3.
+
+## 2026-11-05, part 185: 3566af1's checks
+
+System sandbox (`tests/sandbox.sh DIR && tests/check.sh DIR`): 371/371. `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle` with RPMs built from 3566af1 (`packages/build-rpms.sh --test`): 72/72. Reboot with three users: gdm-greeter 0.77 s, tester 0.78 s, alice 0.84 s; session scopes empty after 0.56 s. Part 183 (three runs each): e88e713 0.87–1.01 s, scopes 0.66–0.75 s; before e88e713 0.99–1.13 s, scopes 0.79–0.83 s. One run, so a lower bound on the spread is not known yet; stock systemd --user on this boot was 0.48/0.53 s (part 168).
+
+### Current state
+
+Parts 182 and 184's changes committed (e88e713, 3566af1). Commits not pushed.
+
+### Next steps
+
+As in part 184: the per-unit stop cost under load, app scopes in the logout's stop transaction, the s6-svunlink 5 s limit; the owner: a release.
