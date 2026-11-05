@@ -952,17 +952,26 @@ impl Daemon {
         // Everything but the bus as one set, ordered by After=/Before=
         // (each unit once the ones ordered after it are down, the rest at
         // once, as systemd stops a whole transaction; one at a time, a
-        // greeter's 40 units took 12 s at a reboot, systemd --user 0.1 s). One set, not a transaction per unit: overlapping
-        // ones stopped a socket under its service's own stop, which then
-        // waited 5 s. No unit locks: the manager is exiting, so nothing
-        // starts any more (check_job, dyn_start_one), and taking them all
-        // could deadlock with a transaction holding its top unit's.
+        // greeter's 40 units took 12 s at a reboot, systemd --user 0.1 s).
+        // One set, not a transaction per unit: overlapping ones stopped a
+        // socket under its service's own stop, which then waited 5 s. No
+        // unit locks: the manager is exiting, so nothing starts any more
+        // (check_job, dyn_start_one), and taking them all could deadlock
+        // with a transaction holding its top unit's.
         let set: Vec<(String, Unit)> = rest
             .iter()
             .filter(|id| self.dynamic_kind(id).is_some())
             .map(|id| (id.clone(), self.load_unit(id).1))
             .collect();
-        self.stop_in_waves(set, None).await;
+        // The scopes (autostarted and launched apps) at the same time, as
+        // in systemd's exit transaction, where nothing orders them: last,
+        // gnome-session waited for its clients in them (an autostart app,
+        // gsd-disk-utility-notify, not yet signalled) for 1-5 s before it
+        // exited (work_history part 184).
+        tokio::join!(
+            self.stop_in_waves(set, None),
+            self.stop_scopes_at_shutdown()
+        );
         // Then the bus, which the units' ExecStop= may still use: the
         // service, then its socket.
         for id in bus_units {
@@ -974,7 +983,6 @@ impl Daemon {
             let _guard = lock.lock().await;
             self.dyn_stop_alone(&id, &unit).await;
         }
-        self.stop_scopes_at_shutdown().await;
     }
 
     pub(super) async fn dyn_restart(&self, id: &str, unit: &Unit) -> &'static str {

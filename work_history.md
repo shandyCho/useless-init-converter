@@ -12150,3 +12150,34 @@ Phases 0 to 5 done; part 182's change committed (e88e713). Commits not pushed.
 2. The per-unit stop cost under load (runner finish, s6-svc, s6-svunlink per unit).
 3. Optional: initialize GRUB's env block in `gnome-vm.sh provision` (part 180).
 4. The owner: a release.
+
+## 2026-11-05, part 184: the GNOME stalls at a reboot, with a gdb sampler and a bus monitor
+
+**Method:** a kept VM on the s6 boot (`VM_KEEP=yes CORE_RPMS=<part 182's RPMs> tests/vm-s6-boot.sh … default`, gdb installed), release binaries copied over /usr/libexec/uinitconverter/initconvertd. Before each reboot a sampler (scratch script, not in the repo) started as root and moved itself into the root cgroup, so it held no session scope (part 168's mistake). It ran `busctl --user monitor` as tester for the whole teardown. When /run/uinitconverter/shutting-down appeared it took `ps` (uid >= 1000, wchan) and `gdb -batch -p PID -ex 'thread apply all bt'` of gnome-shell, gnome-session-*, xdg-desktop-portal*, gsd-* at +1.0 s and +2.5 s. Time = `shutdown starts` to tester's `session closed` in the runner. 10 reboots per build; stock is `USER_MANAGER=systemd` on the same boot.
+
+| Build | Reboots (s) |
+|---|---|
+| e88e713 | 2.07 0.41 0.41 0.42 1.57 2.07 1.94 5.42 0.61 1.93 |
+| + scopes at exit | 0.47 0.41 5.20 0.50 0.45 0.40 0.41 1.38 5.34 2.06 |
+| + StopWhenUnneeded= fix | 0.70 0.71 0.73 3.13 2.98 3.48 5.64 0.80 0.64 0.67 |
+| stock systemd --user | 0.47 0.46 0.46 |
+
+**What the stalls were:**
+1. **gnome-session waited for an autostart app** (e88e713, all 6 slow runs): at +1.0 s gnome-session-service (idle main loop) and gsd-disk-utility-notify (an app scope) still ran; at +2.5 s only the app. `stop_all_user` stopped the scopes last, after every unit and the bus, so the app was signalled only at the end. systemd's exit transaction has the scopes in it, and nothing orders them. **Change (dynamic.rs):** `stop_scopes_at_shutdown()` runs together with the units' stop (`tokio::join!`), the bus after both.
+2. **gnome-session's 1 s query timer** (2 of the slow runs after change 1): between 0.32 and 1.83 s gnome-session made no bus call at all, then sent SessionOver. gnome-session 51 (source read): SIGTERM → `gsm_manager_logout(FORCE)` → QUERY_END_SESSION sends QueryEndSession to its clients (not the shell), ends early when the last answers or leaves, else after `g_timeout_add_seconds(1)` (1-2 s). If no client is left, nothing ends it early. On stock the a11y registry (`at-spi2-registryd --use-gnome-session`, a client) still runs then and answers EndSessionResponse at once (0.38 s).
+3. **Why our manager exited too early:** stock's systemd --user logs "Activating special unit exit.target" at 0.41 s, after gnome-session ended; ours got SIGTERM at ~0.1 s. The system side stops user@ when the session scope is empty, which is when GNOME's leader (gnome-session-init) quits. The leader (leader-systemd.c) quits on the monitor's hangup once graphical-session-pre.target is inactive, at once if it already is. On stock it is active through the session (gnome-session-pre.target Requires= it). Ours: inactive, stopped at login with "stopping graphical-session-pre.target (StopWhenUnneeded=, not needed)". `stop_unneeded` runs after every job; the session start pulls in graphical-session-pre.target, then gnome-session-pre.target (After= it); a job ending in between found nothing running that needed the target (reverse() sees only known units, mostly the running ones). systemd counts a dependent with a pending job as needing it. **Change (relations.rs):** `stop_unneeded` does nothing while a start-type job runs; every job's end runs it again. Checked: the target stays active, no "not needed" line at login, the leader stays to the end, gnome-session sends SessionOver.
+4. **Reactivations during the logout** (3 slow runs after change 3): the GTK portal stopped at 0.031 s, the portal frontend called it at 0.052 s, dbus-broker asked us to start it again (accepted), the new one took 2.3 s to stop. Other runs also reactivated gvfs-daemon, at-spi-dbus-bus, gvfs-metadata and the registry; a new registry registered with gnome-session during its end and gnome-session waited its 10 s END_SESSION timeout. Stock stops that whole group (portals, gvfs, at-spi, the app scope) within 0.02–0.04 s, so only gvfs-metadata is reactivated there (0.156 s). Ours take 0.15–0.3 s each under the shutdown's load (part 182), a window ten times longer. Stock also stops the app scope in the logout's own transaction (JobRemoved at 0.034 s); ours has only units in that set.
+5. 5 s stops (`systemd-importd.service`, `systemd-machined.socket`): the `s6-svunlink -t 5000` limit (s6-svscan aborting its scan on a removed entry); in 3 of 30 runs.
+
+**Tried and reverted:** a start waiting while a unit it is After= is being stopped (systemd's job ordering), with the whole stop set marked. It deadlocked with gnome-session: 10.3 s in 2 of 10 (the 10 s wait limit).
+
+**gnome-shell's segfault at exit** (`shell_camera_monitor_finalize`, part 182): not seen in these 30 runs.
+
+**State:** changes 1 and 3 in the tree, not committed; cargo test 138, user sandbox 118/118. With them a normal reboot is 0.64–0.80 s (stock 0.46 s with the sampler), with stalls in 4 of 10 from item 4 and 5.
+
+### Next steps
+
+1. The per-unit stop cost under load (part 182): it sets the reactivation window of item 4. Candidates: the runner's `finish` per unit, s6-svunlink's wait per unit, the process spawns per stop.
+2. App scopes in the logout's stop transaction when their properties tie them to it (check what gnome-session sets on them on stock).
+3. The s6-svunlink 5 s limit (item 5).
+4. The owner: commit changes 1 and 3 now, or after 1-3.

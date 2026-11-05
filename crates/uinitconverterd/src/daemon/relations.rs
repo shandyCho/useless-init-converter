@@ -187,6 +187,24 @@ impl Daemon {
         if depth > 4 {
             return;
         }
+        // Not while a start job still runs: the units it is about to start
+        // may need what it started first, and they are not running (or
+        // even known) yet. systemd counts a dependent with a pending job as
+        // needing the unit. A login's session start pulls in
+        // graphical-session-pre.target, then gnome-session-pre.target
+        // (Requires= it, After= it); a job ending in between stopped the
+        // first, so GNOME's session leader, which waits for it to go
+        // inactive, quit at once at a logout and the manager was told to
+        // exit before gnome-session ended (work_history part 184). Every
+        // job's end runs this again.
+        if self.jobs.lock().unwrap().values().any(|j| {
+            matches!(
+                j.jtype.as_str(),
+                "start" | "restart" | "try-restart" | "reload-or-restart" | "reload-or-try-restart"
+            )
+        }) {
+            return;
+        }
         let mut stopped = false;
         let mut seen = BTreeSet::new();
         for n in self.known_units() {

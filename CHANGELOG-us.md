@@ -84,6 +84,16 @@ Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
   Without it, `user@` keeps `systemd --user` whatever `USER_MANAGER=` says.
 
 ### Fixed
+- The s6 user manager no longer stops `graphical-session-pre.target` at a GNOME
+  login as unneeded (`StopWhenUnneeded=` was checked between its start and
+  that of `gnome-session-pre.target`, which requires it). GNOME's session
+  leader waits for that target at a logout; with it already stopped it quit at
+  once, the manager was told to exit before gnome-session ended, and
+  gnome-session then waited 1-2 s for clients that were gone. The check now
+  waits until no start job runs.
+- An exiting user manager stops the scopes (autostarted and launched apps)
+  together with the units, as systemd's exit transaction does; it stopped them
+  last, and gnome-session waited for an autostart app in one.
 - A user manager's stop at a logout or reboot sends the first signals about
   0.5 s sooner: the units that must stop with the unit are found from one
   read of the known units (it read every unit's `.requires` directories again
