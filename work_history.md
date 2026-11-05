@@ -11868,7 +11868,7 @@ Phase 1 step 6 (lifecycle-baseline's failed user switch on the s6 boot).
 
 `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle-baseline` (stock systemd --user, our system manager), on 720f285's RPMs: two runs, 68/68 each. The switch to alice passes (her session up, user manager systemd, tester's session in the background), and so do the follow-on checks that failed with it before (alice's pipewire restart, alice's logout). Reboot: 0.48 s per user. It failed in both earlier runs (part 154, and part 164's Phase 0 on 56a0dbf: "alice: no GNOME session after 90 s").
 
-Not bisected (about an hour of VM runs). The candidates are the system-side changes of parts 166 to 168: socket activation starting the service's Wants=/Requires= (system on-demand services too), KillMode=control-group at stops, BindsTo= dependents restarted, the clean Type=dbus/simple exits. No code change in this part.
+(Correction, part 178: probably not fixed by us. The same baseline on the stock systemd boot, with nothing of ours active, failed the same way in Phase 5 on both systemd boots, while it passed on the s6 boot. So this is GDM's user switch in the VM, intermittent; our manager passed the switch in every run.) Not bisected (about an hour of VM runs). The candidates are the system-side changes of parts 166 to 168: socket activation starting the service's Wants=/Requires= (system on-demand services too), KillMode=control-group at stops, BindsTo= dependents restarted, the clean Type=dbus/simple exits. No code change in this part.
 
 ### Next steps
 
@@ -12004,3 +12004,31 @@ The owner: step 8 (A: elogind spike, B: no elogind) and Phase 4 (1, 2 or 3). The
 ### Next steps
 
 Phase 5: the full VM run (every vm-user-manager mode with each BOOT, vm-s6-boot's modes with and without BOOT_ONLY_S6, vm-user-setup with OLD_RPMS, the sandbox variants), then one checklist for the owner's machine.
+
+## 2026-11-05, part 178: Phase 5, the full VM run
+
+RPMs from bda59d4 (`packages/build-rpms.sh --test`), target/release for BOOT=systemd; one script ran every VM test in turn (the host was suspended by the owner from about 08:05 to 11:05, during the boot-only-s6 run, which then took 181 min and passed).
+
+| Run | Result |
+|---|---|
+| BOOT=systemd: user, greeter, baseline, session, session-baseline, apps, apps-baseline, lifecycle, fallback | 15, 10, 10, 22, 22, 50, 50, 75, 18: all pass |
+| BOOT=systemd lifecycle-baseline (stock systemd --user, stock boot) | 53/57: "alice: no GNOME session after 90 s" and 3 follow-ons |
+| BOOT=s6: session, session-baseline, lifecycle, lifecycle-baseline, confined, confined-baseline | 22, 22, 72, 68, 9, 7: all pass |
+| BOOT=systemd-rpm: greeter, baseline, session, session-baseline, apps, apps-baseline, lifecycle, fallback, confined, confined-baseline | 10, 10, 22, 22, 50, 50, 75, 18, 9, 7: all pass |
+| BOOT=systemd-rpm lifecycle-baseline (stock systemd --user) | 53/57, the same user-switch failure |
+| vm-s6-boot.sh s6, no-package, default, systemd | 38, 17, 19, 16: all pass |
+| vm-s6-boot.sh s6 with BOOT_ONLY_S6=yes | 48/48 (both boots) |
+| vm-user-setup.sh with OLD_RPMS=b280b10's build (the owner's installed one) | 21/22: "the old build has no initconvert-user-setup" fails because b280b10 already has it (the script expects a build from before it, e.g. c04ebd2); the upgrade itself turned nothing on, s6-rc stays, `on` works |
+
+Not in the VM: sandbox plain 371/371, SANDBOX_JOURNAL=no 378/378, SANDBOX_FDSTORE=no 359/359, SANDBOX_S6NET_BIN 374/374; user sandbox 118/118; tests/user-setup.sh 13/13; cargo test 138; standalone fdstore 10, journal-relay 7, linkwatch 6, notify 10.
+
+**Seen:** the stock-only lifecycle-baseline fails the switch to alice on both systemd boots and passes on the s6 boot; our manager passes it everywhere. Not ours (nothing of ours runs in that mode on a systemd boot), so step 6 (part 169) is corrected above. On the reboot from the s6 boot GRUB printed `loadenv … invalid environment block` and booted on (the s6 entry came up, all checks passed); not looked into. mcelog.service fails in the VM on every boot (stock too).
+
+### Current state
+
+Phases 0 to 5 done in the VM; commits from 3ee1f46 to this entry, not pushed. The owner's decisions: no elogind (part 177), the s6 boot defaults to the s6 user manager.
+
+### Next steps
+
+1. The owner's machine: the checklist given in the session (RPMs from this commit, reboot into s6, the checks).
+2. Later: the GRUB environment-block message on the s6 boot's reboot; the ~0.5 s left per user at a reboot against stock (part 168); vm-user-setup.sh's old-build check could accept a build that already has the script.
