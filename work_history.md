@@ -12372,3 +12372,35 @@ Kept VM (e6b865b's RPMs; bd42ed2's release initconvertd and runner copied in dur
 
 1. Several alternating lifecycle runs, d5ce251 against bd42ed2.
 2. The owner: a release.
+
+## 2026-11-06, part 195: lifecycle, bd42ed2 against e6b865b, four runs each
+
+`BOOT=s6 CORE_RPMS=… tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`, alternating, new first: new = RPMs from c178a6a (`packages/build-rpms.sh --test`, the code of bd42ed2: d5ce251's stop, 25df6d9's finish poll, bd42ed2's `svc_up`), old = e6b865b's RPMs (part 186). (Part 194's next step said "d5ce251 against bd42ed2"; bd42ed2 contains d5ce251, so the comparison made is against the build before it.) Reboot = from `shutdown starts` to each user@'s PAM close; scopes = the system manager's "shutdown scopes [session-…]".
+
+| Run | Result | reboot per user (s) | scopes | failures |
+|---|---|---|---|---|
+| new 1 | 54/58 | 0.66, 0.67 | 0.533 | the switch to alice (below) |
+| old 1 | 71/72 | 0.72, 0.76, **5.67** | 0.530 | "user@ of tester took 5.67 s to stop": stopping user-runtime-dir@1000 took 5.2 s |
+| new 2 | 72/72 | 0.67, 0.70, 0.70 | 0.530 | |
+| old 2 | 37/58 | 0.54, 0.61 | 0.489 | tester fell back to systemd --user at the first login and again at the next ("the start of gnome-session@gnome.target ended dependency"), then the switch to alice |
+| new 3 | 72/72 | 0.64, 0.69, 0.69 | 0.532 | |
+| old 3 | 54/58 | 0.72, 0.72 | 0.575 | the switch to alice |
+| new 4 | 72/72 | 0.68, 0.71, 0.72 | 0.547 | |
+| old 4 | 72/72 | 0.77, 0.82, 0.82 | 0.599 | |
+
+**Reboot:** new 0.64–0.72 s per user, scopes 0.530–0.547 s; old without the stall 0.72–0.82 s, scopes 0.53–0.60 s (old 2's reboot had tester on stock systemd --user, so it doesn't count). So bd42ed2 is about 0.07 s per user faster than e6b865b with three managers stopping together, and much less spread. Earlier lifecycle runs: 0.87–1.29 s (parts 183, 185, 187), stock 0.48/0.53 s (part 168). The old build stalled once in 4 (the kind seen in parts 182–186); the new one never did.
+
+**old 2's fallback** is the false "start: failed" of part 193: a dependency of gnome-session@gnome.target was read as failed, so the target "ended dependency" and the manager fell back. bd42ed2 fixes that, and it didn't happen in its 4 runs.
+
+**The switch to alice failed in new 1 and in old 3**: "alice: no GNOME session after 90 s". The new greeter was asked for and ran, but alice's session never came up, and tester's session stayed in the background (not active). The follow-on checks failed with it: alice's pipewire, alice's logout. It happens with both builds, so bd42ed2 didn't cause it. It never failed in our manager's earlier lifecycle runs (parts 168, 183, 185, 187: 72/72). But on both systemd boots stock systemd --user (lifecycle-baseline) fails the same check (part 178: 53/57 on each). The VM wasn't kept, and the test records only a screenshot, overwritten by later runs, so the cause isn't known: alice's manager, the greeter, or GDM's autologin of the second user.
+
+**Tests:** none changed in the repo; nothing in the code changed in this part.
+
+### Current state
+
+Phases 0 to 5 done. The commits from 25df6d9 on are not pushed.
+
+### Next steps
+
+1. The failed switch to alice (2 of 8 runs, both builds): `VM_KEEP=yes` lifecycle runs until it fails, then read alice's user@, GDM's and logind's journal in the kept VM.
+2. The owner: a release.
