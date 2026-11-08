@@ -12456,3 +12456,17 @@ Phases 0 to 5 done. The commits from 25df6d9 on are not pushed.
 
 1. The owner: a release.
 2. Optional: lifecycle-baseline on the systemd boots (`BOOT=systemd`, `BOOT=systemd-rpm`) with this test, to see whether part 178's failed switch there was this race.
+
+## 2026-11-09, part 198: lifecycle-baseline on the systemd boots with part 197's test
+
+`tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle-baseline` (stock systemd --user), alternating `BOOT=systemd` (target/debug of b7652e9) and `BOOT=systemd-rpm` (c178a6a's RPMs), two runs each: **73/73 in all four.** The two new checks passed every time ("tester's gnome-shell registered its display with GDM", "seat0 shows the switch greeter"). Alice's session came up and was active in all four. At the reboot, the systemd boot's own report gives each user@ stopped in 0.03–1.74 s.
+
+**So:** part 178's "alice: no GNOME session after 90 s" on both systemd boots (53/57 each, one run each) doesn't show with the wait before the switch. That fits part 196's GDM race, but it isn't proven: part 178's failing runs weren't read, and four runs don't rule out a rarer failure. Part 169's step 6 (stock-only lifecycle-baseline failing the switch) can be read the same way.
+
+### Current state
+
+Phases 0 to 5 done. The commits from 25df6d9 on are not pushed.
+
+### Next steps
+
+1. The owner: a release.
