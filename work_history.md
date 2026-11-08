@@ -12404,3 +12404,37 @@ Phases 0 to 5 done. The commits from 25df6d9 on are not pushed.
 
 1. The failed switch to alice (2 of 8 runs, both builds): `VM_KEEP=yes` lifecycle runs until it fails, then read alice's user@, GDM's and logind's journal in the kept VM.
 2. The owner: a release.
+
+## 2026-11-09, part 196: the failed switch to alice (part 195): GDM didn't bring the switch greeter to the front
+
+**Caught:** `VM_KEEP=yes BOOT=s6 tests/vm-user-manager.sh … lifecycle` with c178a6a's RPMs, repeated until the switch failed: run 1 passed 72/72, run 2 failed. The screenshot after the step shows tester's own session, in the overview, with `s6Alice1` typed into its search field. So when the test sent its keys (down, Return, the password, Return) about 10 s after asking for the switch, the seat was still showing tester's session, and alice never got a login. Neither alice's manager nor ours was involved: alice's PAM session never opened.
+
+**The failing boot's journal:** tester logs in at the greeter at 39.68 s (session 8). Their gnome-shell runs at 40.05 s, says "Registering session with GDM" at 40.47 s and "Will monitor session 8" at 40.52 s. The test's `switch` step starts at 41.33 s and calls CreateTransientDisplay. GDM's new greeter session c2 appears at 41.38 s. Tester's shell logs "GNOME Shell started" and "Registering display with GDM" at 41.50 s, 0.17 s after the switch was asked for. The login greeter (c1) shuts down at 41.82 s. The switch greeter's shell is up at 43.6 s ("Will monitor session c2"). Nothing more from GDM or logind until the test's keys go to tester's session. `the switch greeter runs` passed because it only checks that a greeter-class session exists, not that it is active.
+
+**Reproduced outside the test** in the kept VM (scratch scripts, not in the repo): log tester out, log in at the greeter with the test's keys, wait until tester's new gnome-shell exists, wait DELAY s, call CreateTransientDisplay, then read seat0's ActiveSession every 0.25 s for 20 s.
+
+| DELAY after tester's gnome-shell exists (s) | switch asked for, against "Registering display with GDM" | seat0 |
+|---|---|---|
+| 0 (3 tries) | well before | the greeter after 0.56–0.70 s |
+| 3 (3 tries) | after | the greeter after 0.55–0.56 s |
+| 1.0 | 0.43 s before | the greeter after 0.57 s |
+| 1.3 | 0.04 s after | the greeter after 0.85 s |
+| 1.5 | 0.01 s after | the greeter after 1.07 s |
+| 1.2 | **0.23 s before** | **tester's session for all 20 s**; greeter c11 ran ("Will monitor session c11" 2.2 s later) and stayed in the background |
+
+So the failure is a timing window in GDM. If the transient display is asked for while a session that just logged in is still finishing its start, GDM can start the new greeter and leave the seat on the user's session. It hit 1 of 12 tries here, and 2 of 8 lifecycle runs in part 195, where the switch always comes 1–2 s after the login. The narrower conditions are not known: 0.43 s before the registration worked, 0.23 s failed, and 0.17 s failed in the lifecycle run. GDM's debug log was off. The sweep's next try (1.4) hung: after the logout, the login keys produced no new session for tester, and the script waited for one. Afterwards the seat showed greeter c11 (the one left over from the 1.2 try). Why the keys didn't log in was not read. The sweep was stopped there.
+
+**Ours or not:** VT and seat switching are GDM's and logind's work. Our system manager only gives logind the session scopes and user@, and the user manager isn't involved in a greeter's VT. On both systemd boots stock systemd --user fails this step in lifecycle-baseline (part 178, 53/57 each); that run's cause wasn't read then, so whether it is this is not known.
+
+**Saved (scratch, not in the repo):** the failing boot's journal and the sweep boot's journal.
+
+**Tests:** nothing in the repo changed.
+
+### Current state
+
+Phases 0 to 5 done. The commits from 25df6d9 on are not pushed. The failed switch to alice is a test timing problem around GDM, not a bug in the user manager (as far as shown).
+
+### Next steps
+
+1. The owner: whether to change the lifecycle test. Possible changes: (a) before `switch`, wait until tester's gnome-shell has registered its display with GDM, plus a few seconds; (b) `switch` checks that seat0's active session is the greeter's, and fails with that message otherwise, instead of the later "no GNOME session after 90 s".
+2. The owner: a release.
