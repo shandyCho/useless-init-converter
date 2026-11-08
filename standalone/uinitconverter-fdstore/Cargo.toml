@@ -1,6 +1,6 @@
 [package]
 name = "uinitconverter-fdstore"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Holds file descriptors (systemd's FDSTORE=) for services, apart from the service manager"
 

@@ -4,7 +4,7 @@
 # build time and git commit, so each rebuild is an upgrade for dnf. Plain
 # rpmbuild on such a tarball gives release 1.
 Name:           uinitconverter-fdstore
-Version:        0.1.0
+Version:        0.2.0
 Release:        %{?build_release}%{!?build_release:1}%{?dist}
 Summary:        Holds file descriptors for services across restarts
 # Choose a license before distributing.
@@ -37,5 +37,8 @@ install -Dm0755 target/release/initconvert-fdstore %{buildroot}%{_libexecdir}/ui
 %{_libexecdir}/uinitconverter/initconvert-fdstore
 
 %changelog
+* Mon Nov 09 2026 uinitconverter developers - 0.2.0-1
+- The command is now initconvert-fdstore (the package keeps its name)
+
 * Wed Oct 21 2026 uinitconverter developers - 0.1.0-1
 - Split out of uinitconverter

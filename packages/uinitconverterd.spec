@@ -66,6 +66,9 @@ install -Dm0644 dist/dbus/uinitconverter.conf %{buildroot}%{_datadir}/dbus-1/sys
 %{_datadir}/dbus-1/system.d/uinitconverter.conf
 
 %changelog
+* Mon Nov 09 2026 uinitconverter developers
+- 0.3.0, see CHANGELOG-us.md
+
 * Tue Nov 03 2026 uinitconverter developers
 - No longer requires s6-rc and dbus-daemon (the uinitconverter package does):
   the user manager needs neither

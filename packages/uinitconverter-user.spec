@@ -69,6 +69,9 @@ fi
 %{_prefix}/lib/tmpfiles.d/uinitconverter-user.conf
 
 %changelog
+* Mon Nov 09 2026 uinitconverter developers
+- 0.3.0, see CHANGELOG-us.md
+
 * Tue Nov 03 2026 uinitconverter developers
 - initconvert-user-setup on|off|status: the s6 user manager on a systemd
   boot; Requires uinitconverter-timers (user timers); the drop-in goes when

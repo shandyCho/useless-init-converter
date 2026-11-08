@@ -5,9 +5,9 @@
 버전은 본체 패키지의 버전입니다. 독립 도구는 버전이 따로 있습니다.
 릴리스 노트: [packages/release-notes](packages/release-notes).
 
-## 미출시
+## 0.3.0 (2026-11-09)
 
-0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-157부에 있습니다.
+0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-199부에 있습니다.
 
 ### 추가
 - 작업 모드 `fail`, `replace-irreversibly`, `flush`, `ignore-dependencies`, `ignore-requirements`

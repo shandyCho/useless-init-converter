@@ -5,9 +5,9 @@
 Versions apply to the core packages. The standalone tools have their own
 versions. Release notes: [packages/release-notes](packages/release-notes).
 
-## Unreleased
+## 0.3.0 (2026-11-09)
 
-Changes since 0.2.2. Details per step in `work_history.md`, parts 130-157.
+Changes since 0.2.2. Details per step in `work_history.md`, parts 130-199.
 
 ### Added
 - Job modes `fail`, `replace-irreversibly`, `flush`, `ignore-dependencies`
