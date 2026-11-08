@@ -306,7 +306,9 @@ tester and a new user alice passwords and adds bob. After the session
 checks it logs tester out (the session's units stop, the bus restarts, no
 jobs, no session unit failed), logs tester in again at the greeter with QMP
 keys, asks GDM for a second greeter (`CreateTransientDisplay`, as Switch
-User does) and logs alice in there (both sessions run). It then runs the
+User does) once tester's gnome-shell has registered its display with GDM
+(asked earlier, GDM can leave the seat on tester's session), checks that
+seat0 shows that greeter, and logs alice in there (both sessions run). It then runs the
 RPM update helper (pipewire restarted in both managers, the marker
 cleared, `user@` reloaded in place), lets bob linger (his manager starts,
 `systemctl --user -M bob@` works, disable-linger stops it with nothing

@@ -613,9 +613,19 @@ case $step in
         until_ok greeter_up 60 && ok "the greeter is back" || bad "no greeter after the logout" ;;
     login-tester) session_up tester ;;
     switch)
+        # GDM can leave the seat on a session that is still finishing its
+        # start when a transient display is asked for then (part 196): wait
+        # until tester's shell has registered its display, and a little more.
+        p=$(pgrep -n -u tester -x gnome-shell)
+        until_ok 'journalctl -b --no-pager -o cat _PID='"$p"' | grep -q "Registering display with GDM"' 30 \
+            && ok "tester's gnome-shell registered its display with GDM" || bad "tester's gnome-shell ($p) did not register its display with GDM in 30 s"
+        sleep 3
         out=$(as tester gdbus call --system --dest org.gnome.DisplayManager --object-path /org/gnome/DisplayManager/LocalDisplayFactory \
             --method org.gnome.DisplayManager.LocalDisplayFactory.CreateTransientDisplay 2>&1) && ok "a new greeter was asked for ($out)" || bad "CreateTransientDisplay: $out"
         until_ok '[ -n "$(loginctl list-sessions --no-legend | awk '"'"'$6 == "greeter"'"'"')" ]' 60 && ok "the switch greeter runs" || bad "no greeter session"
+        # The keys go to whatever seat0 shows: the greeter must be in front.
+        until_ok '[ "$(loginctl show-session "$(loginctl show-seat seat0 -p ActiveSession --value)" -p Class --value 2>/dev/null)" = greeter ]' 30 \
+            && ok "seat0 shows the switch greeter" || bad "seat0 still shows session $(loginctl show-seat seat0 -p ActiveSession --value), not the switch greeter"
         sleep 10 ;;
     login-alice)
         session_up alice

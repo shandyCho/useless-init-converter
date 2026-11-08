@@ -12438,3 +12438,21 @@ Phases 0 to 5 done. The commits from 25df6d9 on are not pushed. The failed switc
 
 1. The owner: whether to change the lifecycle test. Possible changes: (a) before `switch`, wait until tester's gnome-shell has registered its display with GDM, plus a few seconds; (b) `switch` checks that seat0's active session is the greeter's, and fails with that message otherwise, instead of the later "no GNOME session after 90 s".
 2. The owner: a release.
+
+## 2026-11-09, part 197: the lifecycle test waits for GDM before the switch, and checks the seat
+
+**Change** (tests/vm-user-manager.sh, life.sh `switch`), both of part 196's options:
+- Before CreateTransientDisplay, wait (up to 30 s) until tester's newest gnome-shell has logged "Registering display with GDM" (journal, `_PID=`), then 3 s more. New check: "tester's gnome-shell registered its display with GDM".
+- After the greeter session exists, wait (up to 30 s) until seat0's active session is greeter-class. New check: "seat0 shows the switch greeter". If GDM leaves the seat on tester's session, the test now fails here with the session it shows, not 90 s later with "alice: no GNOME session".
+- The TESTING pair's lifecycle paragraph says both. lifecycle goes from 72 to 74 checks, lifecycle-baseline from 68 to 70.
+
+**Checks:** `bash -n` and `shellcheck -S warning` pass. In the VM, `BOOT=s6` with c178a6a's RPMs: lifecycle 74/74 three times, lifecycle-baseline 70/70 once. Both new checks passed in all four. Three-user reboot: 0.70–0.78 s per user with ours, 0.45–0.48 s with stock. Four runs can't show that the race is gone from the test (it was 2 in 8 in part 195); they show the new steps work on both managers.
+
+### Current state
+
+Phases 0 to 5 done. The commits from 25df6d9 on are not pushed.
+
+### Next steps
+
+1. The owner: a release.
+2. Optional: lifecycle-baseline on the systemd boots (`BOOT=systemd`, `BOOT=systemd-rpm`) with this test, to see whether part 178's failed switch there was this race.
