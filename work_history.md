@@ -12470,3 +12470,28 @@ Phases 0 to 5 done. The commits from 25df6d9 on are not pushed.
 ### Next steps
 
 1. The owner: a release.
+
+## 2026-11-09, part 199: part 178's failed switch on the systemd boots was the GDM race
+
+Part 178's failing runs were gone (screenshots overwritten, no logs kept). So the check was done directly: a scratch copy of tests/vm-user-manager.sh at b7652e9 with only the wait before the switch removed (the old timing) and the seat check kept. Then `lifecycle-baseline` (stock systemd --user), alternating `BOOT=systemd` and `BOOT=systemd-rpm`, three runs each. The repo was not changed for this.
+
+| Run | Boot | Result |
+|---|---|---|
+| 1 | systemd | 53/58: seat0 still shows session 8, not the switch greeter |
+| 2 | systemd-rpm | 72/72 |
+| 3 | systemd | 53/58: the same |
+| 4 | systemd-rpm | 53/58: the same |
+| 5 | systemd | 53/58: the same |
+| 6 | systemd-rpm | 72/72 |
+
+Session 8 is tester's session from the new login at the greeter. Each failure is the seat check plus part 178's four: "alice: no GNOME session after 90 s", "tester's session is active", alice's pipewire, alice's logout. With the old timing the switch failed in 4 of 6 runs on the stock boots (3 of 3 on BOOT=systemd), each time with the seat left on tester's session. With the wait (part 198) it passed 4 of 4, and part 197's s6 runs passed 4 of 4.
+
+**So:** part 178's (and part 169's) stock-only failure of the switch on the systemd boots was part 196's GDM race. On the stock boots it hits much more often than on the s6 boot (2 of 8 in part 195), probably because the timing between the login and the switch differs. Not a bug in either user manager. b7652e9's wait fixes the test on every boot.
+
+### Current state
+
+Phases 0 to 5 done. The commits from 25df6d9 on are not pushed.
+
+### Next steps
+
+1. The owner: a release.
