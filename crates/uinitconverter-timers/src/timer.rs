@@ -4,10 +4,7 @@
 //!
 //! State (read by the daemon for `systemctl list-timers` / status):
 //!   RUN_DIR/units/<timer>/next-realtime, next-monotonic, last-trigger(-mono), elapsed
-//! Persistent=yes stamps: STATE_DIR/timers/<timer> (the time as text); a
-//! user manager's are systemd --user's, $XDG_DATA_HOME/systemd/timers/
-//! stamp-<timer> (the time as the file's mtime), so the catch-up carries
-//! over between the two managers.
+//! Persistent=yes stamps: STATE_DIR/timers/<timer> (the time as text).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -20,58 +17,17 @@ pub use uinitconverter_base::timerspec::*;
 use uinitconverter_base::unit::parse_timespan_usec;
 
 fn persistent_stamp(cfg: &Config, timer: &str) -> PathBuf {
-    if cfg.user_mode {
-        return user_data_home()
-            .join("systemd/timers")
-            .join(format!("stamp-{timer}"));
-    }
     cfg.state_dir.join("timers").join(timer)
-}
-
-fn user_data_home() -> PathBuf {
-    if let Some(d) =
-        std::env::var_os("XDG_DATA_HOME").filter(|d| d.as_encoded_bytes().starts_with(b"/"))
-    {
-        return PathBuf::from(d);
-    }
-    let home = std::env::var("HOME")
-        .ok()
-        .filter(|h| h.starts_with('/'))
-        .or_else(|| util::lookup_uid(unsafe { libc::getuid() }).map(|u| u.home))
-        .unwrap_or_else(|| "/".into());
-    PathBuf::from(home).join(".local/share")
 }
 
 /// The last trigger of a Persistent= timer, realtime usec.
 fn read_stamp(cfg: &Config, timer: &str) -> Option<u64> {
     let path = persistent_stamp(cfg, timer);
-    if cfg.user_mode {
-        let t = std::fs::metadata(&path).ok()?.modified().ok()?;
-        return t
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|d| d.as_micros() as u64);
-    }
     util::read_trimmed(&path).and_then(|s| s.parse::<u64>().ok())
 }
 
 fn write_stamp(cfg: &Config, timer: &str, usec: u64) {
     let path = persistent_stamp(cfg, timer);
-    if cfg.user_mode {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let when = std::time::UNIX_EPOCH + Duration::from_micros(usec);
-        let r = std::fs::File::options()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .and_then(|f| f.set_modified(when));
-        if let Err(e) = r {
-            eprintln!("uinitconverter[{timer}]: {}: {e}", path.display());
-        }
-        return;
-    }
     let _ = util::write_atomic(&path, usec.to_string().as_bytes());
 }
 

@@ -88,7 +88,6 @@ for s in standalone/*/build-rpm.sh; do "$s"; done             # 독립 도구(�
 cargo test
 for p in standalone/*/; do cargo test --manifest-path "$p/Cargo.toml"; done
 tests/sandbox.sh /tmp/sb && tests/check.sh /tmp/sb; tests/sandbox.sh /tmp/sb stop
-tests/user-sandbox.sh /tmp/usb
 ```
 
 변형(`SANDBOX_JOURNAL=no`, `SANDBOX_FDSTORE=no`, `SANDBOX_S6NET_BIN=`)은 [TESTING.md](../TESTING.md)를
@@ -101,13 +100,10 @@ GNOME 테스트 VM(`tests/gnome-vm.sh fetch`와 `provision`으로 한 번 준비
 
 ```sh
 # s6 부팅: RPM, initconvert init, 재부팅, 확인.
-CORE_RPMS=~/uinitconverter-test/rpms tests/vm-s6-boot.sh ~/uinitconverter-vm s6
-# 일반 systemd 부팅에서 s6 사용자 매니저(uinitconverter-user만).
-BOOT=systemd-rpm CORE_RPMS=~/uinitconverter-test/rpms tests/vm-user-manager.sh ~/uinitconverter-vm session
+CORE_RPMS=~/uinitconverter-test/rpms tests/vm-s6-boot.sh ~/uinitconverter-vm
+# s6 부팅에서 systemd --user 아래의 GNOME 세션.
+BOOT=s6 CORE_RPMS=~/uinitconverter-test/rpms tests/vm-user-manager.sh ~/uinitconverter-vm session
 ```
-
-모든 패키지를 설치한 상태에서 `initconvert-user-setup`(켜기, 끄기, 삭제, 옛 빌드에서 업그레이드)을 확인하려면
-`tests/vm-user-setup.sh`를 쓰세요. 명령은 스크립트 머리말에 있습니다.
 
 `vm-s6-boot.sh`는 독립 도구 RPM을 `~/uinitconverter-vm/rpmbuild/standalone/rpms`(`STANDALONE_RPMS=`로
 바꿈)에서, skarnet.org RPM을 `~/rpmbuild-skarnet/rpms`(`SKARNET_RPMS=`)에서 가져옵니다.
@@ -160,7 +156,6 @@ for p in standalone/*/; do cargo test --manifest-path "$p/Cargo.toml"; done
 for v in "" SANDBOX_JOURNAL=no SANDBOX_FDSTORE=no; do
     env $v tests/sandbox.sh /tmp/sb && env $v tests/check.sh /tmp/sb; env $v tests/sandbox.sh /tmp/sb stop
 done
-tests/user-sandbox.sh /tmp/usb
 ```
 
 그다음 이 트리로 만든 RPM으로 1절의 VM 실행을 하고, 부팅에 관련된 변경이면 실제 부팅도 한 번 이상

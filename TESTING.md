@@ -128,20 +128,6 @@ uinitconverter의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-up
 `sandbox.sh`와 `check.sh`를 실행하세요. 그러면 데몬이 fd를 직접 보관하므로, 데몬을 다시 시작한
 뒤 fd가 사라졌는지를 확인합니다. 독립 도구는 `tests/sandbox.sh`가 `standalone/`에서 빌드합니다.
 
-사용자 모드(systemd --user 없는 사용자 서비스 관리자. 선택 사항이며 권장하지 않음): `tests/user-sandbox.sh DIR`은
-사용자 매니저를 `user@`처럼(`uinitconverter-user` 패키지가 설치하는 `initconvertd`로의 링크
-`initconvert-user-manager`로) 실행하되 `XDG_RUNTIME_DIR`을 샌드박스 디렉터리로
-둡니다. private 소켓, `default.target`, `READY=1`, `dbus.socket`에서 시작되는 버스(여기서는
-dbus-daemon), `systemctl --user`, GNOME 모양의 세션과 로그아웃, 버스 재시작, `SIGTERM`에 의한
-정지를 확인합니다. 이어서 이후 단계의 검사가 있습니다. 환경 generator와 유닛 generator, 트랜잭션(순서,
-`Requisite=`, 병렬 시작, 작업 합치기), 정지 트랜잭션, 타이머와 path 유닛, `Accept=yes`, `MAINPID=`로
-주 프로세스 넘기기, `CollectMode=`, `systemctl --user exit`, `systemd --user`로의 대체(가짜
-`systemd --user`가 실행 여부를 기록)입니다. 자체 검사를 실행하고 끝나면 모두 멈춥니다(`tests/all.sh`에 포함).
-`tests/user-setup.sh DIR`은 `initconvert-user-setup`을 `UINITCONVERTER_SETUP_ROOT=DIR`로
-실행합니다. `on`과 `off`, 그리고 가짜 `/sys/fs/cgroup`과 `/proc`에 대한 `status`(systemd 부팅,
-러너 뒤에 매니저가 있는 s6 부팅, 대체와 그 기록, 다른 사용자가 소유한 기록)를 확인합니다.
-`tests/all.sh`에도 포함됩니다.
-
 `Accept=yes` TCP 검사에는 `s6-tcpserverd`가 필요합니다. `PATH`에 없으면 `check.sh`는 TCP 소켓을
 건너뛰었는지만 확인하고 SKIP 줄을 출력합니다. 실행하려면 두 스크립트 앞에
 `SANDBOX_S6NET_BIN=DIR`(`s6-tcpserverd`가 있는 디렉터리, 예: `dist/rpm/build-skarnet-rpms.sh` 뒤의
@@ -233,68 +219,42 @@ tests/gnome-vm.sh stop ~/uinitconverter-vm
 디스플레이로도 볼 수 있습니다(포트는 `~/uinitconverter-vm/ports`). VM의 SELinux는 enforcing입니다.
 VM 부팅이 망가져도 손해가 없습니다. `start`는 매번 준비된 이미지에서 다시 시작합니다.
 
-`tests/vm-user-manager.sh ~/uinitconverter-vm`은 그 VM에서 실제 `user@UID.service` 아래로 s6
-사용자 매니저를 실행합니다(`cargo build` 뒤에). VM은 systemd로 부팅합니다. 스크립트가 디버그
-바이너리와 skalibs, s6 RPM(`SKARNET_RPMS=`, 기본값 `~/rpmbuild-skarnet/RPMS/x86_64`)을 설치하고,
-`user@`에 `initconvert-user-manager`(`uinitconverter-user` 패키지처럼 `initconvertd`로의 링크)
-drop-in이 붙는 사용자 `s6test`를 만들고, 커널 명령줄에
-`uinitconverter.user_manager=s6`을 넣은 뒤 다시 부팅합니다. 그런 다음 그 `user@`를 시작해 준비 완료,
-`init.scope`와 `app.slice`, 사용자 버스와 `systemctl --user`를 확인하고, `systemd --user`를 쓰는
-두 번째 사용자와 메모리(PSS)를 나란히 출력한 뒤 reload하고 멈춥니다. GDM과 tester의 세션은
-`systemd --user`를 그대로 씁니다.
+`tests/vm-user-manager.sh ~/uinitconverter-vm MODE`는 그 VM에서 GNOME 아래의 사용자 매니저,
+`systemd --user`를 확인합니다. `BOOT=systemd`(기본)에서는 아무것도 설치하지 않은 일반 systemd 부팅을
+기준으로 실행합니다. `BOOT=s6`(`session`, `lifecycle`, `confined` 모드)에서는 `tests/vm-s6-boot.sh`처럼 모든
+RPM을 설치하고(`CORE_RPMS=`, `STANDALONE_RPMS=`, `SKARNET_RPMS=`) `initconvert init`을 실행하므로, s6 부팅의
+러너가 모든 `user@`를 시작합니다. 화면은 `~/uinitconverter-vm/MODE-BOOT.png`로 저장합니다. `VM_KEEP=yes`이면
+끝난 뒤에도 VM이 켜져 있어 `gnome-vm.sh ssh`를 쓸 수 있습니다.
 
-`tests/vm-user-manager.sh ~/uinitconverter-vm greeter`는 대신 모든 `user@`를 s6 매니저로 돌리고
-자동 로그인을 꺼서, GDM 그리터가 그 위에서 뜨게 합니다. 그리터의 gnome-shell, 그 cgroup
-(`session.slice/org.gnome.Shell@gdm.service`), 실패한 유닛과 작업, 세션 타깃, pipewire, SELinux와
-AVC 거부를 확인합니다. 이어서 그리터의 경고와 메모리를 출력하고 스크린숏을
-`~/uinitconverter-vm/greeter-greeter.png`로 저장합니다. `baseline`은 같은 검사를 기본
-`systemd --user`에서 실행합니다(`greeter-baseline.png`). 경고를 비교할 때 씁니다.
-
-`tests/vm-user-manager.sh ~/uinitconverter-vm session`도 모든 `user@`를 s6 매니저로 돌리지만
-GDM 자동 로그인은 그대로 두어서, tester의 GNOME 세션이 그 위에서 뜨게 합니다. `gnome-vm.sh wait`와
-`check`를 실행한 뒤, gnome-shell의 cgroup(`session.slice/org.gnome.Shell@user.service`)과 ambient
-capability, 배경(bwrap 샌드박스 안에서 도는 GNOME 이미지 로더), 실패한 유닛과 작업, 세션 타깃과
-서비스, `is-system-running`, 리더의 환경, 자동 시작 앱 scope, `systemd-run --user --scope`(Ptyxis가
-셸마다 이렇게 시작합니다)와 `GetUnitByPID`, SELinux와 AVC 거부를 확인합니다.
-이어서 QMP 키로 GNOME Shell에서 계산기를 열어 자기 `app-gnome-*.scope`에서 도는지 확인하고
-`~/uinitconverter-vm/session-session.png`를 저장합니다. `session-baseline`은 같은 것을 기본
-`systemd --user`에서 실행합니다. `VM_KEEP=yes`이면 끝난 뒤에도 VM을 켜 두어
-`gnome-vm.sh ssh`로 들어갈 수 있습니다.
-
-`tests/vm-user-manager.sh ~/uinitconverter-vm apps`는 세션 검사를 한 뒤 slice D를 검사합니다. 사용자
-타이머, 모든 사용자 소켓(`Accept=yes` varlink 소켓은 `varlinkctl info`에 응답해야 합니다),
-`app.slice`, `background.slice`, `session.slice`에 대한 systemd-oomd의 감시(`systemctl restart
-systemd-oomd` 뒤에도), podman quadlet 컨테이너(복사한 작은 루트에 `Rootfs=`를 써서 아무것도 내려받지
-않습니다)의 시작과 `app.slice/qhello.service` 위치와 정지, fedora 저장소에서 tester용으로 설치한
-flatpak 앱(오버레이에 약 3 GB, 네트워크 필요)이 자기 `app-flatpak-*.scope`에서 실행되는지와
-gnome-shell의 `XDG_DATA_DIRS`에 flatpak exports가 있는지를 봅니다. `apps-baseline`은 같은 것을 기본
-`systemd --user`에서 실행합니다.
-
-`tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle`(slice E)은 tester와 새 사용자 alice에게 비밀번호를
-주고 bob을 추가합니다. 세션 검사 뒤 tester를 로그아웃시키고(세션 유닛이 멈추고, 버스가 재시작되고, 작업이
-남지 않고, 세션 유닛이 실패하지 않음), QMP 키로 그리터에서 tester를 다시 로그인시키고, tester의 gnome-shell이
-GDM에 디스플레이를 등록한 뒤 GDM에 두 번째 그리터를 요청하고(`CreateTransientDisplay`, 사용자 전환과 같음.
-그보다 먼저 요청하면 GDM이 시트를 tester의 세션에 둔 채로 남길 수 있음), seat0이 그 그리터를 보여 주는지
-확인한 뒤 거기서 alice를 로그인시킵니다(두 세션이 함께 돔). 이어서 RPM 업데이트 도우미를 실행하고(두 매니저에서 pipewire 재시작, marker 지워짐, `user@`는 그
-자리에서 reload), bob을 linger시키고(매니저가 시작되고, `systemctl --user -M bob@`가 동작하고,
-disable-linger가 남김없이 멈춤), alice를 로그아웃시킨 뒤 재부팅합니다. 지난 부팅의 저널에서 모든 `user@`가
-5초 안에 멈췄고 강제 종료되거나 실패하지 않았어야 합니다. `lifecycle-baseline`은 같은 것을 기본
-`systemd --user`에서 실행합니다.
-
-`tests/vm-user-manager.sh ~/uinitconverter-vm fallback`은 s6 매니저에서만 tester의 세션을 일부러
-망가뜨립니다. `user@1000` drop-in이 런처에 유닛 경로(`systemd --user`는 무시하는 테스트용 재정의)를 주는데,
-그 맨 앞에 `org.gnome.Shell@user.service`를 실패하게 하는 drop-in이 있습니다. 자동 로그인이
-`gnome-session-shutdown.target`으로 실패하면 `/run/uinitconverter-user/1000`의 기록, `user@1000`의
-`systemd --user`, 남은 s6 프로세스가 없는지, 그리터를 확인합니다. 그다음 tester가 그리터에서 로그인해
-`systemd --user` 아래에서 동작하는 세션을 받습니다. 마지막으로 bob을 linger시키고 그의 s6 매니저를 SIGKILL로
-죽이면, 다음 `user@` 시작이 충돌을 기록하고 `systemd --user`를 실행합니다.
-
-`BOOT=s6` 또는 `BOOT=systemd-rpm` `tests/vm-user-manager.sh ~/uinitconverter-vm confined`는
-SELinux로 제한된 사용자 둘, carol(`user_u`)과 dave(`staff_u`)를 linger로 추가합니다. 각 `user@`가 활성이
-되어야 하고, 그 매니저와 s6-svscan이 사용자의 도메인(`user_t`, `staff_t`)에서 실행되어야 하며, 그 도메인에서
-나온 거부가 없어야 합니다(`BOOT=systemd-rpm`에서는 SELinux 모듈이 없으므로 `/run/uinitconverter-user`의
-폴백 기록 거부는 알려진 것으로 표시합니다). `confined-baseline`은 같은 것을 기본 `systemd --user`에서
-실행합니다.
+- `session`(기본)은 GDM 자동 로그인을 유지합니다. `gnome-vm.sh wait`와 `check`를 실행한 뒤 gnome-shell의
+  cgroup(`session.slice/org.gnome.Shell@user.service`)과 ambient capability, 배경(GNOME의 bwrap 샌드박스
+  이미지 로더), 실패한 유닛과 작업, 세션 타깃과 서비스, `is-system-running`, 리더의 환경, 자동 시작 앱
+  scope, `systemd-run --user --scope`(Ptyxis가 셸마다 시작하는 방식), `GetUnitByPID`, SELinux와 AVC
+  거부를 확인합니다. 이어서 QMP 키로 GNOME Shell에서 계산기를 열고 그것이 `app-gnome-*.scope`에서
+  실행되는지 확인합니다.
+- `greeter`는 자동 로그인을 꺼서 GDM의 로그인 화면이 뜨게 합니다. 로그인 화면의 gnome-shell, 그
+  cgroup(`session.slice/org.gnome.Shell@gdm.service`), 실패한 유닛과 작업, 세션 타깃, pipewire, SELinux와
+  AVC 거부를 확인하고, 로그인 화면의 경고와 메모리를 보여 줍니다.
+- `apps`는 세션 검사를 한 뒤 사용자 타이머, 모든 사용자 소켓(`Accept=yes` varlink 소켓은
+  `varlinkctl info`에 답해야 함), `app.slice`, `background.slice`, `session.slice`를 감시하는
+  systemd-oomd(`systemctl restart systemd-oomd` 뒤에도), podman quadlet 컨테이너(작게 복사한 루트에
+  `Rootfs=`를 써서 아무것도 받지 않음)를 `app.slice/qhello.service`에서 시작하고 멈추는 것, fedora
+  원격에서 tester용으로 설치한 flatpak 앱(오버레이에 약 3 GB, 네트워크 필요)이 `app-flatpak-*.scope`에서
+  실행되고 gnome-shell의 `XDG_DATA_DIRS`에 flatpak exports가 있는지를 확인합니다.
+- `lifecycle`은 tester와 새 사용자 alice에게 비밀번호를 주고 bob을 추가합니다. 세션 검사 뒤 tester를
+  로그아웃시키고(세션의 유닛이 멈추고, 버스가 재시작되고, 작업이 없고, 세션 유닛이 실패하지 않음),
+  QMP 키로 로그인 화면에서 tester를 다시 로그인시키고, tester의 gnome-shell이 GDM에 디스플레이를
+  등록한 뒤(더 일찍 요청하면 GDM이 자리를 tester의 세션에 둘 수 있음) GDM에 두 번째 로그인 화면을
+  요청하고(`CreateTransientDisplay`, 사용자 전환과 같은 방식), seat0에 그 화면이 보이는지 확인한 뒤
+  거기서 alice를 로그인시킵니다(두 세션이 함께 실행). 이어서 RPM 업데이트 도우미(두 매니저 모두에서
+  pipewire 재시작, 표시 지워짐, `user@`가 그 자리에서 다시 읽음), bob의 linger(매니저가 시작되고
+  `systemctl --user -M bob@`가 동작하며, disable-linger가 아무것도 남기지 않고 멈춤), alice의 로그아웃,
+  재부팅을 확인합니다. 모든 `user@`는 5초 안에 멈췄고 강제 종료되거나 실패하지 않았어야 합니다. s6
+  부팅에서는 각 `user@`를 "shutdown starts"부터 러너의 PAM 세션이 끝날 때까지 잽니다.
+  `PRE_REBOOT_SCRIPT=FILE`은 재부팅 전에 측정 스크립트를 실행합니다(스크립트 머리말 참고).
+- `confined`는 SELinux로 제한된 사용자 carol(`user_u`)과 dave(`staff_u`)를 linger로 추가합니다. 각
+  `user@`가 활성화되고, 그 매니저가 사용자의 도메인(`user_t`, `staff_t`)에서 실행되며, 그 도메인에서
+  나온 거부가 없어야 합니다.
 
 `tests/vm-s6-boot.sh ~/uinitconverter-vm`은 README 2-4단계처럼 설치해 VM을 s6로 부팅합니다. 코어 RPM
 (`packages/build-rpms.sh`, 기본 `~/uinitconverter-vm/rpmbuild/core/rpms` 또는 `CORE_RPMS=`), 독립 도구 RPM
@@ -304,31 +264,13 @@ dnf가 받습니다), `initconvert init --yes --default-s6 --selinux=enforcing`(
 tester의 자동 로그인 세션(자기 유닛 안의 gnome-shell, 세션 타깃, pipewire, 실패한 사용자 유닛 없음), AVC 거부를
 확인하고, 실패한 시스템 유닛을 보여 줍니다. `BOOT_ONLY_S6=yes`는 init에 `--boot-only-s6=yes`를 더하고
 (uinitconverter의 자체 initramfs, mdevd 포함), 항목이 그것으로 부팅하는지, initramfs에서 systemd가 실행되지
-않았는지, 루트와 `/var` 마운트(VM에서는 btrfs 서브볼륨)를 확인합니다. 모드는 `user@`가 무엇을 실행해야
-하는지 정합니다:
+않았는지, 루트와 `/var` 마운트(VM에서는 btrfs 서브볼륨)를 확인합니다. `user@1000`은 `systemd --user`를
+실행하고, 그것이 tester의 버스에서 `org.freedesktop.systemd1`을 가지고 있어야 합니다. 모드:
 
-| 모드 | 설정 | `user@1000`이 실행하는 것 |
-|---|---|---|
-| `s6`(기본) | `USER_MANAGER=s6`, `uinitconverter-user` 설치 | `initconvert-user-manager`. 이어서 s6 부팅에서 재부팅하고 같은 확인 |
-| `no-package` | `USER_MANAGER=s6`, `uinitconverter-user` 없음 | `systemd --user`, 러너의 "install uinitconverter-user" 줄 |
-| `default` | 모든 패키지, `USER_MANAGER=` 없음 | `systemd --user`(기본값) |
-| `systemd` | 모든 패키지, `USER_MANAGER=systemd` | `systemd --user` |
-
-`BOOT=systemd-rpm tests/vm-user-manager.sh ~/uinitconverter-vm MODE`는 `greeter`, `session`, `apps`, `lifecycle`,
-`fallback`을 사용자가 설정하는 그대로 일반 systemd 부팅에서 실행합니다. `uinitconverter-user`와 그것이 요구하는
-패키지만(`CORE_RPMS=`, `SKARNET_RPMS=`에서) 설치하고 `sudo initconvert-user-setup on`을 실행하며, 커널 플래그는
-없습니다. baseline은 패키지를 설치하고 끈 채로 두므로, 설치만으로는 아무것도 바뀌지 않는지도 확인합니다.
-
-`tests/vm-user-setup.sh ~/uinitconverter-vm`은 모든 패키지를 설치하고 `initconvert init`을 실행한(SELinux 모듈 포함)
-systemd 부팅에서, 사용자 컴퓨터와 같은 구성으로 `initconvert-user-setup`을 확인합니다. `on`과 재부팅(s6 매니저,
-enforcing, AVC 거부 없음), `off`와 재부팅, `on` 뒤 `dnf remove uinitconverter-user`(드롭인이 지워짐), 그리고
-`OLD_RPMS=`가 있으면 같은 버전의 옛 빌드에서 업그레이드(업그레이드만으로는 켜지지 않고, 그 뒤 `on`이 동작)를
-확인합니다. 옛 RPM을 먼저 빌드해야 새 빌드의 릴리스 번호가 더 큽니다. 명령은 스크립트 머리말에 있습니다.
-
-`BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm MODE`는 `session`과 `lifecycle` 확인(과 그 baseline)을
-같은 방식으로 s6 부팅에서 실행합니다. 모든 RPM, `USER_MANAGER=s6`(baseline에서는 `systemd`), `initconvert init`을 쓰므로
-s6 부팅의 러너가 모든 `user@`를 시작합니다. 재부팅 때는 각 `user@`를 "shutdown starts"부터 러너의 PAM 세션이
-끝날 때까지 재며, 한도는 같은 5초입니다.
+| 모드 | 설정 |
+|---|---|
+| `default`(기본) | 모든 패키지. 이어서 s6 부팅에서 재부팅하고 같은 확인 |
+| `old-config` | 모든 패키지, `uinitconverter.conf`에 `USER_MANAGER=s6`과 `USER_FALLBACK_ON=`을 남김(0.3.0의 s6 사용자 매니저가 쓰던 것): 무시됨 |
 
 RPM을 빨리 다시 빌드하려면 `packages/build-rpms.sh --test DIR`(packages README 참고)과 `CORE_RPMS=DIR/rpms`.
 콘솔은 `~/uinitconverter-vm/s6boot-MODE-serial.log`에, 화면은 `s6boot-MODE.png`에 남습니다.
@@ -668,7 +610,7 @@ sudo initconvert init --boot-only-s6=yes
 
 ```sh
 sudo initconvert init --uninstall
-sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd uinitconverter-user \
+sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd \
     uinitconverter-fdstore uinitconverter-notify uinitconverter-journal-relay uinitconverter-linkwatch
 sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd \
     skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel

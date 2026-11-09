@@ -56,6 +56,12 @@ starting work; append a new session entry when you finish.
 7. **Safety at install:** the normal systemd boot stays the default; setup only
    adds a GRUB entry "Fedora (s6 + sdcompat)" (SELinux permissive, no plymouth),
    keeps backups, and offers rollback (`sdcompat.db=previous`, `sdcompat.reload=0`).
+8. **Scope** (owner's decision, 2026-11-10, part 205): uinitconverter
+   implements only what the real systemd programs that still run need from
+   PID 1 (logind, `systemd --user`, journald) and what it takes to run
+   Fedora's unit files under s6-rc. "systemd does it too" is not a reason;
+   a feature is added only for a named real caller, recorded here. The s6
+   user manager was removed under this rule.
 
 ## Session 1: 2026-10-18 to 2026-10-19
 
@@ -12601,3 +12607,29 @@ Not run: `tests/vm-user-setup.sh` (the setup tool's `on` warning goes to stderr,
 
 1. The owner: push; on their machine, the update gives `systemd --user` at the next login unless `sudo initconvert-user-setup on`.
 2. Hardening the default path (`systemd --user` under s6): more machines and Fedora releases.
+
+## 2026-11-10, part 205: the scope rule; the s6 user manager removed
+
+**Owner's question:** "I think, we make systemd that developed by rust. how we can make distance from systemd? When I start this project, I just make s6 PID1 and translate systemd command to s6 command." Measured: the core was about 36,000 lines of Rust, most of it systemd behaviour (the D-Bus daemon ~13,200, the exec sandbox ~5,600, the s6 user manager), and the translation part (`gen`, `runner`, `timers`) ~8,000. Proposed five steps: (1) a written scope rule, (2) remove the s6 user manager, (3) move work from runtime to generation time, (4) make the sandboxing best-effort, (5) freeze the D-Bus surface to known callers. **The owner chose 1 and 2** ("could you do 1, 2?"); 3-5 wait for an audit.
+
+**1. Scope rule** (key decision 8 above; CLAUDE.md; "Scope"/"범위" section in the docs/etc pair).
+
+**2. The s6 user manager removed.** Correction to my earlier answer: `dynamic.rs` is not only the user manager's (the system daemon runs on-demand `user@UID` and the AUTO_MASK leftovers through it), so it stays; what went is user mode.
+- Code: `initconvertd user-manager` and the `initconvert-user-manager` argv0 entry; `user.rs` (launcher, fallback, generators) and `daemon/oom.rs` (oomd report) deleted; every `cfg.user_mode` branch in the daemon (user transactions and stop transactions, `stop_in_waves`, `pending_starts`, Exit/exit request, fallback request, bus reconnect, SIGHUP/SIGRTMIN+25 reload, device and s6-rc skips, app.slice default, `attach_via_system`, `unit_of_cgroup_in`), the dynamic engine's socket and target units (only user mode made them dynamic; `dyn_start_socket`, `arm_socket_service`, `sockets_of`, the rearm), and the matching status branches in `s6.rs` and `accept.rs`. Config: `user_mode`, `cgroup_base`, `user_manager`, `user_exclude`, `user_fallback_on`, `INTERNAL_KEYS` (USER_MODE, CGROUP_BASE) gone; **USER_MANAGER, USER_EXCLUDE, USER_FALLBACK_ON moved to REMOVED_KEYS** (accepted, ignored: `initconvert-user-setup on` wrote USER_MANAGER=s6 into owners' configs; test `removed_user_manager_keys_still_load`). Loader: user specifiers and `UserDirs`. Runner: `user_manager_command`, the fallback request, the user-mode exit action, the user-bus BusName helper, user `RuntimeDirectory=` bases. Timers: user stamps. Gen: `logger_run` lost its user-mode fallback (and its `cfg` argument). exec: `cgroup::base()` is the root. `state::FALLBACK_REQUEST` gone. Crates: 2,786 lines removed, 75 added.
+- Packaging: `uinitconverter-user.spec`, `dist/user/initconvert-user-setup`, `dist/tmpfiles.d/uinitconverter-user.conf` deleted; `build-rpms.sh` builds five packages; **`uinitconverterd` Obsoletes `uinitconverter-user < %{version}-%{release}`**, so an update erases it and its `%preun` (`$1 = 0`) deletes the `user@.service.d/90-uinitconverter.conf` drop-in on a systemd boot. `uinitconverter` no longer Suggests it. SELinux: the `/run/uinitconverter-user` filecon removed (the notify socket type stays: `systemd --user` of a confined user still sends READY=1 to the runner). `dist/uinitconverter.conf`: the USER_* block removed.
+- Tests: `tests/user-sandbox.sh`, `tests/user-setup.sh`, `tests/vm-user-setup.sh` deleted (and from `tests/all.sh`). `tests/vm-user-manager.sh` rewritten around `systemd --user`: the former baselines are now the modes `session` (default), `greeter`, `apps`, `lifecycle`, `confined`; `BOOT=systemd` (stock, nothing installed) or `BOOT=s6` (session, lifecycle, confined, as before); `user`, `fallback` and `BOOT=systemd-rpm` gone. `tests/vm-s6-boot.sh`: modes `default` (now with the reboot from the s6 boot) and `old-config` (USER_MANAGER=s6 and USER_FALLBACK_ON= left in the config: must be ignored); `s6`, `no-package`, `systemd` gone.
+- Docs (both languages): docs/etc "Scope" section, "The s6 user manager (removed)" replacing the long section, the rows and keys; TESTING (user-mode sandbox text, the VM sections, the s6 boot table, the removal command); PACKAGEBUILD; packages README (five packages); CHANGELOG "Unreleased" entry; CLAUDE.md. The 0.3.0 release notes and CHANGELOG 0.3.0 entries are history and stay.
+
+**Tests:** `cargo build` no warnings; `cargo fmt --check` clean; `cargo test` 130 passed, 0 failed; `tests/sandbox.sh` + `check.sh` **374/374** (same as part 203); `bash -n` and `shellcheck -S warning` pass on every changed script. `SANDBOX_JOURNAL=no` **381/381**, `SANDBOX_FDSTORE=no` **362/362**. **Not run:** the VM tests (`vm-s6-boot.sh default`/`old-config`, `vm-user-manager.sh` in its new form, both boots), the RPM build, and the upgrade path from 0.3.0 with `uinitconverter-user` installed (does dnf erase it, and does its `%preun` drop the drop-in).
+
+### Current state
+
+0.3.0 is released. Not pushed since: f981fb5 (systemd --user default, part 203). This part is committed (not pushed). The s6 user manager is gone from the tree; the core is about 2,800 lines of Rust smaller.
+
+### Next steps
+
+1. Owner: review and push.
+2. `packages/build-rpms.sh --test`, then `tests/vm-s6-boot.sh ~/uinitconverter-vm` (default and `old-config`) and `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm session` (and `lifecycle`, `confined`).
+3. The upgrade from 0.3.0 with `uinitconverter-user` installed and `initconvert-user-setup on` (systemd boot): `uinitconverter-user` erased, the drop-in gone, `user@` on `systemd --user` after the next login. No test script covers it now (vm-user-setup.sh was deleted); do it by hand in the VM or write a small one.
+4. The audit for steps 3-5 of the scope discussion: each feature with its real caller (or none), marked keep, shrink or drop.
+

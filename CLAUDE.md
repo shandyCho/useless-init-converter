@@ -16,6 +16,12 @@ if they turned out to be wrong.
 
 ## Working on this project
 
+- Scope (the owner's decision, work_history part 205): uinitconverter
+  implements only what the real systemd programs that still run need from
+  PID 1 (logind, `systemd --user`, journald) and what it takes to run
+  Fedora's unit files under s6-rc. "systemd does it too" is not a reason to
+  add a feature; add one only for a named real caller, and record that
+  caller in work_history.md. See "Scope" in the docs/etc pair.
 - Layout: the core is one Cargo workspace (`crates/`); its crates may depend
   on each other. `standalone/*` are separate projects (each its own
   `[workspace]`, Cargo.lock, README pair and spec) and must not depend on the
@@ -30,11 +36,8 @@ if they turned out to be wrong.
 - Packaging: each core executable is its own RPM (`packages/NAME.spec`, all
   built from one workspace tarball by `packages/build-rpms.sh`), and they
   depend on each other with `Requires`; the library crates are not packaged.
-  `uinitconverter-user` (noarch) is the s6 user manager: the link
-  `initconvert-user-manager` into `initconvertd`, `initconvert-user-setup`
-  (on/off/status on a systemd boot, `dist/user/`) and its tmpfiles.d
-  entry; without it `user@` keeps `systemd --user`. It must keep working
-  without the s6 boot packages (no s6-rc, gen or `uinitconverter`).
+  `user@UID.service` runs `systemd --user`; the s6 user manager
+  (`uinitconverter-user`) was removed and `uinitconverterd` Obsoletes it.
   The `uinitconverter` package holds the boot setup (`dist/`) and requires the tools.
   The version is `[workspace.package] version` in Cargo.toml and the release
   is generated per build; the specs carry neither, so build them only with
@@ -46,27 +49,19 @@ if they turned out to be wrong.
   `SANDBOX_FDSTORE=no` in front of both scripts when touching those parts.
   `SANDBOX_S6NET_BIN=~/rpmbuild-skarnet/sysroot/usr/bin` (after
   `dist/rpm/build-skarnet-rpms.sh`) runs the `Accept=yes` TCP checks instead
-  of skipping them. For the user manager (`USER_MODE`, `user.rs`, the
-  dynamic engine): `tests/user-sandbox.sh DIR`, which stops everything
-  itself; for `initconvert-user-setup`: `tests/user-setup.sh DIR`.
-  Changes to the user manager's behaviour in a GNOME session are checked
-  in the VM: `tests/gnome-vm.sh` (fetch/provision once into
-  `~/uinitconverter-vm`), then `tests/vm-user-manager.sh ~/uinitconverter-vm
-  MODE` with `BUILD=release` after `cargo build --release` and
-  `SKARNET_RPMS=~/rpmbuild-skarnet/rpms`; modes: `user`, `greeter`,
-  `session`, `apps`, `lifecycle`, `fallback`; `baseline` (for `greeter`)
-  and `session-`, `apps-`, `lifecycle-baseline` run the same on stock
-  `systemd --user` to compare (see the TESTING pair). `VM_KEEP=yes` keeps
-  the VM up for `tests/gnome-vm.sh ssh`. The s6 boot itself (the RPMs,
+  of skipping them. GNOME under `systemd --user` is checked in the VM:
+  `tests/gnome-vm.sh` (fetch/provision once into `~/uinitconverter-vm`),
+  then `tests/vm-user-manager.sh ~/uinitconverter-vm MODE`, modes
+  `session`, `greeter`, `apps`, `lifecycle`, `confined`; `BOOT=systemd`
+  (default, the stock boot as reference) or `BOOT=s6` (session, lifecycle,
+  confined; every RPM and `initconvert init`). `VM_KEEP=yes` keeps the VM
+  up for `tests/gnome-vm.sh ssh`. The s6 boot itself (the RPMs,
   `initconvert init`, `rc.init`, the runner's `user@`):
-  `tests/vm-s6-boot.sh ~/uinitconverter-vm MODE`, modes `s6`, `no-package`,
-  `default`, after `packages/build-rpms.sh --test DIR` with
-  `CORE_RPMS=DIR/rpms` (the standalone RPMs from `standalone/*/build-rpm.sh
-  ~/uinitconverter-vm/rpmbuild/standalone`). `BOOT=s6` (session, lifecycle)
-  and `BOOT=systemd-rpm` (the systemd boot with only `uinitconverter-user`
-  and `initconvert-user-setup on`) in front of `tests/vm-user-manager.sh`;
-  `tests/vm-user-setup.sh ~/uinitconverter-vm` (with `OLD_RPMS=` for the
-  upgrade case) for `initconvert-user-setup` with every package installed.
+  `tests/vm-s6-boot.sh ~/uinitconverter-vm MODE`, modes `default`,
+  `old-config`, after `packages/build-rpms.sh --test DIR` with
+  `CORE_RPMS=DIR/rpms` and `SKARNET_RPMS=~/rpmbuild-skarnet/rpms` (the
+  standalone RPMs from `standalone/*/build-rpm.sh
+  ~/uinitconverter-vm/rpmbuild/standalone`).
   Everything runs unprivileged and never touches the host's init system.
 - Never modify skarnet's sources (skalibs, execline, s6, s6-rc,
   s6-linux-init, s6-frontend), and don't add patches for them in

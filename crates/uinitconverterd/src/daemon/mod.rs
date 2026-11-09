@@ -15,7 +15,6 @@ mod errors;
 mod introspect;
 mod jobs;
 mod manager;
-mod oom;
 mod private;
 mod prop_order;
 mod props;
@@ -97,32 +96,15 @@ pub struct Transient {
     pub description: String,
 }
 
-/// Why the user manager falls back to systemd --user, once it does.
-static FALLBACK: Mutex<Option<String>> = Mutex::new(None);
-
-/// The fallback reason, for the launcher after the daemon returned.
-pub fn fallback_reason() -> Option<String> {
-    FALLBACK.lock().unwrap().clone()
-}
-
 pub struct Daemon {
     pub cfg: Config,
-    /// The bus. A user manager runs before its bus exists and outlives a
-    /// bus restart (gnome-session-ctl --restart-dbus): None meanwhile.
+    /// The bus.
     conn: RwLock<Option<Connection>>,
-    /// The user manager is exiting: a stopped bus is not armed again.
-    pub exiting: AtomicBool,
-    /// A user manager was asked to exit (Manager.Exit, an exit action, a
-    /// fallback): the main loop stops every unit and returns, as on SIGTERM.
-    exit_request: tokio::sync::Notify,
     /// The last start job of each unit, by when it finished (start_seq),
     /// and its result: a start merged into it (execute_job) gets the same.
     last_start: Mutex<HashMap<String, (u64, &'static str)>>,
     /// Finished start jobs, counted.
     start_seq: std::sync::atomic::AtomicU64,
-    /// Units a user transaction is going to start (count of transactions),
-    /// until their start is done: a Requisite= on one waits for it.
-    pub pending_starts: Mutex<BTreeMap<String, usize>>,
     pub index: RwLock<Index>,
     pub jobs: Mutex<BTreeMap<u32, Job>>,
     pub next_job: AtomicU32,
@@ -322,51 +304,6 @@ impl Daemon {
         }
     }
 
-    /// A user manager asks to exit (Manager.Exit, SuccessAction=exit):
-    /// the main loop stops every unit and returns.
-    pub(super) fn request_exit(&self) {
-        self.exit_request.notify_one();
-    }
-
-    /// A user manager hands its user over to systemd --user (the launcher
-    /// does it once the daemon has returned; see user.rs). The first
-    /// reason wins.
-    pub(super) fn request_fallback(&self, reason: &str) {
-        if !self.cfg.user_mode {
-            return;
-        }
-        {
-            let mut f = FALLBACK.lock().unwrap();
-            if f.is_some() {
-                return;
-            }
-            *f = Some(reason.to_string());
-        }
-        eprintln!("initconvertd: user mode: {reason}: handing over to systemd --user");
-        self.request_exit();
-    }
-
-    /// A runner's request: a unit failed into a USER_FALLBACK_ON= unit
-    /// (the runner checked that no logout was under way). Not while the
-    /// manager is exiting: units fail as they go down.
-    fn fallback_on_failure(&self, reason: &str) {
-        if self.exiting.load(Ordering::Relaxed) {
-            return;
-        }
-        self.request_fallback(reason);
-    }
-
-    /// user@.service is Type=notify-reload: the reload is announced and
-    /// its end told with READY=1, as systemd --user does.
-    async fn user_reload(&self) {
-        util::sd_notify(&format!(
-            "RELOADING=1\nMONOTONIC_USEC={}",
-            util::now_monotonic_usec()
-        ));
-        let _ = self.reload_db().await;
-        util::sd_notify("READY=1");
-    }
-
     pub(super) fn bus(&self) -> Option<Connection> {
         self.conn.read().unwrap().clone()
     }
@@ -374,21 +311,6 @@ impl Daemon {
     async fn reload_db(&self) -> Result<(), String> {
         self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(true,))
             .await;
-        // A user manager has no database: a reload rereads the unit files.
-        if self.cfg.user_mode {
-            let run = self.cfg.run_dir.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
-                if runtime.starts_with('/') {
-                    crate::user::run_unit_generators(&runtime, &crate::user::written_env(&run));
-                }
-            })
-            .await;
-            self.invalidate_caches();
-            self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(false,))
-                .await;
-            return Ok(());
-        }
         let cfg = self.cfg.clone();
         let (plan, moving) = tokio::task::spawn_blocking(move || {
             let plan = gen::plan(&cfg);
@@ -557,28 +479,8 @@ async fn connect_bus(bus: &Bus) -> Result<(Connection, MessageStream), String> {
     Ok((conn, stream))
 }
 
-/// The user bus's socket, for an address of the form unix:path=P.
-fn bus_socket(bus: &Bus) -> Option<PathBuf> {
-    let Bus::Address(a) = bus else { return None };
-    a.split(';')
-        .next()?
-        .strip_prefix("unix:")?
-        .split(',')
-        .find_map(|kv| kv.strip_prefix("path="))
-        .map(PathBuf::from)
-}
-
 pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), String> {
-    // The system manager needs its bus to start. A user manager starts the
-    // bus itself (dbus.socket, then dbus.service), so it connects once the
-    // bus is there, and again after the bus restarts.
-    let (bus_tx, mut bus_rx) =
-        tokio::sync::mpsc::unbounded_channel::<(Connection, MessageStream)>();
-    let first = if cfg.user_mode {
-        None
-    } else {
-        Some(connect_bus(&bus).await?)
-    };
+    let first = connect_bus(&bus).await?;
 
     let manager_env = crate::envfile::load(&cfg.run_dir.join("manager.env"))
         .map(|v| v.into_iter().map(|(k, v)| format!("{k}={v}")).collect())
@@ -586,12 +488,9 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     let daemon = Arc::new(Daemon {
         index: RwLock::new(Index::load(&cfg)),
         cfg,
-        conn: RwLock::new(first.as_ref().map(|(c, _)| c.clone())),
-        exiting: AtomicBool::new(false),
-        exit_request: tokio::sync::Notify::new(),
+        conn: RwLock::new(Some(first.0.clone())),
         last_start: Mutex::new(HashMap::new()),
         start_seq: std::sync::atomic::AtomicU64::new(0),
-        pending_starts: Mutex::new(BTreeMap::new()),
         jobs: Mutex::new(BTreeMap::new()),
         next_job: AtomicU32::new(0),
         s6: s6::State::default(),
@@ -626,7 +525,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     if let Some(def) = daemon.index.read().unwrap().default_target.clone() {
         daemon.started_targets.lock().unwrap().insert(def);
     }
-    if daemon.index.read().unwrap().units.is_empty() && !daemon.cfg.user_mode {
+    if daemon.index.read().unwrap().units.is_empty() {
         eprintln!(
             "initconvertd: no generated database in {} (run `initconvert-gen reload`)",
             daemon.cfg.state_dir.display()
@@ -668,73 +567,14 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
     tokio::spawn(async move {
         let mut last = HashMap::new();
         let mut mtimes = HashMap::new();
-        let mut tick: u32 = 0;
-        // A user manager with its own cgroup reports its slices to
-        // systemd-oomd (oom.rs), every 5 s if anything changed.
-        let mut oomd = (watcher.cfg.user_mode && watcher.cfg.cgroup_base.is_some())
-            .then(|| std::sync::Arc::new(std::sync::Mutex::new(oom::Reporter::default())));
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             watcher.watch_dynamic(&mut last).await;
             watcher.watch_states(&mut mtimes, &mut last).await;
-            if watcher.cfg.user_mode {
-                let req = watcher.cfg.run_dir.join(crate::state::FALLBACK_REQUEST);
-                if let Ok(text) = std::fs::read_to_string(&req) {
-                    let _ = std::fs::remove_file(&req);
-                    let reason = text.split_once('\n').map(|(_, r)| r).unwrap_or(&text);
-                    watcher.fallback_on_failure(reason.trim());
-                }
-            }
-            tick = tick.wrapping_add(1);
-            if let Some(r) = oomd.as_mut().filter(|_| tick % 5 == 0) {
-                let (cfg, r) = (watcher.cfg.clone(), r.clone());
-                let _ = tokio::task::spawn_blocking(move || {
-                    let now = oom::scan(&cfg, &crate::cgroup::base());
-                    r.lock().unwrap().update(now);
-                })
-                .await;
-            }
         }
     });
 
-    let mut current: Option<(Connection, MessageStream)> = first;
-    // A user manager has no s6-rc boot: it starts default.target itself,
-    // and tells user@UID.service it is ready once that is done.
-    if daemon.cfg.user_mode {
-        let d = daemon.clone();
-        tokio::spawn(async move {
-            let r = d.start_any("default.target").await;
-            eprintln!("initconvertd: user mode: default.target {r}");
-            util::sd_notify("READY=1\nSTATUS=Startup finished.");
-        });
-        let d = daemon.clone();
-        let tx = bus_tx.clone();
-        let sock = bus_socket(&bus);
-        tokio::spawn(async move {
-            let mut said = false;
-            loop {
-                let present = sock.as_ref().map(|p| p.exists()).unwrap_or(true);
-                if d.bus().is_none() && present && !d.exiting.load(Ordering::Relaxed) {
-                    match connect_bus(&bus).await {
-                        Ok((c, s)) => {
-                            eprintln!("initconvertd: user mode: on the bus, serving {BUS_NAME}");
-                            *d.conn.write().unwrap() = Some(c.clone());
-                            said = false;
-                            if tx.send((c, s)).is_err() {
-                                return;
-                            }
-                        }
-                        Err(e) if !said => {
-                            eprintln!("initconvertd: user mode: {e} (trying again)");
-                            said = true;
-                        }
-                        Err(_) => {}
-                    }
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            }
-        });
-    }
+    let mut current: Option<(Connection, MessageStream)> = Some(first);
 
     let rec = daemon.clone();
     tokio::spawn(async move {
@@ -757,39 +597,11 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
 
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|e| e.to_string())?;
-    // systemd --user reloads on SIGHUP and re-executes on SIGRTMIN+25
-    // (user@.service's ExecReload=): both reread the unit files here.
-    let mut hup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-        .map_err(|e| e.to_string())?;
-    let mut rtmin25 = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(
-        libc::SIGRTMIN() + 25,
-    ))
-    .map_err(|e| e.to_string())?;
     let mut stopping: Option<tokio::task::JoinHandle<()>> = None;
     let mut stopped = false;
     loop {
         tokio::select! {
-            _ = hup.recv(), if daemon.cfg.user_mode => daemon.user_reload().await,
-            _ = rtmin25.recv(), if daemon.cfg.user_mode => daemon.user_reload().await,
-            c = bus_rx.recv() => {
-                if let Some(c) = c {
-                    current = Some(c);
-                }
-            }
-            _ = daemon.exit_request.notified(), if stopping.is_none() && daemon.cfg.user_mode => {
-                daemon.exiting.store(true, Ordering::Relaxed);
-                let d = daemon.clone();
-                stopping = Some(tokio::spawn(async move { d.stop_all_user().await }));
-            }
             _ = term.recv(), if stopping.is_none() => {
-                if daemon.cfg.user_mode {
-                    // The user's session ends: stop every unit, as systemd
-                    // --user does before it exits.
-                    daemon.exiting.store(true, Ordering::Relaxed);
-                    let d = daemon.clone();
-                    stopping = Some(tokio::spawn(async move { d.stop_all_user().await }));
-                    continue;
-                }
                 if !daemon.cfg.run_dir.join("shutting-down").exists() {
                     break;
                 }
@@ -806,15 +618,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
             }
             m = async { current.as_mut().unwrap().1.next().await }, if current.is_some() => {
                 let Some(m) = m else {
-                    if !daemon.cfg.user_mode {
-                        break;
-                    }
-                    // The bus stopped (a restart, or it failed): serve the
-                    // private socket meanwhile, connect again when it is back.
-                    eprintln!("initconvertd: user mode: the bus went away");
-                    *daemon.conn.write().unwrap() = None;
-                    current = None;
-                    continue;
+                    break;
                 };
                 let Ok(msg) = m else { continue };
                 match msg.message_type() {
@@ -851,7 +655,7 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
             let _ = h.await;
         }
         Some(_) => {}
-        None if daemon.cfg.run_dir.join("shutting-down").exists() && !daemon.cfg.user_mode => {
+        None if daemon.cfg.run_dir.join("shutting-down").exists() => {
             daemon.stop_dynamic_at_shutdown().await
         }
         None => {}
@@ -917,43 +721,6 @@ mod tests {
         assert_eq!(apply_markers(m, &[]).unwrap(), set(&[]));
         assert!(apply_markers(set(&[]), &words(&["+needs-restart", "needs-reload"])).is_err());
         assert!(apply_markers(set(&[]), &words(&["+bogus"])).is_err());
-    }
-
-    #[test]
-    fn unit_of_cgroup_per_manager() {
-        let sys = "/user.slice/user-1000.slice/user@1000.service/app.slice/ptyxis-spawn-x.scope";
-        assert_eq!(
-            unit_of_cgroup_in(sys, None).as_deref(),
-            Some("user@1000.service")
-        );
-        let base =
-            std::path::Path::new("/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service");
-        let user = |cg: &str| unit_of_cgroup_in(cg, Some(base));
-        assert_eq!(user(sys).as_deref(), Some("ptyxis-spawn-x.scope"));
-        assert_eq!(
-            user("/user.slice/user-1000.slice/user@1000.service/init.scope").as_deref(),
-            Some("init.scope")
-        );
-        assert_eq!(
-            user("/user.slice/user-1000.slice/user@1000.service/session.slice/a.service/sub")
-                .as_deref(),
-            Some("a.service")
-        );
-        assert_eq!(
-            user("/user.slice/user-1000.slice/user@1000.service/app.slice").as_deref(),
-            Some("app.slice")
-        );
-        // Not this manager's: another user's, the session scope, a prefix.
-        assert_eq!(
-            user("/user.slice/user-1001.slice/user@1001.service/app.slice/a.service"),
-            None
-        );
-        assert_eq!(user("/user.slice/user-1000.slice/session-2.scope"), None);
-        assert_eq!(
-            user("/user.slice/user-1000.slice/user@1000.service2/a.service"),
-            None
-        );
-        assert_eq!(user("/user.slice/user-1000.slice/user@1000.service"), None);
     }
 
     #[test]

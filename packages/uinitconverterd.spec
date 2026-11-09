@@ -16,15 +16,16 @@ Source0:        uinitconverter-%{version}.tar.gz
 BuildRequires:  cargo
 BuildRequires:  rust
 Requires:       s6
-# s6-rc and dbus-daemon are the s6 boot's (the uinitconverter package
-# requires them): the user manager (uinitconverter-user) uses neither.
+# s6-rc and dbus-daemon are the s6 boot's: the uinitconverter package
+# requires them.
 # Transient services (systemd-run) and the stop/reload commands run it.
 Requires:       uinitconverter-runner = %{version}-%{release}
 # Transient timers (systemd-run --on-calendar) run it.
 Recommends:     uinitconverter-timers = %{version}-%{release}
-# The s6 user manager (USER_MANAGER=s6, opt-in, not recommended) is that
-# package; the default is systemd --user.
-Suggests:       uinitconverter-user = %{version}-%{release}
+# The s6 user manager is gone (user@UID runs systemd --user): updating
+# removes its package, whose %%preun drops the user@ drop-in that
+# `initconvert-user-setup on` wrote.
+Obsoletes:      uinitconverter-user < %{version}-%{release}
 
 %description
 Serves the org.freedesktop.systemd1 D-Bus API on the system bus and on
@@ -66,6 +67,10 @@ install -Dm0644 dist/dbus/uinitconverter.conf %{buildroot}%{_datadir}/dbus-1/sys
 %{_datadir}/dbus-1/system.d/uinitconverter.conf
 
 %changelog
+* Tue Nov 10 2026 uinitconverter developers
+- The s6 user manager is removed: no `initconvertd user-manager`; Obsoletes
+  uinitconverter-user
+
 * Mon Nov 09 2026 uinitconverter developers
 - 0.3.0, see CHANGELOG-us.md
 

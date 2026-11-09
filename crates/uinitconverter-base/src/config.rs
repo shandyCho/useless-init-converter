@@ -107,35 +107,6 @@ pub struct Config {
     pub udev_dir: Option<PathBuf>,
     /// Also follow udevd's netlink events (devices added after startup).
     pub udev_monitor: bool,
-    /// A user's service manager (user@UID.service) instead of the system's:
-    /// every unit runs through the daemon's dynamic engine, without an s6-rc
-    /// database (work_history parts 136-137).
-    pub user_mode: bool,
-    /// The cgroup units go under (CGROUP_BASE=): a user manager's delegated
-    /// user@UID.service. None: the cgroup2 root, as the system manager.
-    pub cgroup_base: Option<PathBuf>,
-    /// What user@UID.service runs (`initconvertd user-manager`):
-    /// "systemd" (`systemd --user`) or "s6" (uinitconverter's user mode,
-    /// opt-in and not recommended); empty when not set: systemd on either
-    /// boot (user_manager_now). The kernel command line's
-    /// uinitconverter.user_manager= overrides it.
-    pub user_manager: String,
-    /// Globs of user units the s6 user manager does not run.
-    pub user_exclude: Vec<String>,
-    /// Globs of user units whose failure path makes the s6 user manager
-    /// hand over to systemd --user (an OnFailure= start of one, or a failed
-    /// start job of one): GNOME 51's session units fail into
-    /// gnome-session-shutdown.target, and the leader starts
-    /// gnome-session@NAME.target.
-    pub user_fallback_on: Vec<String>,
-}
-
-static CGROUP_BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
-/// Config::cgroup_base of this process's configuration (the cgroup code
-/// has no Config at hand).
-pub fn cgroup_base() -> Option<&'static Path> {
-    CGROUP_BASE.get().map(PathBuf::as_path)
 }
 
 /// The values INIT= accepts.
@@ -160,9 +131,9 @@ const JOURNAL_UNITS: &[&str] = &[
 pub const SYSLOGS: &[&str] = &["rsyslog", "syslog-ng"];
 
 /// Every key uinitconverter.conf may set: the contract between the parser
-/// (Config::load), dist/uinitconverter.conf (documents them), `initconvert
-/// init` (writes some) and the user mode (writes the user manager's own
-/// file). The tests check each side against these lists.
+/// (Config::load), dist/uinitconverter.conf (documents them) and
+/// `initconvert init` (writes some). The tests check each side against
+/// these lists.
 pub const KEYS: &[&str] = &[
     "INIT",
     "TOOLS",
@@ -205,14 +176,17 @@ pub const KEYS: &[&str] = &[
     "JOURNAL_STDOUT",
     "UDEV_DIR",
     "UDEV_MONITOR",
-    "CGROUP_BASE",
-    "USER_MODE",
     "ALLOW_UIDS",
 ];
-/// Keys only the user mode writes, into the user manager's generated file.
-pub const INTERNAL_KEYS: &[&str] = &["USER_MODE", "CGROUP_BASE"];
 /// Removed keys still accepted (ignored), so an older file still loads.
-pub const REMOVED_KEYS: &[&str] = &["AUTO_MASK"];
+/// USER_*: the s6 user manager, removed in work_history part 205
+/// (`initconvert-user-setup on` wrote USER_MANAGER=s6).
+pub const REMOVED_KEYS: &[&str] = &[
+    "AUTO_MASK",
+    "USER_MANAGER",
+    "USER_EXCLUDE",
+    "USER_FALLBACK_ON",
+];
 
 /// initconvert-runner's commands: the contract between the runner (parses
 /// them into its Cmd), initconvert-gen (writes them into the service
@@ -386,14 +360,6 @@ impl Config {
             transient_dir: PathBuf::from("/run/systemd/transient"),
             udev_dir: Some(PathBuf::from("/run/udev")),
             udev_monitor: true,
-            user_mode: false,
-            cgroup_base: None,
-            user_manager: String::new(),
-            user_exclude: Vec::new(),
-            user_fallback_on: vec![
-                "gnome-session-shutdown.target".into(),
-                "gnome-session@*.target".into(),
-            ],
         }
     }
 
@@ -439,21 +405,8 @@ impl Config {
                 "RUN_DIR" => cfg.run_dir = PathBuf::from(&v),
                 "LOG_DIR" => cfg.log_dir = opt(&v),
                 "EXCLUDE" => cfg.exclude = v.split_whitespace().map(String::from).collect(),
-                "USER_MANAGER" => match v.as_str() {
-                    "systemd" | "s6" => cfg.user_manager = v.clone(),
-                    o => {
-                        return Err(format!(
-                            "{}: USER_MANAGER={o}: systemd or s6",
-                            path.display()
-                        ))
-                    }
-                },
-                "USER_EXCLUDE" => {
-                    cfg.user_exclude = v.split_whitespace().map(String::from).collect()
-                }
-                "USER_FALLBACK_ON" => {
-                    cfg.user_fallback_on = v.split_whitespace().map(String::from).collect()
-                }
+                // Removed with the s6 user manager: user@ runs systemd --user.
+                "USER_MANAGER" | "USER_EXCLUDE" | "USER_FALLBACK_ON" => {}
                 "EXCLUDE_ADD" => cfg.exclude.extend(v.split_whitespace().map(String::from)),
                 "INCLUDE" => cfg.include = v.split_whitespace().map(String::from).collect(),
                 "DEP_MAP" | "DEP_MAP_ADD" => {
@@ -489,16 +442,6 @@ impl Config {
                 "JOURNAL_STDOUT" => cfg.journal_stdout = PathBuf::from(&v),
                 "UDEV_DIR" => cfg.udev_dir = opt(&v),
                 "UDEV_MONITOR" => cfg.udev_monitor = crate::unit::parse_bool(&v).unwrap_or(true),
-                "CGROUP_BASE" => {
-                    cfg.cgroup_base = opt(&v);
-                    if let Some(b) = &cfg.cgroup_base {
-                        let _ = CGROUP_BASE.set(b.clone());
-                    }
-                }
-                "USER_MODE" => {
-                    cfg.user_mode = crate::unit::parse_bool(&v).unwrap_or(false);
-                    crate::loader::set_user_mode(cfg.user_mode);
-                }
                 "ALLOW_UIDS" => {
                     cfg.allow_uids = v
                         .split_whitespace()
@@ -609,31 +552,6 @@ impl Config {
         }
     }
 
-    /// USER_MANAGER= as it applies on this boot: the kernel command line's
-    /// A user manager: whether `id` is in USER_FALLBACK_ON=.
-    pub fn is_fallback_unit(&self, id: &str) -> bool {
-        self.user_mode
-            && self
-                .user_fallback_on
-                .iter()
-                .any(|p| crate::util::fnmatch(p, id))
-    }
-
-    /// uinitconverter.user_manager= wins. Unset, both boots run systemd
-    /// --user; the s6 user manager is opt-in (`initconvert-user-setup on`
-    /// sets USER_MANAGER=s6) and not recommended, as it can't follow
-    /// systemd --user's changes: the owner's choice of 2026-11-09
-    /// (work_history 203), replacing the s6 boot's s6 default of 2026-11-05.
-    pub fn user_manager_now(&self, cmdline: &str) -> String {
-        cmdline
-            .split_whitespace()
-            .find_map(|w| w.strip_prefix("uinitconverter.user_manager="))
-            .filter(|v| matches!(*v, "systemd" | "s6"))
-            .map(str::to_string)
-            .or_else(|| (!self.user_manager.is_empty()).then(|| self.user_manager.clone()))
-            .unwrap_or_else(|| "systemd".to_string())
-    }
-
     pub fn is_excluded(&self, unit: &str) -> bool {
         self.exclude.iter().any(|g| crate::util::fnmatch(g, unit))
             && !self.include.iter().any(|g| crate::util::fnmatch(g, unit))
@@ -651,21 +569,20 @@ impl Config {
 mod tests {
     use super::*;
 
-    /// USER_MANAGER=: unset, systemd --user on either boot; set, it
-    /// applies; the kernel command line wins over both.
+    /// The s6 user manager's keys are gone but still load (ignored): an
+    /// older file with USER_MANAGER=s6 must not stop the boot.
     #[test]
-    fn user_manager_default_is_systemd() {
-        let mut cfg = Config::defaults();
-        assert_eq!(cfg.user_manager_now("quiet"), "systemd");
-        assert_eq!(cfg.user_manager_now("uinitconverter.user_manager=s6"), "s6");
-        cfg.user_manager = "s6".into();
-        assert_eq!(cfg.user_manager_now("quiet"), "s6");
-        assert_eq!(
-            cfg.user_manager_now("uinitconverter.user_manager=systemd"),
-            "systemd"
-        );
-        cfg.user_manager = "systemd".into();
-        assert_eq!(cfg.user_manager_now("quiet"), "systemd");
+    fn removed_user_manager_keys_still_load() {
+        let dir = std::env::temp_dir().join(format!("uinitconverter-um-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("c.conf");
+        std::fs::write(
+            &f,
+            "USER_MANAGER=s6\nUSER_EXCLUDE=\"a.service\"\nUSER_FALLBACK_ON=x.target\n",
+        )
+        .unwrap();
+        assert!(Config::load(Some(&f)).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -841,7 +758,7 @@ mod contract_tests {
             .split(|c: char| !(c.is_ascii_uppercase() || c == '_'))
             .collect();
         for k in super::KEYS {
-            if super::INTERNAL_KEYS.contains(k) || super::REMOVED_KEYS.contains(k) {
+            if super::REMOVED_KEYS.contains(k) {
                 continue;
             }
             assert!(

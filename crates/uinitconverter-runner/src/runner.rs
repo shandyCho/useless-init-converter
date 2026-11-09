@@ -310,46 +310,7 @@ impl Runner {
             .into_iter()
             .next()
             .ok_or_else(|| "empty ExecStart=".to_string())?;
-        Ok(self.user_manager_command(cmd))
-    }
-
-    /// USER_MANAGER=s6: user@UID.service runs uinitconverter's user manager
-    /// instead of `systemd --user` (work_history part 141). The unit file
-    /// stays as it is, so a systemd boot is not touched.
-    fn user_manager_command(&self, cmd: ExecCommand) -> ExecCommand {
-        let is_systemd_user = Path::new(&cmd.path).file_name() == Some("systemd".as_ref())
-            && cmd.argv.iter().any(|a| a == "--user");
-        if !self.unit.id.starts_with("user@") || !is_systemd_user {
-            return cmd;
-        }
-        let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
-        if self.cfg.user_manager_now(&cmdline) != "s6" {
-            return cmd;
-        }
-        // The s6 user manager is the uinitconverter-user package: without
-        // it, user@ keeps systemd --user.
-        let manager = crate::config::tool_path("initconvert-user-manager");
-        if !manager.exists() {
-            log(
-                self.id(),
-                &format!(
-                    "USER_MANAGER=s6, but {} is missing (install uinitconverter-user): running systemd --user",
-                    manager.display()
-                ),
-            );
-            return cmd;
-        }
-        let manager = manager.display().to_string();
-        let mut argv = vec![manager.clone()];
-        if self.cfg.config_path != Path::new(crate::config::DEFAULT_CONFIG) {
-            argv.push("--config".into());
-            argv.push(self.cfg.config_path.display().to_string());
-        }
-        ExecCommand {
-            path: manager,
-            argv,
-            ..cmd
-        }
+        Ok(cmd)
     }
 
     // ---- subcommands ----
@@ -516,48 +477,6 @@ impl Runner {
         });
     }
 
-    /// A unit's ActiveState from the manager (None if it can't be asked).
-    fn unit_active_state(&self, name: &str) -> Option<String> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .ok()?;
-        rt.block_on(async {
-            let conn = crate::client::connect(&self.cfg).await.ok()?;
-            tokio::time::timeout(
-                std::time::Duration::from_secs(3),
-                crate::client::unit_active_state(&conn, name),
-            )
-            .await
-            .ok()?
-            .ok()
-        })
-    }
-
-    /// A Manager method without arguments, detached like
-    /// start_units_detached.
-    fn call_manager_detached(&self, method: &'static str) {
-        let cfg = self.cfg.clone();
-        let id = self.unit.id.clone();
-        let _ = double_fork(move || {
-            let r = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| e.to_string())
-                .and_then(|rt| {
-                    rt.block_on(async {
-                        let conn = crate::client::connect(&cfg).await?;
-                        crate::client::manager_call(&conn, method, &())
-                            .await
-                            .map(|_| ())
-                    })
-                });
-            if let Err(e) = r {
-                eprintln!("uinitconverter[{id}]: {method}: {e}");
-            }
-        });
-    }
-
     /// Leaving the socket wait: as systemd's activation is a start job for
     /// the service, its Requires=, BindsTo= and Wants= (and .wants/,
     /// .requires/) start with it: pipewire.service's .wants/wireplumber
@@ -595,33 +514,6 @@ impl Runner {
             .into_iter()
             .map(|u| u.replace("%n", &self.unit.id))
             .collect();
-        // A user manager's session failing into USER_FALLBACK_ON= (GNOME's
-        // session units: OnFailure=gnome-session-shutdown.target): the
-        // daemon hands the user over to systemd --user (it reads this
-        // request in its watcher loop).
-        // Not when that unit is up or on its way already: a logout under
-        // way (gnome-session-shutdown.target's Conflicts= stopping units,
-        // which may fail into it). Asked before this OnFailure= starts it.
-        if !success {
-            if let Some(u) = units.iter().find(|u| self.cfg.is_fallback_unit(u)) {
-                let state = self.unit_active_state(u);
-                if matches!(
-                    state.as_deref(),
-                    Some("active" | "activating" | "deactivating")
-                ) {
-                    log(
-                        self.id(),
-                        &format!("failed while {u} is under way: no fallback"),
-                    );
-                } else {
-                    let text = format!("{u}\n{} failed (OnFailure={u})", self.unit.id);
-                    let _ = util::write_atomic(
-                        &self.cfg.run_dir.join(crate::state::FALLBACK_REQUEST),
-                        text.as_bytes(),
-                    );
-                }
-            }
-        }
         // OnFailureJobMode= (OnSuccessJobMode= for OnSuccess=), as
         // systemd: GNOME's units start gnome-session-shutdown.target
         // replace-irreversibly, so nothing undoes the logout.
@@ -636,24 +528,6 @@ impl Runner {
             .unwrap_or_else(|| "replace".into());
         self.start_units_detached(units_key, units, &mode);
         if let Some(action) = self.unit.get("Unit", action_key) {
-            // A user manager may only exit (systemd allows none, exit and
-            // exit-force there): systemctl --user exit is exit.target's
-            // systemd-exit.service with SuccessAction=exit-force.
-            if self.cfg.user_mode {
-                if action.starts_with("exit") {
-                    log(
-                        self.id(),
-                        &format!("{action_key}={action}: the user manager exits"),
-                    );
-                    self.call_manager_detached("Exit");
-                } else if action != "none" {
-                    log(
-                        self.id(),
-                        &format!("{action_key}={action} is not allowed in a user manager"),
-                    );
-                }
-                return;
-            }
             let cmd = match action.as_str() {
                 "none" => None,
                 a if a.starts_with("reboot") || a == "soft-reboot" || a == "kexec" => {

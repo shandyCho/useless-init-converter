@@ -48,9 +48,6 @@ Recommends:     uinitconverter-fdstore
 Recommends:     uinitconverter-notify
 Recommends:     uinitconverter-linkwatch
 Suggests:       uinitconverter-journal-relay
-# The s6 user manager: opt-in (USER_MANAGER=s6) and not recommended; the
-# default for user@UID is systemd --user on either boot.
-Suggests:       uinitconverter-user = %{version}-%{release}
 
 %description
 Runs Fedora's systemd units with s6 as the init system. This package holds
@@ -161,6 +158,10 @@ fi
 %dir %attr(0750,root,wheel) %{_localstatedir}/log/uinitconverter
 
 %changelog
+* Tue Nov 10 2026 uinitconverter developers
+- No longer Suggests uinitconverter-user (removed; user@UID runs
+  systemd --user)
+
 * Mon Nov 09 2026 uinitconverter developers
 - 0.3.0, see CHANGELOG-us.md
 

@@ -201,10 +201,3 @@
 (allow domain init_var_run_t (dir (getattr search)))
 (allow domain uinitconverter_notify_var_run_t (dir (getattr search)))
 (allow domain uinitconverter_notify_var_run_t (sock_file (getattr open write append)))
-;
-; The fallback records of the s6 user manager (/run/uinitconverter-user,
-; 1777, dist/tmpfiles.d/uinitconverter-user.conf): each user's manager
-; writes its own. As var_run_t a confined user's create was denied (the
-; record went to its runtime directory instead, which `initconvert-user-setup
-; status` doesn't read). Like /run/user/UID.
-(filecon "/run/uinitconverter-user(/.*)?" any (system_u object_r user_tmp_t ((s0) (s0))))

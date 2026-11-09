@@ -24,6 +24,23 @@
 라이브러리를 대체하는 방식이 아니라 프로토콜 수준에서 동작합니다. 실제
 `systemctl`과 `libsystemd`가 systemd와 통신할 때와 같은 방식으로 uinitconverter와 통신합니다.
 
+## 범위
+
+uinitconverter는 systemd 유닛을 s6로 잇는 다리이지, 두 번째 systemd가 아닙니다.
+다음 두 가지만 구현합니다.
+
+1. 계속 실행되는 실제 systemd 프로그램(systemd-logind, `systemd --user`,
+   systemd-journald)이 PID 1에 요구하는 것: 그 프로그램들이 호출하는
+   `org.freedesktop.systemd1` 메서드, transient slice와 scope, 필요할 때 만드는
+   `user@UID.service`, cgroup 위임, 종료 target
+2. Fedora의 유닛 파일을 s6-rc 아래에서 실행하는 데 필요한 것
+
+나머지는 추가하기 쉬워도 범위 밖입니다. "systemd도 이렇게 한다"는 이유가 되지
+않습니다. 기능은 실제로 필요로 하는 쪽(프로그램이나 Fedora 유닛)이 있을 때만
+추가하고, 그 쪽을 `work_history.md`에 적습니다. s6 사용자 매니저를 삭제한 것도
+이 때문입니다([아래](#s6-사용자-매니저-삭제됨) 참고). 그것은 `systemd --user`
+자체를 다시 구현한 것이었고, 그것을 필요로 하는 쪽은 없었습니다.
+
 ## systemd 부팅과 비교
 
 **systemd로 부팅할 때보다 측정할 수 있는 이점은 거의 없습니다. 주된 이점은 제어권입니다.**
@@ -52,7 +69,7 @@ s6를 PID 1로 두고 s6의 도구로 관리하면서 Fedora와 GNOME을 쓸 수
 | 메모리 | 거의 같습니다. 중앙값(total - available) 1154 대 1176 MiB(-23 MiB, 스냅숏 s6 21개와 systemd 6개)로, 부팅마다 생기는 20-25 MiB의 차이와 비슷합니다. |
 | 부팅 속도 | 더 빠를 수도 있지만 통제된 시험으로 확인하지는 않았습니다. 커널 시작부터 로그인 화면의 세션이 열릴 때까지 로그상 중앙값은 약 19초 대 28초입니다(s6 23번과 systemd 11번 부팅, 펌웨어와 부트 로더 제외). 이 부팅들은 날짜, 빌드, initramfs가 서로 다르고, 세션은 로그인 화면이 나타나기 전에 열립니다. |
 | 보안 | 전체적으로 낫지 않습니다. PID 1은 작아지지만 `initconvertd`와 도우미 프로세스 약 37개가 root로 실행되고, 최근 28개 서비스의 강화 설정 비교에서 s6가 더 약한 설정은 없습니다(다른 설정은 98개). bolt의 seccomp 필터 수(9 대 11)는 계속 표시되는데, systemd는 ABI마다 필터를 하나씩 올리고 여기서는 필터 하나가 세 ABI를 모두 다루기 때문입니다. |
-| systemd 줄이기 | 일부만 줄어듭니다. udevd, logind, `systemd --user`는 계속 실행되고(GNOME에 logind와 사용자 매니저가 필요합니다), `systemd` 패키지도 설치된 채로 남습니다. s6 사용자 매니저가 `systemd --user`를 대체할 수 있지만 선택 사항이며 권장하지 않습니다. |
+| systemd 줄이기 | 일부만 줄어듭니다. udevd, logind, `systemd --user`는 계속 실행되고(GNOME에 logind와 사용자 매니저가 필요합니다), `systemd` 패키지도 설치된 채로 남습니다. uinitconverter는 `systemd --user`를 대체하지 않습니다([범위](#범위) 참고). |
 
 **systemd와 비교한 비용**
 
@@ -193,13 +210,13 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 리스너가 둘 이상이거나 `ListenStream=`이 아닌(또는 `vsock:`인) `Accept=yes`, 그리고 템플릿이 `Type=notify`, `forking`, `dbus`인 경우: 소켓을 건너뛰며 이유는 `initconvert plan`에 나옵니다. 인스턴스는 연결이 끝나면 실패했어도 사라집니다. systemd는 실패한 인스턴스를 `systemctl reset-failed`까지 남겨 두지만 여기서는 `systemctl --failed`에 들어가지 않습니다(결과는 소켓의 로그와 `ExecStopPost=`에 남습니다). 실행 중인 연결의 재시작이나 다시 읽기는 실패합니다. 템플릿의 `Wants=`와 `Requires=`는 연결마다가 아니라 소켓과 함께 시작됩니다.
 - `Accept=no`: 실행 중에 `.socket`을 시작하면 여전히 그 서비스가 바로 시작되고, 요청 시 서비스가 요구하는 유닛 중 요청 시 서비스가 아닌 것은 부팅 때 시작됩니다(s6-rc 의존성).
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
-- systemd generator: 시스템의 generator는 s6 부팅에서 하나도 실행되지 않습니다(사용자 generator는 s6 사용자 매니저가 실행합니다. [s6 사용자 매니저](#s6-사용자-매니저-선택-사항-권장하지-않음) 참고). `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
+- systemd generator: 시스템의 generator는 s6 부팅에서 하나도 실행되지 않습니다(사용자 generator는 `systemd --user`가 실행합니다). `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
 - `AccuracySec=`(타이머를 묶지 않고 정시에 실행), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. 이 타이머 키들은 허용되지만 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.
 - 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=`(systemd에서는 BPF LSM 프로그램), IP 사용량 집계(`IPAccounting=`).
 - 이미 실행 중인 작업의 취소.
 - 작업 모드: 한 유닛의 작업은 차례로 실행되므로 `replace`는 아직 기다리는 충돌 작업만 취소하고 실행 중인 작업은 취소하지 않습니다(systemd는 실행 중인 시작을 멈춥니다). `ignore-dependencies`와 `ignore-requirements`는 s6-rc 밖에서 실행되는 유닛(인스턴스, 임시 유닛, 사용자 유닛)만 의존성 없이 시작합니다. s6-rc 데이터베이스의 유닛은 s6-rc에 컴파일된 의존성을 여전히 따릅니다.
 - `[Socket]`의 `PrivateNetwork=`, `JoinsNamespaceOf=`, `NetworkNamespacePath=`.
-- s6 부팅의 종료 때의 `KillMode=control-group`: 이때는 s6-rc가 데이터베이스의 서비스를 직접 멈추므로, 서비스의 나머지 프로세스는 주 프로세스가 끝난 뒤에야 시그널을 받습니다(데몬을 거치는 정지와 사용자 매니저의 모든 정지는 systemd처럼 함께 보냅니다).
+- s6 부팅의 종료 때의 `KillMode=control-group`: 이때는 s6-rc가 데이터베이스의 서비스를 직접 멈추므로, 서비스의 나머지 프로세스는 주 프로세스가 끝난 뒤에야 시그널을 받습니다(데몬을 거치는 정지는 systemd처럼 함께 보냅니다).
 - `dist/s6`에 자체 스크립트가 있는 서비스(`dbus`, `udevd`, `earlyoom`, `syslog`, `coredump`)의 유닛 설정: cgroup, 제한, 샌드박스, 사용자는 유닛에서 가져오지만 명령줄과 재시작, 정지 동작은 스크립트에 있습니다. 그래서 `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=`, `Type=`을 바꾸는 드롭인은 적용되지 않습니다.
 
 ## 오프라인 업데이트와 커널 업데이트
@@ -372,7 +389,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 | 무선 상태(rfkill) | systemd-rfkill 대신 s6 oneshot에서 util-linux `rfkill` |
 | 압축 스왑(zram) | systemd generator 대신 s6 oneshot `zram`이 Fedora의 zram-generator를 실행(같은 `zram-generator.conf`, 크기, 우선순위) |
 | 장치 | 일반 서비스로 실행되는 systemd-udevd |
-| 로그인, 사용자 매니저 | 감독(supervised) 서비스로 실행되는 systemd-logind와 `systemd --user`(`systemd --user` 대신 s6 사용자 매니저를 쓰는 것은 [선택 사항이며 권장하지 않음](#s6-사용자-매니저-선택-사항-권장하지-않음)) |
+| 로그인, 사용자 매니저 | 감독(supervised) 서비스로 실행되는 systemd-logind와 `systemd --user` |
 
 2단계(stage 2)가 실패하면 tty9(Ctrl+Alt+F9)에서 로그인해 `/run/uncaught-logs/current`를
 읽으세요. 마지막 설치 이전의 s6 데이터베이스로 부팅하려면 커널 명령줄에
@@ -456,110 +473,20 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 `journalctl -u systemd-logind`와 `journalctl -u user@1000.service`(또는 `JOURNAL=no`에서도
 동작하는 `uinitconverter log UNIT`)를 확인하세요.
 
-### s6 사용자 매니저 (선택 사항, 권장하지 않음)
+### s6 사용자 매니저 (삭제됨)
 
-**권장하지 않습니다.** 두 부팅 모두 기본값은 위에서 설명한 실제 `systemd --user`입니다. s6 사용자
-매니저는 GNOME 49가 쓰는 대로 `systemd --user`를 다시 구현한 것이라 systemd와 GNOME의 변화를 따라갈
-수 없습니다. 둘 중 하나가 업데이트되면 이 매니저로는 로그인이 깨질 수 있습니다. 세션도 s6로 감독하고
-싶고 그 위험을 받아들일 때만 쓰십시오. 아래의 `systemd --user` 자동 대체가 피해를 줄여 주지만 없애
-주지는 않습니다. 바탕이 된 계획은 `work_history.md` 136-155부에 있고, 203부에서 선택 사항이 되었습니다.
+0.3.0까지는 `uinitconverter-user` 패키지가 `systemd --user`를 대신하는 s6 사용자
+매니저를 제공했습니다(`work_history.md`의 part 203부터 선택 사항). 이제 삭제되었습니다.
+GNOME이 쓰는 대로 `systemd --user`를 다시 구현한 것이라 [범위](#범위) 밖이고,
+systemd와 GNOME의 변경을 따라갈 수 없었기 때문입니다. 두 부팅 모두
+`user@UID.service`는 `systemd --user`를 실행합니다.
 
-이것은 `uinitconverter-user` 패키지입니다(`dnf install uinitconverter-user`). s6 부팅 패키지 없이 일반 systemd
-부팅에서도 동작합니다. `uinitconverterd`, `uinitconverter-runner`, `uinitconverter-timers`와 skalibs,
-execline, s6 패키지만 함께 설치됩니다.
-
-- **systemd 부팅에서는** `sudo initconvert-user-setup on`으로 켭니다. `user@.service`의 드롭인
-  `/etc/systemd/system/user@.service.d/90-uinitconverter.conf`와 `USER_MANAGER=s6`을 씁니다.
-  `sudo initconvert-user-setup off`는 `systemd --user`로 되돌리고, `initconvert-user-setup status`는
-  설정과 지금 각 사용자의 `user@`가 무엇을 실행하는지 보여 줍니다. 바뀐 설정은 사용자마다 다음
-  로그인부터 적용됩니다(로그아웃하거나 재부팅). 패키지를 지우면 드롭인도 지워집니다.
-- **s6 부팅에서는** `USER_MANAGER=s6`(`on`이 씁니다)으로 켭니다. 러너가 `user@UID.service`에
-  `systemd --user` 대신 `initconvert-user-manager`를 실행합니다. 유닛 파일은 바꾸지 않습니다.
-  `USER_MANAGER=`가 없거나 `systemd`이면 `user@`는 `systemd --user`를 실행합니다. `uinitconverter`는
-  이 패키지를 Suggests만 하며, 설치해도 켜기 전에는 아무것도 바뀌지 않습니다. `USER_MANAGER=s6`인데
-  패키지가 없으면 `user@`는 `systemd --user`를 그대로 쓰고 러너가 그 이유를 로그에 남깁니다.
-- **어느 부팅에서든** 커널 명령줄의 `uinitconverter.user_manager=systemd`는 그 부팅 동안
-  `systemd --user`를 실행합니다(GRUB에서 되돌리는 방법). `uinitconverter.user_manager=s6`은 한
-  부팅 동안 켭니다.
-
-`initconvert-user-manager`는 `initconvertd`로의 링크이고, 이 이름으로 실행되면 사용자 매니저로
-동작합니다(`initconvertd user-manager`와 같습니다).
-
-사용자 매니저는 `$XDG_RUNTIME_DIR/uinitconverter`(자체 `s6-svscan`, 사용자 모드 설정, 유닛
-상태)를 만들고, `$XDG_RUNTIME_DIR/systemd/private`(`systemctl --user`가 먼저 찾는 곳)를 바로
-제공하며, `default.target`을 시작한 뒤 `user@`에 준비 완료를 알립니다. 유닛은 사용자의 검색
-경로(`~/.config/systemd/user`, `/etc/systemd/user`, `/usr/lib/systemd/user`, ...)에서 사용자
-지정자(`%t`, `%h`, `%S`, ...)로 읽고, `user@UID.service/app.slice` 아래에서 실행합니다(매니저
-자신은 `init.scope`). `Accept=no` 소켓은 유닛입니다. `dbus.socket`이 대기하다가 첫 클라이언트가
-오면 서비스(dbus-broker)가 시작되고, 매니저가 사용자 버스에 `org.freedesktop.systemd1`로
-올라갑니다. 버스가 멈추면(`gnome-session-ctl --restart-dbus`) 소켓이 다시 대기하고, 매니저는
-그동안 private 소켓을 계속 제공하다가 버스가 돌아오면 다시 올라갑니다. `SIGHUP`은 유닛 파일을
-다시 읽고, `SIGTERM`(`user@` 정지)은 모든 유닛을 멈춥니다(버스는 마지막). `USER_EXCLUDE=`에는
-실행하지 않을 사용자 유닛의 glob을 적습니다.
-
-시작은 systemd처럼 트랜잭션입니다. 끌어들이는 유닛(`Requires=`, `BindsTo=`, `Wants=`와 링크
-디렉터리)을 `After=`/`Before=`로 정렬합니다. 각 유닛은 그보다 앞에 정렬된 유닛이 끝나면 시작하고,
-준비된 유닛들은 함께 시작합니다. `Requisite=`는 아무것도 시작하지
-않습니다. 그 유닛이 이미 올라와 있거나, 같은 트랜잭션에 있거나, 다른 트랜잭션이 시작하는 중이어야
-합니다(그 경우 기다립니다). 인스턴스 없이 적은 템플릿은 참조하는 유닛의 인스턴스를 받습니다. 사용자
-환경 생성기(`user-environment-generators/`, `environment.d`를 읽습니다)를 시작할 때 실행하고,
-`Type=dbus` 유닛은 사용자 버스에 이름이 올라오면 준비 완료이며, `RuntimeDirectory=` 계열은
-사용자의 디렉터리입니다. GDM 그리터가 이 위에서 동작합니다. 테스트 VM에서 그리터가 뜨고,
-gnome-shell은 systemd에서처럼 `session.slice/org.gnome.Shell@gdm.service`에 있으며, SELinux는
-enforcing이고 거부가 없습니다.
-
-사용자 유닛 생성기(`user-generators/`: systemd-xdg-autostart-generator, podman의 quadlet 생성기)는
-시작할 때와 reload할 때마다 실행합니다. 출력은 `$XDG_RUNTIME_DIR/systemd/generator`,
-`generator.early`, `generator.late`이고, 이 디렉터리들은 systemd와 같은 자리에서 유닛 경로에
-들어갑니다. 임시 scope(`StartTransientUnit`, gnome-shell과 gnome-session이 앱마다 씁니다)는
-slice를 지정하지 않으면 `app.slice`에 들어갑니다. 유닛은 ambient capability를 받지 않습니다.
-`user@`는 systemd에게서 `CAP_WAKE_ALARM`을 받는데, `systemd --user`는 이것을 자신만 갖고 있고,
-bwrap(GNOME의 이미지 로더, flatpak)은 이것이 있으면 실행을 거부합니다. 사용자의 GNOME 세션이 테스트
-VM에서 이 위에서 동작합니다. GDM 자동 로그인, 세션 타깃, `session.slice/org.gnome.Shell@user.service`의
-gnome-shell, 셸에서 연 앱이 자기 `app-gnome-*.scope`에 들어가는 것, SELinux enforcing에 거부 없음까지
-`systemd --user`와 같습니다.
-
-타이머와 path 유닛도 사용자 모드에서 실행합니다(`timers.target`). `Persistent=` 타이머의 기록은
-`systemd --user`와 같은 곳(`~/.local/share/systemd/timers/stamp-NAME`, 수정 시각)에 두므로, 두
-매니저 사이를 오가도 놓친 실행을 따라잡습니다. `Accept=yes` 소켓은 시스템 쪽처럼 자체
-`s6-ipcserverd` 서비스입니다(`systemd-journalctl.socket`, `systemd-storage-fs.socket`,
-`systemd-ask-password.socket`). 매니저는 자기 slice의 `ManagedOOMMemoryPressure=`/`ManagedOOMSwap=`을
-systemd-oomd에 알리고(`io.systemd.oom.ReportManagedOOMCGroups`, `systemd --user`와 같음. Fedora의
-`slice.d` drop-in이 모든 사용자 slice에 설정합니다), oomd가 다시 시작하면 다시 알립니다. 임시 scope로
-직접 옮길 수 없는 프로세스(ssh 로그인에서 실행한 `flatpak run`)는 시스템 매니저가 옮깁니다
-(`AttachProcessesToUnit`). 테스트 VM에서 podman quadlet 컨테이너, flatpak 앱(`app-flatpak-*.scope`에서
-실행되고 앱 그리드에 나옴), `app.slice`, `background.slice`, `session.slice`에 대한 oomd의 감시가
-`systemd --user`와 같이 동작합니다.
-
-세션의 생애 주기도 테스트 VM에서 `systemd --user`와 같이 동작합니다. 로그아웃
-(`gnome-session-shutdown.target`, `gnome-session-ctl --restart-dbus`로 버스가 한 번 재시작되고, 실패로
-남는 유닛 없음), 그리터에서 다시 로그인, 두 세션이 함께 도는 사용자 전환, RPM 업데이트 도우미
-(`systemctl --user -M UID@`의 marker와 `enqueue-marked`), linger 사용자, 재부팅(사용자 매니저마다 1초쯤에
-멈춤). 정지는 systemd처럼 트랜잭션입니다. 그 유닛과 함께 멈춰야 하는 것(그 유닛에 대한 `Requires=`,
-`BindsTo=`, `Requisite=`, 그리고 `PartOf=`)을 함께 멈추며, 각 유닛은 `After=`/`Before=`로 그 뒤에 오는
-유닛들이 멈추는 대로 바로 멈춥니다. 종료
-중인 사용자 매니저는 아무것도 더 시작하지 않습니다. `systemctl --user exit`(`SuccessAction=exit`)로
-끝나고, 전원 동작은 `systemd --user`처럼 거부합니다. `CollectMode=inactive-or-failed`인 임시
-유닛(dbus-broker의 것)은 실패하면 내려갑니다.
-
-**대체(fallback).** s6 사용자 매니저가 사용자를 제대로 받지 못하면 같은 프로세스에서 `systemd --user`로
-넘겨서 `user@UID.service`가 계속됩니다. 유닛을 멈추고, 위임된 cgroup을 `init.scope`만 남기고 비운 뒤
-`systemd --user`를 exec합니다. 이렇게 되는 경우: `OnFailure=`로 `USER_FALLBACK_ON=`의 유닛에 실패가
-이어질 때(GNOME 51의 세션 유닛은 `gnome-session-shutdown.target`으로 이어집니다. 로그아웃이 이미 그것을
-시작했다면 아님), 그런 유닛의 시작 작업이 실패할 때(GNOME 리더의 `gnome-session@NAME.target`), 데몬이
-오류로 끝나거나 panic할 때, 이번 부팅에서 그 사용자의 이전 s6 매니저가 멈추지 않고 끝났을 때(충돌).
-이유는 `/run/uinitconverter-user/UID`(`uinitconverter-user`의 tmpfiles.d 항목이 만드는 sticky 디렉터리. 사용자 자신의
-파일만 인정)에 기록되고, 이번 부팅 동안 그 사용자의 다음 매니저는 바로 `systemd --user`를 실행합니다.
-다음 부팅에는 다시 s6 매니저를 시도합니다. `user@.service` 환경에 `UINITCONVERTER_LOG_JOBS=1`을 두면
-모든 작업 요청을 호출자의 프로세스 이름과 함께 기록합니다.
-
-s6 부팅의 시스템 매니저 아래에서는 러너가 `user@`에 이 매니저를 시작합니다. 테스트 VM에서
-(`tests/vm-s6-boot.sh`) RPM으로 설치하면 SELinux enforcing에서 AVC 거부 없이 tester의 GNOME 세션이
-이 매니저로 올라오고, s6 부팅에서 재부팅한 뒤에도 마찬가지입니다. `uinitconverter-user`가 없거나
-`USER_MANAGER=`가 없거나 `systemd`이면 그 부팅에서도 `user@`는 `systemd --user`를 실행합니다.
-
-제한된 사용자(`user_u`, `staff_u`)도 두 부팅 모두에서 `systemd --user`처럼 자기 도메인에서 매니저가
-실행됩니다(VM에서 linger 사용자로 확인). 실제 기계 한 대의 s6 부팅에서도 실행되었습니다(0.3.0, Fedora 45).
+업데이트하면 이 패키지는 제거되고(`uinitconverterd`가 Obsoletes), 제거될 때 systemd
+부팅에서 `initconvert-user-setup on`이 썼던 `user@` drop-in도 지워집니다.
+`uinitconverter.conf`에 남은 `USER_MANAGER=`, `USER_EXCLUDE=`, `USER_FALLBACK_ON=`과
+커널 명령줄의 `uinitconverter.user_manager=`는 무시됩니다.
+`tests/vm-user-manager.sh`가 두 부팅에서 GNOME 아래의 `systemd --user`를
+확인합니다([TESTING](../TESTING.md) 참고).
 
 ## `s6` 명령 (s6-frontend)
 
@@ -654,7 +581,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `INIT`: 유닛을 변환할 대상 init 시스템. 지금은 `s6`만 있고, 다른 값이면 모든 도구가 설정 오류로 멈춥니다.
 - `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `initconvert init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. 서비스 상태는 `s6-svstat`을 실행하지 않고 `supervise/status`(s6 2.15의 형식)에서 읽으므로, `s6-svstat=`은 그 파일의 형식이 다를 때만 쓰입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
-- `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: `user@UID.service`가 실행할 것, `systemd` 또는 `s6`(없으면 두 부팅 모두 `systemd`. `s6`은 선택 사항이며 권장하지 않음)([s6 사용자 매니저](#s6-사용자-매니저-선택-사항-권장하지-않음) 참고. 커널 명령줄의 `uinitconverter.user_manager=`가 우선), s6 쪽이 실행하지 않을 사용자 유닛, 그리고 실패 경로가 사용자를 `systemd --user`로 넘기는 사용자 유닛(기본값 `gnome-session-shutdown.target gnome-session@*.target`).
+- `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: [s6 사용자 매니저](#s6-사용자-매니저-삭제됨)와 함께 삭제되었습니다. 아직 받아들이지만 무시합니다.
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 요청하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
 - `INCLUDE`: 기본값으로 uinitconverter에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight(화면·키보드 밝기를 부팅 사이에 유지), 절전 서비스)를 포함합니다. 무선 상태(rfkill)는 systemd-rfkill 대신 `rfkill` s6 oneshot이 유지합니다. 부팅 때 util-linux `rfkill`로 장치마다 soft block을 복원하고, 종료할 때 상태를 systemd-rfkill 자신의 파일(`/var/lib/systemd/rfkill/ID_PATH:TYPE`)에 저장하므로 systemd 부팅 항목과 상태를 공유합니다. systemd-rfkill과 달리 정상 종료할 때만 저장하며, 부팅 중 udev settle 뒤에 나타난 장치는 상태를 그대로 둡니다.
 
@@ -726,7 +653,7 @@ tests/                     비특권 샌드박스, 시나리오 검사, systemct
 | `result` 상태 값(`success`, `exit-code`, ... 그리고 `success`로 보이는 우리 값 `running`) | `base/state.rs`, `state::result` | 러너가 쓰고 데몬이 읽어 `Result`로 내보냄 | `state::tests`: 러너·데몬·타이머에서 `keys::RESULT` 옆에 리터럴 값이 없는지 |
 | 러너와 타이머의 명령(`run`, `finish`, `up`, `down`, `stop-atom`, `accept`, ..., `timer-run`, `path-run`) | `base/config.rs`, `runner_cmd`, `timers_cmd` | gen의 스크립트, 데몬, `dist/s6` run 스크립트, 러너 | 러너의 `Cmd` 열거형(처리하지 않은 명령은 빌드되지 않음), `cmd_tests`(목록, `dist/s6`), `config::contract_tests`(gen과 데몬에 리터럴 명령이 없는지) |
 | fd 저장소 프로토콜 | `base/fdstore.rs`(맨 위에 설명) | 본체의 클라이언트와 대체 저장소, 독립 도구 `initconvert-fdstore`(공유 코드 없음) | `fdstore::tests::protocol_conformance_*`: 본체의 클라이언트로 같은 경우들을 두 서버에 실행(독립 도구는 빌드되어 있으면, 아니면 메모를 남기고 건너뜀) |
-| `uinitconverter.conf`의 키 | `base/config.rs`, `KEYS`, `INTERNAL_KEYS`, `REMOVED_KEYS` | 파서, `dist/uinitconverter.conf`, `initconvert init`, 사용자 모드가 만드는 파일 | `config::contract_tests`(파서의 키, dist 파일), `init::tests::init_writes_known_keys`, `user::tests::user_config_sets_known_keys` |
+| `uinitconverter.conf`의 키 | `base/config.rs`, `KEYS`, `REMOVED_KEYS` | 파서, `dist/uinitconverter.conf`, `initconvert init` | `config::contract_tests`(파서의 키, dist 파일), `init::tests::init_writes_known_keys` |
 | 생성된 데이터베이스의 색인 | `base/index.rs`, `Index::render`와 `Index::load` | gen이 쓰고 러너와 데몬이 읽음 | `index::tests::render_and_load_round_trip` |
 
 도구들이 부르는 데몬의 D-Bus 메서드(`LoadUnit`, `StartUnit`, `Reload`, `StopInstances` 등)에는 따로

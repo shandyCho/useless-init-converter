@@ -15,30 +15,12 @@ use super::*;
 use uinitconverter_base::automask;
 
 /// A logger's run script: s6-log into LOG_DIR/ID (`notify`: readiness on fd
-/// 3, s6-rc's loggers). In user mode LOG_DIR is under $HOME, which can go
-/// away while the manager still runs (GDM removes the greeter's home at
-/// login, and the manager lives on for its stop): then RUN_DIR/log/ID, with
-/// one line saying so, instead of a failed start every second that leaves
-/// the service's output in the pipe. The boot keeps retrying: its LOG_DIR
-/// may simply not be mounted yet.
-pub fn logger_run(cfg: &Config, log_dir: &Path, id: &str, notify: bool) -> String {
+/// 3, s6-rc's loggers).
+pub fn logger_run(log_dir: &Path, id: &str, notify: bool) -> String {
     let logdir = util::sh_quote(&log_dir.join(id).display().to_string());
     let s6log = util::sh_quote(&tools::path("s6-log"));
     let d3 = if notify { " -d3" } else { "" };
-    if !cfg.user_mode {
-        return format!(
-            "#!/bin/sh\nmkdir -p {logdir} || exit 1\nexec {s6log}{d3} n10 s1000000 T {logdir}\n"
-        );
-    }
-    let fallback = util::sh_quote(&cfg.run_dir.join("log").join(id).display().to_string());
-    let qid = util::sh_quote(id);
-    format!(
-        "#!/bin/sh\nd={logdir}\nif ! mkdir -p \"$d\" 2>/dev/null; then\n\
-         \x20   printf 'logger of %s: cannot create %s, logging to %s\\n' {qid} \"$d\" {fallback} >&2\n\
-         \x20   d={fallback}\n\
-         \x20   mkdir -p \"$d\" || exit 1\nfi\n\
-         exec {s6log}{d3} n10 s1000000 T \"$d\"\n"
-    )
+    format!("#!/bin/sh\nmkdir -p {logdir} || exit 1\nexec {s6log}{d3} n10 s1000000 T {logdir}\n")
 }
 
 /// The files of a longrun's directory that s6-rc's source format and a
@@ -205,11 +187,7 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
                     if plan.boot.contains(log) {
                         fs::write(ldir.join("flag-recommended"), "")?;
                     }
-                    write_file(
-                        &ldir.join("run"),
-                        &logger_run(cfg, log_dir, &p.id, true),
-                        true,
-                    )?;
+                    write_file(&ldir.join("run"), &logger_run(log_dir, &p.id, true), true)?;
                 }
             }
         }
@@ -951,57 +929,6 @@ mod tests {
         );
         let _ = child.stdin.take().unwrap().write_all(b"");
         let _ = child.wait();
-        let _ = fs::remove_dir_all(&tmp);
-    }
-
-    /// A user manager's logger whose LOG_DIR can't be made (the greeter's
-    /// home removed at login) logs under RUN_DIR, saying so once; one that
-    /// can logs there. The boot's script still fails (and is retried).
-    #[test]
-    fn logger_falls_back_in_user_mode() {
-        let tmp =
-            std::env::temp_dir().join(format!("uinitconverter-gen-logger-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
-        // A file where the home directory should be: mkdir -p fails.
-        fs::write(tmp.join("home"), "").unwrap();
-        let mut cfg = Config::defaults();
-        cfg.user_mode = true;
-        cfg.run_dir = tmp.join("run");
-        let s6log = util::sh_quote(&tools::path("s6-log"));
-        // Run the script with s6-log replaced by printing its directory.
-        let run = |cfg: &Config, log_dir: &Path, id: &str| {
-            let script = logger_run(cfg, log_dir, id, true)
-                .replace(&format!("exec {s6log} -d3 n10 s1000000 T "), "echo ");
-            let out = Command::new("sh").arg("-c").arg(&script).output().unwrap();
-            (
-                out.status.success(),
-                String::from_utf8_lossy(&out.stdout).trim().to_string(),
-                String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            )
-        };
-        let gone = tmp.join("home/.local/state/uinitconverter/log");
-        let id = "a\\x2db@x.service";
-        let (ok, dir, err) = run(&cfg, &gone, id);
-        assert!(ok, "{err}");
-        assert_eq!(dir, tmp.join("run/log").join(id).display().to_string());
-        assert!(tmp.join("run/log").join(id).is_dir());
-        assert_eq!(err.lines().count(), 1, "{err}");
-        assert!(
-            err.starts_with(&format!("logger of {id}: cannot create ")),
-            "{err}"
-        );
-
-        let fine = tmp.join("state/log");
-        let (ok, dir, err) = run(&cfg, &fine, id);
-        assert!(ok && err.is_empty(), "{err}");
-        assert_eq!(dir, fine.join(id).display().to_string());
-
-        cfg.user_mode = false;
-        let script = logger_run(&cfg, &gone, id, true);
-        assert!(!script.contains("run/log"), "{script}");
-        let (ok, _, _) = run(&cfg, &gone, id);
-        assert!(!ok);
         let _ = fs::remove_dir_all(&tmp);
     }
 }

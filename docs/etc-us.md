@@ -24,6 +24,24 @@ Everything that isn't needed for a first install: how it works, what is and isn'
 It works at the protocol level, not by replacing libraries: the real `systemctl`
 and `libsystemd` talk to it exactly as they would talk to systemd.
 
+## Scope
+
+uinitconverter is a bridge from systemd units to s6, not a second systemd.
+It implements only:
+
+1. what the real systemd programs that still run need from PID 1
+   (systemd-logind, `systemd --user`, systemd-journald): the
+   `org.freedesktop.systemd1` calls they make, transient slices and scopes,
+   on-demand `user@UID.service`, cgroup delegation, the shutdown targets;
+2. what it takes to run Fedora's unit files under s6-rc.
+
+Anything else is out of scope, even when it would be easy to add: "systemd
+does it too" is not a reason. A feature is added only for a real caller
+(a program or a Fedora unit that needs it), and that caller is named in
+`work_history.md`. This is why the s6 user manager was removed (see
+[below](#the-s6-user-manager-removed)): it reimplemented `systemd --user`
+itself, which no caller needs.
+
 ## Compared with booting systemd
 
 **There is little measurable benefit over booting with systemd. The main gain
@@ -55,7 +73,7 @@ Workstation machine. The systemd numbers are from boots up to 2026-10-31.
 | Memory | About the same: the median (total - available) is 1154 vs 1176 MiB (-23 MiB; 21 s6 and 6 systemd snapshots), about the normal 20-25 MiB variation between boots. |
 | Boot speed | Perhaps faster, but not shown by a controlled test: from kernel start to the login screen's session opening, the median in the logs is about 19 vs 28 s (23 s6 and 11 systemd boots, excluding firmware and boot loader). Those boots ran on different days, with different builds and initramfs images, and the session opens before the login screen appears. |
 | Security | Not better overall. PID 1 is smaller, but `initconvertd` and about 37 helper processes run as root, and the latest hardening comparison of 28 services shows no setting weaker on s6 (98 differ). It still flags bolt's seccomp filter count (9 vs 11): one filter here covers the three ABIs where systemd loads one per ABI. |
-| Less systemd | Only partly. udevd, logind and `systemd --user` still run (GNOME needs logind and a user manager), and the `systemd` package stays installed. The s6 user manager can replace `systemd --user`, but it is opt-in and not recommended. |
+| Less systemd | Only partly. udevd, logind and `systemd --user` still run (GNOME needs logind and a user manager), and the `systemd` package stays installed. uinitconverter doesn't replace `systemd --user` (see [Scope](#scope)). |
 
 **Costs compared with systemd**
 
@@ -228,13 +246,13 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - `Accept=yes` with more than one listener, anything but `ListenStream=` (or `vsock:`), and with a `Type=notify`, `forking` or `dbus` template: the socket is skipped, and `initconvert plan` gives the reason. An instance disappears when its connection ends, also when it failed: systemd keeps failed ones until `systemctl reset-failed`, so here they don't count in `systemctl --failed` (their result is in the socket's log and `ExecStopPost=`). Restarting or reloading a running connection fails. The template's `Wants=` and `Requires=` are started with the socket rather than per connection.
 - `Accept=no`: starting a `.socket` at run time still starts its service at once, and an on-demand service's requirements that are not on demand themselves are started at boot (s6-rc dependencies).
 - autofs: `.automount` units mount eagerly.
-- systemd generators: none of the system's runs on the s6 boot (the s6 user manager runs the user ones, see [the s6 user manager](#the-s6-user-manager-opt-in-not-recommended)). `/etc/fstab` is mounted by the `mount-fs` s6 service and the zram swap set up by the `zram` one; units that other generators would make (e.g. `systemd-gpt-auto-generator`'s, `rc-local`) don't exist there.
+- systemd generators: none of the system's runs on the s6 boot (the user ones run in `systemd --user`). `/etc/fstab` is mounted by the `mount-fs` s6 service and the zram swap set up by the `zram` one; units that other generators would make (e.g. `systemd-gpt-auto-generator`'s, `rc-local`) don't exist there.
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. These timer keys are accepted without effect, so the report doesn't list them as ignored.
 - Watchdog, credentials (`LoadCredential=`, `ImportCredential=`), `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=` (a BPF LSM program in systemd), and IP accounting (`IPAccounting=`).
 - Cancelling a job that is already running.
 - Job modes: jobs on a unit run one after another, so `replace` cancels only a conflicting job that is still waiting, not a running one (systemd stops a running start). `ignore-dependencies` and `ignore-requirements` start a unit without its dependencies only when it runs outside s6-rc (instances, transient and user units); a unit in the s6-rc database still gets the dependencies s6-rc compiled in.
 - `PrivateNetwork=` in `[Socket]`, `JoinsNamespaceOf=` and `NetworkNamespacePath=`.
-- `KillMode=control-group` at the s6 boot's shutdown: s6-rc stops the database's services itself there, so a service's other processes get the signal only after its main process has exited (stops through the daemon, and every user manager stop, signal them together as systemd does).
+- `KillMode=control-group` at the s6 boot's shutdown: s6-rc stops the database's services itself there, so a service's other processes get the signal only after its main process has exited (stops through the daemon signal them together as systemd does).
 - Unit settings of the services with their own s6 scripts in `dist/s6` (`dbus`, `udevd`, `earlyoom`, `syslog`, `coredump`): they take the cgroup, limits, sandbox and user from the unit, but the command line and the restart and stop behaviour are in the script. So drop-ins that change `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=` or `Type=` don't reach them.
 
 ## Offline updates and kernel updates
@@ -429,7 +447,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 | Radio state (rfkill) | util-linux `rfkill` from an s6 oneshot instead of systemd-rfkill |
 | Compressed swap (zram) | Fedora's zram-generator, run by the s6 oneshot `zram` instead of as a systemd generator (same `zram-generator.conf`, size and priority) |
 | Devices | systemd-udevd as a plain service |
-| Login, user manager | systemd-logind and `systemd --user`, as supervised services (the s6 user manager instead of `systemd --user` is [opt-in, not recommended](#the-s6-user-manager-opt-in-not-recommended)) |
+| Login, user manager | systemd-logind and `systemd --user`, as supervised services |
 
 If stage 2 fails, log in on tty9 (Ctrl+Alt+F9) and read
 `/run/uncaught-logs/current`. To boot the s6 database from before the last
@@ -526,144 +544,21 @@ machines are untested, so try it in a VM first. If login fails, check `journalct
 systemd-logind` and `journalctl -u user@1000.service` (or `uinitconverter
 log UNIT`, which also works with `JOURNAL=no`).
 
-### The s6 user manager (opt-in, not recommended)
+### The s6 user manager (removed)
 
-**Not recommended.** The default on both boots is the real `systemd --user`,
-described above. The s6 user manager reimplements `systemd --user` as GNOME
-49 uses it, and it can't be kept in step with systemd's and GNOME's changes:
-an update of either may break login with it. Use it only if you want the
-session supervised by s6 and accept that risk; the automatic fallback to
-`systemd --user` (below) limits the damage, but doesn't remove it. The
-plan it was built from is in `work_history.md`, parts 136-155; part 203 made
-it opt-in.
+Up to 0.3.0 the `uinitconverter-user` package offered an s6 replacement for
+`systemd --user` (opt-in since part 203 of `work_history.md`). It is removed:
+it reimplemented `systemd --user` as GNOME uses it, which is outside the
+[scope](#scope), and it couldn't be kept in step with systemd's and GNOME's
+changes. `user@UID.service` runs `systemd --user` on both boots.
 
-It is the `uinitconverter-user` package
-(`dnf install uinitconverter-user`), which also works on a normal systemd boot
-without any of the s6 boot packages: it pulls in only `uinitconverterd`,
-`uinitconverter-runner`, `uinitconverter-timers` and the skalibs, execline and
-s6 packages.
-
-- **On a systemd boot**, `sudo initconvert-user-setup on` turns it on: it
-  writes `user@.service`'s drop-in
-  `/etc/systemd/system/user@.service.d/90-uinitconverter.conf` and
-  `USER_MANAGER=s6`. `sudo initconvert-user-setup off` goes back to
-  `systemd --user`, and `initconvert-user-setup status` shows the setting
-  and what each user's `user@` runs now. A change applies from each user's
-  next login (log out, or reboot). Removing the package removes the drop-in.
-- **On the s6 boot**, `USER_MANAGER=s6` (which `on` writes) turns it on:
-  the runner starts `initconvert-user-manager` for `user@UID.service`
-  instead of `systemd --user`; the unit file is not changed. With
-  `USER_MANAGER=` unset or `systemd`, `user@` runs `systemd --user`.
-  `uinitconverter` only Suggests the package, and installing it changes
-  nothing until it is turned on. With `USER_MANAGER=s6` but without the
-  package, `user@` keeps `systemd --user` and the runner logs why.
-- **On either boot**, `uinitconverter.user_manager=systemd` on the kernel
-  command line runs `systemd --user` for that boot, the way back from GRUB;
-  `uinitconverter.user_manager=s6` turns it on for one boot.
-
-`initconvert-user-manager` is a link to `initconvertd`, which runs as the
-user manager under that name (also `initconvertd user-manager`).
-
-The user manager makes `$XDG_RUNTIME_DIR/uinitconverter` (its own
-`s6-svscan`, a configuration in user mode, the units' state), serves
-`$XDG_RUNTIME_DIR/systemd/private` at once (where `systemctl --user` looks
-first), starts `default.target` and tells `user@` it is ready. Units run
-from the user's search path (`~/.config/systemd/user`, `/etc/systemd/user`,
-`/usr/lib/systemd/user`, ...) with the user's specifiers (`%t`, `%h`, `%S`,
-...), under `user@UID.service/app.slice` (the manager itself is in
-`init.scope`). Sockets with `Accept=no` are units: `dbus.socket` listens,
-its service (dbus-broker) starts on the first client, and the manager goes on
-the user bus as `org.freedesktop.systemd1`. When the bus is stopped
-(`gnome-session-ctl --restart-dbus`), the socket listens again, the manager
-keeps serving the private socket and returns to the bus once it is back.
-`SIGHUP` rereads the unit files; `SIGTERM` (the stop of `user@`) stops every
-unit, the bus last. `USER_EXCLUDE=` lists globs of user units it does not
-run.
-
-A start is a transaction, as in systemd: the units it pulls in
-(`Requires=`, `BindsTo=`, `Wants=` and the link directories) are ordered by
-`After=`/`Before=`: each starts once those ordered before it have
-finished, and the ones that are ready start at once. `Requisite=` starts nothing;
-the unit must be up, in the same transaction, or being started by another
-one (then the start waits for it). A template named without an instance
-takes the referencing unit's. The user environment generators
-(`user-environment-generators/`, which read `environment.d`) run at startup,
-`Type=dbus` units are ready when their name is on the user bus, and
-`RuntimeDirectory=` and its family are the user's directories. GDM's
-greeter runs on it: in the test VM it shows, with gnome-shell in
-`session.slice/org.gnome.Shell@gdm.service` as under systemd, SELinux
-enforcing and no denials.
-
-The user unit generators (`user-generators/`: systemd-xdg-autostart-generator,
-podman's quadlet generator) run at startup and at each reload, with
-`$XDG_RUNTIME_DIR/systemd/generator`, `generator.early` and `generator.late`
-as their output, and those directories are in the unit path where systemd
-puts them. Transient scopes (`StartTransientUnit`, which gnome-shell and
-gnome-session use for each app) go into `app.slice` unless they name a
-slice. The units get no ambient capabilities: `user@` has `CAP_WAKE_ALARM`
-from systemd, which `systemd --user` keeps to itself, and bwrap (GNOME's
-image loaders, flatpak) refuses to run with it. A user's GNOME session runs
-on it in the test VM: GDM's autologin, the session targets, gnome-shell in
-`session.slice/org.gnome.Shell@user.service`, an app from the shell in its
-`app-gnome-*.scope`, SELinux enforcing and no denials, as with
-`systemd --user`.
-
-Timers and path units run in user mode too (`timers.target`), and a
-`Persistent=` timer keeps its stamp where `systemd --user` does
-(`~/.local/share/systemd/timers/stamp-NAME`, its modification time), so
-the catch-up carries over between the two managers. `Accept=yes` sockets
-are their own `s6-ipcserverd` service, as on the system side
-(`systemd-journalctl.socket`, `systemd-storage-fs.socket`,
-`systemd-ask-password.socket`). The manager reports its slices'
-`ManagedOOMMemoryPressure=`/`ManagedOOMSwap=` to systemd-oomd
-(`io.systemd.oom.ReportManagedOOMCGroups`, as `systemd --user`; Fedora's
-`slice.d` drop-in sets them for every user slice), and again when oomd
-restarts. A process it may not move into a transient scope itself (`flatpak
-run` from an ssh login) is moved by the system manager
-(`AttachProcessesToUnit`). In the test VM a podman quadlet container, a
-flatpak app (in `app-flatpak-*.scope`, the apps in the grid) and oomd's
-watch over `app.slice`, `background.slice` and `session.slice` work as with
-`systemd --user`.
-
-The session's life cycle works as with `systemd --user` in the test VM:
-logout (`gnome-session-shutdown.target`, the bus restarted once by
-`gnome-session-ctl --restart-dbus`, no unit left failed), a new login at the
-greeter, a user switch with two sessions at once, the RPM update helper
-(`systemctl --user -M UID@` markers and `enqueue-marked`), lingering users,
-and a reboot (each user manager stops in about a second). A stop is a
-transaction as in systemd: the unit and what must go with it (`Requires=`,
-`BindsTo=`, `Requisite=` on it, `PartOf=`), stopped together: each unit as
-soon as the units ordered after it (`After=`/`Before=`) are down. An exiting user manager starts nothing more.
-`systemctl --user exit` (`SuccessAction=exit`) ends it; power actions are
-refused, as by `systemd --user`. Transient units with
-`CollectMode=inactive-or-failed` (dbus-broker's) are unloaded when they
-fail.
-
-**The fallback.** If the s6 user manager fails a user, it hands over to
-`systemd --user` in the same process, so `user@UID.service` goes on: it
-stops its units, empties its delegated cgroup but for `init.scope`, and
-execs `systemd --user`. That happens when a unit fails into a unit in
-`USER_FALLBACK_ON=` through `OnFailure=` (GNOME 51's session units fail into
-`gnome-session-shutdown.target`; not while a logout already started it),
-when a start job of such a unit fails (the GNOME leader's
-`gnome-session@NAME.target`), when its daemon exits with an error or
-panics, or when the user's previous s6 manager of this boot ended without
-stopping (a crash). The reason is recorded in
-`/run/uinitconverter-user/UID` (a sticky directory from
-`uinitconverter-user`'s tmpfiles.d entry; only the user's own file counts), and the user's later managers
-in this boot run `systemd --user` at once. The next boot tries the s6
-manager again. `UINITCONVERTER_LOG_JOBS=1` in `user@.service`'s environment
-logs every job request with the caller's process name.
-
-Under the s6 boot's own system manager, the runner starts it for `user@`:
-in the test VM (`tests/vm-s6-boot.sh`), installed from the RPMs, tester's
-GNOME session comes up on it with SELinux enforcing and no denials, also
-after a reboot from the s6 boot. Without `uinitconverter-user`, or with
-`USER_MANAGER=` unset or `systemd`, `user@` runs `systemd --user` there.
-
-Confined users (`user_u`, `staff_u`) get their manager in their own domain
-on both boots, as with `systemd --user` (checked in the VM with lingering
-users). It has run on one real machine under the s6 boot (0.3.0, Fedora 45).
+Updating removes the package (`uinitconverterd` Obsoletes it), and its
+removal deletes the `user@` drop-in that `initconvert-user-setup on` wrote
+on a systemd boot. `USER_MANAGER=`, `USER_EXCLUDE=` and `USER_FALLBACK_ON=`
+left in `uinitconverter.conf` are ignored, and so is
+`uinitconverter.user_manager=` on the kernel command line.
+`tests/vm-user-manager.sh` checks `systemd --user` under GNOME on both
+boots (see the [TESTING](../TESTING-us.md) guide).
 
 ## The `s6` command (s6-frontend)
 
@@ -771,7 +666,7 @@ and defaults). The most important keys:
 - `INIT`: the init system units are translated for. Only `s6` exists yet; any other value stops every tool with a configuration error.
 - `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `initconvert init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. A service's state is read from its `supervise/status` (s6 2.15's format) without starting `s6-svstat`, so `s6-svstat=` only applies when that file has another format. The shell scripts and s6 service definitions in `dist/` still run them by name.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
-- `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: what `user@UID.service` runs, `systemd` or `s6` (unset: `systemd` on either boot; `s6` is opt-in and not recommended) (see [the s6 user manager](#the-s6-user-manager-opt-in-not-recommended); `uinitconverter.user_manager=` on the kernel command line wins), the user units the s6 one leaves out, and the user units whose failure path hands a user over to `systemd --user` (default `gnome-session-shutdown.target gnome-session@*.target`).
+- `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: removed with [the s6 user manager](#the-s6-user-manager-removed); still accepted and ignored.
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
 - `INCLUDE`: by default lets through the systemd services that work under uinitconverter: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight (screen/keyboard brightness kept across boots) and the sleep services. The radio state (rfkill) is kept by the `rfkill` s6 oneshot instead of systemd-rfkill: util-linux `rfkill` restores each device's soft block at boot and the state is saved at shutdown, in systemd-rfkill's own files (`/var/lib/systemd/rfkill/ID_PATH:TYPE`), so the systemd boot entry shares it. Unlike systemd-rfkill it saves only at a clean shutdown, and a device that appears after the boot's udev settle keeps its state.
 
@@ -844,7 +739,7 @@ together.
 | The `result` state values (`success`, `exit-code`, ... and our `running`, shown as `success`) | `base/state.rs`, `state::result` | the runner writes, the daemon reads and exports `Result` | `state::tests`: no literal value beside `keys::RESULT` in the runner, the daemon or the timers |
 | The runner's and the timers' commands (`run`, `finish`, `up`, `down`, `stop-atom`, `accept`, ..., `timer-run`, `path-run`) | `base/config.rs`, `runner_cmd`, `timers_cmd` | gen's scripts, the daemon, `dist/s6` run scripts and the runners | the runner's `Cmd` enum (an unhandled command doesn't build); `cmd_tests` (the list, `dist/s6`); `config::contract_tests` (no literal command in gen or the daemon) |
 | The fd store protocol | `base/fdstore.rs` (documented at the top) | the core's client and fallback store, and the standalone `initconvert-fdstore` (no shared code) | `fdstore::tests::protocol_conformance_*`: the same cases through the core's client against both servers (the standalone one if built, else skipped with a note) |
-| The keys of `uinitconverter.conf` | `base/config.rs`, `KEYS`, `INTERNAL_KEYS`, `REMOVED_KEYS` | the parser, `dist/uinitconverter.conf`, `initconvert init`, the user mode's generated file | `config::contract_tests` (the parser's keys, the dist file); `init::tests::init_writes_known_keys`; `user::tests::user_config_sets_known_keys` |
+| The keys of `uinitconverter.conf` | `base/config.rs`, `KEYS`, `REMOVED_KEYS` | the parser, `dist/uinitconverter.conf`, `initconvert init` | `config::contract_tests` (the parser's keys, the dist file); `init::tests::init_writes_known_keys` |
 | The index of a generated database | `base/index.rs`, `Index::render` and `Index::load` | gen writes, the runner and the daemon read | `index::tests::render_and_load_round_trip` |
 
 The daemon's D-Bus methods that the tools call (`LoadUnit`, `StartUnit`,

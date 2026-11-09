@@ -1,7 +1,7 @@
 //! initconvertd: serves org.freedesktop.systemd1 on top of s6-rc, so systemctl,
 //! libsystemd and logind keep working; also a minimal client for it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::exit;
 
 pub(crate) use uinitconverter_base::acceptspec;
@@ -15,7 +15,6 @@ pub(crate) use uinitconverter_gen as gen;
 pub(crate) use uinitconverter_install as install;
 
 mod daemon;
-mod user;
 
 use config::Config;
 
@@ -33,14 +32,6 @@ usage: initconvertd [--config PATH] [COMMAND] [ARGS]
                 at shutdown (the shutting-down marker exists): ask the
                 daemon to stop the on-demand instances (user@UID, ...) now,
                 before s6-rc stops the services they are ordered after
-  user-manager  what user@UID.service runs: the user's service manager
-                (s6-svscan and this daemon in user mode, under
-                $XDG_RUNTIME_DIR/uinitconverter), or `systemd --user` with
-                USER_MANAGER=systemd / uinitconverter.user_manager=systemd
-                (unset: systemd; the s6 manager is opt-in, not
-                recommended).
-                The uinitconverter-user package runs it as
-                initconvert-user-manager (a link to this program).
   log UNIT [-f] show (or follow) a service's log: journalctl -u, or its
                 s6-log directory with JOURNAL=no
 ";
@@ -168,17 +159,8 @@ fn log(cfg: &Config, rest: &[String]) -> ! {
     die(&format!("tail {}: {err}", file.display()))
 }
 
-/// The user manager's own name: the uinitconverter-user package installs
-/// it as a link to initconvertd, and user@UID.service runs it.
-pub const USER_MANAGER_NAME: &str = "initconvert-user-manager";
-
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    // Started as initconvert-user-manager: `initconvertd user-manager`.
-    let argv0 = std::env::args().next().unwrap_or_default();
-    if Path::new(&argv0).file_name() == Some(USER_MANAGER_NAME.as_ref()) {
-        args.insert(0, "user-manager".into());
-    }
     // --config PATH before or after the command (generated scripts and the
     // uinitconverter front end put it after), up to a "--".
     let mut config_path: Option<PathBuf> = None;
@@ -212,7 +194,6 @@ fn main() {
         o if o.starts_with("--") => serve(cfg, &args),
         "start" | "stop" | "restart" => client(&cfg, &cmd, rest),
         "stop-instances" => stop_instances(&cfg),
-        "user-manager" => user::main(&cfg, rest),
         "log" => log(&cfg, rest),
         other => die(&format!("unknown command {other} (see initconvertd help)")),
     };

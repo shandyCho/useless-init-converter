@@ -5,14 +5,11 @@
 # PID 1, initconvertd, GDM's autologin of tester, and what the s6 boot's own
 # system manager (the runner) starts for user@1000.service.
 #
-#   tests/vm-s6-boot.sh DIR [s6]        # USER_MANAGER=s6, uinitconverter-user installed:
-#                                       # user@ runs initconvert-user-manager; then a
-#                                       # reboot from the s6 boot and the same checks
-#   tests/vm-s6-boot.sh DIR no-package  # USER_MANAGER=s6 without uinitconverter-user:
-#                                       # user@ keeps systemd --user, the runner says why
-#   tests/vm-s6-boot.sh DIR default     # every package, no USER_MANAGER=: the default,
-#                                       # systemd --user
-#   tests/vm-s6-boot.sh DIR systemd     # every package, USER_MANAGER=systemd: systemd --user
+#   tests/vm-s6-boot.sh DIR [default]   # every package: user@ runs systemd --user; then
+#                                       # a reboot from the s6 boot and the same checks
+#   tests/vm-s6-boot.sh DIR old-config  # USER_MANAGER=s6 left in uinitconverter.conf (as
+#                                       # 0.3.0's s6 user manager wrote it): ignored,
+#                                       # user@ runs systemd --user
 #
 # RPMS: the core RPMs (packages/build-rpms.sh's OUTDIR/rpms) and the
 # standalone ones, default DIR/rpmbuild/core/rpms and
@@ -27,10 +24,10 @@ set -euo pipefail
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 VM=$TOP/tests/gnome-vm.sh
-D=${1:?usage: tests/vm-s6-boot.sh DIR [s6|no-package|default|systemd]}
+D=${1:?usage: tests/vm-s6-boot.sh DIR [default|old-config]}
 D=$(cd "$D" && pwd)
-MODE=${2:-s6}
-case $MODE in s6 | no-package | default | systemd) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
+MODE=${2:-default}
+case $MODE in default | old-config) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
 CORE=${CORE_RPMS:-$D/rpmbuild/core/rpms}
 STANDALONE=${STANDALONE_RPMS:-$D/rpmbuild/standalone/rpms}
 SKARNET=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/rpms}
@@ -48,8 +45,7 @@ newest() {
     find "$1" -maxdepth 1 -name "$2-[0-9]*.rpm" | sort | tail -1
 }
 mkdir "$S/rpms"
-for p in uinitconverter uinitconverterd uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverter-user; do
-    [ "$MODE" = no-package ] && [ $p = uinitconverter-user ] && continue
+for p in uinitconverter uinitconverterd uinitconverter-gen uinitconverter-runner uinitconverter-timers; do
     f=$(newest "$CORE" $p)
     [ -n "$f" ] || { echo "no $p RPM in $CORE (packages/build-rpms.sh)" >&2; exit 1; }
     cp "$f" "$S/rpms/"
@@ -76,20 +72,18 @@ cd ~tester/in
 dnf -y -q install --nogpgcheck ./*.rpm || { dnf clean metadata && dnf -y -q install --refresh --nogpgcheck ./*.rpm; }
 rpm -qa 'uinitconverter*' | sort
 mkdir -p /etc/uinitconverter
-case $1 in
-    s6 | no-package) echo "USER_MANAGER=s6" >>/etc/uinitconverter/uinitconverter.conf ;;
-    systemd) echo "USER_MANAGER=systemd" >>/etc/uinitconverter/uinitconverter.conf ;;
-esac
+if [ "$1" = old-config ]; then
+    printf 'USER_MANAGER=s6\nUSER_FALLBACK_ON=gnome-session-shutdown.target\n' >>/etc/uinitconverter/uinitconverter.conf
+fi
 initconvert init --yes --default-s6 --selinux="$2" --boot-only-s6="${3:-no}"
 grubby --default-title
 EOS
 
 cat >"$S/check.sh" <<'EOS'
 #!/bin/bash
-# As root in the VM, on the s6 boot. $1: the mode, $2: a label, $3: yes
-# for --boot-only-s6=yes.
+# As root in the VM, on the s6 boot. $1: the mode (unused), $2: a label, $3:
+# yes for --boot-only-s6=yes.
 set -uo pipefail
-mode=$1
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
 bad() { fail=$((fail + 1)); echo "FAIL $*"; }
@@ -121,22 +115,9 @@ main=$(systemctl show -p MainPID --value "user@$u.service")
 exe=$(basename "$(readlink "/proc/$main/exe" 2>/dev/null)" 2>/dev/null)
 echo "   user@$u.service's main process: PID $main, $exe ($(cat "/proc/$main/comm" 2>/dev/null)), $(tr '\0' ' ' <"/proc/$main/cmdline" 2>/dev/null)"
 grep -qx "$main" "$cg/init.scope/cgroup.procs" 2>/dev/null && ok "it is in user@$u.service/init.scope" || bad "init.scope: $(cat "$cg/init.scope/cgroup.procs" 2>&1 | tr '\n' ' ')"
-case $mode in
-    s6)
-        [ "$exe" = initconvertd ] && ok "the runner started initconvert-user-manager" || bad "user@$u.service runs $exe"
-        [ ! -e "/run/uinitconverter-user/$u" ] && ok "no fallback for tester" || bad "tester fell back: $(cat "/run/uinitconverter-user/$u")"
-        own=$(as busctl --user status org.freedesktop.systemd1 2>&1 | sed -n 's/^PID=//p')
-        [ "$own" = "$main" ] && ok "org.freedesktop.systemd1 on tester's bus is the s6 manager" || bad "the bus name's owner: ${own:-none}"
-        [ -d "$cg/app.slice" ] && ok "the manager made app.slice" || bad "no $cg/app.slice"
-        ;;
-    no-package | systemd | default)
-        [ "$exe" = systemd ] && ok "user@$u.service runs systemd --user" || bad "user@$u.service runs $exe"
-        if [ "$mode" = no-package ]; then
-            l=$(journalctl -b --no-pager -o cat 2>/dev/null | grep -F "install uinitconverter-user" | head -1)
-            [ -n "$l" ] && ok "the runner says why: $l" || bad "no 'install uinitconverter-user' line in the journal"
-        fi
-        ;;
-esac
+[ "$exe" = systemd ] && ok "user@$u.service runs systemd --user" || bad "user@$u.service runs $exe"
+own=$(as busctl --user status org.freedesktop.systemd1 2>&1 | sed -n 's/^PID=//p')
+[ "$own" = "$main" ] && ok "org.freedesktop.systemd1 on tester's bus is systemd --user" || bad "the bus name's owner: ${own:-none}"
 # The session: on the screen, not only running.
 until_ok 'pgrep -u tester -x gnome-shell >/dev/null' 120 && ok "tester's gnome-shell runs" || bad "no gnome-shell for tester after 120 s"
 until_ok 's=$(loginctl show-user tester -p Display --value) && [ -n "$s" ] && [ "$(loginctl show-session "$s" -p Active --value)" = yes ]' 60 \
@@ -157,8 +138,6 @@ systemctl --failed --no-legend --no-pager 2>&1 | sed 's/^/   /'
 n=$(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep -c denied)
 [ "$n" = 0 ] && ok "no AVC denials" || bad "$n AVC denials"
 ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep denied | sed -E 's/.*avc: +//' | sort | uniq -c | sort -rn | head -15 | cut -c1-200 | sed 's/^/   /'
-echo "-- the manager's own lines (tester):"
-journalctl -b "_UID=$u" --no-pager -o cat 2>/dev/null | grep -E "^(uinitconverter|initconvertd)" | cut -c1-160 | tail -20 | sed 's/^/   /'
 echo "-- the runner's lines for user@:"
 journalctl -b --no-pager -o cat 2>/dev/null | grep -E "^(uinitconverter\[)?user@[0-9]+\.service[]:]" | cut -c1-160 | tail -10 | sed 's/^/   /'
 echo "passed: $pass  failed: $fail"
@@ -202,7 +181,7 @@ echo "   SSH up $(($(date +%s) - t0)) s after the reboot"
 rc=0
 "$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'first s6 boot'" "$BOOT_ONLY_S6" || rc=$?
 "$VM" screenshot "$D" "$D/s6boot-$MODE.png" || true
-if [ "$MODE" = s6 ]; then
+if [ "$MODE" = default ]; then
     echo "== reboot from the s6 boot, tester's session open"
     t0=$(date +%s)
     reboot_vm || exit 1

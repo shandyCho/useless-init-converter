@@ -5,7 +5,7 @@
 //! StopWhenUnneeded=. The GNOME session's start and teardown rely on these
 //! (work_history part 137).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::time::SystemTime;
 
 use zbus::zvariant::Value;
@@ -316,119 +316,5 @@ impl Daemon {
             last.insert(id.clone(), cur);
             self.emit_state(&id).await;
         }
-    }
-
-    /// A user manager's stop, as systemd's stop transaction: the unit and,
-    /// transitively, the running units that must go with it (Requires=,
-    /// BindsTo=, Requisite= on it, and PartOf=), stopped together: a unit
-    /// ordered after another (After=/Before=) stops first, the rest at
-    /// once (stop_in_waves). One at a time and only the needing units first,
-    /// a logout took seconds: gnome-shell ended while units PartOf=
-    /// graphical-session.target (xdg-desktop-portal-gtk) still ran, and
-    /// they failed on the closed display; units PartOf= a dependent
-    /// (gnome-session-monitor.service) were not stopped at all.
-    pub(super) async fn user_stop_transaction(&self, id: &str, unit: &Unit) -> &'static str {
-        let mut set: Vec<(String, Unit)> = vec![(id.to_string(), unit.clone())];
-        let mut seen: BTreeSet<String> = BTreeSet::from([id.to_string()]);
-        const KEYS: [&str; 4] = ["Requires", "BindsTo", "Requisite", "PartOf"];
-        let index = self.reverse_index(&KEYS);
-        let mut i = 0;
-        while i < set.len() {
-            let cur = set[i].0.clone();
-            i += 1;
-            for k in 0..KEYS.len() {
-                for (d, du) in self.reverse_in(&index, k, &cur) {
-                    if seen.contains(&d) || self.dynamic_kind(&d).is_none() {
-                        continue;
-                    }
-                    if self.is_up(&d, &du).await {
-                        seen.insert(d.clone());
-                        set.push((d, du));
-                    }
-                }
-            }
-        }
-        if set.len() > 1 {
-            let names: Vec<&str> = set[1..].iter().map(|(n, _)| n.as_str()).collect();
-            eprintln!("initconvertd: stop {id} with {}", names.join(" "));
-        }
-        self.stop_in_waves(set, Some(id)).await.unwrap_or("done")
-    }
-
-    /// Stop `set` (each unit alone, dyn_stop_alone): a unit waits while a
-    /// unit of the set ordered after it (After=/Before=) is still to stop or
-    /// stopping, the others at once; an ordering cycle stops the rest
-    /// together. Returns `top`'s result.
-    pub(super) async fn stop_in_waves(
-        &self,
-        set: Vec<(String, Unit)>,
-        top: Option<&str>,
-    ) -> Option<&'static str> {
-        // Ordering within the set, by canonical names.
-        let after: BTreeMap<String, BTreeSet<String>> = set
-            .iter()
-            .map(|(n, u)| {
-                let mut a: BTreeSet<String> = u
-                    .deps("After")
-                    .iter()
-                    .map(|d| self.load_unit(d).0)
-                    .collect();
-                // X Before=Y is Y After=X.
-                for (m, mu) in &set {
-                    if mu.deps("Before").iter().any(|d| self.load_unit(d).0 == *n) {
-                        a.insert(m.clone());
-                    }
-                }
-                (n.clone(), a)
-            })
-            .collect();
-        // Each unit as soon as no unit ordered after it is still pending or
-        // stopping, as systemd's jobs; in whole waves, one slow unit held
-        // back every later one (gnome-shell's stop came 0.5 s after the
-        // services it uses had gone, work_history part 182).
-        use futures_util::stream::{FuturesUnordered, StreamExt};
-        let mut pending = set;
-        let mut stopping: BTreeSet<String> = BTreeSet::new();
-        let mut running = FuturesUnordered::new();
-        let mut result = None;
-        loop {
-            let blocked = |n: &String, pending: &[(String, Unit)], stopping: &BTreeSet<String>| {
-                pending
-                    .iter()
-                    .map(|(m, _)| m)
-                    .chain(stopping.iter())
-                    .any(|m| m != n && after.get(m).is_some_and(|a| a.contains(n)))
-            };
-            let mut ready: Vec<usize> = (0..pending.len())
-                .filter(|&k| !blocked(&pending[k].0, &pending, &stopping))
-                .collect();
-            if ready.is_empty() && running.is_empty() {
-                // An ordering cycle: the rest together.
-                ready = (0..pending.len()).collect();
-            }
-            for k in ready.into_iter().rev() {
-                let (n, u) = pending.remove(k);
-                stopping.insert(n.clone());
-                running.push(async move {
-                    let t = std::time::Instant::now();
-                    let r = self.dyn_stop_alone(&n, &u).await;
-                    (n, r, t.elapsed())
-                });
-            }
-            let Some((n, r, took)) = running.next().await else {
-                break;
-            };
-            if took >= std::time::Duration::from_secs(1) {
-                eprintln!(
-                    "initconvertd: stopping {n} took {:.1} s",
-                    took.as_secs_f64()
-                );
-            }
-            if Some(n.as_str()) == top {
-                result = Some(r);
-            }
-            stopping.remove(&n);
-        }
-        result
     }
 }

@@ -10,13 +10,9 @@ use crate::loader::Unit;
 
 pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 
-/// Where units' slices and cgroups are: the root, or a user manager's
-/// delegated subtree (CGROUP_BASE=), as systemd --user puts its units
-/// under user@UID.service.
+/// Where units' slices and cgroups are: the cgroup2 root.
 pub fn base() -> PathBuf {
-    uinitconverter_base::config::cgroup_base()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(CGROUP_ROOT))
+    PathBuf::from(CGROUP_ROOT)
 }
 
 /// A slice's cgroup.
@@ -58,14 +54,7 @@ pub fn parent_slice(slice: &str) -> String {
 pub fn slice_of(unit: &Unit) -> String {
     unit.get("Service", "Slice")
         .or_else(|| unit.get("Scope", "Slice"))
-        .unwrap_or_else(|| {
-            // systemd --user's default slice.
-            if crate::loader::user_mode() {
-                "app.slice".into()
-            } else {
-                "system.slice".into()
-            }
-        })
+        .unwrap_or_else(|| "system.slice".into())
 }
 
 /// Relative cgroup path as systemd reports it in ControlGroup (leading '/').

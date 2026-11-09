@@ -94,7 +94,6 @@ on the host changes):
 cargo test
 for p in standalone/*/; do cargo test --manifest-path "$p/Cargo.toml"; done
 tests/sandbox.sh /tmp/sb && tests/check.sh /tmp/sb; tests/sandbox.sh /tmp/sb stop
-tests/user-sandbox.sh /tmp/usb
 ```
 
 See [TESTING-us.md](../TESTING-us.md) for the variants
@@ -107,14 +106,10 @@ The GNOME test VM (set up once with `tests/gnome-vm.sh fetch` and
 
 ```sh
 # The s6 boot: the RPMs, initconvert init, a reboot, checks.
-CORE_RPMS=~/uinitconverter-test/rpms tests/vm-s6-boot.sh ~/uinitconverter-vm s6
-# The s6 user manager on a normal systemd boot (uinitconverter-user only).
-BOOT=systemd-rpm CORE_RPMS=~/uinitconverter-test/rpms tests/vm-user-manager.sh ~/uinitconverter-vm session
+CORE_RPMS=~/uinitconverter-test/rpms tests/vm-s6-boot.sh ~/uinitconverter-vm
+# GNOME's session under systemd --user on the s6 boot.
+BOOT=s6 CORE_RPMS=~/uinitconverter-test/rpms tests/vm-user-manager.sh ~/uinitconverter-vm session
 ```
-
-For `initconvert-user-setup` with every package installed (on, off, removal,
-and an upgrade from an older build), `tests/vm-user-setup.sh`; its header has
-the commands.
 
 `vm-s6-boot.sh` takes the standalone RPMs from
 `~/uinitconverter-vm/rpmbuild/standalone/rpms` (`STANDALONE_RPMS=` to change
@@ -176,7 +171,6 @@ for p in standalone/*/; do cargo test --manifest-path "$p/Cargo.toml"; done
 for v in "" SANDBOX_JOURNAL=no SANDBOX_FDSTORE=no; do
     env $v tests/sandbox.sh /tmp/sb && env $v tests/check.sh /tmp/sb; env $v tests/sandbox.sh /tmp/sb stop
 done
-tests/user-sandbox.sh /tmp/usb
 ```
 
 Then the VM runs from section 1 on RPMs of this tree, and at least one real

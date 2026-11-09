@@ -5,6 +5,26 @@
 Versions apply to the core packages. The standalone tools have their own
 versions. Release notes: [packages/release-notes](packages/release-notes).
 
+## Unreleased
+
+Details in `work_history.md`, parts 203-205.
+
+### Removed
+- **The s6 user manager** (`uinitconverter-user`, `initconvertd
+  user-manager`, `initconvert-user-setup`): `user@UID.service` runs
+  `systemd --user` on both boots. It reimplemented `systemd --user` and
+  couldn't follow systemd's and GNOME's changes; see "Scope" in
+  docs/etc-us.md. Updating removes the package (`uinitconverterd` Obsoletes
+  it) together with the `user@` drop-in `initconvert-user-setup on` wrote.
+  `USER_MANAGER=`, `USER_EXCLUDE=`, `USER_FALLBACK_ON=` and
+  `uinitconverter.user_manager=` are ignored.
+
+### Changed
+- `tests/vm-user-manager.sh` checks `systemd --user` under GNOME (session,
+  greeter, apps, lifecycle, confined users) on the systemd boot and, with
+  `BOOT=s6`, on the s6 boot. `tests/vm-s6-boot.sh` has the modes `default`
+  and `old-config`.
+
 ## 0.3.0 (2026-11-09)
 
 Changes since 0.2.2. Details per step in `work_history.md`, parts 130-199.

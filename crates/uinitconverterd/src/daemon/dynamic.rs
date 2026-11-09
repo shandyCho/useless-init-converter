@@ -53,17 +53,6 @@ impl Daemon {
             return matches!(unit.utype(), "service" | "timer" | "path")
                 && !self.cfg.is_excluded(id);
         }
-        // A user manager has no database: every service, target, timer
-        // and path unit is run by the dynamic engine.
-        // Sockets too: Accept=no ones are held for their service (see
-        // dyn_start_socket); Accept=yes ones are a longrun of their own
-        // (s6-ipcserverd/s6-tcpserverd, as in the system's database).
-        if self.cfg.user_mode {
-            return matches!(
-                unit.utype(),
-                "socket" | "service" | "target" | "timer" | "path"
-            ) && !self.cfg.is_excluded(id);
-        }
         unit.utype() == "service"
             && loader::parse_name(id)
                 .map(|n| n.instance.is_some())
@@ -138,7 +127,7 @@ impl Daemon {
         self.cfg.run_dir.join("dyn").join(id)
     }
 
-    fn write_servicedir(&self, id: &str, unit: &Unit, on_demand: bool) -> Result<PathBuf, String> {
+    fn write_servicedir(&self, id: &str, unit: &Unit) -> Result<PathBuf, String> {
         let dir = self.dyn_dir(id);
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -146,7 +135,7 @@ impl Daemon {
         // The same scripts and timings as the database's longruns (gen);
         // `down`: s6-svlink -d links it down, dyn_start brings it up.
         for (name, text, exec) in
-            crate::gen::longrun_files(&self.cfg, id, &crate::gen::Timings::of(unit), on_demand)
+            crate::gen::longrun_files(&self.cfg, id, &crate::gen::Timings::of(unit), false)
         {
             write(dir.join(name), &text, exec).map_err(e)?;
         }
@@ -159,7 +148,7 @@ impl Daemon {
             fs::create_dir_all(&ldir).map_err(e)?;
             write(
                 ldir.join("run"),
-                &crate::gen::logger_run(&self.cfg, log_dir, id, false),
+                &crate::gen::logger_run(log_dir, id, false),
                 true,
             )
             .map_err(e)?;
@@ -220,13 +209,9 @@ impl Daemon {
         "done"
     }
 
-    /// Start a dynamic unit. A user manager runs a transaction (see
-    /// user_transaction); the system manager's on-demand instances start
-    /// their dependencies first, one by one.
+    /// Start a dynamic unit: the on-demand instances start their
+    /// dependencies first, one by one.
     pub(super) async fn dyn_start(&self, id: &str, unit: &Unit) -> &'static str {
-        if self.cfg.user_mode {
-            return Box::pin(self.user_transaction(id, unit)).await;
-        }
         for (dep, required) in self.start_deps(unit) {
             if dep == id {
                 continue;
@@ -240,244 +225,9 @@ impl Daemon {
         self.dyn_start_one(id, unit).await
     }
 
-    /// systemd's start transaction, for a user manager. The set is what
-    /// `top` pulls in (Requires=, BindsTo=, Wants= and the .requires/.wants
-    /// links, through every unit that is not up yet). It is ordered by
-    /// After=/Before= within the set; a unit starts once the units ordered
-    /// before it have finished, those that are ready at once.
-    /// Requisite= starts nothing: the unit must be up or in the set. GNOME's
-    /// session needs this: gnome-session-pre.target is Requisite= of
-    /// gnome-session-initialized.target, which Requires= it, and
-    /// org.gnome.Shell@gdm.service, Before= and Requisite= of
-    /// gnome-session-initialized.target, must start inside the same
-    /// transaction, before it. A failed unit fails those that require it.
-    /// `top`'s lock is the caller's.
-    async fn user_transaction(&self, top: &str, top_unit: &Unit) -> &'static str {
-        let ld = loader::Loader::new(&self.cfg);
-        // Discovery order (also the tie-break of the ordering).
-        let mut set: Vec<(String, Unit)> = vec![(top.to_string(), top_unit.clone())];
-        let mut seen: BTreeSet<String> = BTreeSet::from([top.to_string()]);
-        let mut i = 0;
-        while i < set.len() {
-            let u = set[i].1.clone();
-            i += 1;
-            let mut pulled = u.deps("Requires");
-            pulled.extend(u.deps("BindsTo"));
-            pulled.extend(u.deps("Wants"));
-            pulled.extend(ld.dir_deps(&u, "requires"));
-            pulled.extend(ld.dir_deps(&u, "wants"));
-            for d in pulled {
-                let (did, du) = self.load_unit(&d);
-                if !seen.insert(did.clone()) || !self.transaction_member(&did, &du).await {
-                    continue;
-                }
-                set.push((did, du));
-            }
-        }
-        let ids: Vec<String> = set.iter().map(|(n, _)| n.clone()).collect();
-        let names = |n: &str| -> String { self.load_unit(n).0 };
-        // before[a] holds the units of the set that must start after a.
-        let mut after_count = vec![0usize; set.len()];
-        let mut before: Vec<Vec<usize>> = vec![Vec::new(); set.len()];
-        for (a, (_, ua)) in set.iter().enumerate() {
-            for (b, (idb, ub)) in set.iter().enumerate() {
-                if a == b {
-                    continue;
-                }
-                let a_first = ua.deps("Before").iter().any(|n| names(n) == *idb)
-                    || ub.deps("After").iter().any(|n| names(n) == ids[a]);
-                if a_first && !before[a].contains(&b) {
-                    before[a].push(b);
-                    after_count[b] += 1;
-                }
-            }
-        }
-        let in_set: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
-        {
-            let mut p = self.pending_starts.lock().unwrap();
-            for id in &ids {
-                *p.entry(id.clone()).or_default() += 1;
-            }
-        }
-        // Started as systemd runs a transaction's jobs: every unit whose
-        // units ordered before it (After=/Before=) have finished starts at
-        // once; each one that finishes lets the next ones go. One at a time,
-        // GNOME's session target took about 6 s past gnome-shell (part 146).
-        let mut failed: BTreeSet<String> = BTreeSet::new();
-        let mut top_result = "done";
-        let mut started = vec![false; set.len()];
-        let mut running = futures_util::stream::FuturesUnordered::new();
-        let mut left = set.len();
-        while left > 0 {
-            let mut ready: Vec<usize> = (0..set.len())
-                .filter(|&k| !started[k] && after_count[k] == 0)
-                .collect();
-            if ready.is_empty() && running.is_empty() {
-                // An ordering cycle: systemd drops a job; here the
-                // earliest-found unit goes first.
-                let Some(k) = (0..set.len()).find(|&k| !started[k]) else {
-                    break;
-                };
-                eprintln!(
-                    "initconvertd: {top}: ordering cycle, starting {} first",
-                    ids[k]
-                );
-                ready.push(k);
-            }
-            for k in ready {
-                started[k] = true;
-                // What it needs and is ordered after has finished by now.
-                let (id, unit) = &set[k];
-                let mut need = unit.deps("Requires");
-                need.extend(unit.deps("BindsTo"));
-                need.extend(ld.dir_deps(unit, "requires"));
-                let why = need
-                    .iter()
-                    .map(|d| names(d))
-                    .find(|d| failed.contains(d))
-                    .map(|d| format!("dependency {d} failed"));
-                let in_set = &in_set;
-                running.push(async move {
-                    (k, self.transaction_start(top, id, unit, why, in_set).await)
-                });
-            }
-            let Some((k, r)) = futures_util::StreamExt::next(&mut running).await else {
-                continue;
-            };
-            left -= 1;
-            let id = &ids[k];
-            if r != "done" {
-                failed.insert(id.clone());
-            }
-            if id == top {
-                top_result = r;
-            }
-            self.unpend(id);
-            for &b in &before[k] {
-                after_count[b] = after_count[b].saturating_sub(1);
-            }
-        }
-        top_result
-    }
-
-    /// One unit's start in `top`'s user transaction: refused with `why`
-    /// (a dependency it needs failed), or when a Requisite= is neither up,
-    /// in the transaction, nor started by another one meanwhile; else
-    /// started under its lock (`top`'s lock is the caller's).
-    async fn transaction_start(
-        &self,
-        top: &str,
-        id: &str,
-        unit: &Unit,
-        mut why: Option<String>,
-        in_set: &BTreeSet<&str>,
-    ) -> &'static str {
-        if why.is_none() {
-            for d in unit.deps("Requisite") {
-                let (did, du) = self.load_unit(&d);
-                if in_set.contains(did.as_str()) || self.is_up(&did, &du).await {
-                    continue;
-                }
-                // Another transaction is starting it: systemd's job would
-                // wait for that one (xdg-desktop-portal is After= and
-                // Requisite= graphical-session.target, which gnome-session's
-                // transaction starts, and is activated over D-Bus meanwhile).
-                if self.wait_pending(&did, unit).await && self.is_up(&did, &du).await {
-                    continue;
-                }
-                why = Some(format!("requisite {did} is not active"));
-                break;
-            }
-        }
-        if let Some(w) = why {
-            eprintln!("initconvertd: {id}: not started: {w}");
-            return "dependency";
-        }
-        if id == top {
-            return Box::pin(self.dyn_start_one(id, unit)).await;
-        }
-        let lock = self.unit_lock(id);
-        let _guard = lock.lock().await;
-        if self.is_up(id, unit).await {
-            return "done";
-        }
-        let r = Box::pin(self.dyn_start_one(id, unit)).await;
-        if r != "done" {
-            eprintln!("initconvertd: {id}: start ({top}'s transaction): {r}");
-        }
-        r
-    }
-
-    fn unpend(&self, id: &str) {
-        let mut p = self.pending_starts.lock().unwrap();
-        if let Some(n) = p.get_mut(id) {
-            *n -= 1;
-            if *n == 0 {
-                p.remove(id);
-            }
-        }
-    }
-
-    /// Wait while another transaction has `id` still to start, for at most
-    /// `unit`'s start timeout. False if it was not pending.
-    async fn wait_pending(&self, id: &str, unit: &Unit) -> bool {
-        if !self.pending_starts.lock().unwrap().contains_key(id) {
-            return false;
-        }
-        let deadline = std::time::Instant::now() + Self::start_timeout(unit);
-        while self.pending_starts.lock().unwrap().contains_key(id)
-            && std::time::Instant::now() < deadline
-        {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        true
-    }
-
-    /// Whether a unit pulled into a user transaction gets a start job: a
-    /// unit this manager runs that is not up yet. Others (up, not found,
-    /// excluded, a type not run here) are taken as satisfied, as start_any
-    /// does.
-    async fn transaction_member(&self, id: &str, unit: &Unit) -> bool {
-        if self.transient.lock().unwrap().contains_key(id) {
-            return false;
-        }
-        if !(self.dynamic_kind(id).is_some() || self.can_be_dynamic(id, unit)) {
-            return false;
-        }
-        !self.is_up(id, unit).await
-    }
-
     /// A unit's own start, its dependencies already handled.
     pub(super) async fn dyn_start_one(&self, id: &str, unit: &Unit) -> &'static str {
-        // An exiting user manager starts nothing more, also inside a
-        // transaction already running: GDM ends the greeter's session as
-        // user@ stops, and the leader's gnome-session-shutdown.target went
-        // on to start gnome-session-restart-dbus, so the bus went while
-        // gnome-session-monitor still needed it (5 s to its stop timeout).
-        if self.cfg.user_mode && self.exiting.load(std::sync::atomic::Ordering::Relaxed) {
-            return "canceled";
-        }
         self.stop_conflicts(id, unit).await;
-
-        if unit.utype() == "socket" && unit.get_bool("Socket", "Accept", false) {
-            return self.dyn_start_longrun(id, unit, false).await;
-        }
-        if unit.utype() == "socket" {
-            return self.dyn_start_socket(id, unit).await;
-        }
-
-        // A target is its dependencies; it has no process of its own.
-        if unit.utype() == "target" {
-            self.dynamic.lock().unwrap().insert(
-                id.to_string(),
-                Dynamic {
-                    kind: Kind::Bundle,
-                    active: true,
-                },
-            );
-            self.emit_state(id).await;
-            return "done";
-        }
 
         let oneshot = unit.utype() == "service"
             && (unit.get("Service", "Type").as_deref() == Some("oneshot")
@@ -508,81 +258,13 @@ impl Daemon {
             return if ok { "done" } else { "failed" };
         }
 
-        self.dyn_start_longrun(id, unit, false).await
+        self.dyn_start_longrun(id, unit).await
     }
 
-    /// A user manager's Accept=no socket (dbus.socket): as systemd's socket
-    /// unit in front of an inactive service, its service's runner binds it
-    /// (the fd store keeps it) and waits for the first client, then starts
-    /// the service. Recorded as active; a stop of the service arms it again
-    /// (dyn_stop), so the bus comes back after gnome-session-ctl
-    /// --restart-dbus stops it.
-    async fn dyn_start_socket(&self, id: &str, unit: &Unit) -> &'static str {
-        let Some(svc) = super::socket_service(id, unit) else {
-            return "done";
-        };
-        if let Err(e) = crate::socket::mark_requested(&self.cfg.run_dir, id) {
-            eprintln!("initconvertd: {id}: {e}");
-        }
-        self.dynamic.lock().unwrap().insert(
-            id.to_string(),
-            Dynamic {
-                kind: Kind::Bundle,
-                active: true,
-            },
-        );
-        let (sid, su) = self.load_unit(&svc);
-        let r = self.arm_socket_service(&sid, &su).await;
-        self.emit_state(id).await;
-        r
-    }
-
-    /// The service of an active socket, waiting for activity. Not while a
-    /// job holds it: a start of the service itself starts this socket
-    /// first (Requires=dbus.socket), and that start binds it.
-    async fn arm_socket_service(&self, sid: &str, su: &Unit) -> &'static str {
-        if !su.is_loaded() || self.dynamic.lock().unwrap().contains_key(sid) {
-            return "done";
-        }
-        if self.jobs.lock().unwrap().values().any(|j| j.unit == sid) {
-            return "done";
-        }
-        let lock = self.unit_lock(sid);
-        let Ok(_guard) = lock.try_lock() else {
-            return "done";
-        };
-        // A run before this one: it waits again.
-        let st = crate::state::for_unit(&self.cfg.run_dir, sid);
-        st.clear(crate::state::keys::ACTIVATED);
-        st.clear(crate::state::keys::START_REQUESTED);
-        self.dyn_start_longrun(sid, su, true).await
-    }
-
-    /// The active sockets whose service is `id`.
-    fn sockets_of(&self, id: &str) -> Vec<String> {
-        let names: Vec<String> = self
-            .dynamic
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(n, d)| d.kind == Kind::Bundle && n.ends_with(".socket"))
-            .map(|(n, _)| n.clone())
-            .collect();
-        names
-            .into_iter()
-            .filter(|n| {
-                let (_, u) = self.load_unit(n);
-                super::socket_service(n, &u)
-                    .map(|s| self.load_unit(&s).0 == id)
-                    .unwrap_or(false)
-            })
-            .collect()
-    }
-
-    async fn dyn_start_longrun(&self, id: &str, unit: &Unit, on_demand: bool) -> &'static str {
+    async fn dyn_start_longrun(&self, id: &str, unit: &Unit) -> &'static str {
         let already = self.dynamic.lock().unwrap().contains_key(id);
         if !already {
-            let dir = match self.write_servicedir(id, unit, on_demand) {
+            let dir = match self.write_servicedir(id, unit) {
                 Ok(d) => d,
                 Err(e) => {
                     eprintln!("initconvertd: {id}: {e}");
@@ -675,11 +357,7 @@ impl Daemon {
 
     pub(super) async fn dyn_stop(&self, id: &str, unit: &Unit) -> &'static str {
         let t = std::time::Instant::now();
-        let r = if self.cfg.user_mode {
-            Box::pin(self.user_stop_transaction(id, unit)).await
-        } else {
-            Box::pin(self.dyn_stop_seen(id, unit, &mut BTreeSet::new())).await
-        };
+        let r = Box::pin(self.dyn_stop_seen(id, unit, &mut BTreeSet::new())).await;
         if t.elapsed() >= std::time::Duration::from_secs(1) {
             eprintln!(
                 "initconvertd: stopping {id} took {:.1} s",
@@ -710,22 +388,9 @@ impl Daemon {
         self.dyn_stop_alone(id, unit).await
     }
 
-    /// Stop `id` itself: its dependents are the caller's. A service whose
-    /// socket still listens is armed again (not while exiting).
+    /// Stop `id` itself: its dependents are the caller's.
     pub(super) async fn dyn_stop_alone(&self, id: &str, unit: &Unit) -> &'static str {
-        let rearm = unit.utype() == "service"
-            && !self.exiting.load(std::sync::atomic::Ordering::Relaxed)
-            && !self.sockets_of(id).is_empty();
-        let r = self.dyn_remove(id, unit).await;
-        if rearm {
-            // Its socket still listens (the fd store kept it).
-            eprintln!("initconvertd: {id}: stopped, its socket listens again");
-            let st = crate::state::for_unit(&self.cfg.run_dir, id);
-            st.clear(crate::state::keys::ACTIVATED);
-            st.clear(crate::state::keys::START_REQUESTED);
-            Box::pin(self.dyn_start_longrun(id, unit, true)).await;
-        }
-        r
+        self.dyn_remove(id, unit).await
     }
 
     /// dyn_stop() of `id` alone: its dependents stay.
@@ -733,22 +398,6 @@ impl Daemon {
         let Some(kind) = self.dynamic_kind(id) else {
             return "done";
         };
-        if kind == Kind::Bundle {
-            self.dynamic.lock().unwrap().remove(id);
-            // A socket's service that only waits for it goes too, and the
-            // socket is closed.
-            if let Some(svc) = super::socket_service(id, unit) {
-                let (sid, su) = self.load_unit(&svc);
-                let waiting = crate::state::for_unit(&self.cfg.run_dir, &sid)
-                    .has(crate::state::keys::SOCKET_WAIT);
-                if waiting && self.sockets_of(&sid).is_empty() {
-                    Box::pin(self.dyn_remove(&sid, &su)).await;
-                }
-                let _ = crate::socket::unmark_requested(&self.cfg.run_dir, id);
-            }
-            self.emit_state(id).await;
-            return "done";
-        }
         if kind == Kind::Oneshot {
             let active = self
                 .dynamic
@@ -805,13 +454,7 @@ impl Daemon {
                 }
             }
         }
-        if self.exiting.load(std::sync::atomic::Ordering::Relaxed) || self.sockets_of(id).is_empty()
-        {
-            self.drop_stored_fds(id);
-        } else {
-            // Its sockets stay with the store for the next run.
-            crate::fdstore::del(&self.cfg.run_dir.join("fdstore"), id, None);
-        }
+        self.drop_stored_fds(id);
         // Wait for s6-supervise (and its logger's) to exit before removing
         // its directory, as long as it takes, up to 5 s (s6-svunlink's
         // limit before, part 187: s6-svscan doesn't end the supervisors
@@ -927,55 +570,6 @@ impl Daemon {
             }
         }
         seen
-    }
-
-    /// A user manager's exit (SIGTERM from user@UID.service's stop): every
-    /// unit stops, dependents first (dyn_stop), the bus last so the units
-    /// can still call it while they stop.
-    pub(super) async fn stop_all_user(&self) {
-        let bus_units = ["dbus.service", "dbus.socket"].map(|n| self.load_unit(n).0);
-        let rest: Vec<String> = self
-            .dynamic
-            .lock()
-            .unwrap()
-            .keys()
-            .filter(|id| !bus_units.contains(id))
-            .cloned()
-            .collect();
-        // Everything but the bus as one set, ordered by After=/Before=
-        // (each unit once the ones ordered after it are down, the rest at
-        // once, as systemd stops a whole transaction; one at a time, a
-        // greeter's 40 units took 12 s at a reboot, systemd --user 0.1 s).
-        // One set, not a transaction per unit: overlapping ones stopped a
-        // socket under its service's own stop, which then waited 5 s. No
-        // unit locks: the manager is exiting, so nothing starts any more
-        // (check_job, dyn_start_one), and taking them all could deadlock
-        // with a transaction holding its top unit's.
-        let set: Vec<(String, Unit)> = rest
-            .iter()
-            .filter(|id| self.dynamic_kind(id).is_some())
-            .map(|id| (id.clone(), self.load_unit(id).1))
-            .collect();
-        // The scopes (autostarted and launched apps) at the same time, as
-        // in systemd's exit transaction, where nothing orders them: last,
-        // gnome-session waited for its clients in them (an autostart app,
-        // gsd-disk-utility-notify, not yet signalled) for 1-5 s before it
-        // exited (work_history part 184).
-        tokio::join!(
-            self.stop_in_waves(set, None),
-            self.stop_scopes_at_shutdown()
-        );
-        // Then the bus, which the units' ExecStop= may still use: the
-        // service, then its socket.
-        for id in bus_units {
-            if self.dynamic_kind(&id).is_none() {
-                continue;
-            }
-            let (_, unit) = self.load_unit(&id);
-            let lock = self.unit_lock(&id);
-            let _guard = lock.lock().await;
-            self.dyn_stop_alone(&id, &unit).await;
-        }
     }
 
     pub(super) async fn dyn_restart(&self, id: &str, unit: &Unit) -> &'static str {

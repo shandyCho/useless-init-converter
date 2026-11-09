@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the uinitconverter RPMs (the six core packages and the standalone tools)
+# Build the uinitconverter RPMs (the five core packages and the standalone tools)
 # and collect them for a GitHub release. The skarnet.org packages are not
 # in it: users build them with dist/rpm/build-skarnet-rpms.sh.
 #

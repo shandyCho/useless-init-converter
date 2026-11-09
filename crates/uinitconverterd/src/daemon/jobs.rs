@@ -126,24 +126,7 @@ impl Daemon {
                 ),
             ));
         }
-        // A user manager that is exiting starts nothing more, as systemd
-        // --user (its exit job is irreversible): the GNOME leader's
-        // gnome-session-shutdown.target on SIGTERM, or an OnFailure= of a
-        // unit going down, would otherwise run after the bus is gone.
-        if starts && self.cfg.user_mode && self.exiting.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(err(
-                E_DESTRUCTIVE,
-                format!(
-                    "Transaction for {id}/{jtype} is destructive (the user manager is exiting)."
-                ),
-            ));
-        }
-        // (A user manager runs its sockets as units: dyn_start_socket.)
-        if starts
-            && self.kind_of(&id).is_none()
-            && !self.cfg.is_excluded(&id)
-            && !self.cfg.user_mode
-        {
+        if starts && self.kind_of(&id).is_none() && !self.cfg.is_excluded(&id) {
             if let Some(svc) = socket_service(&id, &unit) {
                 // Sockets are bound by their service's runner: record this
                 // one so the runner binds it too, then start the service.
@@ -397,17 +380,7 @@ impl Daemon {
     }
 
     pub(super) async fn finish_job(&self, job: u32, id: &str, result: &str) {
-        let jtype = self.jobs.lock().unwrap().remove(&job).map(|j| j.jtype);
-        // The user's session did not come up (the leader's start of
-        // gnome-session@NAME.target failed): systemd --user takes over.
-        if self.cfg.user_mode
-            && jtype.as_deref() == Some("start")
-            && !matches!(result, "done" | "skipped")
-            && self.cfg.is_fallback_unit(id)
-            && !self.exiting.load(std::sync::atomic::Ordering::Relaxed)
-        {
-            self.request_fallback(&format!("the start of {id} ended {result}"));
-        }
+        self.jobs.lock().unwrap().remove(&job);
         self.forget_unit_state(id);
         self.emit(
             MANAGER_PATH,

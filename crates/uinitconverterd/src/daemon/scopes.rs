@@ -44,26 +44,6 @@ pub(super) fn unit_of_cgroup(cg: &str) -> Option<String> {
         .map(|c| c.to_string())
 }
 
-/// unit_of_cgroup for the manager whose units live under `base` (a user
-/// manager's CGROUP_BASE, below /sys/fs/cgroup): the part of `cg` below it,
-/// so app.slice/x.scope is x.scope, not user@UID.service. None outside it.
-/// Without a base, the whole tree (the system manager).
-pub(super) fn unit_of_cgroup_in(cg: &str, base: Option<&std::path::Path>) -> Option<String> {
-    let Some(base) = base else {
-        return unit_of_cgroup(cg);
-    };
-    let rel = base
-        .strip_prefix(crate::cgroup::CGROUP_ROOT)
-        .ok()?
-        .to_str()?
-        .trim_end_matches('/');
-    let below = cg.strip_prefix('/')?.strip_prefix(rel)?;
-    if !(below.is_empty() || below.starts_with('/')) {
-        return None;
-    }
-    unit_of_cgroup(below)
-}
-
 /// PIDs behind the pidfds of a PIDFDs (ah) property.
 pub(super) fn pids_from_pidfds(v: &OwnedValue) -> Vec<u32> {
     use std::os::fd::AsRawFd;
@@ -248,11 +228,7 @@ impl Daemon {
             ));
         }
         let mut pids: Vec<u32> = Vec::new();
-        // A user manager's units default to app.slice (gnome-desktop's app
-        // scopes name none).
-        let mut slice = if kind == "scope" && self.cfg.user_mode {
-            "app.slice".to_string()
-        } else if kind == "scope" {
+        let mut slice = if kind == "scope" {
             "system.slice".to_string()
         } else {
             String::new()
@@ -301,22 +277,7 @@ impl Daemon {
         std::fs::create_dir_all(&dir)
             .map_err(|e| err(E_FAILED, format!("{}: {e}", dir.display())))?;
         for p in &pids {
-            let mut r = std::fs::write(dir.join("cgroup.procs"), p.to_string());
-            // A user manager may not move a process from outside its own
-            // cgroup (an app started from an ssh login's session scope):
-            // as systemd --user, it asks the system manager to.
-            if self.cfg.user_mode
-                && matches!(
-                    r.as_ref().map_err(|e| e.raw_os_error()),
-                    Err(Some(libc::EACCES | libc::EPERM))
-                )
-            {
-                if let Err(e) = self.attach_via_system(&dir, *p).await {
-                    eprintln!("initconvertd: {name}: the system manager did not move PID {p}: {e}");
-                } else {
-                    r = Ok(());
-                }
-            }
+            let r = std::fs::write(dir.join("cgroup.procs"), p.to_string());
             if let Err(e) = r {
                 // The scope never existed: its empty cgroup goes (rmdir
                 // fails, harmlessly, if an earlier PID was moved in). A
@@ -453,34 +414,6 @@ impl Daemon {
         Ok(())
     }
 
-    /// A user manager's request to the system manager: move `pid` into
-    /// `dir`, which lies inside this manager's own unit (CGROUP_BASE,
-    /// user@UID.service).
-    async fn attach_via_system(&self, dir: &std::path::Path, pid: u32) -> Result<(), String> {
-        let base = crate::cgroup::base();
-        let unit = base
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .ok_or("no cgroup of our own")?;
-        let sub = dir
-            .strip_prefix(&base)
-            .map_err(|_| format!("{} is not under {}", dir.display(), base.display()))?;
-        let sub = format!("/{}", sub.display());
-        let conn = zbus::Connection::system()
-            .await
-            .map_err(|e| e.to_string())?;
-        conn.call_method(
-            Some("org.freedesktop.systemd1"),
-            "/org/freedesktop/systemd1",
-            Some("org.freedesktop.systemd1.Manager"),
-            "AttachProcessesToUnit",
-            &(unit.as_str(), sub.as_str(), vec![pid]),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
     /// AttachProcessesToUnit(unit, subcgroup, pids)
     /// As systemd, "" names the caller's own unit (systemd --user moves its
     /// processes within user@UID.service so). An unprivileged caller may
@@ -492,7 +425,7 @@ impl Daemon {
     /// (GetUnitByPID, unit/self).
     pub(super) fn unit_of_pid(&self, pid: u32) -> Option<String> {
         let cg = util::proc_cgroup(pid)?;
-        unit_of_cgroup_in(&cg, self.cfg.cgroup_base.as_deref())
+        unit_of_cgroup(&cg)
     }
 
     pub(super) async fn attach_processes(&self, c: &Peer, msg: &Message) -> R<()> {

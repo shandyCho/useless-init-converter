@@ -2,33 +2,18 @@
 
 use super::*;
 
-/// RuntimeDirectory= and its family: (setting, base, variable). A user
-/// manager's are the user's, as systemd.exec(5) lists them.
+/// RuntimeDirectory= and its family: (setting, base, variable).
 pub(super) fn dirs() -> Vec<(&'static str, String, &'static str)> {
-    let (run, state, cache, logs, conf) = if crate::loader::user_mode() {
-        let u = crate::loader::UserDirs::current();
-        (
-            u.runtime.clone(),
-            u.state.clone(),
-            u.cache.clone(),
-            format!("{}/log", u.state),
-            u.config.clone(),
-        )
-    } else {
-        (
-            "/run".into(),
-            "/var/lib".into(),
-            "/var/cache".into(),
-            "/var/log".into(),
-            "/etc".into(),
-        )
-    };
     vec![
-        ("RuntimeDirectory", run, "RUNTIME_DIRECTORY"),
-        ("StateDirectory", state, "STATE_DIRECTORY"),
-        ("CacheDirectory", cache, "CACHE_DIRECTORY"),
-        ("LogsDirectory", logs, "LOGS_DIRECTORY"),
-        ("ConfigurationDirectory", conf, "CONFIGURATION_DIRECTORY"),
+        ("RuntimeDirectory", "/run".into(), "RUNTIME_DIRECTORY"),
+        ("StateDirectory", "/var/lib".into(), "STATE_DIRECTORY"),
+        ("CacheDirectory", "/var/cache".into(), "CACHE_DIRECTORY"),
+        ("LogsDirectory", "/var/log".into(), "LOGS_DIRECTORY"),
+        (
+            "ConfigurationDirectory",
+            "/etc".into(),
+            "CONFIGURATION_DIRECTORY",
+        ),
     ]
 }
 

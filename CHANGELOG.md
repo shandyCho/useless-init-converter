@@ -5,6 +5,23 @@
 버전은 본체 패키지의 버전입니다. 독립 도구는 버전이 따로 있습니다.
 릴리스 노트: [packages/release-notes](packages/release-notes).
 
+## 출시 전
+
+자세한 내용은 `work_history.md` 203-205부에 있습니다.
+
+### 삭제
+- **s6 사용자 매니저**(`uinitconverter-user`, `initconvertd user-manager`,
+  `initconvert-user-setup`): 두 부팅 모두 `user@UID.service`는 `systemd --user`를 실행합니다.
+  `systemd --user`를 다시 구현한 것이라 systemd와 GNOME의 변경을 따라갈 수 없었습니다. docs/etc.md의
+  "범위"를 참고하세요. 업데이트하면 이 패키지가 제거되고(`uinitconverterd`가 Obsoletes),
+  `initconvert-user-setup on`이 썼던 `user@` drop-in도 함께 지워집니다. `USER_MANAGER=`,
+  `USER_EXCLUDE=`, `USER_FALLBACK_ON=`과 `uinitconverter.user_manager=`는 무시됩니다.
+
+### 변경
+- `tests/vm-user-manager.sh`는 GNOME 아래의 `systemd --user`(세션, 로그인 화면, 앱, 수명 주기,
+  제한된 사용자)를 systemd 부팅에서, `BOOT=s6`이면 s6 부팅에서 확인합니다. `tests/vm-s6-boot.sh`의
+  모드는 `default`와 `old-config`입니다.
+
 ## 0.3.0 (2026-11-09)
 
 0.2.2 이후의 변경. 단계별 자세한 내용은 `work_history.md` 130-199부에 있습니다.

@@ -321,61 +321,6 @@ impl<'a> Loader<'a> {
     }
 }
 
-static USER_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// A user manager's specifiers (Config::load sets it for USER_MODE=yes):
-/// %t, %S, %C, %L, %E, %h, %u, %U, %g, %G are the user's, as under
-/// `systemd --user`.
-pub fn set_user_mode(on: bool) {
-    USER_MODE.store(on, std::sync::atomic::Ordering::Relaxed);
-}
-
-pub fn user_mode() -> bool {
-    USER_MODE.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// The user's directories and names for the specifiers above.
-pub struct UserDirs {
-    pub runtime: String,
-    pub home: String,
-    pub state: String,
-    pub cache: String,
-    pub config: String,
-    pub user: String,
-    pub uid: u32,
-    pub group: String,
-    pub gid: u32,
-}
-
-impl UserDirs {
-    /// This process's user, read once.
-    pub fn current() -> &'static UserDirs {
-        static DIRS: std::sync::OnceLock<UserDirs> = std::sync::OnceLock::new();
-        DIRS.get_or_init(UserDirs::read)
-    }
-
-    fn read() -> UserDirs {
-        let uid = unsafe { libc::getuid() };
-        let gid = unsafe { libc::getgid() };
-        let (user, pw_home) = util::lookup_uid(uid)
-            .map(|u| (u.name, u.home))
-            .unwrap_or_else(|| (uid.to_string(), "/".into()));
-        let env = |k: &str| std::env::var(k).ok().filter(|v| v.starts_with('/'));
-        let home = env("HOME").unwrap_or(pw_home);
-        UserDirs {
-            runtime: env("XDG_RUNTIME_DIR").unwrap_or_else(|| format!("/run/user/{uid}")),
-            state: env("XDG_STATE_HOME").unwrap_or_else(|| format!("{home}/.local/state")),
-            cache: env("XDG_CACHE_HOME").unwrap_or_else(|| format!("{home}/.cache")),
-            config: env("XDG_CONFIG_HOME").unwrap_or_else(|| format!("{home}/.config")),
-            group: util::group_name(gid).unwrap_or_else(|| gid.to_string()),
-            home,
-            user,
-            uid,
-            gid,
-        }
-    }
-}
-
 /// Context needed to expand specifiers like %n, %i, %t.
 pub fn expand_specifiers(s: &str, unit: &Unit) -> String {
     if !s.contains('%') {
@@ -392,7 +337,6 @@ pub fn expand_specifiers(s: &str, unit: &Unit) -> String {
         .map(|p| p.display().to_string())
         .unwrap_or_default();
 
-    let user = user_mode().then(UserDirs::current);
     let mut out = String::new();
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
@@ -404,25 +348,6 @@ pub fn expand_specifiers(s: &str, unit: &Unit) -> String {
             out.push('%');
             break;
         };
-        if let Some(u) = &user {
-            let v = match spec {
-                't' => Some(u.runtime.clone()),
-                'S' => Some(u.state.clone()),
-                'C' => Some(u.cache.clone()),
-                'L' => Some(format!("{}/log", u.state)),
-                'E' => Some(u.config.clone()),
-                'h' => Some(u.home.clone()),
-                'u' => Some(u.user.clone()),
-                'U' => Some(u.uid.to_string()),
-                'g' => Some(u.group.clone()),
-                'G' => Some(u.gid.to_string()),
-                _ => None,
-            };
-            if let Some(v) = v {
-                out.push_str(&v);
-                continue;
-            }
-        }
         match spec {
             '%' => out.push('%'),
             'n' => out.push_str(name),

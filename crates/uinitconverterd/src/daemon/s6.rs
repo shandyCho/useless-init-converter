@@ -142,10 +142,6 @@ impl Daemon {
     /// Atoms that are up: s6-rc's view plus the longruns started beside an
     /// s6-rc change that s6-rc has not been told about yet.
     pub(super) async fn active_atoms(&self) -> BTreeSet<String> {
-        // A user manager has no s6-rc database (asking s6-rc for it took 3 s).
-        if self.cfg.user_mode {
-            return BTreeSet::new();
-        }
         let mut active = self.active_atoms_live().await;
         active.extend(self.s6.beside.lock().unwrap().iter().cloned());
         active
@@ -457,26 +453,6 @@ impl Daemon {
         }
 
         if let Some(kind) = self.dynamic_kind(id) {
-            if kind == Kind::Bundle {
-                (s.active, s.sub) = ("active", "active");
-                // A user manager's socket: listening, or running while its
-                // service runs.
-                if let Some(svc) = super::socket_service(id, unit) {
-                    let svc = self.load_unit(&svc).0;
-                    let waiting = state::for_unit(&self.cfg.run_dir, &svc).has(keys::SOCKET_WAIT);
-                    let up = self
-                        .svstat_cached(&svc)
-                        .await
-                        .map(|v| v.up)
-                        .unwrap_or(false);
-                    s.sub = if up && !waiting {
-                        "running"
-                    } else {
-                        "listening"
-                    };
-                }
-                return s;
-            }
             if kind == Kind::Oneshot {
                 let up = self
                     .dynamic
@@ -510,12 +486,6 @@ impl Daemon {
                 } else {
                     "waiting"
                 };
-                return s;
-            }
-            // A user manager's Accept=yes socket: s6-ipcserverd is the
-            // socket, not a main process.
-            if sv.up && id.ends_with(".socket") {
-                (s.active, s.sub) = ("active", "listening");
                 return s;
             }
             if sv.up {

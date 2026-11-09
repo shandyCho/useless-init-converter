@@ -130,24 +130,6 @@ To check that the core works without the standalone `initconvert-fdstore`, run
 holds the fds itself, so `check.sh` checks that they are gone after the daemon
 restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
-User mode (a user's service manager without systemd --user; opt-in, not recommended):
-`tests/user-sandbox.sh DIR` runs the user manager as `user@` would (as
-`initconvert-user-manager`, the `uinitconverter-user` package's link to
-`initconvertd`), with `XDG_RUNTIME_DIR` in a sandbox directory: the private socket,
-`default.target`, `READY=1`, the bus started from `dbus.socket` (dbus-daemon
-here), `systemctl --user`, a GNOME-shaped session and logout, a bus restart
-and the stop on `SIGTERM`; then the later slices' checks: environment and
-unit generators, transactions (ordering, `Requisite=`, parallel starts, job
-merging), stop transactions, timers and paths, `Accept=yes`, a `MAINPID=`
-hand-over, `CollectMode=`, `systemctl --user exit`, and the fallback to
-`systemd --user` (a fake one records that it ran). It runs its own checks and
-stops everything itself (`tests/all.sh` includes it).
-`tests/user-setup.sh DIR` runs `initconvert-user-setup` under
-`UINITCONVERTER_SETUP_ROOT=DIR`: `on` and `off`, and `status` against a fake
-`/sys/fs/cgroup` and `/proc` (the systemd boot, the s6 boot with the runner
-in front of the manager, a fallback and its record, a record owned by
-another user). Also in `tests/all.sh`.
-
 The `Accept=yes` TCP checks need `s6-tcpserverd`. Without it in `PATH`, `check.sh`
 checks that the TCP socket is skipped and prints a SKIP line. To run them, put
 `SANDBOX_S6NET_BIN=DIR` (a directory with `s6-tcpserverd`, e.g.
@@ -255,85 +237,57 @@ on a VNC display on 127.0.0.1 (port in `~/uinitconverter-vm/ports`). SELinux is
 enforcing in the VM. A broken boot there costs nothing: `start` begins from the
 provisioned image again.
 
-`tests/vm-user-manager.sh ~/uinitconverter-vm` runs the s6 user manager under
-a real `user@UID.service` in that VM (after `cargo build`). The VM boots
-systemd; the script installs the debug binaries and the skalibs and s6 RPMs
-(`SKARNET_RPMS=`, default `~/rpmbuild-skarnet/RPMS/x86_64`), adds a user
-`s6test` whose `user@` gets a drop-in for `initconvert-user-manager` (a link
-to `initconvertd`, as the `uinitconverter-user` package installs it),
-sets `uinitconverter.user_manager=s6` on the kernel command line and boots
-again. It then starts that `user@`, checks readiness, `init.scope` and
-`app.slice`, the user bus and `systemctl --user`, prints the memory (PSS)
-next to a second user with `systemd --user`, reloads and stops it. GDM and
-tester's session keep `systemd --user`.
+`tests/vm-user-manager.sh ~/uinitconverter-vm MODE` checks the user manager,
+`systemd --user`, under GNOME in that VM. With `BOOT=systemd` (the default)
+the VM runs the stock systemd boot with nothing installed, as the reference;
+with `BOOT=s6` (modes `session`, `lifecycle` and `confined`) it installs
+every RPM as `tests/vm-s6-boot.sh` does (`CORE_RPMS=`, `STANDALONE_RPMS=`,
+`SKARNET_RPMS=`) and runs `initconvert init`, so the s6 boot's runner starts
+every `user@`. Screenshots are saved as `~/uinitconverter-vm/MODE-BOOT.png`;
+`VM_KEEP=yes` leaves the VM running afterwards, for `gnome-vm.sh ssh`.
 
-`tests/vm-user-manager.sh ~/uinitconverter-vm greeter` puts every `user@`
-on the s6 manager instead and turns autologin off, so GDM's greeter comes up
-on it. It checks the greeter's gnome-shell, its cgroup
-(`session.slice/org.gnome.Shell@gdm.service`), failed units and jobs, the
-session targets, pipewire, SELinux and AVC denials. It then prints the
-greeter's warnings and memory, and saves a screenshot as
-`~/uinitconverter-vm/greeter-greeter.png`. `baseline` runs the same checks
-on stock `systemd --user` (`greeter-baseline.png`), to compare the warnings.
-
-`tests/vm-user-manager.sh ~/uinitconverter-vm session` also puts every
-`user@` on the s6 manager but keeps GDM's autologin, so tester's GNOME
-session comes up on it. It runs `gnome-vm.sh wait` and `check`, then checks
-gnome-shell's cgroup (`session.slice/org.gnome.Shell@user.service`) and
-ambient capabilities, the background (GNOME's bwrap-sandboxed image loader),
-failed units and jobs, the session targets and services,
-`is-system-running`, the leader's environment, the autostart app scopes,
-`systemd-run --user --scope` (as Ptyxis starts each shell) and
-`GetUnitByPID`, SELinux and AVC denials. It then opens Calculator from GNOME Shell with QMP
-keys and checks it runs in its `app-gnome-*.scope`, and saves
-`~/uinitconverter-vm/session-session.png`. `session-baseline` runs the same
-on stock `systemd --user`. `VM_KEEP=yes` leaves the VM running afterwards,
-for `gnome-vm.sh ssh`.
-
-`tests/vm-user-manager.sh ~/uinitconverter-vm apps` runs the session checks,
-then slice D's: the user timers, every user socket (the `Accept=yes`
-varlink ones must answer `varlinkctl info`), systemd-oomd watching
-`app.slice`, `background.slice` and `session.slice` (again after `systemctl
-restart systemd-oomd`), a podman quadlet container (`Rootfs=` on a small
-copied root, so nothing is pulled) started, in `app.slice/qhello.service`,
-and stopped, and a flatpak app installed for tester from the fedora remote
-(about 3 GB in the overlay; needs the network) running in its
-`app-flatpak-*.scope`, with the flatpak exports in gnome-shell's
-`XDG_DATA_DIRS`. `apps-baseline` runs the same on stock `systemd --user`.
-
-`tests/vm-user-manager.sh ~/uinitconverter-vm lifecycle` (slice E) gives
-tester and a new user alice passwords and adds bob. After the session
-checks it logs tester out (the session's units stop, the bus restarts, no
-jobs, no session unit failed), logs tester in again at the greeter with QMP
-keys, asks GDM for a second greeter (`CreateTransientDisplay`, as Switch
-User does) once tester's gnome-shell has registered its display with GDM
-(asked earlier, GDM can leave the seat on tester's session), checks that
-seat0 shows that greeter, and logs alice in there (both sessions run). It then runs the
-RPM update helper (pipewire restarted in both managers, the marker
-cleared, `user@` reloaded in place), lets bob linger (his manager starts,
-`systemctl --user -M bob@` works, disable-linger stops it with nothing
-left), logs alice out, and reboots: from the last boot's journal every
-`user@` must have stopped within 5 s, none killed or failed.
-`lifecycle-baseline` runs the same on stock `systemd --user`.
-
-`tests/vm-user-manager.sh ~/uinitconverter-vm fallback` breaks tester's
-session on purpose for the s6 manager only: a `user@1000` drop-in gives the
-launcher a unit path (its test override, which `systemd --user` ignores)
-that starts with a drop-in making `org.gnome.Shell@user.service` fail. The
-autologin fails into `gnome-session-shutdown.target`; the test checks the
-record in `/run/uinitconverter-user/1000`, `systemd --user` in `user@1000`,
-no s6 process left, and the greeter. Tester then logs in at the greeter and
-gets a working session under `systemd --user`. Last, bob lingers, his s6
-manager is killed with SIGKILL, and the next start of his `user@` runs
-`systemd --user` with the crash recorded.
-
-`BOOT=s6` or `BOOT=systemd-rpm` `tests/vm-user-manager.sh ~/uinitconverter-vm
-confined` adds two SELinux-confined users, carol (`user_u`) and dave
-(`staff_u`), lingering: each `user@` must become active, its manager and its
-s6-svscan must run in the user's domain (`user_t`, `staff_t`), and no denial
-may come from those domains (on `BOOT=systemd-rpm`, without the SELinux
-module, the fallback record's denial in `/run/uinitconverter-user` is listed
-as known). `confined-baseline` runs the same on stock `systemd --user`.
+- `session` (default) keeps GDM's autologin. It runs `gnome-vm.sh wait` and
+  `check`, then checks gnome-shell's cgroup
+  (`session.slice/org.gnome.Shell@user.service`) and ambient capabilities,
+  the background (GNOME's bwrap-sandboxed image loader), failed units and
+  jobs, the session targets and services, `is-system-running`, the leader's
+  environment, the autostart app scopes, `systemd-run --user --scope` (as
+  Ptyxis starts each shell) and `GetUnitByPID`, SELinux and AVC denials. It
+  then opens Calculator from GNOME Shell with QMP keys and checks it runs in
+  its `app-gnome-*.scope`.
+- `greeter` turns autologin off, so GDM's greeter comes up. It checks the
+  greeter's gnome-shell, its cgroup
+  (`session.slice/org.gnome.Shell@gdm.service`), failed units and jobs, the
+  session targets, pipewire, SELinux and AVC denials, and prints the
+  greeter's warnings and memory.
+- `apps` runs the session checks, then the user timers, every user socket
+  (the `Accept=yes` varlink ones must answer `varlinkctl info`), systemd-oomd
+  watching `app.slice`, `background.slice` and `session.slice` (again after
+  `systemctl restart systemd-oomd`), a podman quadlet container (`Rootfs=` on
+  a small copied root, so nothing is pulled) started, in
+  `app.slice/qhello.service`, and stopped, and a flatpak app installed for
+  tester from the fedora remote (about 3 GB in the overlay; needs the
+  network) running in its `app-flatpak-*.scope`, with the flatpak exports in
+  gnome-shell's `XDG_DATA_DIRS`.
+- `lifecycle` gives tester and a new user alice passwords and adds bob.
+  After the session checks it logs tester out (the session's units stop, the
+  bus restarts, no jobs, no session unit failed), logs tester in again at the
+  greeter with QMP keys, asks GDM for a second greeter
+  (`CreateTransientDisplay`, as Switch User does) once tester's gnome-shell
+  has registered its display with GDM (asked earlier, GDM can leave the seat
+  on tester's session), checks that seat0 shows that greeter, and logs alice
+  in there (both sessions run). It then runs the RPM update helper (pipewire
+  restarted in both managers, the marker cleared, `user@` reloaded in
+  place), lets bob linger (his manager starts, `systemctl --user -M bob@`
+  works, disable-linger stops it with nothing left), logs alice out, and
+  reboots: every `user@` must have stopped within 5 s, none killed or
+  failed. On the s6 boot each `user@` is measured from "shutdown starts" to
+  the end of its runner's PAM session. `PRE_REBOOT_SCRIPT=FILE` runs a
+  sampler before the reboot (see the script's header).
+- `confined` adds two SELinux-confined users, carol (`user_u`) and dave
+  (`staff_u`), lingering: each `user@` must become active, its manager must
+  run in the user's domain (`user_t`, `staff_t`), and no denial may come
+  from those domains.
 
 `tests/vm-s6-boot.sh ~/uinitconverter-vm` boots the VM with s6, installed
 as README steps 2-4 do it: the core RPMs (`packages/build-rpms.sh`; default
@@ -348,39 +302,13 @@ no failed user units) and AVC denials, and prints the failed system units.
 `BOOT_ONLY_S6=yes` adds `--boot-only-s6=yes` to init (uinitconverter's own
 initramfs, with mdevd) and checks that the entry boots it, that no systemd
 ran in the initramfs, and the root and `/var` mounts (the VM's are btrfs
-subvolumes). The mode says what `user@` must run:
+subvolumes). `user@1000` must run `systemd --user`, owning
+`org.freedesktop.systemd1` on tester's bus. The mode:
 
-| Mode | Setup | `user@1000` runs |
-|---|---|---|
-| `s6` (default) | `USER_MANAGER=s6`, `uinitconverter-user` installed | `initconvert-user-manager`; then a reboot from the s6 boot and the same checks |
-| `no-package` | `USER_MANAGER=s6`, no `uinitconverter-user` | `systemd --user`, with the runner's "install uinitconverter-user" line |
-| `default` | every package, no `USER_MANAGER=` | `systemd --user` (the default) |
-| `systemd` | every package, `USER_MANAGER=systemd` | `systemd --user` |
-
-`BOOT=systemd-rpm tests/vm-user-manager.sh ~/uinitconverter-vm MODE` runs
-`greeter`, `session`, `apps`, `lifecycle` or `fallback` on the stock systemd
-boot as a user would set it up: only `uinitconverter-user` and what it
-requires (from `CORE_RPMS=` and `SKARNET_RPMS=`), then `sudo
-initconvert-user-setup on`, with no kernel flag. The baselines install the
-package and leave it off, so they also check that installing it changes
-nothing.
-
-`tests/vm-user-setup.sh ~/uinitconverter-vm` checks `initconvert-user-setup`
-on the systemd boot with everything installed and `initconvert init` run, the
-SELinux module included, as on an owner's machine: `on` and a reboot (the s6
-manager, enforcing, no AVC denials), `off` and a reboot, `on` then
-`dnf remove uinitconverter-user` (the drop-in goes), and with
-`OLD_RPMS=` an upgrade from an older build of the same version (nothing
-turned on by the upgrade, `on` works after it). Build the old RPMs first,
-so the newer build has the newer release; the script's header has the
-commands.
-
-`BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm MODE` runs the
-`session` and `lifecycle` checks (and their baselines) on the s6 boot the same
-way: every RPM, `USER_MANAGER=s6` (`systemd` in the baselines) and `initconvert
-init`, so the s6 boot's runner starts every `user@`. At the reboot it measures
-each `user@` from "shutdown starts" to the end of its runner's PAM session,
-with the same 5 s limit.
+| Mode | Setup |
+|---|---|
+| `default` (default) | every package; then a reboot from the s6 boot and the same checks |
+| `old-config` | every package, with `USER_MANAGER=s6` and `USER_FALLBACK_ON=` left in `uinitconverter.conf` (as 0.3.0's s6 user manager wrote them): ignored |
 
 For quick rebuilds of the RPMs, `packages/build-rpms.sh --test DIR` (see the
 packages README) and `CORE_RPMS=DIR/rpms`. The console is kept in
@@ -751,7 +679,7 @@ Boot the normal Fedora entry, then:
 
 ```sh
 sudo initconvert init --uninstall
-sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd uinitconverter-user \
+sudo dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd \
     uinitconverter-fdstore uinitconverter-notify uinitconverter-journal-relay uinitconverter-linkwatch
 sudo dnf remove skalibs execline s6 s6-rc s6-linux-init s6-frontend mdevd \
     skalibs-devel execline-devel s6-devel s6-rc-devel s6-linux-init-devel
