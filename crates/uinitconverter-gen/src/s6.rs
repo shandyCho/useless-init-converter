@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use uinitconverter_base::config::{runner_cmd, timers_cmd};
+use uinitconverter_base::snapshot::{self, Snapshot};
 
 use super::*;
 use uinitconverter_base::automask;
@@ -116,6 +117,7 @@ fn write_file(path: &Path, content: &str, exec: bool) -> std::io::Result<()> {
 
 pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
+    let ld = Loader::new(cfg);
     let runner = cfg.runner.display().to_string();
     let args = cfg.runner_args();
 
@@ -174,6 +176,11 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
                 for (name, text, exec) in longrun_files(cfg, &p.id, &p.timings, p.on_demand) {
                     write_file(&sdir.join(name), &text, exec)?;
                 }
+                if let Some(u) = plan.loaded.get(&p.id) {
+                    let snap = Snapshot::take(&ld, u.clone());
+                    fs::create_dir_all(sdir.join("data"))?;
+                    write_file(&sdir.join(snapshot::SERVICE_FILE), &snap.render(), false)?;
+                }
                 if let Some(stop) = &p.stop_atom {
                     write_stop_atom(cfg, plan, p, &dir.join(stop))?;
                 }
@@ -219,7 +226,33 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
         triggers: plan.triggers.clone(),
     };
     fs::write(dir.join("..").join("index"), idx.render())?;
+    write_holder(plan, &ld, &dir.join(snapshot::HOLDER), &idx)?;
     fs::write(dir.join("..").join("report.txt"), report(plan))?;
+    Ok(())
+}
+
+/// The holder longrun (snapshot::HOLDER): the snapshots of the units that
+/// have no service directory of their own, and the index, in its `data/`,
+/// so they travel with the database. It never needs to run; started by
+/// hand, it only waits.
+fn write_holder(plan: &Plan, ld: &Loader, hdir: &Path, idx: &Index) -> std::io::Result<()> {
+    let units = hdir.join(snapshot::HOLDER_UNITS);
+    fs::create_dir_all(&units)?;
+    write_file(&hdir.join("type"), "longrun\n", false)?;
+    let pause = util::sh_quote(&tools::path("s6-pause"));
+    write_file(
+        &hdir.join("run"),
+        &format!("#!/bin/sh\nexec {pause}\n"),
+        true,
+    )?;
+    write_file(&hdir.join(snapshot::HOLDER_INDEX), &idx.render(), false)?;
+    for (id, u) in &plan.loaded {
+        let own = plan.units.get(id).is_some_and(|p| p.kind == Kind::Longrun);
+        if !own {
+            let snap = Snapshot::take(ld, u.clone());
+            write_file(&hdir.join(snapshot::holder_file(id)), &snap.render(), false)?;
+        }
+    }
     Ok(())
 }
 
@@ -602,6 +635,28 @@ fn sync_stop_atoms(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String
     Ok(())
 }
 
+/// The holder (snapshot::HOLDER) stays `usable`: in the database, never
+/// started. Masked or disabled in the set, the tools would lose the units
+/// it carries, so the set's state is put back here.
+fn sync_holder(cfg: &Config, changes: &mut Vec<String>) -> Result<(), String> {
+    match install::set_rx(cfg, snapshot::HOLDER) {
+        None | Some("usable") => Ok(()),
+        Some(rx) => {
+            run(Command::new(tools::path("s6-rc-set-change"))
+                .arg("-r")
+                .arg(&cfg.repo_dir)
+                .arg(&cfg.set_name)
+                .arg("usable")
+                .arg(snapshot::HOLDER))?;
+            changes.push(format!(
+                "{} {rx} -> usable (it holds the units)",
+                snapshot::HOLDER
+            ));
+            Ok(())
+        }
+    }
+}
+
 /// Commit the set and install it: as the boot database, and (with a live
 /// state) as the live one. s6-rc-set-fix -u first enables what active
 /// services depend on: a new package's service may need one the set has
@@ -791,6 +846,7 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
         .and_then(|_| sync_loggers(cfg, &mut set_changes))
         .and_then(|_| undo_auto_mask(cfg, &plan, &mut set_changes))
         .and_then(|_| sync_stop_atoms(cfg, &mut set_changes))
+        .and_then(|_| sync_holder(cfg, &mut set_changes))
         .and_then(|_| commit_and_install(cfg, update_live, &mut set_changes));
     let updated_live = match res {
         Ok(r) => r,

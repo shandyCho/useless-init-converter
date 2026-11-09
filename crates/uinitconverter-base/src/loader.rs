@@ -39,9 +39,20 @@ impl LoadState {
             LoadState::BadSetting => "bad-setting",
         }
     }
+
+    pub fn parse(s: &str) -> Option<LoadState> {
+        [
+            LoadState::Loaded,
+            LoadState::NotFound,
+            LoadState::Masked,
+            LoadState::BadSetting,
+        ]
+        .into_iter()
+        .find(|l| l.as_str() == s)
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Unit {
     /// Canonical name (alias symlinks resolved, instance applied).
     pub id: String,

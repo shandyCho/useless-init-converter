@@ -12,6 +12,7 @@ pub mod index;
 pub mod loader;
 pub mod mountunit;
 pub mod pathspec;
+pub mod snapshot;
 pub mod state;
 pub mod timerspec;
 pub mod tools;

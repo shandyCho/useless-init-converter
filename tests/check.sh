@@ -1098,6 +1098,18 @@ s6-rc-set-change -r "$W/repo" current active stopper.service 2>/dev/null
 call Reload
 expect_eq "the .stop oneshot is active again with its service" "$(rx stopper.service.stop)" "active"
 in_default stopper.service.stop && ok "and in the default bundle" || bad "stopper.service.stop not in the default bundle"
+# The database carries its units (snapshot.rs): each longrun its own in
+# data/unit, the others and the index in the holder, which stays usable.
+H=$R/live/servicedirs/uinitconverter-units
+[ -s "$H/data/index" ] && [ -s "$H/data/units/multi-user.target" ] \
+    && ok "the live database's holder carries the index and the other units" || bad "holder: $(ls -R "$H/data" 2>&1 | head -5)"
+head -2 "$R/live/servicedirs/hello.service/data/unit" 2>/dev/null | tail -1 | grep -qx 'id	hello.service' \
+    && ok "a longrun carries its unit in data/unit" || bad "hello.service/data/unit: $(head -3 "$R/live/servicedirs/hello.service/data/unit" 2>&1)"
+expect_eq "the holder is usable, never started" "$(rx uinitconverter-units) $(s6-svstat -o up "$H" 2>/dev/null)" "usable false"
+s6-rc-set-change -r "$W/repo" current masked uinitconverter-units 2>/dev/null
+call Reload
+expect_eq "a masked holder is usable again after a reload" "$(rx uinitconverter-units)" "usable"
+[ -s "$H/data/index" ] && ok "and back in the live database" || bad "no $H/data/index after the reload"
 
 section "linkwatch"
 # A supervisor that started before anyone listened: its "s" went to nobody.

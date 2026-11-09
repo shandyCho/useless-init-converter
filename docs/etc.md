@@ -654,6 +654,7 @@ tests/                     비특권 샌드박스, 시나리오 검사, systemct
 | 러너와 타이머의 명령(`run`, `finish`, `up`, `down`, `stop-atom`, `accept`, ..., `timer-run`, `path-run`) | `base/config.rs`, `runner_cmd`, `timers_cmd` | gen의 스크립트, 데몬, `dist/s6` run 스크립트, 러너 | 러너의 `Cmd` 열거형(처리하지 않은 명령은 빌드되지 않음), `cmd_tests`(목록, `dist/s6`), `config::contract_tests`(gen과 데몬에 리터럴 명령이 없는지) |
 | fd 저장소 프로토콜 | `base/fdstore.rs`(맨 위에 설명) | 본체의 클라이언트와 대체 저장소, 독립 도구 `initconvert-fdstore`(공유 코드 없음) | `fdstore::tests::protocol_conformance_*`: 본체의 클라이언트로 같은 경우들을 두 서버에 실행(독립 도구는 빌드되어 있으면, 아니면 메모를 남기고 건너뜀) |
 | `uinitconverter.conf`의 키 | `base/config.rs`, `KEYS`, `REMOVED_KEYS` | 파서, `dist/uinitconverter.conf`, `initconvert init` | `config::contract_tests`(파서의 키, dist 파일), `init::tests::init_writes_known_keys` |
+| 유닛 스냅샷: 데이터베이스를 만든 유닛(longrun은 자기 `data/unit`, 나머지와 인덱스는 `uinitconverter-units` 보관 서비스의 `data/`) | `base/snapshot.rs`(형식은 맨 위) | gen이 쓰고, 러너, 타이머, 데몬이 읽음 | `snapshot::tests`(다시 읽으면 로드한 유닛과 같음), gen의 `database_carries_its_units`, `check.sh`(라이브 데이터베이스의 보관 서비스, `usable` 유지) |
 | 생성된 데이터베이스의 색인 | `base/index.rs`, `Index::render`와 `Index::load` | gen이 쓰고 러너와 데몬이 읽음 | `index::tests::render_and_load_round_trip` |
 
 도구들이 부르는 데몬의 D-Bus 메서드(`LoadUnit`, `StartUnit`, `Reload`, `StopInstances` 등)에는 따로

@@ -7,7 +7,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct UnitFile {
     /// (section, key, value) in the order they were read.
     pub entries: Vec<(String, String, String)>,

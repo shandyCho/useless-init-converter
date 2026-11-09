@@ -12733,3 +12733,13 @@ About 600 units on Fedora Workstation, unit files plus drop-ins about 1 KB each:
 
 1. The owner: confirm option (b) for oneshots and the index.
 2. Slice 1.
+
+## 2026-11-10, part 208: slice 1, the database carries its units
+
+Option (b) of part 207, as recommended; the owner then asked for every slice in a row, a commit after each, and a report in Korean at the end.
+
+- `uinitconverter-base/src/snapshot.rs`: the format (one definition; documented at the top): id, names, load state and error, fragment and drop-ins with their mtimes, the `.wants/.requires/.upholds` entries, the entries as read (specifiers unexpanded). `Snapshot::take` (from a loaded unit), `render`, `parse`. `Unit`/`UnitFile` derive `PartialEq`; `LoadState::parse`.
+- gen: `Plan::loaded` keeps every unit loaded for the database (the translated ones, Accept=no sockets bound by their service's runner, Accept=yes templates; not excluded or transient units). `write_source` writes a longrun's own unit to `data/unit`, and the holder longrun `uinitconverter-units` (run: `s6-pause`; never started) with every other unit in `data/units/` and the index in `data/index`. `sync_holder` puts it back to `usable` at each reload if the set has it elsewhere.
+- Correction to part 206: the requirement list is not resolved at generation time. The snapshot keeps the link directories' entries; readers resolve names through the same database's index, which the holder carries too.
+- Tests: `snapshot::tests` (round trip of a drop-in, an alias, link directories, a template instance, a masked and a missing unit, values with tabs and backslashes; malformed input), gen `database_carries_its_units` (an edit after the reload doesn't change the database), `check.sh` (the holder and its data in the live database, `usable` and down; masked by hand, a reload puts it back). `cargo test` 134 passed; sandbox **379/379**.
+- Seen in the sandbox: the repository adds a new longrun as `usable`; s6-rc gives it a live service directory with `data/` while it's down.

@@ -116,6 +116,11 @@ pub struct Plan {
     /// pulls in. These get flag-recommended, so a repository set first
     /// sees them as active; after that the set decides.
     pub boot: BTreeSet<String>,
+    /// Every unit loaded for the database, by id (the translated ones, the
+    /// sockets a service's runner binds, `Accept=yes` templates): written
+    /// into the database as snapshots (snapshot.rs), so the tools run what
+    /// was loaded here.
+    pub loaded: BTreeMap<String, Unit>,
 }
 
 /// The s6 service (dist/s6) that serves the fd store.
@@ -615,6 +620,7 @@ pub fn plan(cfg: &Config) -> Plan {
                 .insert(name, "provided by extra s6-rc source".into());
             continue;
         }
+        plan.loaded.insert(unit.id.clone(), unit.clone());
 
         match unit.utype() {
             "service" | "target" | "mount" | "swap" => {}
@@ -652,6 +658,9 @@ pub fn plan(cfg: &Config) -> Plan {
                     // A longrun of its own: s6-ipcserverd starts an instance
                     // of the template per connection (runner `accept`).
                     let tmpl = ld.load(&acceptspec::template(&unit));
+                    if tmpl.is_loaded() {
+                        plan.loaded.insert(tmpl.id.clone(), tmpl.clone());
+                    }
                     if let Some(why) = acceptspec::unsupported(&unit, &tmpl) {
                         plan.skipped.insert(name, why);
                         continue;
@@ -1378,6 +1387,88 @@ mod tests {
         assert!(!src.join("off.service/flag-recommended").exists());
         assert!(!src.join("multi-user.target/flag-recommended").exists());
         assert!(!src.join(&cfg.default_bundle).exists());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// The database carries the units it was generated from (snapshot.rs):
+    /// a longrun its own in data/unit, everything else (oneshots, targets,
+    /// a socket its service's runner binds) and the index in the holder.
+    /// Each is the unit as loaded, edits after the reload aside.
+    #[test]
+    fn database_carries_its_units() {
+        use uinitconverter_base::snapshot::{self, Snapshot};
+        let tmp =
+            std::env::temp_dir().join(format!("uinitconverter-gen-snap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let units = tmp.join("units");
+        fs::create_dir_all(units.join("multi-user.target.wants")).unwrap();
+        fs::create_dir_all(units.join("d.service.d")).unwrap();
+        let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
+        write("multi-user.target", "[Unit]\nDescription=m\n");
+        std::os::unix::fs::symlink("multi-user.target", units.join("default.target")).unwrap();
+        write(
+            "d.service",
+            "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/sleep 9\n",
+        );
+        write("d.service.d/x.conf", "[Service]\nEnvironment=A=1\n");
+        write(
+            "d.socket",
+            "[Unit]\nDefaultDependencies=no\n[Socket]\nListenStream=/run/d.sock\n",
+        );
+        write(
+            "o.service",
+            "[Unit]\nDefaultDependencies=no\n[Service]\nType=oneshot\nExecStart=/bin/true\n",
+        );
+        for u in ["d.service", "d.socket", "o.service"] {
+            std::os::unix::fs::symlink(
+                format!("../{u}"),
+                units.join("multi-user.target.wants").join(u),
+            )
+            .unwrap();
+        }
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![units.clone()];
+        cfg.extra_source = vec![];
+        let plan = plan(&cfg);
+        let src = tmp.join("db").join("source");
+        write_source(&cfg, &plan, &src).unwrap();
+        let ld = Loader::new(&cfg);
+        let read = |p: std::path::PathBuf| {
+            Snapshot::parse(
+                &fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())),
+            )
+            .unwrap()
+        };
+
+        let d = read(src.join("d.service").join(snapshot::SERVICE_FILE));
+        assert_eq!(d.unit, ld.load("d.service"));
+        assert_eq!(d.unit.dropins.len(), 1);
+        let h = src.join(snapshot::HOLDER);
+        assert_eq!(fs::read_to_string(h.join("type")).unwrap(), "longrun\n");
+        assert!(h.join("run").exists());
+        assert_eq!(
+            fs::read_to_string(h.join(snapshot::HOLDER_INDEX)).unwrap(),
+            fs::read_to_string(tmp.join("db/index")).unwrap()
+        );
+        for u in ["o.service", "multi-user.target", "d.socket"] {
+            let s = read(h.join(snapshot::holder_file(u)));
+            assert_eq!(s.unit, ld.load(u), "{u}");
+        }
+        let m = read(h.join(snapshot::holder_file("multi-user.target")));
+        assert!(m.dir_deps("wants").contains(&"o.service".to_string()));
+        // A longrun's unit is only in its own directory.
+        assert!(!h.join(snapshot::holder_file("d.service")).exists());
+
+        // Edited after the reload: the database keeps what was loaded.
+        write(
+            "d.service",
+            "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/false\n",
+        );
+        let d2 = read(src.join("d.service").join(snapshot::SERVICE_FILE));
+        assert_eq!(
+            d2.unit.get("Service", "ExecStart").as_deref(),
+            Some("/bin/sleep 9")
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 
