@@ -12767,3 +12767,24 @@ Option (b) of part 207, as recommended; the owner then asked for every slice in 
 - `Snapshot::changed_on_disk` (base): a loaded unit's fragment or drop-in has another mtime or is gone, or loading it now gives another fragment, other drop-ins or another load state (a new drop-in, a mask). The daemon's `NeedDaemonReload` (was hard-coded `false`) asks it of the cached snapshot; transient units are `false`. Real caller: `systemctl status`/`show` read it and print systemd's "changed on disk" warning.
 - Cost: one load from disk per property read (GetAll), only of the unit asked for.
 - Tests: `snapshot::tests::changed_on_disk_as_need_daemon_reload` (unchanged, mtime, new drop-in, masked); sandbox: `snap.service` false, true after the edit (`touch -d '+2 seconds'`, so the check doesn't depend on the clock's second), false after the reload. `cargo test` 136; sandbox **388/388**, `SANDBOX_JOURNAL=no` **395/395**, `SANDBOX_FDSTORE=no` **376/376**.
+
+## 2026-11-10, part 212: slice 5 decided against; the state after slices 1-4
+
+**Slice 5** (part 206: write simple settings straight into s6 files, so s6 runs simple units without the runner) was to be decided after slices 1-4. **Decided: not done.** Every start, however simple the unit, needs what no skarnet tool does:
+- the unit's cgroup (`system.slice/<unit>`, `enter_cgroup`): `systemctl status`, logind, `sd_pid_get_unit` and resource control read it;
+- stdout/stderr to journald's stream socket with the unit's identity (`stdio.rs`): `journalctl -u`;
+- the state files (MAIN_PID, timestamps, result) and `INVOCATION_ID` the daemon reports.
+A plain s6 run script (`s6-setuidgid`, an envdir) would lose those, so the count of qualifying Fedora units doesn't matter and wasn't measured. What s6 can express is already written as s6 files (`timeout-kill`, `timeout-finish`, `down-signal`, `notification-fd`), and since slice 1 the service directory also carries the unit it runs (`data/unit`), which skarnet's tools copy, roll back and install with the database.
+
+### Current state
+
+Slices 1-4 committed: 9cbb081, d65d160, 1568c62, 0a407cd (plan c60aab0, checks 3c8f54c). Not pushed. Each s6-rc database carries the units it was generated from; the runner, the timers and the daemon run and report those units until `daemon-reload`; a rollback boot runs the older database's units and index; `NeedDaemonReload` is real. Unit files are read from disk only: for units the database doesn't carry (the daemon's on-demand loading, written to `RUN_DIR/units/ID/snapshot` when started), for `confine` (dist/s6), and without a live database with a holder.
+
+**Not checked:** the VM (`tests/vm-s6-boot.sh`, `vm-user-manager.sh BOOT=s6`), an RPM update from 0.3.0 (the first boot after it runs a database without the holder: the tools read unit files until the RPM trigger's reload, by design), a real rollback boot with `uinitconverter.db=previous`, and the size of `data/` on Fedora Workstation (part 207's estimate: ~0.6 MB per database).
+
+### Next steps
+
+1. Owner: review and push (parts 205-212).
+2. `packages/build-rpms.sh --test`; `tests/vm-s6-boot.sh ~/uinitconverter-vm` (default, old-config); `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm session|lifecycle|confined`. In the VM also: `du -sh /var/lib/uinitconverter/db/*`, a rollback boot, and an edit without reload (`systemctl status` shows the warning).
+3. The upgrade from 0.3.0 with `uinitconverter-user` installed (part 205's step 3).
+4. Remaining items from part 205's list: best-effort sandboxing (step 4) and freezing the D-Bus surface to known callers (step 5), each after an audit of real callers.
