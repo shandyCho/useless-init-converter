@@ -60,6 +60,16 @@ impl Daemon {
             && !self.cfg.is_excluded(id)
     }
 
+    /// A unit started outside the database: its runner reads the unit as
+    /// loaded here (snapshot::runtime_file), as for the database's units.
+    pub(super) fn write_runtime_snapshot(&self, unit: &Unit) {
+        let ld = loader::Loader::new(&self.cfg);
+        let snap = crate::snapshot::Snapshot::take(&ld, unit.clone());
+        if let Err(e) = crate::snapshot::write_runtime(&self.cfg, &snap) {
+            eprintln!("initconvertd: {}: snapshot: {e}", unit.id);
+        }
+    }
+
     pub(super) fn dynamic_kind(&self, id: &str) -> Option<Kind> {
         self.dynamic.lock().unwrap().get(id).map(|d| d.kind)
     }
@@ -228,6 +238,7 @@ impl Daemon {
     /// A unit's own start, its dependencies already handled.
     pub(super) async fn dyn_start_one(&self, id: &str, unit: &Unit) -> &'static str {
         self.stop_conflicts(id, unit).await;
+        self.write_runtime_snapshot(unit);
 
         let oneshot = unit.utype() == "service"
             && (unit.get("Service", "Type").as_deref() == Some("oneshot")

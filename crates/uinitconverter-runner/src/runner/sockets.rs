@@ -5,7 +5,7 @@ use super::*;
 impl Runner {
     /// Socket units that hand fds to this service.
     pub(super) fn socket_units(&self) -> Vec<Unit> {
-        let ld = Loader::new(&self.cfg);
+        let units = crate::snapshot::Units::new(&self.cfg);
         let mut names = self.unit.get_words("Service", "Sockets");
         if names.is_empty() {
             let stem = self.unit.id.trim_end_matches(".service");
@@ -18,35 +18,22 @@ impl Runner {
             {
                 names.push(default);
             }
-            // Sockets that name this service with Service= (e.g. systemd-logind-varlink.socket).
-            for dir in &self.cfg.unit_path {
-                let Ok(rd) = fs::read_dir(dir) else { continue };
-                for e in rd.flatten() {
-                    let n = e.file_name().to_string_lossy().into_owned();
-                    if !n.ends_with(".socket") || names.contains(&n) {
-                        continue;
-                    }
-                    let Ok(text) = fs::read_to_string(e.path()) else {
-                        continue;
-                    };
-                    if !text.contains("Service=") {
-                        continue;
-                    }
-                    let s = ld.load(&n);
-                    if s.get("Socket", "Service")
-                        .map(|v| self.unit.names.contains(&v))
-                        .unwrap_or(false)
-                        && (install::is_enabled(&self.cfg, &n)
-                            || socket::is_requested(&self.cfg.run_dir, &n))
-                    {
-                        names.push(n);
-                    }
+            // Sockets that name this service with Service= (e.g.
+            // systemd-logind-varlink.socket): the database's, and those
+            // started by hand.
+            for s in units.sockets_naming(&self.unit.names) {
+                let n = s.unit.id;
+                if !names.contains(&n)
+                    && (install::is_enabled(&self.cfg, &n)
+                        || socket::is_requested(&self.cfg.run_dir, &n))
+                {
+                    names.push(n);
                 }
             }
         }
         names
             .into_iter()
-            .map(|n| ld.load(&n))
+            .map(|n| units.get(&n).unit)
             .filter(|u| u.is_loaded())
             .collect()
     }

@@ -59,6 +59,8 @@ fn cstr(s: &str) -> CString {
 pub struct Runner {
     pub cfg: Config,
     pub unit: Unit,
+    /// The unit's link directories' entries, as its database recorded them.
+    dir_deps: std::collections::BTreeMap<String, Vec<String>>,
     pub st: UnitState,
     user: Option<UserInfo>,
     gid: Option<u32>,
@@ -97,9 +99,32 @@ impl Runner {
     /// `starting`: the command starts the unit (`run`, `up`), so a User=,
     /// Group= or SupplementaryGroups= that doesn't resolve fails it.
     pub fn new(cfg: Config, name: &str, starting: bool) -> Result<Runner, String> {
-        let unit = Loader::new(&cfg).load(name);
+        let snap = crate::snapshot::Units::new(&cfg).get(name);
+        Self::from_snapshot(cfg, name, snap, starting)
+    }
+
+    /// `confine`: a hand-written s6 service (dist/s6) gets the sandbox of a
+    /// distribution unit that is not in the database, so its unit file is
+    /// read as it is now.
+    pub fn new_from_disk(cfg: Config, name: &str, starting: bool) -> Result<Runner, String> {
+        let ld = Loader::new(&cfg);
+        let snap = crate::snapshot::Snapshot::take(&ld, ld.load(name));
+        Self::from_snapshot(cfg, name, snap, starting)
+    }
+
+    fn from_snapshot(
+        cfg: Config,
+        name: &str,
+        snap: crate::snapshot::Snapshot,
+        starting: bool,
+    ) -> Result<Runner, String> {
+        let crate::snapshot::Snapshot { unit, dir_deps, .. } = snap;
         if unit.load_state != LoadState::Loaded {
-            return Err(format!("unit {name}: {}", unit.load_state.as_str()));
+            let why = unit
+                .load_error
+                .as_deref()
+                .unwrap_or(unit.load_state.as_str());
+            return Err(format!("unit {name}: {why}"));
         }
         let st = crate::state::for_unit(&cfg.run_dir, &unit.id);
         st.ensure();
@@ -120,6 +145,7 @@ impl Runner {
             sandbox: Sandbox::from_unit(&unit, &st.dir, Vec::new()),
             cfg,
             unit,
+            dir_deps,
             st,
             user,
             gid,
@@ -144,6 +170,11 @@ impl Runner {
         &self.unit.id
     }
 
+    /// The entries of the unit's NAME.KIND/ directories.
+    pub(super) fn dir_deps(&self, kind: &str) -> Vec<String> {
+        self.dir_deps.get(kind).cloned().unwrap_or_default()
+    }
+
     pub fn setenv(&mut self, k: &str, v: &str) {
         env_set(&mut self.env, k, v);
     }
@@ -160,12 +191,11 @@ impl Runner {
     /// A required unit (Requires=/Requisite=/BindsTo=) that failed. s6-rc
     /// only orders units; requirement failures are enforced here.
     fn failed_requirement(&self) -> Option<String> {
-        let ld = Loader::new(&self.cfg);
         let idx = crate::index::Index::load(&self.cfg);
         let mut deps = self.unit.get_words("Unit", "Requires");
         deps.extend(self.unit.get_words("Unit", "Requisite"));
         deps.extend(self.unit.get_words("Unit", "BindsTo"));
-        deps.extend(ld.dir_deps(&self.unit, "requires"));
+        deps.extend(self.dir_deps("requires"));
         for d in deps {
             let d = idx.resolve(&d).to_string();
             if d == self.unit.id {
@@ -485,16 +515,16 @@ impl Runner {
     /// on demand too have their sockets listening already, so this one
     /// need not wait; for the others StartUnit is a no-op when they run.
     fn start_waiting_requirements(&self) {
-        let ld = Loader::new(&self.cfg);
+        let units = crate::snapshot::Units::new(&self.cfg);
         let mut names = Vec::new();
         for key in ["Requires", "BindsTo", "Wants"] {
             names.extend(self.unit.get_words("Unit", key));
         }
-        names.extend(ld.dir_deps(&self.unit, "requires"));
-        names.extend(ld.dir_deps(&self.unit, "wants"));
+        names.extend(self.dir_deps("requires"));
+        names.extend(self.dir_deps("wants"));
         let mut ids: Vec<String> = Vec::new();
         for n in names {
-            let id = ld.load(&n).id;
+            let id = units.id(&n);
             if id != self.unit.id && !ids.contains(&id) {
                 ids.push(id);
             }

@@ -8,7 +8,7 @@ pub(crate) use uinitconverter_base::acceptspec;
 pub(crate) use uinitconverter_base::pathspec as pathunit;
 pub(crate) use uinitconverter_base::timerspec as timer;
 pub(crate) use uinitconverter_base::{
-    config, envfile, fdstore, loader, mountunit, state, tools, unit, util,
+    config, envfile, fdstore, loader, mountunit, snapshot, state, tools, unit, util,
 };
 pub(crate) use uinitconverter_exec::{cgroup, conditions, execcmd, socket};
 pub(crate) use uinitconverter_gen as gen;

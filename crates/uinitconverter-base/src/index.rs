@@ -65,9 +65,17 @@ pub struct Index {
 }
 
 impl Index {
+    /// The index of the live database (its holder, snapshot.rs), so a
+    /// rollback boot (uinitconverter.db=previous) reads the index of the
+    /// database it booted; without a live database (or one generated
+    /// before the holder existed), the newest generated one,
+    /// STATE_DIR/current/index.
     pub fn load(cfg: &Config) -> Index {
         let mut idx = Index::default();
-        let Ok(text) = fs::read_to_string(cfg.state_dir.join("current").join("index")) else {
+        let path = crate::snapshot::live_holder(cfg)
+            .map(|h| h.join(crate::snapshot::HOLDER_INDEX))
+            .unwrap_or_else(|| cfg.state_dir.join("current").join("index"));
+        let Ok(text) = fs::read_to_string(path) else {
             return idx;
         };
         for line in text.lines() {

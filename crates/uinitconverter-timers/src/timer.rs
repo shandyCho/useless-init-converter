@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::loader::{Loader, Unit};
+use crate::loader::Unit;
 use crate::state::{self, UnitState};
 use crate::util;
 pub use uinitconverter_base::timerspec::*;
@@ -180,8 +180,8 @@ impl Runner {
 }
 
 pub fn cmd_timer_run(cfg: Config, name: &str) -> i32 {
-    let ld = Loader::new(&cfg);
-    let timer = ld.load(name);
+    let units = uinitconverter_base::snapshot::Units::new(&cfg);
+    let timer = units.get(name).unit;
     if !timer.is_loaded() {
         eprintln!(
             "uinitconverter: timer {name}: {}",
@@ -196,7 +196,7 @@ pub fn cmd_timer_run(cfg: Config, name: &str) -> i32 {
     }
     // The unit's own name: its runner keeps its state under that, also when
     // Unit= names an alias (dnf-makecache.timer: Unit=dnf5-makecache.service).
-    let target = ld.load(&trigger_unit(&timer)).id;
+    let target = units.id(&trigger_unit(&timer));
     let st = state::for_unit(&cfg.run_dir, &timer.id);
     st.ensure();
     st.clear(ELAPSED);

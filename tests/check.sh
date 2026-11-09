@@ -289,6 +289,8 @@ section "User= gone before the stop"
 call StartUnit ss userless.service replace
 expect_state userless.service active/running
 sed -i 's/^User=.*/User=sdc-no-such-user/' "$W/units/userless.service"
+# The tools run the database's unit: the edit takes effect with a reload.
+call Reload
 call StopUnit ss userless.service replace
 expect_state userless.service inactive/dead
 expect_eq "the stop recorded the exit (MainPID)" "$(prop userless.service Service MainPID)" "0"
@@ -1110,6 +1112,21 @@ s6-rc-set-change -r "$W/repo" current masked uinitconverter-units 2>/dev/null
 call Reload
 expect_eq "a masked holder is usable again after a reload" "$(rx uinitconverter-units)" "usable"
 [ -s "$H/data/index" ] && ok "and back in the live database" || bad "no $H/data/index after the reload"
+# Edited without a reload, a unit keeps running what its database has
+# (systemd runs the loaded unit until daemon-reload); after it, the new one.
+snap_runs() {
+    sn=$(wc -l <"$W/snap.out" 2>/dev/null || echo 0)
+    call RestartUnit ss snap.service replace
+    st=50
+    while [ $st -gt 0 ] && [ "$(wc -l <"$W/snap.out" 2>/dev/null || echo 0)" = "$sn" ]; do st=$((st - 1)); sleep 0.2; done
+    tail -1 "$W/snap.out" 2>/dev/null
+}
+expect_eq "snap.service runs its database's command" "$(snap_runs)" "one"
+sed -i 's/echo one/echo two/' "$W/units/snap.service"
+expect_eq "edited without a reload, the restart runs the database's command" "$(snap_runs)" "one"
+call Reload
+expect_eq "after a reload, the edited command" "$(snap_runs)" "two"
+call StopUnit ss snap.service replace
 
 section "linkwatch"
 # A supervisor that started before anyone listened: its "s" went to nobody.

@@ -20,6 +20,14 @@ Details in `work_history.md`, parts 203-205.
   `uinitconverter.user_manager=` are ignored.
 
 ### Changed
+- **Services run the units of their database.** gen writes each unit into
+  the s6-rc database it generates (a longrun's `data/unit`, the others and
+  the index in the never-started `uinitconverter-units` service), and the
+  runner and the timers read them there, as systemd runs its loaded units
+  until `daemon-reload`: a unit file edited without `systemctl
+  daemon-reload` no longer changes the next start. Package updates are not
+  affected (Fedora's RPM triggers reload). A rollback boot now also reads
+  the index of the database it booted, not the newer one's.
 - `tests/vm-user-manager.sh` checks `systemd --user` under GNOME (session,
   greeter, apps, lifecycle, confined users) on the systemd boot and, with
   `BOOT=s6`, on the s6 boot. `tests/vm-s6-boot.sh` has the modes `default`

@@ -133,6 +133,9 @@ impl Daemon {
                 if let Err(e) = crate::socket::mark_requested(&self.cfg.run_dir, &id) {
                     eprintln!("initconvertd: {id}: {e}");
                 }
+                // Its service's runner binds it; a socket the database
+                // doesn't carry is read from here.
+                self.write_runtime_snapshot(&unit);
                 return Box::pin(self.check_job(&svc, jtype, allow_reload, manual)).await;
             }
         }

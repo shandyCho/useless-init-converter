@@ -18,6 +18,12 @@
   `USER_EXCLUDE=`, `USER_FALLBACK_ON=`과 `uinitconverter.user_manager=`는 무시됩니다.
 
 ### 변경
+- **서비스는 자기 데이터베이스의 유닛을 실행합니다.** gen이 만드는 s6-rc 데이터베이스에 각 유닛을 쓰고
+  (longrun은 `data/unit`, 나머지와 인덱스는 실행되지 않는 `uinitconverter-units` 서비스), 러너와 타이머가
+  거기서 읽습니다. systemd가 `daemon-reload` 전까지 읽어 둔 유닛을 실행하는 것과 같아서,
+  `systemctl daemon-reload` 없이 고친 유닛 파일은 이제 다음 시작에 영향을 주지 않습니다. 패키지 업데이트는
+  영향이 없습니다(Fedora의 RPM 트리거가 reload합니다). 되돌린 부팅도 이제 새 데이터베이스가 아니라 부팅한
+  데이터베이스의 인덱스를 읽습니다.
 - `tests/vm-user-manager.sh`는 GNOME 아래의 `systemd --user`(세션, 로그인 화면, 앱, 수명 주기,
   제한된 사용자)를 systemd 부팅에서, `BOOT=s6`이면 s6 부팅에서 확인합니다. `tests/vm-s6-boot.sh`의
   모드는 `default`와 `old-config`입니다.

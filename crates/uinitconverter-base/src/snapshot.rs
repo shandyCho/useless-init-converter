@@ -37,6 +37,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use crate::config::Config;
 use crate::loader::{LoadState, Loader, Unit};
 use crate::unit::UnitFile;
 
@@ -204,6 +205,179 @@ fn parse_stamp(t: &str) -> Option<Option<(i64, u32)>> {
     Some(Some((sec.parse().ok()?, nsec.parse().ok()?)))
 }
 
+/// The live database's holder service directory, when the live database
+/// has one (one generated before the holder existed has none).
+pub fn live_holder(cfg: &Config) -> Option<PathBuf> {
+    let h = cfg.live_dir.join("servicedirs").join(HOLDER);
+    h.join(HOLDER_INDEX).is_file().then_some(h)
+}
+
+/// Where the daemon writes the snapshot of a unit it loads at run time
+/// (a dynamic instance, a transient unit, a socket started by hand): in
+/// the unit's state directory, RUN_DIR/units/ID/snapshot.
+pub fn runtime_file(cfg: &Config, id: &str) -> PathBuf {
+    cfg.unit_run_dir(id).join("snapshot")
+}
+
+/// The daemon's side of runtime_file().
+pub fn write_runtime(cfg: &Config, snap: &Snapshot) -> std::io::Result<()> {
+    let p = runtime_file(cfg, &snap.unit.id);
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    crate::util::write_atomic(&p, snap.render().as_bytes())
+}
+
+/// The units the tools run: the live database's (each longrun's
+/// `data/unit`, the holder's `data/units/`), then those the daemon loaded
+/// at run time (runtime_file). A unit in none of them is not found: the
+/// unit files on disk are not read behind the database's back. Without a
+/// live database with a holder (no s6 boot, `initconvert plan`, or a
+/// database generated before the holder existed) the unit files are read,
+/// as before.
+pub struct Units<'a> {
+    cfg: &'a Config,
+    holder: Option<PathBuf>,
+    index: crate::index::Index,
+}
+
+impl<'a> Units<'a> {
+    pub fn new(cfg: &'a Config) -> Units<'a> {
+        Units {
+            cfg,
+            holder: live_holder(cfg),
+            index: crate::index::Index::load(cfg),
+        }
+    }
+
+    /// Whether the units come from a live database (else from disk).
+    pub fn from_database(&self) -> bool {
+        self.holder.is_some()
+    }
+
+    pub fn index(&self) -> &crate::index::Index {
+        &self.index
+    }
+
+    /// A unit's canonical id: through the index's aliases, or as loaded
+    /// from disk.
+    pub fn id(&self, name: &str) -> String {
+        if self.holder.is_some() {
+            self.index.resolve(name).to_string()
+        } else {
+            Loader::new(self.cfg).load(name).id
+        }
+    }
+
+    /// A unit and its link directories' entries.
+    pub fn get(&self, name: &str) -> Snapshot {
+        let Some(holder) = &self.holder else {
+            let ld = Loader::new(self.cfg);
+            return Snapshot::take(&ld, ld.load(name));
+        };
+        let id = self.index.resolve(name).to_string();
+        if let Some(s) = self.find(holder, &id) {
+            return s;
+        }
+        // An instance of a template the database carries (an Accept=yes
+        // connection's echo@N-PID-UID.service): the template's unit under
+        // the instance's name, as the loader would make it.
+        if let Some(t) = crate::loader::template_of(&id) {
+            if let Some(mut s) = self.find(holder, &t).filter(|s| s.unit.is_loaded()) {
+                s.unit.id = id.clone();
+                s.unit.names = vec![id];
+                return s;
+            }
+        }
+        Snapshot {
+            unit: Unit {
+                id: id.clone(),
+                names: vec![id],
+                fragment: None,
+                dropins: Vec::new(),
+                load_state: LoadState::NotFound,
+                load_error: Some("not in the live database (run `systemctl daemon-reload`)".into()),
+                file: UnitFile::default(),
+            },
+            dir_deps: BTreeMap::new(),
+            mtimes: BTreeMap::new(),
+        }
+    }
+
+    fn find(&self, holder: &Path, id: &str) -> Option<Snapshot> {
+        let comp = crate::util::path_component(id);
+        let live = self.cfg.live_dir.join("servicedirs");
+        [
+            live.join(&*comp).join(SERVICE_FILE),
+            holder.join(holder_file(id)),
+            runtime_file(self.cfg, id),
+        ]
+        .into_iter()
+        .find_map(|p| {
+            let text = std::fs::read_to_string(&p).ok()?;
+            Some(Snapshot::parse(&text).unwrap_or_else(|e| {
+                let mut s = Snapshot::parse(&format!("{MAGIC}\nid\t{}\n", escape(id))).unwrap();
+                s.unit.load_state = LoadState::BadSetting;
+                s.unit.load_error = Some(format!("{}: {e}", p.display()));
+                s
+            }))
+        })
+    }
+
+    /// The socket units whose Service= names one of `names`: the
+    /// database's, and those the daemon loaded at run time (a socket
+    /// started by hand). From disk: every socket in the unit path.
+    pub fn sockets_naming(&self, names: &[String]) -> Vec<Snapshot> {
+        let names_it = |s: &Snapshot| {
+            s.unit
+                .get("Socket", "Service")
+                .is_some_and(|v| names.contains(&v))
+        };
+        let Some(holder) = &self.holder else {
+            let ld = Loader::new(self.cfg);
+            let mut out = Vec::new();
+            for dir in &self.cfg.unit_path {
+                let Ok(rd) = std::fs::read_dir(dir) else {
+                    continue;
+                };
+                for e in rd.flatten() {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    if !n.ends_with(".socket") {
+                        continue;
+                    }
+                    let Ok(text) = std::fs::read_to_string(e.path()) else {
+                        continue;
+                    };
+                    if !text.contains("Service=") {
+                        continue;
+                    }
+                    let s = Snapshot::take(&ld, ld.load(&n));
+                    if names_it(&s) && !out.iter().any(|o: &Snapshot| o.unit.id == s.unit.id) {
+                        out.push(s);
+                    }
+                }
+            }
+            return out;
+        };
+        let mut ids: Vec<String> = Vec::new();
+        for dir in [holder.join(HOLDER_UNITS), self.cfg.run_dir.join("units")] {
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().into_owned();
+                if n.ends_with(".socket") && !ids.contains(&n) {
+                    ids.push(n);
+                }
+            }
+        }
+        ids.iter()
+            .map(|n| self.get(n))
+            .filter(|s| s.unit.is_loaded() && names_it(s))
+            .collect()
+    }
+}
+
 /// A file's mtime as (seconds, nanoseconds) since the epoch.
 pub fn mtime(p: &Path) -> Option<(i64, u32)> {
     let d = std::fs::metadata(p)
@@ -255,7 +429,6 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
     use std::fs;
 
     fn tmp(tag: &str) -> PathBuf {
@@ -323,6 +496,78 @@ mod tests {
         assert_eq!(a.mtimes.len(), 2, "the fragment and the drop-in");
         let t = Snapshot::take(&ld, ld.load("t@x.service"));
         assert_eq!(t.dir_deps("requires"), vec!["b.target".to_string()]);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// With a live database: a longrun's own data/unit, the holder's
+    /// units, the daemon's runtime file, an instance of a template the
+    /// holder carries; anything else is not found, even with a unit file on
+    /// disk. The index is the live database's, not STATE_DIR/current's.
+    #[test]
+    fn units_come_from_the_live_database() {
+        let d = tmp("units");
+        let units = d.join("units");
+        fs::create_dir_all(&units).unwrap();
+        for n in [
+            "a.service",
+            "b.target",
+            "c.service",
+            "t@.service",
+            "disk.service",
+        ] {
+            fs::write(units.join(n), format!("[Unit]\nDescription={n}\n")).unwrap();
+        }
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![units.clone()];
+        cfg.live_dir = d.join("live");
+        cfg.run_dir = d.join("run");
+        cfg.state_dir = d.join("state");
+        cfg.repo_dir = d.join("repo");
+        let ld = Loader::new(&cfg);
+        let snap = |n: &str| Snapshot::take(&ld, ld.load(n)).render();
+        let sd = cfg.live_dir.join("servicedirs");
+        fs::create_dir_all(sd.join("a.service/data")).unwrap();
+        fs::write(sd.join("a.service").join(SERVICE_FILE), snap("a.service")).unwrap();
+        let h = sd.join(HOLDER);
+        fs::create_dir_all(h.join(HOLDER_UNITS)).unwrap();
+        fs::write(h.join(holder_file("b.target")), snap("b.target")).unwrap();
+        fs::write(h.join(holder_file("t@.service")), snap("t@.service")).unwrap();
+        fs::write(
+            h.join(HOLDER_INDEX),
+            "unit\ta.service\tlongrun\t-\nalias\tal.service\ta.service\n",
+        )
+        .unwrap();
+        fs::create_dir_all(cfg.state_dir.join("current")).unwrap();
+        fs::write(
+            cfg.state_dir.join("current/index"),
+            "unit\tnewer.service\tlongrun\t-\n",
+        )
+        .unwrap();
+        write_runtime(&cfg, &Snapshot::take(&ld, ld.load("c.service"))).unwrap();
+
+        let u = Units::new(&cfg);
+        assert!(u.from_database());
+        assert!(u.index().units.contains_key("a.service"));
+        assert!(!u.index().units.contains_key("newer.service"));
+        assert_eq!(u.get("a.service").unit, ld.load("a.service"));
+        assert_eq!(u.get("al.service").unit.id, "a.service");
+        assert_eq!(u.get("b.target").unit, ld.load("b.target"));
+        assert_eq!(u.get("c.service").unit, ld.load("c.service"));
+        let i = u.get("t@x.service").unit;
+        assert!(i.is_loaded());
+        assert_eq!(i.id, "t@x.service");
+        assert_eq!(i.get("Unit", "Description").as_deref(), Some("t@.service"));
+        let gone = u.get("disk.service").unit;
+        assert_eq!(gone.load_state, LoadState::NotFound);
+        assert!(gone.load_error.unwrap().contains("daemon-reload"));
+
+        // No holder (no live database, or one older than the holder):
+        // the unit files and STATE_DIR/current's index.
+        fs::remove_dir_all(&h).unwrap();
+        let u = Units::new(&cfg);
+        assert!(!u.from_database());
+        assert!(u.index().units.contains_key("newer.service"));
+        assert!(u.get("disk.service").unit.is_loaded());
         let _ = fs::remove_dir_all(&d);
     }
 

@@ -14,7 +14,7 @@ fn socket_state(cfg: &Config, id: &str) -> UnitState {
 }
 
 fn load_socket(cfg: &Config, name: &str) -> Result<Unit, String> {
-    let sock = Loader::new(cfg).load(name);
+    let sock = crate::snapshot::Units::new(cfg).get(name).unit;
     if !sock.is_loaded() {
         return Err(format!("unit {name}: {}", sock.load_state.as_str()));
     }
@@ -55,7 +55,9 @@ pub fn accept_main(cfg: &Config, name: &str) -> i32 {
             }
         }
     };
-    let tmpl = Loader::new(cfg).load(&acceptspec::template(&sock));
+    let tmpl = crate::snapshot::Units::new(cfg)
+        .get(&acceptspec::template(&sock))
+        .unit;
     if let Some(why) = acceptspec::unsupported(&sock, &tmpl) {
         return fail(&why);
     }

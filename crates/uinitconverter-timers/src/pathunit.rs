@@ -16,7 +16,7 @@ use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use rustix::fs::inotify::{self, CreateFlags, ReadFlags, WatchFlags};
 
 use crate::config::Config;
-use crate::loader::Loader;
+
 use crate::state::{self, keys};
 use crate::util;
 pub use uinitconverter_base::pathspec::*;
@@ -154,7 +154,9 @@ async fn unit_active(conn: &zbus::Connection, unit: &str) -> bool {
 }
 
 pub fn cmd_path_run(cfg: Config, name: &str) -> i32 {
-    let unit = Loader::new(&cfg).load(name);
+    let unit = uinitconverter_base::snapshot::Units::new(&cfg)
+        .get(name)
+        .unit;
     if !unit.is_loaded() {
         eprintln!(
             "uinitconverter: path unit {name}: {}",

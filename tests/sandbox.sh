@@ -118,6 +118,16 @@ WantedBy=multi-user.target
 Alias=hello-alias.service
 EOF
 
+# The database's unit is what runs: check.sh edits it without a reload.
+cat > "$U/snap.service" <<EOF
+[Unit]
+Description=Runs what its database says
+[Service]
+ExecStart=/bin/sh -c 'echo one >> $W/snap.out; exec sleep 1000'
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # Stands in for gdm: at shutdown it's asked down at once, and Restart=always
 # must not bring it back.
 cat > "$U/fake-dm.service" <<EOF
@@ -973,7 +983,7 @@ disable *
 EOF
 
 C="--config $W/uinitconverter.conf"
-"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket lazy.socket lazydep.socket echo.socket rawfd.socket badacc.socket tcpacc.socket ${TCP6:+"$TCP6"} watch.path chg.path bad.service after-bad.service stopper.service stopcond.service >/dev/null
+"$GEN" $C enable hello.service sock.socket tick.timer cal.timer persist.timer winner.service loser.service vl-varlink.socket lazy.socket lazydep.socket echo.socket rawfd.socket badacc.socket tcpacc.socket ${TCP6:+"$TCP6"} watch.path chg.path bad.service after-bad.service stopper.service stopcond.service snap.service >/dev/null
 
 # Stand-in for journald's stdout stream socket: records each connection.
 mkdir -p "$R/journal"

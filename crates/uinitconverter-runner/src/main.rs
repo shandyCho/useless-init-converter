@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::process::exit;
 
 pub(crate) use uinitconverter_base::{
-    acceptspec, config, envfile, fdstore, index, loader, mountunit, state, tools, unit, util,
+    acceptspec, config, envfile, fdstore, index, loader, mountunit, snapshot, state, tools, unit,
+    util,
 };
 pub(crate) use uinitconverter_client as client;
 pub(crate) use uinitconverter_exec::{
@@ -164,7 +165,7 @@ fn parse_internal(args: &[String]) -> Internal {
 fn setup_failed(cfg: &Config, cmd: Cmd, unit: &str, e: &str) -> i32 {
     use state::{keys, result};
     eprintln!("initconvert-runner: {unit}: {e}");
-    let st = state::for_unit(&cfg.run_dir, &loader::Loader::new(cfg).load(unit).id);
+    let st = state::for_unit(&cfg.run_dir, &snapshot::Units::new(cfg).id(unit));
     match cmd {
         Cmd::Run | Cmd::Up => {
             st.stamp(keys::INACTIVE_EXIT);
@@ -241,11 +242,13 @@ fn main() {
         Cmd::Connection => exit(runner::connection_main(&cfg, &a.unit)),
         _ => {}
     }
-    let mut r = match runner::Runner::new(
-        cfg.clone(),
-        &a.unit,
-        matches!(cmd, Cmd::Run | Cmd::Up | Cmd::Confine),
-    ) {
+    let starting = matches!(cmd, Cmd::Run | Cmd::Up | Cmd::Confine);
+    let made = if cmd == Cmd::Confine {
+        runner::Runner::new_from_disk(cfg.clone(), &a.unit, starting)
+    } else {
+        runner::Runner::new(cfg.clone(), &a.unit, starting)
+    };
+    let mut r = match made {
         Ok(r) => r,
         Err(e) => exit(setup_failed(&cfg, cmd, &a.unit, &e)),
     };
