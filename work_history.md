@@ -12633,3 +12633,58 @@ Not run: `tests/vm-user-setup.sh` (the setup tool's `on` warning goes to stderr,
 3. The upgrade from 0.3.0 with `uinitconverter-user` installed and `initconvert-user-setup on` (systemd boot): `uinitconverter-user` erased, the drop-in gone, `user@` on `systemd --user` after the next login. No test script covers it now (vm-user-setup.sh was deleted); do it by hand in the VM or write a small one.
 4. The audit for steps 3-5 of the scope discussion: each feature with its real caller (or none), marked keep, shrink or drop.
 
+
+## 2026-11-10, part 206: plan — moving work to generation time
+
+Step 3 of part 205's list. The owner asked for the whole design first ("Write a plan first"), before any code. Nothing here is implemented yet.
+
+### What runs at runtime today
+
+Generation time (gen, at `daemon-reload`) already decides the s6-rc service tree: kinds, ordering, timeouts and the down signal (`Timings`), the run/finish scripts. But the parsed unit itself is thrown away; each tool parses the unit files again on its own:
+
+| Who | When | What it does again |
+|---|---|---|
+| `initconvert-runner` (`Runner::new`, `sockets.rs`, `connection.rs`) | every start, stop, reload of every service | `Loader`: search `UNIT_PATH`, merge drop-ins, expand specifiers; parse `ExecStart=` and the other commands; on each start, `failed_requirement` loads the index and resolves `Requires=`/`Requisite=`/`BindsTo=` plus the `.requires/` links |
+| `initconvert-timers` (`timer.rs`, `pathunit.rs`) | each timer/path service start | loads the timer and the unit it triggers |
+| `initconvertd` (`load_unit`, `props.rs`, `relations.rs`) | first query of a unit; cached until `daemon-reload` | the same loading |
+| `uinitconverter-install` | `systemctl enable/disable/preset` | reads `[Install]` from disk: stays, systemd does the same |
+
+**The inconsistency.** The daemon keeps the version it loaded until `daemon-reload`, as systemd does. The runner always reads the current file. After a unit file changes without a reload, `systemctl show` reports one version and a restart runs another. systemd runs the loaded version and warns "changed on disk, run daemon-reload". `NeedDaemonReload` is hard-coded `false` (`props.rs`), so that warning never appears here.
+
+### Design: a unit snapshot written by gen
+
+On each reload, gen writes every unit it loaded into the new database directory (`STATE_DIR/db/<stamp>/units/<id>`, next to `index`, so `current`/`previous` switch it together with the index):
+
+- The resolved unit: fragment and drop-ins merged, in file order, as one flat unit file (values as written; specifiers stay unexpanded, so instances still expand their own).
+- A header: `id`, `names`, `load_state`, `fragment` and drop-in paths with their mtimes (for `NeedDaemonReload`).
+- The resolved requirement list (`Requires=`, `Requisite=`, `BindsTo=`, `.requires/`), as canonical ids through the index, so `failed_requirement` only reads state files.
+
+The format is a contract between gen (writes), the runner, the timers and the daemon (read): one definition in `uinitconverter-base` (`snapshot.rs`: write, read, the header keys) with tests on every side, per CLAUDE.md. Round-trip test: for every unit in the sandbox's unit path, `read(write(Loader::load(u)))` equals `Loader::load(u)`.
+
+Units created at runtime have no database entry, so the daemon writes their snapshot when it creates them: dynamic instances (`user@UID`, template instances, AUTO_MASK leftovers) next to their service directory in `RUN_DIR/dyn/<id>/`, and transient units (systemd-run) when `StartTransientUnit` writes the unit file.
+
+Things that must stay at runtime stay there: conditions (system state), `User=`/`Group=` lookup (sysusers creates users during the boot; `DynamicUser=`), the sandbox setup and its mounts, socket binding and the fd store, timer arithmetic, `EnvironmentFile=` contents (read at start, as systemd does).
+
+### Slices, each tested and committed on its own
+
+1. **The format and the writer.** `uinitconverter-base::snapshot`; gen writes `units/` for the database's units; the round-trip test; `initconvert plan` unchanged. Nothing reads it yet. Tests: `cargo test`, sandbox.
+2. **The runner and the timers read it.** `Runner::new`, `sockets.rs`, `connection.rs`, `timer.rs`, `pathunit.rs` load from the snapshot of the database the service belongs to, or from `RUN_DIR/dyn/<id>/` for a dynamic instance. No silent fallback to `Loader`: a missing snapshot is an error with the unit's name (a second path would hide bugs). `failed_requirement` uses the stored list. Sandbox check: edit a unit file without `daemon-reload`, restart it, the old command runs; after `daemon-reload`, the new one.
+3. **The daemon reads it.** `load_unit` and its `unit_cache` become the snapshot; the daemon writes the snapshots of dynamic instances and transient units; `daemon-reload` rewrites the snapshots of running dynamic instances (systemd reloads every unit, instances too) without restarting them.
+4. **`NeedDaemonReload`.** Computed from the stored paths and mtimes against the files on disk now; `systemctl status` then prints systemd's warning. Real caller: `systemctl` reads it.
+5. **Later, decided after 1-4:** writing simple settings straight into s6 files (`s6-setuidgid`, an envdir, `down-signal`), so s6 runs them without the runner. It only pays off for simple units and adds a second path; decide after measuring how many Fedora units qualify.
+
+### To check before slice 1
+
+- After booting with `uinitconverter.db=previous`: which `index` the tools read (they read `STATE_DIR/current`, and `booted_previous` keeps `current` as it is). The snapshot must follow the same rule, or a rollback boot would run the newer units' commands with the older database.
+- Whether the run scripts can name their database's snapshot directly (`db/<stamp>/units/<id>`): that would bind each service to its own database, but it changes every run script at every reload. Check in s6-rc-update's source whether a changed `run` file makes it restart a running longrun; if it does, keep the path out of the scripts and resolve it through `current`.
+- The cost: the size of `units/` for a Fedora Workstation set (about 600 units), and the time gen spends writing it.
+
+### Behaviour change to announce
+
+A unit file edited or replaced by a package without `daemon-reload` won't take effect on the next restart; it waits for the reload, as with systemd. Fedora's RPM file triggers run `daemon-reload` after every package transaction, so only hand edits are affected. CHANGELOG pair and docs/etc ("What is implemented") change together with slice 2.
+
+### Next steps
+
+1. The owner reviews this plan.
+2. The checks under "To check before slice 1".
+3. Slice 1.
