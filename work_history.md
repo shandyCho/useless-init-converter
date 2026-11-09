@@ -12788,3 +12788,21 @@ Slices 1-4 committed: 9cbb081, d65d160, 1568c62, 0a407cd (plan c60aab0, checks 3
 2. `packages/build-rpms.sh --test`; `tests/vm-s6-boot.sh ~/uinitconverter-vm` (default, old-config); `BOOT=s6 tests/vm-user-manager.sh ~/uinitconverter-vm session|lifecycle|confined`. In the VM also: `du -sh /var/lib/uinitconverter/db/*`, a rollback boot, and an edit without reload (`systemctl status` shows the warning).
 3. The upgrade from 0.3.0 with `uinitconverter-user` installed (part 205's step 3).
 4. Remaining items from part 205's list: best-effort sandboxing (step 4) and freezing the D-Bus surface to known callers (step 5), each after an audit of real callers.
+
+## 2026-11-10, part 213: the VM checks of slices 1-4
+
+RPMs from 1cbf04a (`packages/build-rpms.sh --test ~/uinitconverter-vm/rpmbuild/core`: five packages, no `uinitconverter-user`); the standalone RPMs from 0.3.0's sources (unchanged since).
+
+- `tests/vm-s6-boot.sh default`: 17/17 on the first s6 boot, 17/17 after the reboot from it. `old-config`: 17/17 (`USER_MANAGER=s6` left in the config is ignored). The only failed system unit is mcelog.service (known, fails on stock boots too).
+- `BOOT=s6 tests/vm-user-manager.sh lifecycle`: every stage passed (20, 8, 7, 4, 9, 5, 5, 8, 4), incl. the RPM update helper and "no user@ was killed or failed at the reboot". `confined`: 7/7. (`session` alone wasn't run; lifecycle runs its checks first.)
+- In the VM (old-config, kept up): the holder `uinitconverter-units` is in the live database and not up; 232 units in its `data/units`, 152,744 bytes; 142 longruns' `data/unit`, 142,531 bytes, so ~0.3 MB per database (`du`: 944K for the holder's `data/`, from 4K blocks), against part 207's ~0.6 MB estimate. Runtime snapshots were written for `user@1000`, `user-runtime-dir@1000` and the sockets started on demand (cups, pcscd, sssd-kcm). An edit of `sshd.service` (copy to /etc) turned `NeedDaemonReload` yes and `systemctl status` printed the "changed on disk" warning; after `daemon-reload` it was no again, sshd still active.
+
+### Current state
+
+As in part 212, now checked in the VM. Not pushed. **Not checked:** the RPM update from 0.3.0 with `uinitconverter-user` installed, a real rollback boot (`uinitconverter.db=previous`).
+
+### Next steps
+
+1. Owner: push (parts 205-213).
+2. The upgrade from 0.3.0 with `uinitconverter-user` installed (part 205's step 3), and a rollback boot.
+3. Part 205's steps 4 and 5 (best-effort sandboxing, the D-Bus surface), each after an audit of real callers.
