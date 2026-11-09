@@ -12576,9 +12576,9 @@ Both languages changed together. Docs only; no code or tests changed. Not commit
 
 ### Current state
 
-0.3.0 is released. This change and part 202 are uncommitted. The s6 user manager is kept and tested but opt-in.
+0.3.0 is released. This change and part 202 are committed together as f981fb5 (not pushed). The s6 user manager is kept and tested but opt-in.
 
 ### Next steps
 
-1. Commit; then `packages/build-rpms.sh --test` and `tests/vm-s6-boot.sh ~/uinitconverter-vm default` (expects `systemd --user`) and `s6`.
+1. `packages/build-rpms.sh --test` and `tests/vm-s6-boot.sh ~/uinitconverter-vm default` (expects `systemd --user`) and `s6`.
 2. Hardening the default path (systemd --user under s6): more machines and Fedora releases.
