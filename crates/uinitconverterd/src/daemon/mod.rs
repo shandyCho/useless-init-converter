@@ -271,6 +271,17 @@ impl Daemon {
         }
     }
 
+    /// NeedDaemonReload: the unit files differ from what was loaded (the
+    /// database's unit, or the one loaded on demand). `systemctl status`
+    /// then warns "changed on disk".
+    pub(super) fn need_daemon_reload(&self, unit: &Unit) -> bool {
+        if self.transient.lock().unwrap().contains_key(&unit.id) {
+            return false;
+        }
+        self.load_snapshot(&unit.id)
+            .changed_on_disk(&Loader::new(&self.cfg))
+    }
+
     /// The entries of `unit`'s NAME.KIND/ directories, as loaded with it.
     pub(super) fn dir_deps(&self, unit: &Unit, kind: &str) -> Vec<String> {
         if self.transient.lock().unwrap().contains_key(&unit.id) {

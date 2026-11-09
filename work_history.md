@@ -12760,4 +12760,10 @@ Option (b) of part 207, as recommended; the owner then asked for every slice in 
 - The link directories (`.wants/`, `.requires/`, `.upholds/`) come from the cached snapshot (`Daemon::dir_deps`): `relations.rs` (reverse index, stopped targets, a target's inactive members), `props.rs` (Wants=/Requires=/Upholds= properties), the dynamic engine's `start_deps`. `scope_iface` uses `load_unit`.
 - The daemon writes runtime snapshots from its cache (`load_snapshot_of`), and a reload rewrites every runtime snapshot from the unit files now (or drops it when the new database carries the unit) before the caches are cleared, as systemd reloads every loaded unit.
 - `snapshot.rs`: `find_live` and the lookup shared with `Units::get`.
-- Tests: sandbox `systemctl show` (ExecStart through the bus) shows the database's command after an edit without a reload; `inst@a.service` (started outside the database): its runtime snapshot is written at the start and rewritten by a reload. `cargo test` 135; sandbox **385/385**., `SANDBOX_JOURNAL=no` **392/392**, `SANDBOX_FDSTORE=no` **373/373**.
+- Tests: sandbox `systemctl show` (ExecStart through the bus) shows the database's command after an edit without a reload; `inst@a.service` (started outside the database): its runtime snapshot is written at the start and rewritten by a reload. `cargo test` 135; sandbox **385/385**, `SANDBOX_JOURNAL=no` **392/392**, `SANDBOX_FDSTORE=no` **373/373**.
+
+## 2026-11-10, part 211: slice 4, NeedDaemonReload
+
+- `Snapshot::changed_on_disk` (base): a loaded unit's fragment or drop-in has another mtime or is gone, or loading it now gives another fragment, other drop-ins or another load state (a new drop-in, a mask). The daemon's `NeedDaemonReload` (was hard-coded `false`) asks it of the cached snapshot; transient units are `false`. Real caller: `systemctl status`/`show` read it and print systemd's "changed on disk" warning.
+- Cost: one load from disk per property read (GetAll), only of the unit asked for.
+- Tests: `snapshot::tests::changed_on_disk_as_need_daemon_reload` (unchanged, mtime, new drop-in, masked); sandbox: `snap.service` false, true after the edit (`touch -d '+2 seconds'`, so the check doesn't depend on the clock's second), false after the reload. `cargo test` 136; sandbox **388/388**, `SANDBOX_JOURNAL=no` **395/395**, `SANDBOX_FDSTORE=no` **376/376**.

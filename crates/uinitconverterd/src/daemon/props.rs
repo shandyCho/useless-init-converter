@@ -562,7 +562,10 @@ impl Daemon {
             "IgnoreOnIsolate".into(),
             Value::from(unit.get_bool("Unit", "IgnoreOnIsolate", false)),
         );
-        p.insert("NeedDaemonReload".into(), Value::from(false));
+        p.insert(
+            "NeedDaemonReload".into(),
+            Value::from(self.need_daemon_reload(unit)),
+        );
         p.insert(
             "Markers".into(),
             strv(

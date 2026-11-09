@@ -92,6 +92,23 @@ impl Snapshot {
         }
     }
 
+    /// Whether the unit files now differ from what was loaded: systemd's
+    /// NeedDaemonReload, for which `systemctl status` warns "changed on
+    /// disk". A fragment or drop-in was changed or removed, or the unit now
+    /// has another fragment, other drop-ins, or another load state.
+    pub fn changed_on_disk(&self, ld: &Loader) -> bool {
+        if !self.unit.is_loaded() {
+            return false;
+        }
+        if self.mtimes.iter().any(|(p, t)| mtime(p) != Some(*t)) {
+            return true;
+        }
+        let now = ld.load(&self.unit.id);
+        now.load_state != self.unit.load_state
+            || now.fragment != self.unit.fragment
+            || now.dropins != self.unit.dropins
+    }
+
     /// The names in NAME.KIND/, as Loader::dir_deps gave them.
     pub fn dir_deps(&self, kind: &str) -> Vec<String> {
         self.dir_deps.get(kind).cloned().unwrap_or_default()
@@ -579,6 +596,43 @@ mod tests {
         assert!(!u.from_database());
         assert!(u.index().units.contains_key("newer.service"));
         assert!(u.get("disk.service").unit.is_loaded());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// changed_on_disk: nothing changed; the fragment edited; a drop-in
+    /// added; the unit masked.
+    #[test]
+    fn changed_on_disk_as_need_daemon_reload() {
+        let d = tmp("ndr");
+        let units = d.join("units");
+        fs::create_dir_all(&units).unwrap();
+        let f = units.join("a.service");
+        fs::write(&f, "[Service]\nExecStart=/bin/true\n").unwrap();
+        let mut cfg = Config::defaults();
+        cfg.unit_path = vec![units.clone()];
+        let ld = Loader::new(&cfg);
+        let take = || Snapshot::take(&ld, ld.load("a.service"));
+        let s = take();
+        assert!(!s.changed_on_disk(&ld));
+        // A different mtime (a second later than written).
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        fs::File::options()
+            .write(true)
+            .open(&f)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert!(s.changed_on_disk(&ld));
+        let s = take();
+        assert!(!s.changed_on_disk(&ld));
+        fs::create_dir_all(units.join("a.service.d")).unwrap();
+        fs::write(units.join("a.service.d/x.conf"), "[Service]\nNice=1\n").unwrap();
+        assert!(s.changed_on_disk(&ld));
+        let s = take();
+        assert!(!s.changed_on_disk(&ld));
+        fs::remove_file(&f).unwrap();
+        std::os::unix::fs::symlink("/dev/null", &f).unwrap();
+        assert!(s.changed_on_disk(&ld));
         let _ = fs::remove_dir_all(&d);
     }
 

@@ -24,6 +24,8 @@
   `systemctl daemon-reload` 없이 고친 유닛 파일은 이제 다음 시작에 영향을 주지 않습니다. 패키지 업데이트는
   영향이 없습니다(Fedora의 RPM 트리거가 reload합니다). 되돌린 부팅도 이제 새 데이터베이스가 아니라 부팅한
   데이터베이스의 인덱스를 읽습니다.
+- `NeedDaemonReload`를 계산합니다(전에는 항상 false). 마지막 reload 뒤에 유닛 파일이 바뀌면
+  `systemctl status`가 경고합니다.
 - `tests/vm-user-manager.sh`는 GNOME 아래의 `systemd --user`(세션, 로그인 화면, 앱, 수명 주기,
   제한된 사용자)를 systemd 부팅에서, `BOOT=s6`이면 s6 부팅에서 확인합니다. `tests/vm-s6-boot.sh`의
   모드는 `default`와 `old-config`입니다.

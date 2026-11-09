@@ -1132,13 +1132,18 @@ snap_runs() {
     tail -1 "$W/snap.out" 2>/dev/null
 }
 expect_eq "snap.service runs its database's command" "$(snap_runs)" "one"
+expect_eq "NeedDaemonReload is false while the files match" "$(prop snap.service Unit NeedDaemonReload)" "false"
 sed -i 's/echo one/echo two/' "$W/units/snap.service"
+# A different mtime even within the same second as the database's.
+touch -d '+2 seconds' "$W/units/snap.service"
+expect_eq "edited: NeedDaemonReload (systemctl warns \"changed on disk\")" "$(prop snap.service Unit NeedDaemonReload)" "true"
 expect_eq "edited without a reload, the restart runs the database's command" "$(snap_runs)" "one"
 call ResetFailedUnit s snap.service 2>/dev/null
 $B get-property $DEST "$(upath snap.service)" org.freedesktop.systemd1.Service ExecStart | grep -q 'echo one' \
     && ok "the daemon shows the database's ExecStart= too" || bad "ExecStart: $($B get-property $DEST "$(upath snap.service)" org.freedesktop.systemd1.Service ExecStart)"
 call Reload
 expect_eq "after a reload, the edited command" "$(snap_runs)" "two"
+expect_eq "after the reload, NeedDaemonReload is false again" "$(prop snap.service Unit NeedDaemonReload)" "false"
 call StopUnit ss snap.service replace
 
 section "linkwatch"

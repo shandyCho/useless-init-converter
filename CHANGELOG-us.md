@@ -28,6 +28,8 @@ Details in `work_history.md`, parts 203-205.
   daemon-reload` no longer changes the next start. Package updates are not
   affected (Fedora's RPM triggers reload). A rollback boot now also reads
   the index of the database it booted, not the newer one's.
+- `NeedDaemonReload` is computed (it was always false): `systemctl status`
+  warns when a unit file changed on disk since the last reload.
 - `tests/vm-user-manager.sh` checks `systemd --user` under GNOME (session,
   greeter, apps, lifecycle, confined users) on the systemd boot and, with
   `BOOT=s6`, on the s6 boot. `tests/vm-s6-boot.sh` has the modes `default`
