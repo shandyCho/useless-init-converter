@@ -12688,3 +12688,48 @@ A unit file edited or replaced by a package without `daemon-reload` won't take e
 1. The owner reviews this plan.
 2. The checks under "To check before slice 1".
 3. Slice 1.
+
+## 2026-11-10, part 207: the checks before slice 1; s6 as the baseline
+
+**Owner's direction:** "baseline is pure s6 and ecosystem like s6-svc, s6-frontend, etc... (skarnet's utilities)". So the measure for this work: a generated service should be a complete s6-rc service definition that skarnet's tools handle on their own (s6-rc, s6-svc, s6-svstat, s6-frontend's `s6`, `s6 live install`, a rollback boot), with the runner only where s6 can't express a setting. The snapshot's place follows from that (below).
+
+### Check 2: does a changed `run` file restart a running longrun? No.
+
+Read in s6-rc 0.8.0.2 (`src/s6-rc/s6-rc-update.c`, `src/libs6rc/s6rc_servicedir_copy_online.c`, `s6rc_servicedir_internal.c`):
+- `compute_transitions` restarts a running service only when the conversion file says `restart`, its type changes (longrun/oneshot), or it gains a dependency that isn't up. File contents are never compared.
+- `make_new_livedir` moves each running longrun's live servicedir into the new live directory and calls `s6rc_servicedir_copy_online`: the files in `s6rc_servicedir_file_list` (`run`, `finish`, `notification-fd`, timeouts, `down-signal`, ..., **`data/` and `env/`**) are replaced in place, the process keeps running, and its next start runs the new files.
+
+So a reload can change what a service's next start runs without restarting it, which is systemd's `daemon-reload` behaviour.
+
+### Check 1: the rollback boot. The tools already read the wrong database's index.
+
+`rc.init` gives `compiled.previous` to `s6-rc-init` for `uinitconverter.db=previous`, but every tool reads `STATE_DIR/current/index`, and `current` points at the newer `db/<stamp>` (gen's `booted_previous` only affects the next reload). **Existing bug, not caused by this work:** on a rollback boot the daemon and the runner use the newer database's index (kinds, aliases, triggers) with the older s6-rc database. A snapshot next to `index` would have the same bug.
+
+### Where the snapshot goes: the service's own `data/`
+
+s6-rc-compile copies a longrun's `data/` and `env/` verbatim into the compiled servicedir (s6-rc-compile.html: "if you want to store service configuration data, to be used by the run script, ... make sure it is in a data/ or env/ subdirectory", and run scripts should use relative paths, since servicedirs are relocated), and `s6-rc-update` replaces them online (above). So gen writes each longrun's snapshot as `data/unit` in its s6-rc source directory, and the runner reads `./data/unit` (the run script's working directory is the servicedir). Then:
+- the unit travels with the compiled database: a rollback boot, `s6 live install`, `s6-rc-set-install` and the repository all carry the matching unit without any work of ours;
+- the run scripts don't change between reloads;
+- no garbage collection question: the data lives and dies with its database;
+- with skarnet's tools only, the service directory says what it runs.
+
+**Oneshots have no servicedir** (s6-rc keeps their `up`/`down` in the database), so no `data/`. Options, to decide in slice 1:
+- (a) the up/down scripts name the snapshot by absolute path in gen's source tree (`STATE_DIR/db/<stamp>/units/ID`); then gen's garbage collection must keep every `db/<stamp>` that a database still in use refers to (`compiled`, `compiled.previous`, the live one, the `.SET:` copies), which it doesn't check today;
+- (b) one longrun in the database (gen's, e.g. the daemon's own service or a small `uinitconverter-units` holder) carries every oneshot's snapshot, and the index too, in its `data/`; the tools find it through the live database (`/run/s6-rc/servicedirs/NAME/data/`). This also fixes check 1's index bug the same way, since the index then travels with its database.
+
+(b) is the s6-native one: everything the tools need is inside the s6-rc database. Recommended.
+
+### Check 3: cost (estimate, to measure in the VM in slice 1)
+
+About 600 units on Fedora Workstation, unit files plus drop-ins about 1 KB each: about 0.6 MB per database, two or three databases kept under `/var/lib/uinitconverter` plus the `.SET:` copies, and the longruns' live copies in `/run`. Writing is one file per unit at reload; gen already loads them all.
+
+### Plan changes (part 206)
+
+- Slice 1 writes `data/unit` for longruns and the holder's `data/` for oneshots and the index (option b), not `STATE_DIR/db/<stamp>/units/`.
+- New slice before slice 2 (or within slice 1): the tools read the index from the live database's holder, which fixes the rollback-boot bug of check 1. Sandbox check: boot with `compiled.previous` and see the older index.
+- Dynamic instances: the daemon writes `data/unit` into `RUN_DIR/dyn/<id>/` (they are plain s6 servicedirs linked with `s6-svlink`), so instances follow the same rule.
+
+### Next steps
+
+1. The owner: confirm option (b) for oneshots and the index.
+2. Slice 1.
