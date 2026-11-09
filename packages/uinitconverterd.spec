@@ -22,8 +22,8 @@ Requires:       s6
 Requires:       uinitconverter-runner = %{version}-%{release}
 # Transient timers (systemd-run --on-calendar) run it.
 Recommends:     uinitconverter-timers = %{version}-%{release}
-# The s6 user manager (USER_MANAGER=s6) is that package; the default is
-# systemd --user.
+# The s6 user manager (USER_MANAGER=s6, opt-in, not recommended) is that
+# package; the default is systemd --user.
 Suggests:       uinitconverter-user = %{version}-%{release}
 
 %description

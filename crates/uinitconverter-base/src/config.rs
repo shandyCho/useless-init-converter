@@ -115,9 +115,9 @@ pub struct Config {
     /// user@UID.service. None: the cgroup2 root, as the system manager.
     pub cgroup_base: Option<PathBuf>,
     /// What user@UID.service runs (`initconvertd user-manager`):
-    /// "systemd" (`systemd --user`) or "s6" (uinitconverter's user mode);
-    /// empty when not set: s6 on the s6 boot, systemd on a systemd boot
-    /// (user_manager_now). The kernel command line's
+    /// "systemd" (`systemd --user`) or "s6" (uinitconverter's user mode,
+    /// opt-in and not recommended); empty when not set: systemd on either
+    /// boot (user_manager_now). The kernel command line's
     /// uinitconverter.user_manager= overrides it.
     pub user_manager: String,
     /// Globs of user units the s6 user manager does not run.
@@ -619,23 +619,19 @@ impl Config {
                 .any(|p| crate::util::fnmatch(p, id))
     }
 
-    /// uinitconverter.user_manager= wins. Unset, the s6 boot (PID 1 is
-    /// s6-svscan) runs the s6 user manager and a systemd boot systemd
-    /// --user (there it is turned on with `initconvert-user-setup on`,
-    /// which sets it): the owner's choice of 2026-11-05 (work_history 177).
+    /// uinitconverter.user_manager= wins. Unset, both boots run systemd
+    /// --user; the s6 user manager is opt-in (`initconvert-user-setup on`
+    /// sets USER_MANAGER=s6) and not recommended, as it can't follow
+    /// systemd --user's changes: the owner's choice of 2026-11-09
+    /// (work_history 203), replacing the s6 boot's s6 default of 2026-11-05.
     pub fn user_manager_now(&self, cmdline: &str) -> String {
-        self.user_manager_on(cmdline, pid1_is_s6())
-    }
-
-    /// user_manager_now() with the boot given (`s6_boot`).
-    pub fn user_manager_on(&self, cmdline: &str, s6_boot: bool) -> String {
         cmdline
             .split_whitespace()
             .find_map(|w| w.strip_prefix("uinitconverter.user_manager="))
             .filter(|v| matches!(*v, "systemd" | "s6"))
             .map(str::to_string)
             .or_else(|| (!self.user_manager.is_empty()).then(|| self.user_manager.clone()))
-            .unwrap_or_else(|| if s6_boot { "s6" } else { "systemd" }.to_string())
+            .unwrap_or_else(|| "systemd".to_string())
     }
 
     pub fn is_excluded(&self, unit: &str) -> bool {
@@ -651,31 +647,25 @@ impl Config {
     }
 }
 
-/// Whether this is the s6 boot: s6-svscan is PID 1 (s6-linux-init).
-pub fn pid1_is_s6() -> bool {
-    std::fs::read_to_string("/proc/1/comm").is_ok_and(|c| c.trim() == "s6-svscan")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// USER_MANAGER=: set, it applies on either boot; unset, the s6 boot
-    /// runs the s6 user manager and a systemd boot systemd --user; the
-    /// kernel command line wins over both.
+    /// USER_MANAGER=: unset, systemd --user on either boot; set, it
+    /// applies; the kernel command line wins over both.
     #[test]
-    fn user_manager_default_follows_the_boot() {
+    fn user_manager_default_is_systemd() {
         let mut cfg = Config::defaults();
-        assert_eq!(cfg.user_manager_on("quiet", true), "s6");
-        assert_eq!(cfg.user_manager_on("quiet", false), "systemd");
+        assert_eq!(cfg.user_manager_now("quiet"), "systemd");
+        assert_eq!(cfg.user_manager_now("uinitconverter.user_manager=s6"), "s6");
+        cfg.user_manager = "s6".into();
+        assert_eq!(cfg.user_manager_now("quiet"), "s6");
         assert_eq!(
-            cfg.user_manager_on("uinitconverter.user_manager=systemd", true),
+            cfg.user_manager_now("uinitconverter.user_manager=systemd"),
             "systemd"
         );
         cfg.user_manager = "systemd".into();
-        assert_eq!(cfg.user_manager_on("quiet", true), "systemd");
-        cfg.user_manager = "s6".into();
-        assert_eq!(cfg.user_manager_on("quiet", false), "s6");
+        assert_eq!(cfg.user_manager_now("quiet"), "systemd");
     }
 
     #[test]

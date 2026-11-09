@@ -52,7 +52,7 @@ s6를 PID 1로 두고 s6의 도구로 관리하면서 Fedora와 GNOME을 쓸 수
 | 메모리 | 거의 같습니다. 중앙값(total - available) 1154 대 1176 MiB(-23 MiB, 스냅숏 s6 21개와 systemd 6개)로, 부팅마다 생기는 20-25 MiB의 차이와 비슷합니다. |
 | 부팅 속도 | 더 빠를 수도 있지만 통제된 시험으로 확인하지는 않았습니다. 커널 시작부터 로그인 화면의 세션이 열릴 때까지 로그상 중앙값은 약 19초 대 28초입니다(s6 23번과 systemd 11번 부팅, 펌웨어와 부트 로더 제외). 이 부팅들은 날짜, 빌드, initramfs가 서로 다르고, 세션은 로그인 화면이 나타나기 전에 열립니다. |
 | 보안 | 전체적으로 낫지 않습니다. PID 1은 작아지지만 `initconvertd`와 도우미 프로세스 약 37개가 root로 실행되고, 최근 28개 서비스의 강화 설정 비교에서 s6가 더 약한 설정은 없습니다(다른 설정은 98개). bolt의 seccomp 필터 수(9 대 11)는 계속 표시되는데, systemd는 ABI마다 필터를 하나씩 올리고 여기서는 필터 하나가 세 ABI를 모두 다루기 때문입니다. |
-| systemd 줄이기 | 일부만 줄어듭니다. udevd, logind, `systemd --user`는 계속 실행되고(GNOME에 logind와 `systemd --user`가 필요합니다), `systemd` 패키지도 설치된 채로 남습니다. |
+| systemd 줄이기 | 일부만 줄어듭니다. udevd, logind, `systemd --user`는 계속 실행되고(GNOME에 logind와 사용자 매니저가 필요합니다), `systemd` 패키지도 설치된 채로 남습니다. s6 사용자 매니저가 `systemd --user`를 대체할 수 있지만 선택 사항이며 권장하지 않습니다. |
 
 **systemd와 비교한 비용**
 
@@ -193,7 +193,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 리스너가 둘 이상이거나 `ListenStream=`이 아닌(또는 `vsock:`인) `Accept=yes`, 그리고 템플릿이 `Type=notify`, `forking`, `dbus`인 경우: 소켓을 건너뛰며 이유는 `initconvert plan`에 나옵니다. 인스턴스는 연결이 끝나면 실패했어도 사라집니다. systemd는 실패한 인스턴스를 `systemctl reset-failed`까지 남겨 두지만 여기서는 `systemctl --failed`에 들어가지 않습니다(결과는 소켓의 로그와 `ExecStopPost=`에 남습니다). 실행 중인 연결의 재시작이나 다시 읽기는 실패합니다. 템플릿의 `Wants=`와 `Requires=`는 연결마다가 아니라 소켓과 함께 시작됩니다.
 - `Accept=no`: 실행 중에 `.socket`을 시작하면 여전히 그 서비스가 바로 시작되고, 요청 시 서비스가 요구하는 유닛 중 요청 시 서비스가 아닌 것은 부팅 때 시작됩니다(s6-rc 의존성).
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
-- systemd generator: 시스템의 generator는 s6 부팅에서 하나도 실행되지 않습니다(사용자 generator는 s6 사용자 매니저가 실행합니다. [s6 사용자 매니저](#s6-사용자-매니저-진행-중) 참고). `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
+- systemd generator: 시스템의 generator는 s6 부팅에서 하나도 실행되지 않습니다(사용자 generator는 s6 사용자 매니저가 실행합니다. [s6 사용자 매니저](#s6-사용자-매니저-선택-사항-권장하지-않음) 참고). `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
 - `AccuracySec=`(타이머를 묶지 않고 정시에 실행), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. 이 타이머 키들은 허용되지만 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.
 - 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=`(systemd에서는 BPF LSM 프로그램), IP 사용량 집계(`IPAccounting=`).
 - 이미 실행 중인 작업의 취소.
@@ -372,7 +372,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 | 무선 상태(rfkill) | systemd-rfkill 대신 s6 oneshot에서 util-linux `rfkill` |
 | 압축 스왑(zram) | systemd generator 대신 s6 oneshot `zram`이 Fedora의 zram-generator를 실행(같은 `zram-generator.conf`, 크기, 우선순위) |
 | 장치 | 일반 서비스로 실행되는 systemd-udevd |
-| 로그인, 사용자 매니저 | 감독(supervised) 서비스로 실행되는 systemd-logind와 `systemd --user` |
+| 로그인, 사용자 매니저 | 감독(supervised) 서비스로 실행되는 systemd-logind와 `systemd --user`(`systemd --user` 대신 s6 사용자 매니저를 쓰는 것은 [선택 사항이며 권장하지 않음](#s6-사용자-매니저-선택-사항-권장하지-않음)) |
 
 2단계(stage 2)가 실패하면 tty9(Ctrl+Alt+F9)에서 로그인해 `/run/uncaught-logs/current`를
 읽으세요. 마지막 설치 이전의 s6 데이터베이스로 부팅하려면 커널 명령줄에
@@ -456,10 +456,15 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 `journalctl -u systemd-logind`와 `journalctl -u user@1000.service`(또는 `JOURNAL=no`에서도
 동작하는 `uinitconverter log UNIT`)를 확인하세요.
 
-### s6 사용자 매니저 (진행 중)
+### s6 사용자 매니저 (선택 사항, 권장하지 않음)
 
-`systemd --user`도 대체하는 작업이 진행 중입니다(계획은 `work_history.md` 136-155부). 이것은
-`uinitconverter-user` 패키지입니다(`dnf install uinitconverter-user`). s6 부팅 패키지 없이 일반 systemd
+**권장하지 않습니다.** 두 부팅 모두 기본값은 위에서 설명한 실제 `systemd --user`입니다. s6 사용자
+매니저는 GNOME 49가 쓰는 대로 `systemd --user`를 다시 구현한 것이라 systemd와 GNOME의 변화를 따라갈
+수 없습니다. 둘 중 하나가 업데이트되면 이 매니저로는 로그인이 깨질 수 있습니다. 세션도 s6로 감독하고
+싶고 그 위험을 받아들일 때만 쓰십시오. 아래의 `systemd --user` 자동 대체가 피해를 줄여 주지만 없애
+주지는 않습니다. 바탕이 된 계획은 `work_history.md` 136-155부에 있고, 203부에서 선택 사항이 되었습니다.
+
+이것은 `uinitconverter-user` 패키지입니다(`dnf install uinitconverter-user`). s6 부팅 패키지 없이 일반 systemd
 부팅에서도 동작합니다. `uinitconverterd`, `uinitconverter-runner`, `uinitconverter-timers`와 skalibs,
 execline, s6 패키지만 함께 설치됩니다.
 
@@ -468,11 +473,11 @@ execline, s6 패키지만 함께 설치됩니다.
   `sudo initconvert-user-setup off`는 `systemd --user`로 되돌리고, `initconvert-user-setup status`는
   설정과 지금 각 사용자의 `user@`가 무엇을 실행하는지 보여 줍니다. 바뀐 설정은 사용자마다 다음
   로그인부터 적용됩니다(로그아웃하거나 재부팅). 패키지를 지우면 드롭인도 지워집니다.
-- **s6 부팅에서는** 이것이 기본값입니다. `USER_MANAGER=`가 없거나 `USER_MANAGER=s6`(`on`이 씁니다)이면
-  러너가 `user@UID.service`에 `systemd --user` 대신 `initconvert-user-manager`를 실행합니다. 유닛 파일은
-  바꾸지 않습니다. `uinitconverter`가 이 패키지를 Recommends합니다. 패키지가 없으면 `user@`는
-  `systemd --user`를 그대로 쓰고 러너가 그 이유를 로그에 남깁니다. `USER_MANAGER=systemd`도
-  `systemd --user`를 유지합니다.
+- **s6 부팅에서는** `USER_MANAGER=s6`(`on`이 씁니다)으로 켭니다. 러너가 `user@UID.service`에
+  `systemd --user` 대신 `initconvert-user-manager`를 실행합니다. 유닛 파일은 바꾸지 않습니다.
+  `USER_MANAGER=`가 없거나 `systemd`이면 `user@`는 `systemd --user`를 실행합니다. `uinitconverter`는
+  이 패키지를 Suggests만 하며, 설치해도 켜기 전에는 아무것도 바뀌지 않습니다. `USER_MANAGER=s6`인데
+  패키지가 없으면 `user@`는 `systemd --user`를 그대로 쓰고 러너가 그 이유를 로그에 남깁니다.
 - **어느 부팅에서든** 커널 명령줄의 `uinitconverter.user_manager=systemd`는 그 부팅 동안
   `systemd --user`를 실행합니다(GRUB에서 되돌리는 방법). `uinitconverter.user_manager=s6`은 한
   부팅 동안 켭니다.
@@ -551,10 +556,10 @@ systemd-oomd에 알리고(`io.systemd.oom.ReportManagedOOMCGroups`, `systemd --u
 s6 부팅의 시스템 매니저 아래에서는 러너가 `user@`에 이 매니저를 시작합니다. 테스트 VM에서
 (`tests/vm-s6-boot.sh`) RPM으로 설치하면 SELinux enforcing에서 AVC 거부 없이 tester의 GNOME 세션이
 이 매니저로 올라오고, s6 부팅에서 재부팅한 뒤에도 마찬가지입니다. `uinitconverter-user`가 없거나
-`USER_MANAGER=systemd`이면 그 부팅에서도 `user@`는 `systemd --user`를 실행합니다.
+`USER_MANAGER=`가 없거나 `systemd`이면 그 부팅에서도 `user@`는 `systemd --user`를 실행합니다.
 
 제한된 사용자(`user_u`, `staff_u`)도 두 부팅 모두에서 `systemd --user`처럼 자기 도메인에서 매니저가
-실행됩니다(VM에서 linger 사용자로 확인). 아직 안 된 것: 실제 하드웨어의 s6 부팅에서 실행.
+실행됩니다(VM에서 linger 사용자로 확인). 실제 기계 한 대의 s6 부팅에서도 실행되었습니다(0.3.0, Fedora 45).
 
 ## `s6` 명령 (s6-frontend)
 
@@ -649,7 +654,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `INIT`: 유닛을 변환할 대상 init 시스템. 지금은 `s6`만 있고, 다른 값이면 모든 도구가 설정 오류로 멈춥니다.
 - `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `initconvert init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. 서비스 상태는 `s6-svstat`을 실행하지 않고 `supervise/status`(s6 2.15의 형식)에서 읽으므로, `s6-svstat=`은 그 파일의 형식이 다를 때만 쓰입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
-- `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: `user@UID.service`가 실행할 것, `systemd` 또는 `s6`(없으면 s6 부팅에서는 `s6`, systemd 부팅에서는 `systemd`)([s6 사용자 매니저](#s6-사용자-매니저-진행-중) 참고. 커널 명령줄의 `uinitconverter.user_manager=`가 우선), s6 쪽이 실행하지 않을 사용자 유닛, 그리고 실패 경로가 사용자를 `systemd --user`로 넘기는 사용자 유닛(기본값 `gnome-session-shutdown.target gnome-session@*.target`).
+- `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: `user@UID.service`가 실행할 것, `systemd` 또는 `s6`(없으면 두 부팅 모두 `systemd`. `s6`은 선택 사항이며 권장하지 않음)([s6 사용자 매니저](#s6-사용자-매니저-선택-사항-권장하지-않음) 참고. 커널 명령줄의 `uinitconverter.user_manager=`가 우선), s6 쪽이 실행하지 않을 사용자 유닛, 그리고 실패 경로가 사용자를 `systemd --user`로 넘기는 사용자 유닛(기본값 `gnome-session-shutdown.target gnome-session@*.target`).
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 요청하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
 - `INCLUDE`: 기본값으로 uinitconverter에서 동작하는 systemd 서비스(logind, user-sessions, hostnamed, localed, timedated, resolved, vconsole-setup(콘솔 키맵과 글꼴), backlight(화면·키보드 밝기를 부팅 사이에 유지), 절전 서비스)를 포함합니다. 무선 상태(rfkill)는 systemd-rfkill 대신 `rfkill` s6 oneshot이 유지합니다. 부팅 때 util-linux `rfkill`로 장치마다 soft block을 복원하고, 종료할 때 상태를 systemd-rfkill 자신의 파일(`/var/lib/systemd/rfkill/ID_PATH:TYPE`)에 저장하므로 systemd 부팅 항목과 상태를 공유합니다. systemd-rfkill과 달리 정상 종료할 때만 저장하며, 부팅 중 udev settle 뒤에 나타난 장치는 상태를 그대로 둡니다.
 

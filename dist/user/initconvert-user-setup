@@ -1,7 +1,9 @@
 #!/bin/sh
 # initconvert-user-setup: turn uinitconverter's s6 user manager on or off for
-# user@UID.service on a systemd boot (package uinitconverter-user). On the s6
-# boot USER_MANAGER= alone decides (unset: the s6 manager); this writes it too.
+# user@UID.service (package uinitconverter-user). It is opt-in and not
+# recommended: it reimplements systemd --user and can't be kept in step with
+# its changes. On the s6 boot USER_MANAGER= alone decides (unset: systemd
+# --user); this writes it too.
 #
 #   initconvert-user-setup on       # the s6 manager from each user's next login
 #   initconvert-user-setup off      # systemd --user from each user's next login
@@ -81,6 +83,7 @@ EOF
         set_user_manager s6
         reload
         echo "The s6 user manager runs each user's manager from their next login (log out, or reboot)."
+        echo "Not recommended: it can't follow systemd --user's changes, so a GNOME or systemd update may break login. 'initconvert-user-setup off' goes back." >&2
         ;;
     off)
         need_root off
@@ -92,11 +95,8 @@ EOF
         ;;
     status)
         if [ -e "$DROPIN" ]; then echo "drop-in:      $DROPIN"; else echo "drop-in:      none (off on a systemd boot)"; fi
-        # Unset: the s6 manager on the s6 boot (PID 1 s6-svscan), systemd
-        # --user on a systemd boot (Config::user_manager_now).
-        dflt=systemd
-        [ "$(cat "$ROOT/proc/1/comm" 2>/dev/null)" = s6-svscan ] && dflt="s6, the s6 boot's default"
-        echo "USER_MANAGER: $(setting || true)$( [ -z "$(setting || true)" ] && echo "unset ($dflt)")"
+        # Unset: systemd --user on either boot (Config::user_manager_now).
+        echo "USER_MANAGER: $(setting || true)$( [ -z "$(setting || true)" ] && echo "unset (systemd)")"
         k=$(tr ' ' '\n' 2>/dev/null <"$ROOT/proc/cmdline" | sed -n 's/^uinitconverter\.user_manager=//p' | tail -1)
         [ -n "$k" ] && echo "this boot:    uinitconverter.user_manager=$k on the kernel command line"
         for p in "$ROOT"/sys/fs/cgroup/user.slice/user-*.slice/user@*.service/init.scope/cgroup.procs; do

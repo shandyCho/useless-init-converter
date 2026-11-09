@@ -128,7 +128,7 @@ uinitconverter의 SELinux 모듈이 설치된 머신에서는 `/usr/bin/s6-rc-up
 `sandbox.sh`와 `check.sh`를 실행하세요. 그러면 데몬이 fd를 직접 보관하므로, 데몬을 다시 시작한
 뒤 fd가 사라졌는지를 확인합니다. 독립 도구는 `tests/sandbox.sh`가 `standalone/`에서 빌드합니다.
 
-사용자 모드(systemd --user 없는 사용자 서비스 관리자, 진행 중): `tests/user-sandbox.sh DIR`은
+사용자 모드(systemd --user 없는 사용자 서비스 관리자. 선택 사항이며 권장하지 않음): `tests/user-sandbox.sh DIR`은
 사용자 매니저를 `user@`처럼(`uinitconverter-user` 패키지가 설치하는 `initconvertd`로의 링크
 `initconvert-user-manager`로) 실행하되 `XDG_RUNTIME_DIR`을 샌드박스 디렉터리로
 둡니다. private 소켓, `default.target`, `READY=1`, `dbus.socket`에서 시작되는 버스(여기서는
@@ -311,7 +311,7 @@ tester의 자동 로그인 세션(자기 유닛 안의 gnome-shell, 세션 타�
 |---|---|---|
 | `s6`(기본) | `USER_MANAGER=s6`, `uinitconverter-user` 설치 | `initconvert-user-manager`. 이어서 s6 부팅에서 재부팅하고 같은 확인 |
 | `no-package` | `USER_MANAGER=s6`, `uinitconverter-user` 없음 | `systemd --user`, 러너의 "install uinitconverter-user" 줄 |
-| `default` | 모든 패키지, `USER_MANAGER=` 없음 | `initconvert-user-manager`(s6 부팅의 기본값) |
+| `default` | 모든 패키지, `USER_MANAGER=` 없음 | `systemd --user`(기본값) |
 | `systemd` | 모든 패키지, `USER_MANAGER=systemd` | `systemd --user` |
 
 `BOOT=systemd-rpm tests/vm-user-manager.sh ~/uinitconverter-vm MODE`는 `greeter`, `session`, `apps`, `lifecycle`,

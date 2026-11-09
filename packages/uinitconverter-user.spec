@@ -27,7 +27,10 @@ Requires:       systemd
 
 %description
 The s6 user manager: user@UID.service runs initconvert-user-manager instead
-of systemd --user. On a normal systemd boot, `initconvert-user-setup on`
+of systemd --user. It is opt-in and not recommended: it reimplements
+systemd --user and can't be kept in step with its changes, so a GNOME or
+systemd update may break login. Installing it changes nothing until it is
+turned on. On a normal systemd boot, `initconvert-user-setup on`
 turns it on (and `off` back to systemd --user); it needs none of the s6 boot
 packages. On the s6 boot, USER_MANAGER=s6 in uinitconverter.conf does. In
 either case uinitconverter.user_manager=systemd on the kernel command line

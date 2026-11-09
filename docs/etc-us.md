@@ -55,7 +55,7 @@ Workstation machine. The systemd numbers are from boots up to 2026-10-31.
 | Memory | About the same: the median (total - available) is 1154 vs 1176 MiB (-23 MiB; 21 s6 and 6 systemd snapshots), about the normal 20-25 MiB variation between boots. |
 | Boot speed | Perhaps faster, but not shown by a controlled test: from kernel start to the login screen's session opening, the median in the logs is about 19 vs 28 s (23 s6 and 11 systemd boots, excluding firmware and boot loader). Those boots ran on different days, with different builds and initramfs images, and the session opens before the login screen appears. |
 | Security | Not better overall. PID 1 is smaller, but `initconvertd` and about 37 helper processes run as root, and the latest hardening comparison of 28 services shows no setting weaker on s6 (98 differ). It still flags bolt's seccomp filter count (9 vs 11): one filter here covers the three ABIs where systemd loads one per ABI. |
-| Less systemd | Only partly. udevd, logind and `systemd --user` still run (GNOME needs logind and `systemd --user`), and the `systemd` package stays installed. |
+| Less systemd | Only partly. udevd, logind and `systemd --user` still run (GNOME needs logind and a user manager), and the `systemd` package stays installed. The s6 user manager can replace `systemd --user`, but it is opt-in and not recommended. |
 
 **Costs compared with systemd**
 
@@ -228,7 +228,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - `Accept=yes` with more than one listener, anything but `ListenStream=` (or `vsock:`), and with a `Type=notify`, `forking` or `dbus` template: the socket is skipped, and `initconvert plan` gives the reason. An instance disappears when its connection ends, also when it failed: systemd keeps failed ones until `systemctl reset-failed`, so here they don't count in `systemctl --failed` (their result is in the socket's log and `ExecStopPost=`). Restarting or reloading a running connection fails. The template's `Wants=` and `Requires=` are started with the socket rather than per connection.
 - `Accept=no`: starting a `.socket` at run time still starts its service at once, and an on-demand service's requirements that are not on demand themselves are started at boot (s6-rc dependencies).
 - autofs: `.automount` units mount eagerly.
-- systemd generators: none of the system's runs on the s6 boot (the s6 user manager runs the user ones, see [the s6 user manager](#the-s6-user-manager-in-progress)). `/etc/fstab` is mounted by the `mount-fs` s6 service and the zram swap set up by the `zram` one; units that other generators would make (e.g. `systemd-gpt-auto-generator`'s, `rc-local`) don't exist there.
+- systemd generators: none of the system's runs on the s6 boot (the s6 user manager runs the user ones, see [the s6 user manager](#the-s6-user-manager-opt-in-not-recommended)). `/etc/fstab` is mounted by the `mount-fs` s6 service and the zram swap set up by the `zram` one; units that other generators would make (e.g. `systemd-gpt-auto-generator`'s, `rc-local`) don't exist there.
 - `AccuracySec=` (timers fire on time instead of coalescing), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. These timer keys are accepted without effect, so the report doesn't list them as ignored.
 - Watchdog, credentials (`LoadCredential=`, `ImportCredential=`), `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=` (a BPF LSM program in systemd), and IP accounting (`IPAccounting=`).
 - Cancelling a job that is already running.
@@ -429,7 +429,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 | Radio state (rfkill) | util-linux `rfkill` from an s6 oneshot instead of systemd-rfkill |
 | Compressed swap (zram) | Fedora's zram-generator, run by the s6 oneshot `zram` instead of as a systemd generator (same `zram-generator.conf`, size and priority) |
 | Devices | systemd-udevd as a plain service |
-| Login, user manager | systemd-logind and `systemd --user`, as supervised services |
+| Login, user manager | systemd-logind and `systemd --user`, as supervised services (the s6 user manager instead of `systemd --user` is [opt-in, not recommended](#the-s6-user-manager-opt-in-not-recommended)) |
 
 If stage 2 fails, log in on tty9 (Ctrl+Alt+F9) and read
 `/run/uncaught-logs/current`. To boot the s6 database from before the last
@@ -526,10 +526,18 @@ machines are untested, so try it in a VM first. If login fails, check `journalct
 systemd-logind` and `journalctl -u user@1000.service` (or `uinitconverter
 log UNIT`, which also works with `JOURNAL=no`).
 
-### The s6 user manager (in progress)
+### The s6 user manager (opt-in, not recommended)
 
-Work is under way to replace `systemd --user` too (the plan is in
-`work_history.md`, parts 136-155). It is the `uinitconverter-user` package
+**Not recommended.** The default on both boots is the real `systemd --user`,
+described above. The s6 user manager reimplements `systemd --user` as GNOME
+49 uses it, and it can't be kept in step with systemd's and GNOME's changes:
+an update of either may break login with it. Use it only if you want the
+session supervised by s6 and accept that risk; the automatic fallback to
+`systemd --user` (below) limits the damage, but doesn't remove it. The
+plan it was built from is in `work_history.md`, parts 136-155; part 203 made
+it opt-in.
+
+It is the `uinitconverter-user` package
 (`dnf install uinitconverter-user`), which also works on a normal systemd boot
 without any of the s6 boot packages: it pulls in only `uinitconverterd`,
 `uinitconverter-runner`, `uinitconverter-timers` and the skalibs, execline and
@@ -542,12 +550,13 @@ s6 packages.
   `systemd --user`, and `initconvert-user-setup status` shows the setting
   and what each user's `user@` runs now. A change applies from each user's
   next login (log out, or reboot). Removing the package removes the drop-in.
-- **On the s6 boot** it is the default: with `USER_MANAGER=` unset (or
-  `USER_MANAGER=s6`, which `on` writes) the runner starts
-  `initconvert-user-manager` for `user@UID.service` instead of
-  `systemd --user`; the unit file is not changed. `uinitconverter`
-  Recommends the package. Without it, `user@` keeps `systemd --user` and the
-  runner logs why; `USER_MANAGER=systemd` keeps `systemd --user` too.
+- **On the s6 boot**, `USER_MANAGER=s6` (which `on` writes) turns it on:
+  the runner starts `initconvert-user-manager` for `user@UID.service`
+  instead of `systemd --user`; the unit file is not changed. With
+  `USER_MANAGER=` unset or `systemd`, `user@` runs `systemd --user`.
+  `uinitconverter` only Suggests the package, and installing it changes
+  nothing until it is turned on. With `USER_MANAGER=s6` but without the
+  package, `user@` keeps `systemd --user` and the runner logs why.
 - **On either boot**, `uinitconverter.user_manager=systemd` on the kernel
   command line runs `systemd --user` for that boot, the way back from GRUB;
   `uinitconverter.user_manager=s6` turns it on for one boot.
@@ -650,11 +659,11 @@ Under the s6 boot's own system manager, the runner starts it for `user@`:
 in the test VM (`tests/vm-s6-boot.sh`), installed from the RPMs, tester's
 GNOME session comes up on it with SELinux enforcing and no denials, also
 after a reboot from the s6 boot. Without `uinitconverter-user`, or with
-`USER_MANAGER=systemd`, `user@` runs `systemd --user` there.
+`USER_MANAGER=` unset or `systemd`, `user@` runs `systemd --user` there.
 
 Confined users (`user_u`, `staff_u`) get their manager in their own domain
 on both boots, as with `systemd --user` (checked in the VM with lingering
-users). Not done yet: a run on real hardware under the s6 boot.
+users). It has run on one real machine under the s6 boot (0.3.0, Fedora 45).
 
 ## The `s6` command (s6-frontend)
 
@@ -762,7 +771,7 @@ and defaults). The most important keys:
 - `INIT`: the init system units are translated for. Only `s6` exists yet; any other value stops every tool with a configuration error.
 - `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `initconvert init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. A service's state is read from its `supervise/status` (s6 2.15's format) without starting `s6-svstat`, so `s6-svstat=` only applies when that file has another format. The shell scripts and s6 service definitions in `dist/` still run them by name.
 - `ALLOW_UIDS`: non-root users allowed to manage units.
-- `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: what `user@UID.service` runs, `systemd` or `s6` (unset: `s6` on the s6 boot, `systemd` on a systemd boot) (see [the s6 user manager](#the-s6-user-manager-in-progress); `uinitconverter.user_manager=` on the kernel command line wins), the user units the s6 one leaves out, and the user units whose failure path hands a user over to `systemd --user` (default `gnome-session-shutdown.target gnome-session@*.target`).
+- `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: what `user@UID.service` runs, `systemd` or `s6` (unset: `systemd` on either boot; `s6` is opt-in and not recommended) (see [the s6 user manager](#the-s6-user-manager-opt-in-not-recommended); `uinitconverter.user_manager=` on the kernel command line wins), the user units the s6 one leaves out, and the user units whose failure path hands a user over to `systemd --user` (default `gnome-session-shutdown.target gnome-session@*.target`).
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
 - `INCLUDE`: by default lets through the systemd services that work under uinitconverter: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight (screen/keyboard brightness kept across boots) and the sleep services. The radio state (rfkill) is kept by the `rfkill` s6 oneshot instead of systemd-rfkill: util-linux `rfkill` restores each device's soft block at boot and the state is saved at shutdown, in systemd-rfkill's own files (`/var/lib/systemd/rfkill/ID_PATH:TYPE`), so the systemd boot entry shares it. Unlike systemd-rfkill it saves only at a clean shutdown, and a device that appears after the boot's udev settle keeps its state.
 

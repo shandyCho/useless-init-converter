@@ -10,8 +10,8 @@
 #                                       # reboot from the s6 boot and the same checks
 #   tests/vm-s6-boot.sh DIR no-package  # USER_MANAGER=s6 without uinitconverter-user:
 #                                       # user@ keeps systemd --user, the runner says why
-#   tests/vm-s6-boot.sh DIR default     # every package, no USER_MANAGER=: the s6 boot's
-#                                       # default, initconvert-user-manager
+#   tests/vm-s6-boot.sh DIR default     # every package, no USER_MANAGER=: the default,
+#                                       # systemd --user
 #   tests/vm-s6-boot.sh DIR systemd     # every package, USER_MANAGER=systemd: systemd --user
 #
 # RPMS: the core RPMs (packages/build-rpms.sh's OUTDIR/rpms) and the
@@ -27,7 +27,7 @@ set -euo pipefail
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 VM=$TOP/tests/gnome-vm.sh
-D=${1:?usage: tests/vm-s6-boot.sh DIR [s6|no-package|default]}
+D=${1:?usage: tests/vm-s6-boot.sh DIR [s6|no-package|default|systemd]}
 D=$(cd "$D" && pwd)
 MODE=${2:-s6}
 case $MODE in s6 | no-package | default | systemd) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
@@ -122,14 +122,14 @@ exe=$(basename "$(readlink "/proc/$main/exe" 2>/dev/null)" 2>/dev/null)
 echo "   user@$u.service's main process: PID $main, $exe ($(cat "/proc/$main/comm" 2>/dev/null)), $(tr '\0' ' ' <"/proc/$main/cmdline" 2>/dev/null)"
 grep -qx "$main" "$cg/init.scope/cgroup.procs" 2>/dev/null && ok "it is in user@$u.service/init.scope" || bad "init.scope: $(cat "$cg/init.scope/cgroup.procs" 2>&1 | tr '\n' ' ')"
 case $mode in
-    s6 | default)
+    s6)
         [ "$exe" = initconvertd ] && ok "the runner started initconvert-user-manager" || bad "user@$u.service runs $exe"
         [ ! -e "/run/uinitconverter-user/$u" ] && ok "no fallback for tester" || bad "tester fell back: $(cat "/run/uinitconverter-user/$u")"
         own=$(as busctl --user status org.freedesktop.systemd1 2>&1 | sed -n 's/^PID=//p')
         [ "$own" = "$main" ] && ok "org.freedesktop.systemd1 on tester's bus is the s6 manager" || bad "the bus name's owner: ${own:-none}"
         [ -d "$cg/app.slice" ] && ok "the manager made app.slice" || bad "no $cg/app.slice"
         ;;
-    no-package | systemd)
+    no-package | systemd | default)
         [ "$exe" = systemd ] && ok "user@$u.service runs systemd --user" || bad "user@$u.service runs $exe"
         if [ "$mode" = no-package ]; then
             l=$(journalctl -b --no-pager -o cat 2>/dev/null | grep -F "install uinitconverter-user" | head -1)

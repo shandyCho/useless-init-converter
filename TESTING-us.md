@@ -130,7 +130,7 @@ To check that the core works without the standalone `initconvert-fdstore`, run
 holds the fds itself, so `check.sh` checks that they are gone after the daemon
 restarts. `tests/sandbox.sh` builds the standalone tools from `standalone/`.
 
-User mode (a user's service manager without systemd --user, in progress):
+User mode (a user's service manager without systemd --user; opt-in, not recommended):
 `tests/user-sandbox.sh DIR` runs the user manager as `user@` would (as
 `initconvert-user-manager`, the `uinitconverter-user` package's link to
 `initconvertd`), with `XDG_RUNTIME_DIR` in a sandbox directory: the private socket,
@@ -354,7 +354,7 @@ subvolumes). The mode says what `user@` must run:
 |---|---|---|
 | `s6` (default) | `USER_MANAGER=s6`, `uinitconverter-user` installed | `initconvert-user-manager`; then a reboot from the s6 boot and the same checks |
 | `no-package` | `USER_MANAGER=s6`, no `uinitconverter-user` | `systemd --user`, with the runner's "install uinitconverter-user" line |
-| `default` | every package, no `USER_MANAGER=` | `initconvert-user-manager` (the s6 boot's default) |
+| `default` | every package, no `USER_MANAGER=` | `systemd --user` (the default) |
 | `systemd` | every package, `USER_MANAGER=systemd` | `systemd --user` |
 
 `BOOT=systemd-rpm tests/vm-user-manager.sh ~/uinitconverter-vm MODE` runs

@@ -7,7 +7,9 @@
 #     (status once named the runner there);
 #   - a manager that fell back to systemd --user, with its record;
 #   - a record in the user's name but owned by someone else, which
-#     initconvertd ignores and status must too.
+#     initconvertd ignores and status must too;
+#   - `on` warns that the s6 manager is not recommended, and an unset
+#     USER_MANAGER= reads as systemd, also on the s6 boot.
 #
 #   tests/user-setup.sh WORKDIR
 set -euo pipefail
@@ -47,7 +49,14 @@ mkdir -p "$W/usr/libexec/uinitconverter" "$W/etc/uinitconverter"
 : >"$W/usr/libexec/uinitconverter/initconvertd"
 ln -s initconvertd "$W/usr/libexec/uinitconverter/initconvert-user-manager"
 
-run on >/dev/null
+# Unset, on the s6 boot (PID 1 s6-svscan): systemd, the default on both.
+mkdir -p "$W/proc/1"
+echo s6-svscan >"$W/proc/1/comm"
+out=$(run status)
+grep -qx "USER_MANAGER: unset (systemd)" <<<"$out" && ok "unset: systemd, also on the s6 boot" || bad "unset: $out"
+
+err=$(run on 2>&1 >/dev/null)
+grep -q "^Not recommended:" <<<"$err" && ok "on: warns that it is not recommended" || bad "on: no warning: $err"
 [ -f "$W/etc/systemd/system/user@.service.d/90-uinitconverter.conf" ] && ok "on: drop-in written" || bad "on: no drop-in"
 grep -qx USER_MANAGER=s6 "$W/etc/uinitconverter/uinitconverter.conf" && ok "on: USER_MANAGER=s6" || bad "on: $(cat "$W/etc/uinitconverter/uinitconverter.conf")"
 

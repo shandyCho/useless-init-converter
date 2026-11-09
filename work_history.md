@@ -12539,3 +12539,46 @@ The owner built the release with `packages/github-release.sh` at 2339857, pushed
 
 1. Optional: RPMs for other Fedora releases (`github-release.sh` on each, then `gh release upload v0.3.0`).
 2. For the next release: tag only with `gh release create --target`, or tag the commit the RPMs are built from (HEAD at `github-release.sh` time), so the two match.
+
+## 2026-11-09, part 202: the docs' "what is replaced" rows name the s6 user manager
+
+The owner asked how far systemd and its ecosystem are replaced. Answering from the docs showed two places in the docs/etc pair still saying `systemd --user` runs, though since 0.3.0 the s6 boot runs the s6 user manager by default:
+
+- "Compared with booting systemd", the "Less systemd" row: udevd and logind still run; `systemd --user` is replaced when `uinitconverter-user` is installed.
+- The component table under "What `initconvert init` does" and its lead-in: the "Login, user manager" row now says `user@UID.service` runs `initconvert-user-manager`, or `systemd --user` without the package, with `USER_MANAGER=systemd`, or after a fallback (linked to the s6 user manager section).
+
+Both languages changed together. Docs only; no code or tests changed. Not committed yet.
+
+### Current state
+
+0.3.0 is released on GitHub. The docs change above is uncommitted.
+
+### Next steps
+
+1. Commit the docs change.
+2. Optional: RPMs for other Fedora releases (`github-release.sh` on each, then `gh release upload v0.3.0`).
+3. For the next release: tag the commit the RPMs are built from.
+
+## 2026-11-09, part 203: systemd --user is the default again; the s6 user manager is opt-in and not recommended
+
+**Decision changed by the owner:** "make systemd --user the default, keep ours opt-in. but add 'not recommand'. I think we can't follow systemd's changes." This replaces the owner's choice of 2026-11-05 (part 177: the s6 boot defaults to the s6 user manager). Decision 3 at the top of this file (the real `systemd --user` in `user@UID.service`) is the default again on both boots. Reason: the s6 user manager reimplements `systemd --user` as GNOME 49 uses it, and keeping it in step with systemd's and GNOME's changes isn't realistic; the project's aim is now to make what exists solid (see the discussion before part 202: the original goal is met without it).
+
+**Changes:**
+- `Config::user_manager_now`: unset `USER_MANAGER=` is `systemd` on either boot. `user_manager_on` and `pid1_is_s6` are gone (no other users). The test is now `user_manager_default_is_systemd`.
+- `initconvert-user-setup`: the header says opt-in and not recommended; `on` prints a "Not recommended: ..." line on stderr; `status` shows an unset setting as `unset (systemd)` on both boots.
+- Specs: `uinitconverter` Suggests `uinitconverter-user` (was Recommends); the `uinitconverter-user` description says it is opt-in, not recommended, and that installing it changes nothing until it is turned on. `uinitconverterd`'s comment too.
+- `dist/uinitconverter.conf`, `initconvertd`'s help, the docs/etc pair (the "Less systemd" row and component table back to `systemd --user`, the section renamed "The s6 user manager (opt-in, not recommended)" with a warning paragraph, its anchors, the USER_MANAGER key, and "not done yet: real hardware" replaced by part 200's run), the TESTING pair, the packages README pair. Part 202's doc rows were reverted to say `systemd --user`.
+- Tests: `tests/user-setup.sh` checks the unset default on the s6 boot and `on`'s warning (15 checks); `tests/vm-s6-boot.sh`'s `default` mode now expects `systemd --user`.
+
+**Tests:** `cargo test` passes; `tests/sandbox.sh` + `check.sh` 374/374; `tests/user-sandbox.sh` 118/118 (it sets `USER_MANAGER=s6` itself); `tests/user-setup.sh` 15/15. `bash -n` and `shellcheck -S warning` pass on the changed scripts. **Not run:** the VM tests (`tests/vm-s6-boot.sh ... default` with the new expectation, `vm-user-setup.sh`), which need fresh RPMs. Not committed.
+
+**On the owner's machine:** after updating to RPMs with this change, `user@` runs `systemd --user` on the s6 boot unless `USER_MANAGER=s6` is set (`sudo initconvert-user-setup on`). The installed `uinitconverter-user` stays but is inactive.
+
+### Current state
+
+0.3.0 is released. This change and part 202 are uncommitted. The s6 user manager is kept and tested but opt-in.
+
+### Next steps
+
+1. Commit; then `packages/build-rpms.sh --test` and `tests/vm-s6-boot.sh ~/uinitconverter-vm default` (expects `systemd --user`) and `s6`.
+2. Hardening the default path (systemd --user under s6): more machines and Fedora releases.
