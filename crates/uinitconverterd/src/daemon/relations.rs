@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use zbus::zvariant::Value;
 
 use super::Daemon;
-use crate::loader::{Loader, Unit};
+use crate::loader::Unit;
 
 /// Relations whose reverse is also read from `.wants`/`.requires` dirs.
 fn dir_kind(key: &str) -> Option<&'static str> {
@@ -34,7 +34,6 @@ impl Daemon {
     /// key read every known unit's directories again, 0.5 s before a
     /// logout's first signal (work_history part 182).
     fn reverse_index(&self, keys: &[&str]) -> Vec<(String, Unit, Vec<BTreeSet<String>>)> {
-        let ld = Loader::new(&self.cfg);
         let mut seen = BTreeSet::new();
         let mut out = Vec::new();
         for n in self.known_units() {
@@ -47,7 +46,7 @@ impl Daemon {
                 .map(|key| {
                     let mut r: BTreeSet<String> = u.deps(key).into_iter().collect();
                     if let Some(kind) = dir_kind(key) {
-                        r.extend(ld.dir_deps(&u, kind));
+                        r.extend(self.dir_deps(&u, kind));
                     }
                     r
                 })
@@ -82,7 +81,6 @@ impl Daemon {
         if self.stopped_targets.lock().unwrap().is_empty() {
             return;
         }
-        let ld = Loader::new(&self.cfg);
         let mut stack = vec![(id.to_string(), 0u32)];
         let mut seen = BTreeSet::new();
         while let Some((n, depth)) = stack.pop() {
@@ -94,8 +92,8 @@ impl Daemon {
             let mut deps = u.deps("Requires");
             deps.extend(u.deps("Wants"));
             deps.extend(u.deps("BindsTo"));
-            deps.extend(ld.dir_deps(&u, "wants"));
-            deps.extend(ld.dir_deps(&u, "requires"));
+            deps.extend(self.dir_deps(&u, "wants"));
+            deps.extend(self.dir_deps(&u, "requires"));
             stack.extend(deps.into_iter().map(|d| (d, depth + 1)));
         }
     }
@@ -113,11 +111,10 @@ impl Daemon {
         unit: &Unit,
         before: &BTreeSet<String>,
     ) {
-        let ld = Loader::new(&self.cfg);
         let mut deps = unit.get_words("Unit", "Requires");
         deps.extend(unit.get_words("Unit", "Wants"));
-        deps.extend(ld.dir_deps(unit, "wants"));
-        deps.extend(ld.dir_deps(unit, "requires"));
+        deps.extend(self.dir_deps(unit, "wants"));
+        deps.extend(self.dir_deps(unit, "requires"));
         let mut seen = BTreeSet::new();
         for d in deps {
             let (did, du) = self.load_unit(&d);

@@ -12753,3 +12753,11 @@ Option (b) of part 207, as recommended; the owner then asked for every slice in 
 - Tests: `snapshot::tests::units_come_from_the_live_database` (each source, alias, instance, not found despite a file on disk, the live index over `current`; without the holder, disk and `current`). Sandbox: `snap.service` (edited without a reload the restart runs the old command; after `Reload` the new one). The `userless.service` check edited `User=` without a reload and relied on the runner reading the file; it now reloads after the edit (same check: the stop works without the user, a start fails with `resources`).
 - Results: `cargo test` 135 passed; sandbox **382/382**, `SANDBOX_JOURNAL=no` **389/389**, `SANDBOX_FDSTORE=no` **370/370**.
 - Docs: docs/etc pair ("What is implemented"), CHANGELOG pair (behaviour change).
+
+## 2026-11-10, part 210: slice 3, the daemon reads the database's units
+
+- `initconvertd`'s `unit_cache` holds snapshots. A miss reads the live database (`snapshot::find_live`: the longrun's `data/unit`, the holder, the runtime file, an instance of a carried template); a unit the database doesn't carry is loaded from disk, as systemd loads any unit on demand (`systemctl status` of a disabled unit), and cached until a reload. This and the reload refresh below are the only disk loads left in the daemon.
+- The link directories (`.wants/`, `.requires/`, `.upholds/`) come from the cached snapshot (`Daemon::dir_deps`): `relations.rs` (reverse index, stopped targets, a target's inactive members), `props.rs` (Wants=/Requires=/Upholds= properties), the dynamic engine's `start_deps`. `scope_iface` uses `load_unit`.
+- The daemon writes runtime snapshots from its cache (`load_snapshot_of`), and a reload rewrites every runtime snapshot from the unit files now (or drops it when the new database carries the unit) before the caches are cleared, as systemd reloads every loaded unit.
+- `snapshot.rs`: `find_live` and the lookup shared with `Units::get`.
+- Tests: sandbox `systemctl show` (ExecStart through the bus) shows the database's command after an edit without a reload; `inst@a.service` (started outside the database): its runtime snapshot is written at the start and rewritten by a reload. `cargo test` 135; sandbox **385/385**., `SANDBOX_JOURNAL=no` **392/392**, `SANDBOX_FDSTORE=no` **373/373**.

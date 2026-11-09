@@ -63,8 +63,7 @@ impl Daemon {
     /// A unit started outside the database: its runner reads the unit as
     /// loaded here (snapshot::runtime_file), as for the database's units.
     pub(super) fn write_runtime_snapshot(&self, unit: &Unit) {
-        let ld = loader::Loader::new(&self.cfg);
-        let snap = crate::snapshot::Snapshot::take(&ld, unit.clone());
+        let snap = self.load_snapshot_of(unit);
         if let Err(e) = crate::snapshot::write_runtime(&self.cfg, &snap) {
             eprintln!("initconvertd: {}: snapshot: {e}", unit.id);
         }
@@ -170,7 +169,6 @@ impl Daemon {
     /// .requires/.wants links. A target starts everything it wants; a
     /// service only what it wants and is ordered after.
     fn start_deps(&self, unit: &Unit) -> Vec<(String, bool)> {
-        let ld = loader::Loader::new(&self.cfg);
         let after: BTreeSet<String> = unit.get_words("Unit", "After").into_iter().collect();
         let mut out = Vec::new();
         for key in ["Requires", "Requisite", "BindsTo"] {
@@ -178,11 +176,11 @@ impl Daemon {
                 out.push((d, true));
             }
         }
-        for d in ld.dir_deps(unit, "requires") {
+        for d in self.dir_deps(unit, "requires") {
             out.push((d, true));
         }
         let mut wants = unit.get_words("Unit", "Wants");
-        wants.extend(ld.dir_deps(unit, "wants"));
+        wants.extend(self.dir_deps(unit, "wants"));
         for d in wants {
             if unit.utype() == "target" || after.contains(&d) {
                 out.push((d, false));

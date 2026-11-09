@@ -133,7 +133,9 @@ pub struct Daemon {
     /// Jobs on the same unit run one after another.
     unit_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Parsed unit files (cleared by Reload and unit file operations).
-    pub unit_cache: Mutex<HashMap<String, Unit>>,
+    /// Loaded units (snapshot.rs: the live database's, those written for
+    /// units started outside it, else read from disk), until a reload.
+    pub unit_cache: Mutex<HashMap<String, crate::snapshot::Snapshot>>,
     /// UnitFileState values (cleared like unit_cache, and when the s6 set
     /// changes: see file_state_cache_check()).
     pub file_state_cache: Mutex<HashMap<String, String>>,
@@ -201,18 +203,80 @@ impl Daemon {
                 },
             );
         }
-        if let Some(u) = self.unit_cache.lock().unwrap().get(&resolved) {
-            return (u.id.clone(), u.clone());
+        let snap = self.load_snapshot(&resolved);
+        (snap.unit.id.clone(), snap.unit)
+    }
+
+    /// The unit as the tools run it: the live database's (or what was
+    /// written for a unit started outside it). A unit the database doesn't
+    /// carry is loaded from disk, as systemd loads any unit on demand
+    /// (`systemctl status` of a disabled one), and kept until a reload.
+    fn load_snapshot(&self, resolved: &str) -> crate::snapshot::Snapshot {
+        if let Some(s) = self.unit_cache.lock().unwrap().get(resolved) {
+            return s.clone();
         }
-        let unit = Loader::new(&self.cfg).load(&resolved);
+        let snap = crate::snapshot::find_live(&self.cfg, resolved).unwrap_or_else(|| {
+            let ld = Loader::new(&self.cfg);
+            crate::snapshot::Snapshot::take(&ld, ld.load(resolved))
+        });
         // Not-found units are re-read every time (systemd retries them too).
-        if unit.load_state != LoadState::NotFound {
+        if snap.unit.load_state != LoadState::NotFound {
             self.unit_cache
                 .lock()
                 .unwrap()
-                .insert(resolved, unit.clone());
+                .insert(resolved.to_string(), snap.clone());
         }
-        (unit.id.clone(), unit)
+        snap
+    }
+
+    /// `unit` with what it was loaded with (a transient scope: only the
+    /// unit).
+    pub(super) fn load_snapshot_of(&self, unit: &Unit) -> crate::snapshot::Snapshot {
+        if self.transient.lock().unwrap().contains_key(&unit.id) {
+            return crate::snapshot::Snapshot {
+                unit: unit.clone(),
+                dir_deps: Default::default(),
+                mtimes: Default::default(),
+            };
+        }
+        self.load_snapshot(&unit.id)
+    }
+
+    /// A reload loads again what was loaded outside the database: each
+    /// runtime snapshot (snapshot::runtime_file) is rewritten from the unit
+    /// files now, or dropped when the new database carries the unit.
+    fn refresh_runtime_snapshots(&self) {
+        let Ok(rd) = std::fs::read_dir(self.cfg.run_dir.join("units")) else {
+            return;
+        };
+        let ld = Loader::new(&self.cfg);
+        for e in rd.flatten() {
+            let file = e.path().join("snapshot");
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let Ok(old) = crate::snapshot::Snapshot::parse(&text) else {
+                let _ = std::fs::remove_file(&file);
+                continue;
+            };
+            let id = old.unit.id;
+            let _ = std::fs::remove_file(&file);
+            if crate::snapshot::find_live(&self.cfg, &id).is_some() {
+                continue;
+            }
+            let snap = crate::snapshot::Snapshot::take(&ld, ld.load(&id));
+            if let Err(e) = crate::snapshot::write_runtime(&self.cfg, &snap) {
+                eprintln!("initconvertd: {id}: snapshot: {e}");
+            }
+        }
+    }
+
+    /// The entries of `unit`'s NAME.KIND/ directories, as loaded with it.
+    pub(super) fn dir_deps(&self, unit: &Unit, kind: &str) -> Vec<String> {
+        if self.transient.lock().unwrap().contains_key(&unit.id) {
+            return Vec::new();
+        }
+        self.load_snapshot(&unit.id).dir_deps(kind)
     }
 
     /// UnitFileState follows the s6 set, which `s6 set enable|disable`
@@ -368,6 +432,7 @@ impl Daemon {
                 eprintln!("initconvertd: set {}: {c}", self.cfg.set_name);
             }
         }
+        self.refresh_runtime_snapshots();
         self.invalidate_caches();
         self.s6.database_changed();
         for id in &restart {

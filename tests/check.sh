@@ -381,6 +381,16 @@ expect_state inst@a.service active/running
 expect_state prep@a.service active/exited
 expect_eq "BindsTo dependency ran first" "$(head -1 "$R/prep.out" 2>/dev/null)" "up a"
 $B call $MGR ListUnits | grep -q '"inst@a.service"' && ok "instance listed" || bad "instance not in ListUnits"
+# Started outside the database: the daemon wrote the unit it loaded for
+# the runner, and a reload loads it again (snapshot.rs, runtime_file).
+grep -q 'Instance %i (like user@)' "$R/run/units/inst@a.service/snapshot" 2>/dev/null \
+    && ok "the daemon wrote the instance's unit for its runner" || bad "no runtime snapshot of inst@a.service"
+sed -i 's/^Description=Instance %i (like user@)$/Description=Instance %i (reloaded)/' "$W/units/inst@.service"
+call Reload
+grep -q 'Instance %i (reloaded)' "$R/run/units/inst@a.service/snapshot" 2>/dev/null \
+    && ok "a reload rewrote it from the unit file" || bad "after a reload: $(grep Description "$R/run/units/inst@a.service/snapshot" 2>&1)"
+sed -i 's/^Description=Instance %i (reloaded)$/Description=Instance %i (like user@)/' "$W/units/inst@.service"
+call Reload
 # s6-svlink -d leaves the instance's logger down unless started too.
 [ $journal = no ] && expect_log inst@a.service "instance a up"
 call StopUnit ss prep@a.service replace
@@ -1124,6 +1134,9 @@ snap_runs() {
 expect_eq "snap.service runs its database's command" "$(snap_runs)" "one"
 sed -i 's/echo one/echo two/' "$W/units/snap.service"
 expect_eq "edited without a reload, the restart runs the database's command" "$(snap_runs)" "one"
+call ResetFailedUnit s snap.service 2>/dev/null
+$B get-property $DEST "$(upath snap.service)" org.freedesktop.systemd1.Service ExecStart | grep -q 'echo one' \
+    && ok "the daemon shows the database's ExecStart= too" || bad "ExecStart: $($B get-property $DEST "$(upath snap.service)" org.freedesktop.systemd1.Service ExecStart)"
 call Reload
 expect_eq "after a reload, the edited command" "$(snap_runs)" "two"
 call StopUnit ss snap.service replace

@@ -12,7 +12,7 @@ use crate::cgroup;
 use crate::conditions;
 use crate::execcmd;
 use crate::install;
-use crate::loader::{Loader, Unit};
+use crate::loader::Unit;
 use crate::state::{self, keys};
 use crate::unit::{parse_timeout_usec, parse_timespan_usec};
 use crate::util;
@@ -389,14 +389,13 @@ impl Daemon {
         // As systemd's: the .wants/, .requires/ and .upholds/ entries too
         // (pipewire.service Wants=wireplumber.service from
         // /etc/systemd/user/pipewire.service.wants/).
-        let ld = crate::loader::Loader::new(&self.cfg);
         for (k, dir) in [
             ("Wants", "wants"),
             ("Requires", "requires"),
             ("Upholds", "upholds"),
         ] {
             let mut v = unit.get_words("Unit", k);
-            for d in ld.dir_deps(unit, dir) {
+            for d in self.dir_deps(unit, dir) {
                 if !v.contains(&d) {
                     v.push(d);
                 }
@@ -1240,8 +1239,7 @@ impl Daemon {
 
     fn scope_iface(&self, id: &str) -> Props {
         let mut p = Props::new();
-        let ld = Loader::new(&self.cfg);
-        let unit = ld.load(id);
+        let (_, unit) = self.load_unit(id);
         p.insert("Controller".into(), s(""));
         p.insert("Result".into(), s("success"));
         p.insert("TimeoutStopUSec".into(), Value::from(90_000_000u64));

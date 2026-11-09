@@ -276,18 +276,8 @@ impl<'a> Units<'a> {
             return Snapshot::take(&ld, ld.load(name));
         };
         let id = self.index.resolve(name).to_string();
-        if let Some(s) = self.find(holder, &id) {
+        if let Some(s) = find_in(self.cfg, holder, &id) {
             return s;
-        }
-        // An instance of a template the database carries (an Accept=yes
-        // connection's echo@N-PID-UID.service): the template's unit under
-        // the instance's name, as the loader would make it.
-        if let Some(t) = crate::loader::template_of(&id) {
-            if let Some(mut s) = self.find(holder, &t).filter(|s| s.unit.is_loaded()) {
-                s.unit.id = id.clone();
-                s.unit.names = vec![id];
-                return s;
-            }
         }
         Snapshot {
             unit: Unit {
@@ -302,26 +292,6 @@ impl<'a> Units<'a> {
             dir_deps: BTreeMap::new(),
             mtimes: BTreeMap::new(),
         }
-    }
-
-    fn find(&self, holder: &Path, id: &str) -> Option<Snapshot> {
-        let comp = crate::util::path_component(id);
-        let live = self.cfg.live_dir.join("servicedirs");
-        [
-            live.join(&*comp).join(SERVICE_FILE),
-            holder.join(holder_file(id)),
-            runtime_file(self.cfg, id),
-        ]
-        .into_iter()
-        .find_map(|p| {
-            let text = std::fs::read_to_string(&p).ok()?;
-            Some(Snapshot::parse(&text).unwrap_or_else(|e| {
-                let mut s = Snapshot::parse(&format!("{MAGIC}\nid\t{}\n", escape(id))).unwrap();
-                s.unit.load_state = LoadState::BadSetting;
-                s.unit.load_error = Some(format!("{}: {e}", p.display()));
-                s
-            }))
-        })
     }
 
     /// The socket units whose Service= names one of `names`: the
@@ -376,6 +346,47 @@ impl<'a> Units<'a> {
             .filter(|s| s.unit.is_loaded() && names_it(s))
             .collect()
     }
+}
+
+/// Unit `id` (canonical) in the live database or the daemon's runtime
+/// files, None when the live database has no holder or doesn't carry it.
+/// The daemon's lookup; the tools go through Units.
+pub fn find_live(cfg: &Config, id: &str) -> Option<Snapshot> {
+    find_in(cfg, &live_holder(cfg)?, id)
+}
+
+fn find_in(cfg: &Config, holder: &Path, id: &str) -> Option<Snapshot> {
+    if let Some(s) = find_file(cfg, holder, id) {
+        return Some(s);
+    }
+    // An instance of a template the database carries (an Accept=yes
+    // connection's echo@N-PID-UID.service): the template's unit under the
+    // instance's name, as the loader would make it.
+    let t = crate::loader::template_of(id)?;
+    let mut s = find_file(cfg, holder, &t).filter(|s| s.unit.is_loaded())?;
+    s.unit.id = id.to_string();
+    s.unit.names = vec![id.to_string()];
+    Some(s)
+}
+
+fn find_file(cfg: &Config, holder: &Path, id: &str) -> Option<Snapshot> {
+    let comp = crate::util::path_component(id);
+    let live = cfg.live_dir.join("servicedirs");
+    [
+        live.join(&*comp).join(SERVICE_FILE),
+        holder.join(holder_file(id)),
+        runtime_file(cfg, id),
+    ]
+    .into_iter()
+    .find_map(|p| {
+        let text = std::fs::read_to_string(&p).ok()?;
+        Some(Snapshot::parse(&text).unwrap_or_else(|e| {
+            let mut s = Snapshot::parse(&format!("{MAGIC}\nid\t{}\n", escape(id))).unwrap();
+            s.unit.load_state = LoadState::BadSetting;
+            s.unit.load_error = Some(format!("{}: {e}", p.display()));
+            s
+        }))
+    })
 }
 
 /// A file's mtime as (seconds, nanoseconds) since the epoch.
