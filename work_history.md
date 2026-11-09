@@ -12495,3 +12495,29 @@ Phases 0 to 5 done. The commits from 25df6d9 on are not pushed.
 ### Next steps
 
 1. The owner: a release.
+
+## 2026-11-09, part 200: 0.3.0 on the owner's Fedora machine (s6 boot)
+
+The owner released 0.3.0 (a7fcfb1: core 0.3.0, the standalone tools 0.2.0), installed the RPMs on their Fedora 45 machine and booted it with s6. The owner sent their own checks' output, then the running system was read here (read-only, no changes).
+
+**From the owner's output:**
+- PID 1 is `s6-svscan`.
+- `initconvert --version`: the core tools are all `0.3.0-1.20261109100753.ga7fcfb1.fc45`; fdstore, journal-relay, linkwatch and notify are installed (standalone).
+- `ausearch -m AVC -ts boot`: no matches.
+- No `systemd` process for the user; `initconvert-user-manager` runs instead, and `/run/uinitconverter-user/1000.running` exists.
+
+**Read here:**
+- `s6 live status`: every system service is up or down; none is in any other state. The down ones (btrfs maintenance, dbus-daemon, cups-browsed, fprintd, ...) are not enabled; the bus is dbus-broker.
+- The user's `s6-svscan /run/user/1000/uinitconverter/scan` supervises the whole GNOME session, each service with its own `s6-log` in `~/.local/state/uinitconverter/log/`: dbus-broker, pipewire, wireplumber, gnome-session, gnome-shell, all gsd-* services, the portals, gvfs, evolution, localsearch, and D-Bus-activated services (Ptyxis, ScreenSaver, ...).
+- Five `initconvert-runner notify-helper` processes have PID 1 as their parent (dbus-broker with `--reload`, gnome-session-monitor, gnome-session-manager@gnome, org.gnome.Shell@user, localsearch-3). That is the design: the helper calls `setsid` and stays for the service's lifetime to relay STATUS=, RELOADING=, FDSTORE= (`runner/notify.rs`).
+- The user logs' error and warning lines since boot (10:32:10) are GNOME's own, not ours: orca.service not found (Orca not installed), USBGuard not activatable, a missing sound file, a wireplumber ALSA device, flatpak refs gone from flathub, and oo7-daemon failing to mlock. oo7's RLIMIT_MEMLOCK is 8 MiB, the same default stock systemd --user gives; the warning wasn't compared on a stock boot.
+
+**Tests:** nothing in the repo changed; no test suite was run.
+
+### Current state
+
+Phases 0 to 5 done. 0.3.0 is released (a7fcfb1) and runs on the owner's machine with the s6 boot and the s6 user manager. The commits from 25df6d9 on are not pushed.
+
+### Next steps
+
+1. The owner: push to GitHub.
