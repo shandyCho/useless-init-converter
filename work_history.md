@@ -12624,7 +12624,7 @@ Not run: `tests/vm-user-setup.sh` (the setup tool's `on` warning goes to stderr,
 
 ### Current state
 
-0.3.0 is released. Not pushed since: f981fb5 (systemd --user default, part 203). This part is committed (not pushed). The s6 user manager is gone from the tree; the core is about 2,800 lines of Rust smaller.
+0.3.0 is released. Pushed up to 4d90c89 (part 203 included). This part is committed as 6676c49 (not pushed). The s6 user manager is gone from the tree; the core is about 2,800 lines of Rust smaller.
 
 ### Next steps
 
