@@ -12523,3 +12523,19 @@ Phases 0 to 5 done. 0.3.0 is released (a7fcfb1) and runs on the owner's machine 
 ### Next steps
 
 1. The owner: push to GitHub.
+
+## 2026-11-09, part 201: 0.3.0 published on GitHub
+
+The owner built the release with `packages/github-release.sh` at 2339857, pushed main and published the release with `gh release create` (guide given here from `docs/PACKAGEBUILD-us.md` §2). Checked from this machine without credentials (`git ls-remote`, the public API, the download URL):
+
+- origin's main is 2339857. The release "uinitconverter 0.3.0" isn't a draft and has 11 assets: SHA256SUMS and 10 RPMs. Core 0.3.0: uinitconverter, uinitconverterd, -gen, -runner, -timers and the noarch uinitconverter-user. Standalone 0.2.0: fdstore, journal-relay, linkwatch and notify. All are `1.2026110910xxxx.g2339857.fc45`. The uploaded SHA256SUMS is identical to `~/uinitconverter-release/assets/SHA256SUMS`.
+- **The tag and the RPMs name different commits.** The tag `v0.3.0` is an annotated tag by the owner on **a7fcfb1** ("Release 0.3.0"). `gh` keeps an existing tag and ignores `--target` (2339857). The RPMs and NOTES.md name g2339857. The two commits differ only in work_history.md (part 200, 28 lines), so the tagged source builds the same programs. Left as it is: moving a published tag would change it for everyone who already fetched it.
+
+### Current state
+
+0.3.0 is released on GitHub (tag v0.3.0 on a7fcfb1, RPMs from 2339857, fc45 x86_64) and runs on the owner's machine with the s6 boot and the s6 user manager. Everything up to 2339857 is pushed.
+
+### Next steps
+
+1. Optional: RPMs for other Fedora releases (`github-release.sh` on each, then `gh release upload v0.3.0`).
+2. For the next release: tag only with `gh release create --target`, or tag the commit the RPMs are built from (HEAD at `github-release.sh` time), so the two match.
