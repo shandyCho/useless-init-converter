@@ -12582,3 +12582,22 @@ Both languages changed together. Docs only; no code or tests changed. Not commit
 
 1. `packages/build-rpms.sh --test` and `tests/vm-s6-boot.sh ~/uinitconverter-vm default` (expects `systemd --user`) and `s6`.
 2. Hardening the default path (systemd --user under s6): more machines and Fedora releases.
+
+## 2026-11-09, part 204: part 203 in the VM (s6 boot)
+
+Test RPMs from 63f03b2 (`packages/build-rpms.sh --test ~/uinitconverter-vm/rpmbuild/core`); the standalone RPMs from ec81b22 (no standalone change since). `uinitconverter`'s RPM lists `uinitconverter-user` under Suggests, not Recommends; `uinitconverter-user`'s description says "opt-in and not recommended".
+
+- `tests/vm-s6-boot.sh ~/uinitconverter-vm default` (every package, no `USER_MANAGER=`): **16/16**. `user@1000`'s main process is `/usr/lib/systemd/systemd --user`, so the new default holds on the s6 boot with `uinitconverter-user` installed. tester's GNOME session up, no AVC denials.
+- `tests/vm-s6-boot.sh ~/uinitconverter-vm s6` (`USER_MANAGER=s6`): **19/19** on the first s6 boot and 19/19 after the reboot from the s6 boot. `user@1000` runs `initconvert-user-manager`, which owns org.freedesktop.systemd1 on tester's bus. No AVC denials.
+- The only failed system unit in both is mcelog.service, known (no MCE in the VM, fails on stock boots too).
+
+Not run: `tests/vm-user-setup.sh` (the setup tool's `on` warning goes to stderr, and that test reads only stdout and the files) and the `vm-user-manager.sh` modes, which set `USER_MANAGER=` themselves.
+
+### Current state
+
+0.3.0 is released. Since then (not pushed): f981fb5 makes `systemd --user` the default on both boots and the s6 user manager opt-in and not recommended; checked in the VM on the s6 boot (this part).
+
+### Next steps
+
+1. The owner: push; on their machine, the update gives `systemd --user` at the next login unless `sudo initconvert-user-setup on`.
+2. Hardening the default path (`systemd --user` under s6): more machines and Fedora releases.
