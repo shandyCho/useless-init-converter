@@ -9,6 +9,7 @@ use std::process::{exit, Command};
 
 mod early;
 mod init;
+mod svc;
 
 const USAGE: &str = "\
 usage: initconvert [--config PATH] COMMAND [ARGS]
@@ -140,6 +141,10 @@ fn main() {
     }
     if args.first().is_some_and(|a| a == "early") {
         early::main(&args[1..]);
+    }
+    // The hand-written s6 services' start (their run is `exec initconvert svc NAME`).
+    if args.first().is_some_and(|a| a == "svc") {
+        svc::main(&args[1..]);
     }
     // --config PATH may come before the command; keep it for the tool.
     let mut i = 0;

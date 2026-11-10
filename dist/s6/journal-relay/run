@@ -1,14 +1,3 @@
-#!/bin/sh
-# Without journald (JOURNAL=no): listen on journald's client sockets in
-# /run/systemd/journal and forward to rsyslog. dbus-broker-launch, the
-# session bus of systemd --user, refuses to start without them.
-# uinitconverter-journal-relay is a separate project; initconvert init --journal=no
-# requires it. If it is missing anyway, report ready and idle so the boot
-# goes on.
-bin=/usr/libexec/uinitconverter/initconvert-journal-relay
-if [ ! -x "$bin" ]; then
-    echo "initconvert-journal-relay is not installed: no journald sockets" >&2
-    echo >&3
-    exec sleep infinity
-fi
-exec "$bin" --ready-fd 3
+#!/usr/bin/execlineb -P
+# The start is initconvert svc journal-relay (crates/uinitconverter/src/svc.rs).
+/usr/libexec/uinitconverter/initconvert svc journal-relay

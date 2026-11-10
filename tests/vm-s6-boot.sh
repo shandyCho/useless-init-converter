@@ -344,8 +344,8 @@ essential)
     [ "$b" != "$l0" ] && ok "the next boot's database is the new one" || bad "the boot database is still the live one"
     # The daemon's line reaches s6's catch-all logger a moment later.
     t=0
-    until logs | grep -q "not applied to the running system" || [ $t -ge 10 ]; do sleep 1; t=$((t + 1)); done
-    logs | grep -q "not applied to the running system" \
+    until logs | grep "not applied to the running system" >/dev/null || [ $t -ge 10 ]; do sleep 1; t=$((t + 1)); done
+    logs | grep "not applied to the running system" >/dev/null \
         && ok "the daemon says why" || bad "no 'not applied to the running system' line"
     timeout 180 systemctl daemon-reload && ok "a reload without it" || bad "the reload without it failed"
     [ "$(live)" = "$(readlink -f /var/lib/uinitconverter/compiled)" ] && ok "applied live again" || bad "live $(live), boot $(readlink -f /var/lib/uinitconverter/compiled)"

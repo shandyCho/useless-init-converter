@@ -52,8 +52,10 @@ add /usr/lib64/libseccomp.so.2 /usr/lib64/libkmod.so.2 /usr/lib64/libzstd.so.1
 add "$(rpm -ql s6 | grep -E '/s6-ftrigrd$' | head -n 1)"
 for m in /usr/lib64/rsyslog/*.so; do add "$m"; done
 mkdir -p "$R/usr/libexec/uinitconverter"
-cp "$TOP/target/debug/initconvert-runner" "$R/usr/libexec/uinitconverter/"
+cp "$TOP/target/debug/initconvert-runner" "$TOP/target/debug/initconvert" "$R/usr/libexec/uinitconverter/"
 add "$TOP/target/debug/initconvert-runner"
+# The run scripts are execline: `initconvert svc NAME` (rule 6).
+add "$TOP/target/debug/initconvert"
 rm -rf "$R${TOP:?}"
 cp /usr/lib/systemd/system/{rsyslog,earlyoom,systemd-udevd,systemd-coredumpd}.service "$R/usr/lib/systemd/system/"
 mkdir -p "$R/usr/lib/udev"

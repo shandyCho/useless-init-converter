@@ -1,9 +1,3 @@
-#!/bin/sh
-# earlyoom replaces systemd-oomd under s6 (same settings file as earlyoom.service).
-[ -r /etc/default/earlyoom ] && . /etc/default/earlyoom
-# Split with quote removal, as systemd does for $EARLYOOM_ARGS: Fedora's
-# default has quoted regexes with spaces ('^(Web Content|Isolated Web Co)$').
-eval "set -- ${EARLYOOM_ARGS:-}"
-# earlyoom.service's user, capabilities, sandbox, Nice= and OOMScoreAdjust=. If
-# they can't be applied it doesn't start, and s6 tries again.
-exec /usr/libexec/uinitconverter/initconvert-runner confine earlyoom.service -- /usr/bin/earlyoom "$@"
+#!/usr/bin/execlineb -P
+# The start is initconvert svc earlyoom (crates/uinitconverter/src/svc.rs).
+/usr/libexec/uinitconverter/initconvert svc earlyoom

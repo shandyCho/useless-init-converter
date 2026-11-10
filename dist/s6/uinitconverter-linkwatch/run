@@ -1,11 +1,3 @@
-#!/bin/sh
-# Unblocks s6-rc-update (daemon-reload) and s6-svlink when they wait for a
-# new supervisor's start event that came before they listened (an s6 race:
-# the wait has no end and holds s6-rc's lock). initconvert-linkwatch is a
-# separate, optional project: without it, idle.
-bin=/usr/libexec/uinitconverter/initconvert-linkwatch
-if [ ! -x "$bin" ]; then
-    echo "initconvert-linkwatch is not installed" >&2
-    exec sleep infinity
-fi
-exec "$bin"
+#!/usr/bin/execlineb -P
+# The start is initconvert svc linkwatch (crates/uinitconverter/src/svc.rs).
+/usr/libexec/uinitconverter/initconvert svc linkwatch

@@ -24,6 +24,12 @@ Details in `work_history.md`, parts 203-205.
   `systemctl` uses the `Manager` methods `…Unit`, which stay).
 
 ### Changed
+- **The hand-written s6 services start through Rust (rule 6):** each `run`
+  in `/etc/uinitconverter/s6` (dbus, syslog, udevd, earlyoom, journal-relay,
+  the fd store, linkwatch, initconvertd) is one line of execline;
+  `initconvert svc NAME` does what the shell did (the bus choice and the
+  dbus-broker fallback, the syslog choice, udevd's sandbox fallback,
+  earlyoom's arguments) and execs the program.
 - **systemd-journald is off by default (rule 2; reverses key decision 5):**
   `JOURNAL=no` is the new default: rsyslog (or syslog-ng, now required) and
   one s6-log directory per service under `/var/log/uinitconverter`;

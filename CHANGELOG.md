@@ -21,6 +21,10 @@
   이 이름을 가진 파일이 없습니다. `systemctl`은 그대로 남는 `Manager`의 `…Unit` 메서드를 씁니다).
 
 ### 변경
+- **직접 작성한 s6 서비스를 Rust로 시작합니다(규칙 6):** `/etc/uinitconverter/s6`의 각 `run`(dbus,
+  syslog, udevd, earlyoom, journal-relay, fd 저장소, linkwatch, initconvertd)은 execline 한 줄입니다.
+  셸이 하던 일(버스 선택과 dbus-broker 대체, syslog 선택, udevd 샌드박스 대체, earlyoom 인자)은
+  `initconvert svc NAME`이 하고 프로그램을 exec합니다.
 - **systemd-journald가 기본으로 꺼집니다(규칙 2, 핵심 결정 5를 뒤집음):** 새 기본값은 `JOURNAL=no`로,
   rsyslog(또는 syslog-ng, 이제 필수)와 `/var/log/uinitconverter` 아래 서비스별 s6-log 디렉터리를 씁니다.
   이때 `journalctl -u`와 `systemctl status`의 로그 줄은 비어 있습니다(`initconvert init --journal=yes`이면
