@@ -230,25 +230,6 @@ impl<'a> Loader<'a> {
         unit
     }
 
-    /// As `load`, but a slice or scope without a unit file still gets its
-    /// drop-ins (slice.d/, app-.scope.d/, ...), as systemd loads implicit
-    /// slices (-.slice, app-gnome\x2dsession\x2dmanager.slice) and
-    /// transient scopes. Their load state stays NotFound.
-    pub fn load_implicit(&self, name: &str) -> Unit {
-        let mut unit = self.load(name);
-        if unit.load_state == LoadState::NotFound
-            && (name.ends_with(".slice") || name.ends_with(".scope"))
-        {
-            unit.dropins = self.dropins_for(&unit);
-            for d in unit.dropins.clone() {
-                if let Err(e) = unit.file.parse_file(&d) {
-                    eprintln!("uinitconverter: {}: {e}", d.display());
-                }
-            }
-        }
-        unit
-    }
-
     fn dropins_for(&self, unit: &Unit) -> Vec<PathBuf> {
         let mut dirs: Vec<String> = Vec::new();
         let ty = unit_type(&unit.id);

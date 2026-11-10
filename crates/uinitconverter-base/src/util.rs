@@ -204,14 +204,6 @@ unsafe fn passwd_to_info(pw: *mut libc::passwd) -> Option<UserInfo> {
     })
 }
 
-pub fn group_name(gid: u32) -> Option<String> {
-    unsafe {
-        let gr = libc::getgrgid(gid);
-        (!gr.is_null() && !(*gr).gr_name.is_null())
-            .then(|| CStr::from_ptr((*gr).gr_name).to_string_lossy().into_owned())
-    }
-}
-
 pub fn lookup_group(name: &str) -> Option<u32> {
     if let Ok(gid) = name.parse::<u32>() {
         return Some(gid);

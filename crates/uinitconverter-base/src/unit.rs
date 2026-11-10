@@ -103,10 +103,6 @@ impl UnitFile {
         self.get(section, key).and_then(parse_bool)
     }
 
-    pub fn has_section(&self, section: &str) -> bool {
-        self.entries.iter().any(|(s, _, _)| s == section)
-    }
-
     pub fn keys_in(&self, section: &str) -> Vec<&str> {
         let mut keys: Vec<&str> = self
             .entries

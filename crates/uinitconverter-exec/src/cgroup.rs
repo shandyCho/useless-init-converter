@@ -57,13 +57,6 @@ pub fn slice_of(unit: &Unit) -> String {
         .unwrap_or_else(|| "system.slice".into())
 }
 
-/// Relative cgroup path as systemd reports it in ControlGroup (leading '/').
-pub fn unit_cgroup_rel(unit_id: &str, slice: &str) -> String {
-    let base = base();
-    let rel = base.strip_prefix(CGROUP_ROOT).unwrap_or(Path::new(""));
-    format!("/{}", rel.join(slice_path(slice)).join(unit_id).display())
-}
-
 pub fn unit_cgroup_dir(unit_id: &str, slice: &str) -> PathBuf {
     slice_dir(slice).join(&*crate::util::path_component(unit_id))
 }

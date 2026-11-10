@@ -360,13 +360,6 @@ pub fn mark_requested(run_dir: &Path, name: &str) -> std::io::Result<()> {
     fs::write(p, "")
 }
 
-pub fn unmark_requested(run_dir: &Path, name: &str) -> std::io::Result<()> {
-    match fs::remove_file(requested_marker(run_dir, name)) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
-    }
-}
-
 pub fn is_requested(run_dir: &Path, name: &str) -> bool {
     requested_marker(run_dir, name).exists()
 }
