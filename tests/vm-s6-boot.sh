@@ -322,12 +322,18 @@ current)
     ;;
 essential)
     echo "== a reload that would restart the essential services"
-    m=/etc/uinitconverter/s6/uinitconverter-sysinit/contents.d/syslog
-    s6-svstat /run/service/syslog 2>/dev/null | grep -q '^up' && echo "   syslog is up; the check needs it down"
-    d0=$(pgrep -x initconvertd); b0=$(s6-svstat -p /run/service/dbus); l0=$(live); t0=$(date +%s)
+    # A new s6 service (in /etc/s6/sources, EXTRA_SOURCE) put into the
+    # bundle: dbus and initconvertd would gain a dependency on a service
+    # that wasn't up.
+    m=/etc/uinitconverter/s6/uinitconverter-sysinit/contents.d/vmtest-down
+    v=/etc/s6/sources/vmtest-down
+    mkdir -p "$v"
+    echo oneshot >"$v/type"
+    echo true >"$v/up"
+    d0=$(pgrep -x initconvertd); b0=$(s6-svstat -p /run/service/dbus); l0=$(live)
     touch "$m"
     timeout 180 systemctl daemon-reload; r=$?
-    rm -f "$m"
+    rm -f "$m"; rm -rf "$v"
     [ "$r" = 0 ] && ok "daemon-reload returned" || bad "daemon-reload: exit $r"
     [ "$(pgrep -x initconvertd)" = "$d0" ] && ok "initconvertd kept running (PID $d0)" || bad "initconvertd: $d0 -> $(pgrep -x initconvertd)"
     [ "$(s6-svstat -p /run/service/dbus)" = "$b0" ] && ok "dbus kept running" || bad "dbus: $b0 -> $(s6-svstat -p /run/service/dbus)"
@@ -336,7 +342,10 @@ essential)
     [ "$(live)" = "$l0" ] && ok "the live database stayed" || bad "the live database changed: $(live)"
     b=$(readlink -f /var/lib/uinitconverter/compiled)
     [ "$b" != "$l0" ] && ok "the next boot's database is the new one" || bad "the boot database is still the live one"
-    timeout 30 sh -c "$(declare -f logs); logs" | grep -q "not applied to the running system" \
+    # The daemon's line reaches s6's catch-all logger a moment later.
+    t=0
+    until logs | grep -q "not applied to the running system" || [ $t -ge 10 ]; do sleep 1; t=$((t + 1)); done
+    logs | grep -q "not applied to the running system" \
         && ok "the daemon says why" || bad "no 'not applied to the running system' line"
     timeout 180 systemctl daemon-reload && ok "a reload without it" || bad "the reload without it failed"
     [ "$(live)" = "$(readlink -f /var/lib/uinitconverter/compiled)" ] && ok "applied live again" || bad "live $(live), boot $(readlink -f /var/lib/uinitconverter/compiled)"
