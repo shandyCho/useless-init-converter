@@ -156,6 +156,12 @@ f=$(as systemctl --user list-units --failed --no-legend 2>&1)
 [ -z "$f" ] && ok "no failed user units" || bad "failed user units: $f"
 echo "-- failed system units:"
 systemctl --failed --no-legend --no-pager 2>&1 | sed 's/^/   /'
+# The s6 oneshots in place of systemd-user-sessions, -vconsole-setup and
+# -backlight (rule 2): logins open, and the early steps said nothing.
+[ ! -e /run/nologin ] && ok "no /run/nologin (user-sessions)" || bad "/run/nologin is there"
+s6-rc -a list | grep -qx user-sessions && ok "user-sessions is up" || bad "user-sessions isn't up"
+w=$({ journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current 2>/dev/null; } | grep "uinitconverter early:" | sort -u)
+[ -z "$w" ] && ok "no early-boot warnings" || bad "early-boot warnings: $(echo "$w" | head -5 | tr '\n' ' ')"
 n=$(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep -c denied)
 [ "$n" = 0 ] && ok "no AVC denials" || bad "$n AVC denials"
 ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep denied | sed -E 's/.*avc: +//' | sort | uniq -c | sort -rn | head -15 | cut -c1-200 | sed 's/^/   /'

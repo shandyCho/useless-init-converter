@@ -284,7 +284,8 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - Units wanted by devices (udev's `SYSTEMD_WANTS`, e.g. `bluetooth.target` for a
   Bluetooth adapter, `sound.target`, `bolt.service`) start when the device
   appears, from udevd's events and, at startup, from udev's database. Excluded
-  units among them (`systemd-backlight@`, `systemd-rfkill`) are skipped.
+  units among them (`systemd-backlight@`, `systemd-rfkill`,
+  `systemd-vconsole-setup`) are skipped.
 
 ## Not implemented (yet)
 
@@ -491,6 +492,10 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 | Network / DNS / time | NetworkManager, systemd-resolved (`--resolved=no`: NetworkManager alone), chrony |
 | OOM handling | earlyoom instead of systemd-oomd |
 | Radio state (rfkill) | util-linux `rfkill` from an s6 oneshot instead of systemd-rfkill |
+| Console keymap and font | kbd's `loadkeys`/`setfont` from the `vconsole` s6 oneshot instead of systemd-vconsole-setup |
+| Brightness across boots | the `backlight` s6 oneshot instead of systemd-backlight@ |
+| Login gate (`/run/nologin`) | the `user-sessions` s6 oneshot instead of systemd-user-sessions |
+| Machine ID | dbus's `dbus-uuidgen` instead of systemd-machine-id-setup |
 | Compressed swap (zram) | Fedora's zram-generator, run by the s6 oneshot `zram` instead of as a systemd generator (same `zram-generator.conf`, size and priority) |
 | Devices | systemd-udevd as a plain service |
 | Login, user manager | systemd-logind and `systemd --user`, as supervised services |
@@ -728,7 +733,7 @@ and defaults). The most important keys:
 - `ALLOW_UIDS`: non-root users allowed to manage units.
 - `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: removed with [the s6 user manager](#the-s6-user-manager-removed); still accepted and ignored.
 - `UDEV_DIR`, `UDEV_MONITOR`: where udev's database is (`/run/udev`; empty turns device-wanted units off) and whether to follow udevd's events.
-- `INCLUDE`: by default lets through the systemd services that work under uinitconverter: logind, user-sessions, hostnamed, localed, timedated, resolved (DNS), vconsole-setup (console keymap and font), backlight (screen/keyboard brightness kept across boots) and the sleep services. The radio state (rfkill) is kept by the `rfkill` s6 oneshot instead of systemd-rfkill: util-linux `rfkill` restores each device's soft block at boot and the state is saved at shutdown, in systemd-rfkill's own files (`/var/lib/systemd/rfkill/ID_PATH:TYPE`), so the systemd boot entry shares it. Unlike systemd-rfkill it saves only at a clean shutdown, and a device that appears after the boot's udev settle keeps its state.
+- `INCLUDE`: by default lets through the systemd services that work under uinitconverter: logind, hostnamed, localed, timedated, resolved (DNS) and the sleep services. Replaced by s6 oneshots (rule 2): the console keymap and font (`vconsole`: kbd's `loadkeys` and `setfont` with `/etc/vconsole.conf`, in place of systemd-vconsole-setup), the screen and keyboard brightness kept across boots (`backlight`, in systemd-backlight's own files `/var/lib/systemd/backlight`), and unprivileged logins allowed once the system is up (`user-sessions` removes `/run/nologin` and writes it again at shutdown, in place of systemd-user-sessions); `/etc/machine-id` is created by dbus's `dbus-uuidgen` when it's missing. The early-boot steps are `initconvert`'s own (`/usr/libexec/uinitconverter/early STEP` links to it). The radio state (rfkill) is kept by the `rfkill` s6 oneshot instead of systemd-rfkill: util-linux `rfkill` restores each device's soft block at boot and the state is saved at shutdown, in systemd-rfkill's own files (`/var/lib/systemd/rfkill/ID_PATH:TYPE`), so the systemd boot entry shares it. Unlike systemd-rfkill it saves only at a clean shutdown, and a device that appears after the boot's udev settle keeps its state.
 
 ## Source layout
 

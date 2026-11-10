@@ -299,7 +299,6 @@ impl Config {
             // the user manager (user@.service) make GNOME and other desktops work.
             include: [
                 "systemd-logind.service",
-                "systemd-user-sessions.service",
                 "systemd-hostnamed.service",
                 "systemd-localed.service",
                 "systemd-timedated.service",
@@ -313,13 +312,10 @@ impl Config {
                 "systemd-resolved.service",
                 "systemd-resolved-varlink.socket",
                 "systemd-resolved-monitor.socket",
-                // udev restarts it for each new console (vtcon); the boot run
-                // is the vconsole s6 oneshot, since initconvertd isn't up yet.
-                "systemd-vconsole-setup.service",
-                // Wanted by udev for each backlight device: restore the
-                // brightness at boot, save it at stop. (The radio state is
-                // the rfkill s6 oneshot's, in systemd-rfkill's files.)
-                "systemd-backlight@*.service",
+                // systemd-vconsole-setup, systemd-backlight@ and
+                // systemd-user-sessions are replaced by the s6 oneshots
+                // vconsole (kbd), backlight and user-sessions (rule 2,
+                // work_history part 220).
             ]
             .iter()
             .map(|s| s.to_string())
@@ -337,6 +333,8 @@ impl Config {
                 ("systemd-tmpfiles-setup.service", "tmpfiles-setup"),
                 ("systemd-sysusers.service", "sysusers"),
                 ("systemd-remount-fs.service", "mount-fs"),
+                ("systemd-user-sessions.service", "user-sessions"),
+                ("systemd-vconsole-setup.service", "vconsole"),
             ]
             .iter()
             .map(|(a, b)| (a.to_string(), b.to_string()))

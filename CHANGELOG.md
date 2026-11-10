@@ -21,6 +21,14 @@
   이 이름을 가진 파일이 없습니다. `systemctl`은 그대로 남는 `Manager`의 `…Unit` 메서드를 씁니다).
 
 ### 변경
+- **systemd 프로그램을 더 대체했습니다(규칙 2):** systemd-vconsole-setup은 kbd의 `loadkeys`/`setfont`
+  (`vconsole` s6 oneshot)로, systemd-backlight@는 `backlight` s6 oneshot(같은 파일
+  `/var/lib/systemd/backlight`)으로, systemd-user-sessions는 `user-sessions` s6 oneshot
+  (`/run/nologin`)으로, systemd-machine-id-setup은 dbus의 `dbus-uuidgen`으로 바꿨습니다. 세 유닛은 기본
+  `INCLUDE`에서 빠졌고, `systemd-user-sessions.service`와 `systemd-vconsole-setup.service`는 s6 서비스로
+  연결됩니다(`DEP_MAP`).
+- 초기 부팅 단계(`/usr/libexec/uinitconverter/early`)를 셸 스크립트 대신 `initconvert`의 일부(그 링크)로
+  옮겼습니다(규칙 6).
 - **서비스는 자기 데이터베이스의 유닛을 실행합니다.** gen이 만드는 s6-rc 데이터베이스에 각 유닛을 쓰고
   (longrun은 `data/unit`, 나머지와 인덱스는 실행되지 않는 `uinitconverter-units` 서비스), 러너와 타이머가
   거기서 읽습니다. systemd가 `daemon-reload` 전까지 읽어 둔 유닛을 실행하는 것과 같아서,

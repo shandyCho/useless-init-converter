@@ -24,6 +24,15 @@ Details in `work_history.md`, parts 203-205.
   `systemctl` uses the `Manager` methods `…Unit`, which stay).
 
 ### Changed
+- **More systemd programs replaced (rule 2):** systemd-vconsole-setup by
+  kbd's `loadkeys`/`setfont` (the `vconsole` s6 oneshot), systemd-backlight@
+  by the `backlight` s6 oneshot (same files in `/var/lib/systemd/backlight`),
+  systemd-user-sessions by the `user-sessions` s6 oneshot (`/run/nologin`),
+  systemd-machine-id-setup by dbus's `dbus-uuidgen`. The three units left
+  the default `INCLUDE`; `systemd-user-sessions.service` and
+  `systemd-vconsole-setup.service` map to the s6 services (`DEP_MAP`).
+- The early-boot steps (`/usr/libexec/uinitconverter/early`) are part of
+  `initconvert` (a link to it) instead of a shell script (rule 6).
 - **Services run the units of their database.** gen writes each unit into
   the s6-rc database it generates (a longrun's `data/unit`, the others and
   the index in the never-started `uinitconverter-units` service), and the

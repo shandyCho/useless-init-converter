@@ -7,6 +7,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{exit, Command};
 
+mod early;
 mod init;
 
 const USAGE: &str = "\
@@ -128,6 +129,18 @@ fn version() -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The early-boot steps of the s6 services (`up`/`down` run
+    // /usr/libexec/uinitconverter/early STEP, a link to this program).
+    let argv0 = std::env::args().next().unwrap_or_default();
+    if std::path::Path::new(&argv0)
+        .file_name()
+        .is_some_and(|n| n == "early")
+    {
+        early::main(&args);
+    }
+    if args.first().is_some_and(|a| a == "early") {
+        early::main(&args[1..]);
+    }
     // --config PATH may come before the command; keep it for the tool.
     let mut i = 0;
     while args.get(i).map(|a| a == "--config").unwrap_or(false) {

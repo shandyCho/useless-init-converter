@@ -24,6 +24,8 @@ Requires:       s6-rc
 Requires:       execline
 Requires:       dbus-daemon
 Requires:       util-linux
+# dbus-uuidgen: /etc/machine-id when it is missing (early mount-api).
+Requires:       dbus-tools
 # initconvert init: SELinux file labels and the boot entry.
 Requires:       policycoreutils-python-utils
 Requires:       grubby
@@ -37,6 +39,8 @@ Requires(postun): policycoreutils
 # JOURNAL=no: the syslog daemon of the s6 boot (SYSLOG=, initconvert init --syslog=).
 Recommends:     (rsyslog or syslog-ng)
 Recommends:     earlyoom
+# The console keymap and font (early vconsole).
+Recommends:     kbd
 # The s6 command; initconvert init writes /etc/s6.conf for it.
 Recommends:     s6-frontend
 # The s6 initramfs (initconvert init --boot-only-s6=yes) loads drivers with it.
@@ -83,7 +87,8 @@ cargo test --release --offline -p uinitconverter -p uinitconverter-version
 
 %install
 install -Dm0755 target/release/initconvert %{buildroot}%{_libexecdir}/uinitconverter/initconvert
-install -Dm0755 dist/early %{buildroot}%{_libexecdir}/uinitconverter/early
+# The s6 services' early-boot steps are initconvert's (argv0 "early").
+ln -s initconvert %{buildroot}%{_libexecdir}/uinitconverter/early
 install -Dm0755 dist/initramfs/mkinitramfs %{buildroot}%{_libexecdir}/uinitconverter/mkinitramfs
 install -d %{buildroot}%{_bindir}
 ln -s ../libexec/uinitconverter/initconvert %{buildroot}%{_bindir}/initconvert
