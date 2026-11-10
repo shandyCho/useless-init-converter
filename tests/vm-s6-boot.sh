@@ -25,8 +25,9 @@
 # OLD_RPMS (upgrade): 0.3.0's core RPMs, uinitconverter-user among them;
 # default DIR/rpmbuild/core-0.3.0.
 # SELINUX=permissive|enforcing (default enforcing) is init's --selinux=.
-# BOOT_ONLY_S6=yes: init's --boot-only-s6=yes (uinitconverter's own initramfs,
-# with mdevd; no systemd at all); the checks add that the entry boots it.
+# BOOT_ONLY_S6=yes|no|auto (default auto, init's default): init's
+# --boot-only-s6= (uinitconverter's own initramfs, with mdevd; no systemd at
+# all). When init chose it, the checks add that the entry boots it.
 # The overlay is fresh; dnf fetches the dependencies (network). DIR keeps
 # s6boot-MODE.png and s6boot-MODE-serial.log. VM_KEEP=yes keeps the VM up.
 set -euo pipefail
@@ -42,7 +43,7 @@ OLD=${OLD_RPMS:-$D/rpmbuild/core-0.3.0}
 STANDALONE=${STANDALONE_RPMS:-$D/rpmbuild/standalone/rpms}
 SKARNET=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/rpms}
 SELINUX=${SELINUX:-enforcing}
-BOOT_ONLY_S6=${BOOT_ONLY_S6:-no}
+BOOT_ONLY_S6=${BOOT_ONLY_S6:-auto}
 S=$(mktemp -d)
 if [ "${VM_KEEP:-no}" = yes ]; then
     trap 'cp "$D/serial.log" "$D/s6boot-$MODE-serial.log" 2>/dev/null; rm -rf "$S"' EXIT
@@ -96,14 +97,14 @@ fi
 if [ "$1" = upgrade ]; then
     initconvert-user-setup on
 fi
-initconvert init --yes --default-s6 --selinux="$2" --boot-only-s6="${3:-no}"
+initconvert init --yes --default-s6 --selinux="$2" --boot-only-s6="${3:-auto}"
 grubby --default-title
 EOS
 
 cat >"$S/check.sh" <<'EOS'
 #!/bin/bash
 # As root in the VM, on the s6 boot. $1: the mode (unused), $2: a label, $3:
-# yes for --boot-only-s6=yes.
+# init's --boot-only-s6= (the initramfs checks run when init chose it).
 set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
@@ -119,7 +120,8 @@ echo "== $2"
 c=$(cat /proc/1/comm)
 [ "$c" = s6-svscan ] && ok "PID 1 is s6-svscan" || bad "PID 1 is $c"
 echo "   kernel: $(uname -r); cmdline: $(cat /proc/cmdline)"
-if [ "${3:-no}" = yes ]; then
+if [ -e /etc/uinitconverter/boot-only-s6 ]; then
+    ok "init chose the s6 initramfs (--boot-only-s6=${3:-auto})"
     i=$(grubby --info=DEFAULT 2>/dev/null | sed -n 's/^initrd="\(.*\)"/\1/p')
     case $i in *-s6.img) ok "the entry boots uinitconverter's initramfs ($i)" ;; *) bad "the entry's initrd: ${i:-none}" ;; esac
     [ -s "/boot/initramfs-$(uname -r)-s6.img" ] && ok "the image for this kernel exists" || bad "no /boot/initramfs-$(uname -r)-s6.img"
