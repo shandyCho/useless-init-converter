@@ -20,8 +20,10 @@ if they turned out to be wrong.
   1. use s6 and its ecosystem's features first; 2. a systemd feature another
   package can replace is replaced by it; 3. only what nothing but systemd
   can do is done by systemd; 4. s6 is PID 1; 5. follow the Unix philosophy
-  (small tools doing one thing each, composed). Check every change against
-  them.
+  (small tools doing one thing each, composed); 6. shell code that Rust can
+  replace is replaced by Rust (what s6 expects as a script, such as a
+  service's run/up/down, stays one: rule 1 comes first). Check every change
+  against them.
 - Scope (the owner's decision, work_history part 205): uinitconverter
   implements only what the real systemd programs that still run need from
   PID 1 (logind, `systemd --user`, journald) and what it takes to run

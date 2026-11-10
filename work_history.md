@@ -76,6 +76,10 @@ starting work; append a new session entry when you finish.
    4. s6 is PID 1.
    5. Follow the Unix philosophy: small tools that each do one thing,
       composed; plain text between them.
+   6. Shell code that Rust can replace is replaced by Rust (added
+      2026-11-11, part 219: the owner chose shell → Rust, not the reverse).
+      The rules apply in order, so what s6 itself expects as a script (a
+      service's run/up/down, rule 1) stays one.
    Key decision 8 (scope) applies these: uinitconverter itself only
    bridges what rules 1-3 leave over.
 
@@ -12921,3 +12925,27 @@ The owner stated the rules: "1. use s6 and their ecosystem's feature at first. 2
 
 1. Owner: push (parts 205-218).
 2. Check the remaining systemd pieces against rule 2: for each systemd program still run (journald, udevd, logind, resolved, coredump, `systemd --user`, the generators), whether another package could replace it, as earlyoom did for oomd. Measure before proposing.
+
+## 2026-11-11, part 219: rule 6; the rule 2 check of the systemd pieces still run
+
+**Rule 6** (owner): "if shell code is replaceable rust code, replace that"; asked which direction, the owner chose shell → Rust. Added to key decision 9, CLAUDE.md and "Scope" in the docs/etc pair, with the note that the rules apply in order (what s6 expects as a script stays one).
+
+**Rule 2 check.** What the s6 boot still runs from systemd (the default INCLUDE list, `dist/s6`, `dist/early`), against what Fedora 45's repos offer (`dnf repoquery` in the VM) and who calls each D-Bus service (strings in the VM's `/usr`):
+
+| systemd piece | Replacement in Fedora 45 | Finding |
+|---|---|---|
+| udevd, udevadm | eudev, mdevd not in the repos (mdevd only from our skarnet RPMs, no udev database); 1,187 installed ELF files link libudev | keep (rule 3) |
+| logind | elogind, ConsoleKit2 not in the repos; seatd is, but gdm, GNOME and polkit (50 binaries) use `org.freedesktop.login1` | keep |
+| `systemd --user` | none; GNOME's session runs through it | keep |
+| hostnamed, localed, timedated | none; gnome-control-center, gsd-*, GTK, flatpak, gnome-initial-setup call them | keep |
+| systemd-tmpfiles, systemd-sysusers | opentmpfiles, opensysusers not in the repos | keep (tools, not PID 1) |
+| systemd-suspend & co. | pm-utils not in the repos | keep |
+| journald | rsyslog, syslog-ng (`JOURNAL=no` exists) | replaceable; default kept so far for `journalctl -u`, status logs, coredumpctl (key decision 5) |
+| resolved | NetworkManager alone; dnsmasq, unbound, openresolv (`RESOLVED=no` exists) | replaceable; on by default |
+| systemd-coredump | abrt, abrt-addon-ccpp | replaceable |
+| systemd-vconsole-setup | kbd's `setfont`/`loadkeys` (installed) | replaceable |
+| systemd-backlight@ | brightnessctl, light | replaceable |
+| systemd-user-sessions | removes `/run/nologin`: an s6 oneshot (rule 1) | replaceable |
+| systemd-machine-id-setup | `dbus-uuidgen --ensure=/etc/machine-id` (dbus) | replaceable |
+
+Already replaced before: systemd-oomd (earlyoom), systemd-rfkill (util-linux `rfkill`), zram via zram-generator run by an s6 oneshot, fstab/remount/modules-load/sysctl/hostname by `dist/early` with util-linux/kmod/procps. Owner to choose which of the replaceable ones to replace.

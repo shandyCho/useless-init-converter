@@ -36,6 +36,8 @@ The project's rules, in this order:
    `systemd --user`, journald, udevd, run as s6 services).
 4. s6 is PID 1.
 5. Follow the Unix philosophy: small tools that each do one thing, composed.
+6. Shell code that Rust can replace is replaced by Rust (what s6 itself
+   expects as a script, such as a service's `run`, stays one).
 
 uinitconverter is a bridge from systemd units to s6, not a second systemd.
 It implements only:
