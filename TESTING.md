@@ -262,7 +262,10 @@ RPM을 설치하고(`CORE_RPMS=`, `STANDALONE_RPMS=`, `SKARNET_RPMS=`) `initconv
 dnf가 받습니다), `initconvert init --yes --default-s6 --selinux=enforcing`(`SELINUX=permissive`로 바꿀 수 있음)을
 실행한 뒤 재부팅합니다. s6 부팅에서 PID 1, initconvertd, SELinux 모드, 러너가 tester의 `user@`에 시작한 것,
 tester의 자동 로그인 세션(자기 유닛 안의 gnome-shell, 세션 타깃, pipewire, 실패한 사용자 유닛 없음), AVC 거부를
-확인하고, 실패한 시스템 유닛을 보여 줍니다. `BOOT_ONLY_S6=yes`는 init에 `--boot-only-s6=yes`를 더하고
+확인하고, 실패한 시스템 유닛을 보여 줍니다. `BUS=broker`와 `SYSLOG=syslog-ng`는 init에 `--bus=`와
+`--syslog=`를 넘기고(syslog-ng는 이때 설치), s6의 `dbus`와 `syslog` 서비스가 실행하는 프로그램, D-Bus 활성화
+(hostnamed), `/dev/log`를 통한 메시지 전달을 더 확인합니다(기본 부팅에도 있는 syslog-ng의 `execmem` 거부는
+보여 주기만 하고 세지 않습니다). `BOOT_ONLY_S6=yes`는 init에 `--boot-only-s6=yes`를 더하고
 (uinitconverter의 자체 initramfs, mdevd 포함), 항목이 그것으로 부팅하는지, initramfs에서 systemd가 실행되지
 않았는지, 루트와 `/var` 마운트(VM에서는 btrfs 서브볼륨)를 확인합니다. `user@1000`은 `systemd --user`를
 실행하고, 그것이 tester의 버스에서 `org.freedesktop.systemd1`을 가지고 있어야 합니다. 모드:

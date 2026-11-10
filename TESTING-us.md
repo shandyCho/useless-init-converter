@@ -299,7 +299,7 @@ to change it) and a reboot. On the s6 boot it checks PID 1, initconvertd,
 the SELinux mode, what the runner started for tester's `user@`, tester's
 autologin session (gnome-shell in its unit, the session targets, pipewire,
 no failed user units) and AVC denials, and prints the failed system units.
-`BOOT_ONLY_S6=yes` adds `--boot-only-s6=yes` to init (uinitconverter's own
+`BUS=broker` and `SYSLOG=syslog-ng` pass `--bus=` and `--syslog=` to init (syslog-ng is installed for it); the checks add which program the s6 `dbus` and `syslog` services run, a D-Bus activation (hostnamed) and a message through `/dev/log` (syslog-ng's `execmem` denial, which the stock boot has too, is listed and not counted). `BOOT_ONLY_S6=yes` adds `--boot-only-s6=yes` to init (uinitconverter's own
 initramfs, with mdevd) and checks that the entry boots it, that no systemd
 ran in the initramfs, and the root and `/var` mounts (the VM's are btrfs
 subvolumes). `user@1000` must run `systemd --user`, owning

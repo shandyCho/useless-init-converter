@@ -13006,3 +13006,16 @@ Not pushed: parts 205-222. The product's shell is gone: what s6 runs are execlin
 1. Owner: push.
 2. Not covered by the VM tests: `--bus=broker` (`svc listen-exec` for dbus-broker), `SYSLOG=syslog-ng`, a real laptop's backlight and keymap.
 3. A release (0.4.0): CHANGELOG "Unreleased" lists the behaviour changes (JOURNAL/RESOLVED/boot-only-s6 defaults).
+
+## 2026-11-11, part 223: dbus-broker and syslog-ng checked in the VM
+
+The owner asked to test what part 222 left unchecked. `tests/vm-s6-boot.sh` got `BUS=` and `SYSLOG=` (init's `--bus=`/`--syslog=`, syslog-ng installed for it) and checks for both: the program the s6 `dbus` and `syslog` services run (`/proc/PID/exe`), a D-Bus activation (hostnamed), the other syslog daemon not running, a `logger` message through `/dev/log` in `/var/log/messages`.
+
+- First run (`BUS=broker SYSLOG=syslog-ng`): GNOME, the activation and `/dev/log` worked on both boots. Two test mistakes (busctl's `Comm=` is `dbus-broker-lau`, the launcher cut to 15 bytes; syslog-ng's process is `syslog-ng-main`, so `pgrep -x` missed it) and two SELinux denials from `syslogd_t`: `watch` on `/etc/uinitconverter` (etc_t; syslog-ng watches its configuration file's directory) — **ours, allowed** in the module (2be563e); `execmem` — **not ours**: the stock systemd boot with Fedora's syslog-ng has it too (checked: two denials there), so the check lists it as known and doesn't count it.
+- Second run, 2be563e's RPMs: `BUS=broker SYSLOG=syslog-ng` 33/33 on both boots (dbus-broker-launch supervised, hostnamed activated through dbus-broker, syslog-ng the s6 syslog service, /dev/log to /var/log/messages); `BUS=daemon SYSLOG=rsyslog` (the defaults) 33/33 on both boots.
+
+### Next steps
+
+1. Owner: push (parts 205-223).
+2. Untested on real hardware: a laptop's backlight and keymap.
+3. A release (0.4.0).
