@@ -12977,3 +12977,32 @@ Steps, in order; each: implement, `cargo test`, sandbox, the VM where the boot i
 6. **Rule 5 — sweep.** Code left without a caller by steps 1-5 (the part 217 method), the docs pair, a final report.
 
 Kept as they are, with the reason: build and test scripts (`packages/*.sh`, `standalone/*/build-rpm.sh`, `dist/rpm/build-skarnet-rpms.sh`, `tests/*.sh`) — tooling around rpmbuild and QEMU, not the product; rule 6 is applied to the product. Rule 3 pieces: udevd, logind, `systemd --user`, hostnamed/localed/timedated, systemd-tmpfiles/sysusers, the sleep services, systemd-coredump.
+
+## 2026-11-11, part 222: the rework under the six rules (part 221's plan), done
+
+Rule 6 added by the owner during part 219 ("if shell code is replaceable rust code, replace that": asked, shell → Rust). The plan's steps, each committed:
+
+1. **86bfbd0 — the s6 services' run scripts.** Each `run` in `dist/s6` is one line of execline; `initconvert svc NAME` (`svc.rs`) does the bus choice and dbus-broker fallback, the syslog choice, udevd's sandbox fallback with its try window, earlyoom's arguments (shell word splitting), journal-relay/fdstore/linkwatch with `s6-pause` when absent, and `listen-exec` (the bound socket to fd 3, LISTEN_FDS) instead of `sh -c`.
+2. **0c38bc6 — stage 2, shutdown, init-selinux.** `rc.init`, `rc.shutdown`, `rc.shutdown.final`, `runlevel` are one line of execline; `initconvert rc init|shutdown|shutdown-final` (`rc.rs`); `/usr/sbin/init-selinux` is a link (argv0).
+3. **bcfc292, 6faeb00 — the kernel-install plugin and the s6 initramfs.** Both links to `initconvert` (`kinstall.rs`: the BLS rewrite, the GRUB default, `ls -v` order; `initramfs.rs`: the builder, and inside the image the rootfs step (LUKS, mount, rescue) and the switch). `UINITCONVERTER_INITRAMFS_SOURCE` for tests. `dist/early`, the plugin, `mkinitramfs` and init-selinux shell files are gone; `dist/` holds only execline one-liners and the image's tree.
+4. **Step 4 (s6-fdholderd) — audited, kept ours.** s6-fdholderd's server side fits (named fds, survives restarts), but its clients are exec-based (`s6-fdholder-retrieve` gives one fd as stdin to the next program) or s6's undocumented client protocol / FFI into libs6: worse to maintain than our 690-line server for a runner that needs N named fds in one process. Rule 1 doesn't pay off here.
+5. **3642520 — `--boot-only-s6=auto` by default.** uinitconverter's initramfs unless the root needs what it can't do (no mdevd, rd.lvm/rd.md, resume=, TPM2/FIDO2/PKCS#11 in crypttab, a separate /usr, a network root, lvm/raid/mpath/loop under the root); init says why when it keeps Fedora's; an explicit no is kept in `boot-only-s6.off`.
+6. **d05c65d — sweep.** No pub item left without a caller; docs layout updated.
+
+**Bugs found on the way (all by the VM tests):**
+- a13f263: tests left behind by 529d034 (the defaults) — I had filtered `cargo test` output for FAILED/panicked, which a compile error doesn't print, and reported passes wrongly for 529d034-10e773b. Since then the result lines are read.
+- b014c70, 793f0c2: **logins locked out after the update from 0.3.0.** 0.3.0's database ran `systemd-user-sessions.service`; the update removes it (rule 2), s6-rc-update stops it, its ExecStop= writes `/run/nologin` (found with a serial-console watcher: 121 bytes at the update; SSH and GDM logins refused until a reboot). gen asks the live s6-rc whether the unit was up before an install and removes `/run/nologin` after one that took it out (not while shutting down). The index files can't tell: after a deferred install they are newer than the live database.
+- 7650339: udevd's try window read the last start unsigned (the shell's arithmetic was signed); `tests/confine-vm.sh` didn't mirror the host's `/usr/sbin` link (bash landed in a real usr/sbin).
+- Test fixes: the essential check's own down service, pipefail with `grep -q`, the catch-all logger's delay, `logs()` reading only this boot, `--boot-only-s6` left out for 0.3.0's init.
+
+**Tests (final RPMs, 793f0c2):** `cargo test` 157 pass, every standalone project's tests pass; sandbox 388/388, `SANDBOX_JOURNAL=no` 395/395, `SANDBOX_FDSTORE=no` 376/376; `tests/initramfs.sh` (QEMU: LUKS2 passphrase, wrong passphrase, rd.break, NVMe, ext4/xfs/btrfs, images without cryptsetup) 20/20; `tests/confine-vm.sh` 115/115. VM (SELinux enforcing, the s6 initramfs chosen by auto): `default` 28/28 on both boots; `rollback` 28/5/7/28/4 and the essential check 10/10; `upgrade` from 0.3.0 15/15, essential 10/10, 28/28 after the reboot; `BOOT=s6 vm-user-manager.sh lifecycle` all stages (20/8/7/4/9/5/5/8/4).
+
+### Current state
+
+Not pushed: parts 205-222. The product's shell is gone: what s6 runs are execline one-liners into `initconvert`; the boot runs no systemd in the initramfs where it can; journald, resolved, vconsole-setup, backlight, user-sessions, machine-id-setup are replaced; systemd-coredump, udevd, logind, `systemd --user`, hostnamed/localed/timedated, tmpfiles/sysusers and the sleep services stay (rule 3). The update from 0.3.0 keeps journald and resolved (pinned) and works on the s6 boot.
+
+### Next steps
+
+1. Owner: push.
+2. Not covered by the VM tests: `--bus=broker` (`svc listen-exec` for dbus-broker), `SYSLOG=syslog-ng`, a real laptop's backlight and keymap.
+3. A release (0.4.0): CHANGELOG "Unreleased" lists the behaviour changes (JOURNAL/RESOLVED/boot-only-s6 defaults).
