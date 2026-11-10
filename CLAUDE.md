@@ -16,6 +16,12 @@ if they turned out to be wrong.
 
 ## Working on this project
 
+- The project's rules (owner, work_history key decision 9), in this order:
+  1. use s6 and its ecosystem's features first; 2. a systemd feature another
+  package can replace is replaced by it; 3. only what nothing but systemd
+  can do is done by systemd; 4. s6 is PID 1; 5. follow the Unix philosophy
+  (small tools doing one thing each, composed). Check every change against
+  them.
 - Scope (the owner's decision, work_history part 205): uinitconverter
   implements only what the real systemd programs that still run need from
   PID 1 (logind, `systemd --user`, journald) and what it takes to run

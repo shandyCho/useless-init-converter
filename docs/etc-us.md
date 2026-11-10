@@ -26,6 +26,17 @@ and `libsystemd` talk to it exactly as they would talk to systemd.
 
 ## Scope
 
+The project's rules, in this order:
+
+1. Use s6 and its ecosystem's features first.
+2. A systemd feature another package can replace is replaced by it (earlyoom
+   for systemd-oomd, rsyslog and s6-log for logging without journald,
+   util-linux `rfkill` for systemd-rfkill).
+3. Only what nothing but systemd can do is done by systemd itself (logind,
+   `systemd --user`, journald, udevd, run as s6 services).
+4. s6 is PID 1.
+5. Follow the Unix philosophy: small tools that each do one thing, composed.
+
 uinitconverter is a bridge from systemd units to s6, not a second systemd.
 It implements only:
 

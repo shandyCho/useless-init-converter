@@ -67,6 +67,17 @@ starting work; append a new session entry when you finish.
    and leaving what only systemd can do to the real systemd program. Prefer
    a skarnet tool's own behaviour (e.g. `s6-rc-update -n`) over re-modelling
    it in Rust.
+9. **The project's rules** (owner, 2026-11-11, part 218), in this order:
+   1. Use s6 and its ecosystem's features first.
+   2. A systemd feature another package can replace is replaced by it
+      (as earlyoom for systemd-oomd, rsyslog/s6-log, util-linux `rfkill`).
+   3. Only what nothing but systemd can do is done by systemd (logind,
+      `systemd --user`, journald, udevd as services).
+   4. s6 is PID 1.
+   5. Follow the Unix philosophy: small tools that each do one thing,
+      composed; plain text between them.
+   Key decision 8 (scope) applies these: uinitconverter itself only
+   bridges what rules 1-3 leave over.
 
 ## Session 1: 2026-10-18 to 2026-10-19
 
@@ -12901,3 +12912,12 @@ Not pushed: parts 205-217. The core is about 1,000 lines smaller than at part 21
 
 1. Owner: push.
 2. The same `/usr` search can be repeated after a Fedora release upgrade, to see whether a caller appeared for something missing (`EnqueueUnitJobMany`) or disappeared for something kept.
+
+## 2026-11-11, part 218: the project's rules written down
+
+The owner stated the rules: "1. use s6 and their ecosystem's feature at first. 2. if systemd's feature is replaceable by another package, replace that. 3. only systemd's feature can do something, that do systemd. 4. s6 is PID 1. 5. follow unix philosophy." Recorded as key decision 9 (with the examples already in the tree: earlyoom, rsyslog/s6-log, util-linux rfkill; logind, `systemd --user`, journald, udevd as s6 services), at the top of CLAUDE.md's rules, and at the start of "Scope" in the docs/etc pair. Key decision 8 (scope) stays as how uinitconverter applies them. No code changed.
+
+### Next steps
+
+1. Owner: push (parts 205-218).
+2. Check the remaining systemd pieces against rule 2: for each systemd program still run (journald, udevd, logind, resolved, coredump, `systemd --user`, the generators), whether another package could replace it, as earlyoom did for oomd. Measure before proposing.

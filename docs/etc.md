@@ -26,6 +26,16 @@
 
 ## 범위
 
+프로젝트의 규칙은 다음과 같고, 이 순서대로 적용합니다.
+
+1. s6와 그 생태계의 기능을 먼저 씁니다.
+2. 다른 패키지로 대체할 수 있는 systemd 기능은 그 패키지로 대체합니다(systemd-oomd 대신 earlyoom,
+   journald 없는 로깅에 rsyslog와 s6-log, systemd-rfkill 대신 util-linux `rfkill`).
+3. systemd만 할 수 있는 일만 systemd 자신이 합니다(logind, `systemd --user`, journald, udevd를
+   s6 서비스로 실행).
+4. s6가 PID 1입니다.
+5. 유닉스 철학을 따릅니다. 한 가지 일을 하는 작은 도구들을 조합합니다.
+
 uinitconverter는 systemd 유닛을 s6로 잇는 다리이지, 두 번째 systemd가 아닙니다.
 다음 두 가지만 구현합니다.
 
