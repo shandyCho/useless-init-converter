@@ -620,7 +620,9 @@ mod tests {
 
     #[test]
     fn journal_drops_syslog_map() {
-        let cfg = Config::defaults().finish();
+        let mut cfg = Config::defaults();
+        cfg.journal = true;
+        let cfg = cfg.finish();
         assert_eq!(cfg.mapped_dep("systemd-journald.socket"), None);
         assert_eq!(cfg.mapped_dep("syslog.socket"), None);
         let mut cfg = Config::defaults();
@@ -632,7 +634,9 @@ mod tests {
 
     #[test]
     fn journal_no_excludes_rsyslog() {
-        let cfg = Config::defaults().finish();
+        let mut cfg = Config::defaults();
+        cfg.journal = true;
+        let cfg = cfg.finish();
         assert!(!cfg.is_excluded("rsyslog.service"));
         assert_eq!(cfg.mapped_dep("rsyslog.service"), None);
         let mut cfg = Config::defaults();
@@ -654,9 +658,12 @@ mod tests {
 
     #[test]
     fn resolved_no_excludes_its_units() {
-        assert!(!Config::defaults()
-            .finish()
-            .is_excluded("systemd-resolved.service"));
+        let mut cfg = Config::defaults();
+        cfg.resolved = true;
+        assert!(!cfg.finish().is_excluded("systemd-resolved.service"));
+        // The defaults (rule 2, part 220): neither journald nor resolved.
+        let d = Config::defaults();
+        assert!(!d.journal && !d.resolved);
         let mut cfg = Config::defaults();
         cfg.resolved = false;
         let cfg = cfg.finish();

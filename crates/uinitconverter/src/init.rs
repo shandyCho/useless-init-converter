@@ -661,7 +661,8 @@ mod tests {
         assert_eq!(set_conf_key(&on, "RESOLVED", true, false), None);
         assert_eq!(set_conf_key(&on, "RESOLVED", false, false).unwrap(), base);
         // An explicit RESOLVED=no (the old init's) goes, as it is the default now.
-        let old = "# comment\nDEBUG=no\n\n# set by uinitconverter init --resolved=no\nRESOLVED=no\n";
+        let old =
+            "# comment\nDEBUG=no\n\n# set by uinitconverter init --resolved=no\nRESOLVED=no\n";
         assert_eq!(set_conf_key(old, "RESOLVED", false, false).unwrap(), base);
         // BUS=: dbus-daemon unless the last setting says broker; BUS_ADDRESS is another key.
         assert!(!conf_broker("BUS_ADDRESS=broker\n") && conf_broker("BUS=daemon\nBUS= Broker\n"));
@@ -699,7 +700,7 @@ mod tests {
         );
         // The old script's marker goes too.
         let old = "A=1\n\n# set by setup-fedora.sh --no-resolved\nRESOLVED=no\n";
-        assert_eq!(set_conf_key(old, "RESOLVED", true).unwrap(), "A=1\n");
+        assert_eq!(set_conf_key(old, "RESOLVED", false, false).unwrap(), "A=1\n");
     }
 
     #[test]
