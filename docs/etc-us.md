@@ -644,7 +644,11 @@ Notes:
   boot only, and the reload says so ("not applied to the running system: the
   update would restart ..."): initconvertd runs the update, and stopping it
   or dbus would leave it waiting on its own stop. systemd's daemon-reload
-  restarts nothing either. The package ships none of the bundle members
+  restarts nothing either. The live state keeps the database it runs:
+  rc.init gives `s6-rc-init` the database's directory, not the boot link,
+  and on a system booted before that, the reload first points the live
+  state at its database with an `s6-rc-update` to that same database (which
+  restarts nothing). The package ships none of the bundle members
   `initconvert init` adds or removes, so an RPM update doesn't change the
   bundle behind its back.
 - `s6 live start/stop` and `s6 process restart` act below uinitconverter: there is

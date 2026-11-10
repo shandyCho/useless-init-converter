@@ -714,10 +714,11 @@ fn commit_and_install(
     // the early boot) is left for the next boot, as systemd's daemon-reload
     // restarts nothing: initconvertd runs this update, and s6-rc-update
     // stopping it (or dbus, which it needs) left it waiting on its own stop,
-    // off the bus (work_history part 214). -E doesn't help: s6-rc-update
+    // off the bus (work_history parts 214-215). -E doesn't help: s6-rc-update
     // still unlinks such a service's old directory, which kills it.
     match essential_restarts(cfg) {
         Ok(ess) if !ess.is_empty() => {
+            pin_live(cfg)?;
             install(&["--no-update"])?;
             changes.push(format!(
                 "not applied to the running system: the update would restart {} \
@@ -804,6 +805,23 @@ fn commit_and_install(
             None => install(&[]).map(|_| ()),
         };
     }
+}
+
+/// Point the live state at the database it runs rather than at the boot
+/// link (rc.init before part 215 gave s6-rc-init the link), so that
+/// switching the link for the next boot doesn't switch it under the live
+/// state: an s6-rc-update to that same database, which restarts nothing.
+fn pin_live(cfg: &Config) -> Result<(), String> {
+    let link = cfg.live_dir.join("compiled");
+    let db = fs::canonicalize(&link).map_err(|e| format!("{}: {e}", link.display()))?;
+    if fs::read_link(&link).ok().as_deref() == Some(db.as_path()) {
+        return Ok(());
+    }
+    run(Command::new(tools::path("s6-rc-update"))
+        .arg("-l")
+        .arg(&cfg.live_dir)
+        .arg(&db))
+    .map(|_| ())
 }
 
 /// The essential services that are up and that installing the set's

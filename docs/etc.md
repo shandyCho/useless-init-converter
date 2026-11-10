@@ -558,7 +558,10 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
   `s6-rc-update -n`(dry run)으로 업데이트가 무엇을 멈출지 확인합니다. 실행 중인 essential 서비스(dbus,
   initconvertd, 초기 부팅)가 들어 있으면 다음 부팅용으로만 설치하고 그렇다고 알립니다("not applied to the
   running system: the update would restart ..."). 업데이트를 실행하는 것이 initconvertd라서, 그것이나 dbus를
-  멈추면 자기 자신이 멈추기를 기다리게 됩니다. systemd의 daemon-reload도 아무것도 재시작하지 않습니다. 패키지는
+  멈추면 자기 자신이 멈추기를 기다리게 됩니다. systemd의 daemon-reload도 아무것도 재시작하지 않습니다.
+  라이브 상태는 실행 중인 데이터베이스를 계속 씁니다. rc.init은 `s6-rc-init`에 부팅 링크가 아니라 데이터베이스
+  디렉터리를 넘기고, 그 전에 부팅한 시스템에서는 reload가 먼저 같은 데이터베이스로 `s6-rc-update`를 실행해(아무것도
+  재시작하지 않음) 라이브 상태를 그 데이터베이스에 고정합니다. 패키지는
   `initconvert init`이 넣고 빼는 번들 구성원을 하나도 넣지 않으므로, RPM 업데이트가 몰래 번들을 바꾸지 않습니다.
 - `s6 live start/stop`과 `s6 process restart`는 uinitconverter 아래에서 동작합니다. systemd
   작업(job)이 없으므로 유닛의 시작과 중지는 `systemctl`이 낫습니다. `s6 live stop`은

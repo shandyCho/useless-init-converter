@@ -28,6 +28,10 @@ for opt in $(cat /proc/cmdline); do
     esac
 done
 [ -e "$db" ] || db=/var/lib/uinitconverter/compiled
+# The database itself, not the link: a reload that installs a database for
+# the next boot only (it would restart an essential service) switches the
+# link, and the live state must keep the database it runs.
+db=$(readlink -f "$db")
 
 s6-rc-init -c "$db" -l /run/s6-rc /run/service
 
