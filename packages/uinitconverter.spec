@@ -42,6 +42,9 @@ Requires:       (rsyslog or syslog-ng)
 Recommends:     earlyoom
 # The console keymap and font (early vconsole).
 Recommends:     kbd
+# Core dumps: abrt's core_pattern hook and daemon, as units (rule 2, in
+# place of systemd-coredump).
+Recommends:     abrt-addon-ccpp
 # The s6 command; initconvert init writes /etc/s6.conf for it.
 Recommends:     s6-frontend
 # The s6 initramfs (initconvert init --boot-only-s6=yes) loads drivers with it.

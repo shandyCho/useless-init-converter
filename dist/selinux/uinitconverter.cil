@@ -169,11 +169,6 @@
 ; this: it sets its limits after it is in init_t. init_t -> domain has it already.
 (allow kernel_t init_t (process (rlimitinh)))
 
-; dist/s6/coredump: systemd-coredump --manager creates its socket in
-; /run/systemd/coredumpd. The policy has create on the socket file but nothing
-; on the directory, as Fedora's boot uses systemd-coredump.socket instead.
-(allow systemd_coredump_t systemd_coredump_var_run_t (dir (getattr search open read write add_name remove_name)))
-
 ; The runner's notify sockets (NOTIFY_SOCKET, /run/uinitconverter/notify/*).
 ; A user manager runs in the user's domain (user@UID: unconfined_t, user_t,
 ; staff_t, ...), and confined user domains may not send to init_t's datagram

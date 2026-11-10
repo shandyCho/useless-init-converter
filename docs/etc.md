@@ -258,7 +258,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - 작업 모드: 한 유닛의 작업은 차례로 실행되므로 `replace`는 아직 기다리는 충돌 작업만 취소하고 실행 중인 작업은 취소하지 않습니다(systemd는 실행 중인 시작을 멈춥니다). `ignore-dependencies`와 `ignore-requirements`는 s6-rc 밖에서 실행되는 유닛(인스턴스, 임시 유닛, 사용자 유닛)만 의존성 없이 시작합니다. s6-rc 데이터베이스의 유닛은 s6-rc에 컴파일된 의존성을 여전히 따릅니다.
 - `[Socket]`의 `PrivateNetwork=`, `JoinsNamespaceOf=`, `NetworkNamespacePath=`.
 - s6 부팅의 종료 때의 `KillMode=control-group`: 이때는 s6-rc가 데이터베이스의 서비스를 직접 멈추므로, 서비스의 나머지 프로세스는 주 프로세스가 끝난 뒤에야 시그널을 받습니다(데몬을 거치는 정지는 systemd처럼 함께 보냅니다).
-- `dist/s6`에 자체 스크립트가 있는 서비스(`dbus`, `udevd`, `earlyoom`, `syslog`, `coredump`)의 유닛 설정: cgroup, 제한, 샌드박스, 사용자는 유닛에서 가져오지만 명령줄과 재시작, 정지 동작은 스크립트에 있습니다. 그래서 `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=`, `Type=`을 바꾸는 드롭인은 적용되지 않습니다.
+- `dist/s6`에 자체 스크립트가 있는 서비스(`dbus`, `udevd`, `earlyoom`, `syslog`)의 유닛 설정: cgroup, 제한, 샌드박스, 사용자는 유닛에서 가져오지만 명령줄과 재시작, 정지 동작은 스크립트에 있습니다. 그래서 `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=`, `Type=`을 바꾸는 드롭인은 적용되지 않습니다.
 
 ## 오프라인 업데이트와 커널 업데이트
 
@@ -448,10 +448,11 @@ s6가 계속 다시 시도합니다.
 `JOURNAL=no`일 때 서비스 출력은 `/var/log/uinitconverter`에 있고, 저널처럼 root와 `wheel` 그룹만
 읽을 수 있습니다(0750).
 
-코어 덤프는 systemd에서처럼 보관됩니다. `coredump` s6 서비스가 `systemd-coredump --manager`를 유닛의
-샌드박스로 실행하고 `kernel.core_pattern`을 그 소켓으로 지정하며, 서비스는 무제한 소프트
-`RLIMIT_CORE`로 시작합니다. 파일은 `/var/lib/systemd/coredump`에 있습니다. `JOURNAL=no`이면
-`coredumpctl`은 저널을 읽으므로 아무것도 보여주지 않고, 요약은 syslog로 갑니다.
+코어 덤프는 abrt가 받습니다(규칙 2, systemd-coredump 대신. 패키지가 `abrt-addon-ccpp`를 권장합니다).
+Fedora의 `abrt-ccpp.service`가 `kernel.core_pattern`을 abrt의 훅으로 지정하고, `abrtd.service`가 문제
+보고서를 `/var/spool/abrt`에 보관합니다. `abrt`(abrt-cli)나 GNOME의 문제 보고 도구로 볼 수 있습니다. 서비스는
+무제한 소프트 `RLIMIT_CORE`로 시작합니다. abrt가 없으면 `kernel.core_pattern`은 `sysctl --system`이 정한
+값(Fedora의 systemd-coredump 파이프)으로 남습니다.
 
 s6 종료 때 콘솔에 나온 내용은 다음 부팅에서 `/var/log/uinitconverter/last-shutdown-console.log`
 (s6의 catch-all 로그)와 `last-shutdown-kernel.log`(종료가 시작된 뒤의 커널 로그, auditd가 멈춘 뒤의

@@ -21,6 +21,9 @@
   이 이름을 가진 파일이 없습니다. `systemctl`은 그대로 남는 `Manager`의 `…Unit` 메서드를 씁니다).
 
 ### 변경
+- **코어 덤프는 abrt가 받습니다(규칙 2):** `coredump` s6 서비스(systemd-coredump의 리스너)를 지웠습니다.
+  패키지는 `abrt-addon-ccpp`를 권장하며, 그 Fedora 유닛이 `kernel.core_pattern`을 abrt로 지정하고 보고서를
+  보관합니다(`abrt list`). 관련 SELinux 규칙도 함께 지웠습니다.
 - **systemd-journald가 기본으로 꺼집니다(규칙 2, 핵심 결정 5를 뒤집음):** 새 기본값은 `JOURNAL=no`로,
   rsyslog(또는 syslog-ng, 이제 필수)와 `/var/log/uinitconverter` 아래 서비스별 s6-log 디렉터리를 씁니다.
   이때 `journalctl -u`와 `systemctl status`의 로그 줄은 비어 있습니다(`initconvert init --journal=yes`이면
