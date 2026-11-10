@@ -21,6 +21,9 @@
   이 이름을 가진 파일이 없습니다. `systemctl`은 그대로 남는 `Manager`의 `…Unit` 메서드를 씁니다).
 
 ### 변경
+- **systemd-resolved가 기본으로 꺼집니다(규칙 2):** 새 기본값은 `RESOLVED=no`이며, s6 부팅에서는
+  NetworkManager가 DNS를 처리합니다(`initconvert init --resolved=yes`이면 resolved 실행). 업데이트는 기존
+  설치를 그대로 둡니다. `uinitconverter.conf`에 설정이 없으면 패키지가 `RESOLVED=yes`를 적습니다.
 - **systemd 프로그램을 더 대체했습니다(규칙 2):** systemd-vconsole-setup은 kbd의 `loadkeys`/`setfont`
   (`vconsole` s6 oneshot)로, systemd-backlight@는 `backlight` s6 oneshot(같은 파일
   `/var/lib/systemd/backlight`)으로, systemd-user-sessions는 `user-sessions` s6 oneshot

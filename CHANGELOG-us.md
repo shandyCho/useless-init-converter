@@ -24,6 +24,11 @@ Details in `work_history.md`, parts 203-205.
   `systemctl` uses the `Manager` methods `…Unit`, which stay).
 
 ### Changed
+- **systemd-resolved is off by default (rule 2):** `RESOLVED=no` is the new
+  default, so NetworkManager handles DNS on the s6 boot
+  (`initconvert init --resolved=yes` runs resolved). An update keeps an
+  existing install as it is: the package writes `RESOLVED=yes` into a
+  `uinitconverter.conf` that doesn't set it.
 - **More systemd programs replaced (rule 2):** systemd-vconsole-setup by
   kbd's `loadkeys`/`setfont` (the `vconsole` s6 oneshot), systemd-backlight@
   by the `backlight` s6 oneshot (same files in `/var/lib/systemd/backlight`),

@@ -13,7 +13,9 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::{exit, Command, Stdio};
 
-use uinitconverter_base::config::{Config, DEFAULT_LOG_DIR, SYSLOGS};
+use uinitconverter_base::config::{
+    Config, DEFAULT_LOG_DIR, JOURNAL_DEFAULT, RESOLVED_DEFAULT, SYSLOGS,
+};
 use uinitconverter_base::tools;
 
 mod boot;
@@ -256,8 +258,11 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
     match read(conf_path) {
         Some(mut text) => {
             let mut changed = false;
-            for (key, val) in [("JOURNAL", s.journal), ("RESOLVED", s.resolved)] {
-                if let Some(t) = set_conf_key(&text, key, val) {
+            for (key, val, default) in [
+                ("JOURNAL", s.journal, JOURNAL_DEFAULT),
+                ("RESOLVED", s.resolved, RESOLVED_DEFAULT),
+            ] {
+                if let Some(t) = set_conf_key(&text, key, val, default) {
                     println!("  {key}={} in {conf_path}", if val { "yes" } else { "no" });
                     text = t;
                     changed = true;
@@ -634,17 +639,30 @@ mod tests {
     #[test]
     fn conf_keys() {
         let base = "# comment\nDEBUG=no\n";
-        assert!(conf_bool(base, "JOURNAL"));
-        assert!(!conf_bool("JOURNAL=yes\n  JOURNAL= Off\n", "JOURNAL"));
-        assert!(conf_bool("JOURNALX=no\n", "JOURNAL"));
-        assert_eq!(set_conf_key(base, "JOURNAL", true), None);
-        let off = set_conf_key(base, "JOURNAL", false).unwrap();
+        assert!(conf_bool(base, "JOURNAL", true));
+        assert!(!conf_bool(base, "JOURNAL", false));
+        assert!(!conf_bool("JOURNAL=yes\n  JOURNAL= Off\n", "JOURNAL", true));
+        assert!(conf_bool("JOURNALX=no\n", "JOURNAL", true));
+        assert_eq!(set_conf_key(base, "JOURNAL", true, true), None);
+        let off = set_conf_key(base, "JOURNAL", false, true).unwrap();
         assert_eq!(
             off,
             "# comment\nDEBUG=no\n\n# set by uinitconverter init --journal=no\nJOURNAL=no\n"
         );
-        assert_eq!(set_conf_key(&off, "JOURNAL", false), None);
-        assert_eq!(set_conf_key(&off, "JOURNAL", true).unwrap(), base);
+        assert_eq!(set_conf_key(&off, "JOURNAL", false, true), None);
+        assert_eq!(set_conf_key(&off, "JOURNAL", true, true).unwrap(), base);
+        // A key whose default is no: yes is written, no removes it.
+        let on = set_conf_key(base, "RESOLVED", true, false).unwrap();
+        assert_eq!(
+            on,
+            "# comment\nDEBUG=no\n\n# set by uinitconverter init --resolved=yes\nRESOLVED=yes\n"
+        );
+        assert!(conf_bool(&on, "RESOLVED", false));
+        assert_eq!(set_conf_key(&on, "RESOLVED", true, false), None);
+        assert_eq!(set_conf_key(&on, "RESOLVED", false, false).unwrap(), base);
+        // An explicit RESOLVED=no (the old init's) goes, as it is the default now.
+        let old = "# comment\nDEBUG=no\n\n# set by uinitconverter init --resolved=no\nRESOLVED=no\n";
+        assert_eq!(set_conf_key(old, "RESOLVED", false, false).unwrap(), base);
         // BUS=: dbus-daemon unless the last setting says broker; BUS_ADDRESS is another key.
         assert!(!conf_broker("BUS_ADDRESS=broker\n") && conf_broker("BUS=daemon\nBUS= Broker\n"));
         assert_eq!(set_conf_bus(base, false), None);

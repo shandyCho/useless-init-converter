@@ -112,6 +112,12 @@ pub struct Config {
 /// The values INIT= accepts.
 pub const INITS: &[&str] = &["s6"];
 
+/// JOURNAL='s default: systemd-journald as an s6 service.
+pub const JOURNAL_DEFAULT: bool = true;
+/// RESOLVED='s default: no systemd-resolved; NetworkManager handles DNS
+/// (rule 2, work_history part 220).
+pub const RESOLVED_DEFAULT: bool = false;
+
 /// Units taken out of INCLUDE when RESOLVED=no.
 const RESOLVED_UNITS: &[&str] = &[
     "systemd-resolved.service",
@@ -351,9 +357,9 @@ impl Config {
             reboot_cmd: "s6-linux-init-shutdown -r now".into(),
             halt_cmd: "s6-linux-init-shutdown -h now".into(),
             allow_uids: Vec::new(),
-            journal: true,
+            journal: JOURNAL_DEFAULT,
             syslog: "rsyslog".into(),
-            resolved: true,
+            resolved: RESOLVED_DEFAULT,
             journal_stdout: PathBuf::from("/run/systemd/journal/stdout"),
             transient_dir: PathBuf::from("/run/systemd/transient"),
             udev_dir: Some(PathBuf::from("/run/udev")),
@@ -429,11 +435,15 @@ impl Config {
                 "POWEROFF_CMD" => cfg.poweroff_cmd = v,
                 "REBOOT_CMD" => cfg.reboot_cmd = v,
                 "HALT_CMD" => cfg.halt_cmd = v,
-                "JOURNAL" => cfg.journal = crate::unit::parse_bool(&v).unwrap_or(true),
+                "JOURNAL" => {
+                    cfg.journal = crate::unit::parse_bool(&v).unwrap_or(JOURNAL_DEFAULT)
+                }
                 "SYSLOG" => cfg.syslog = v,
                 // Removed (see automask.rs); a reload undoes what it masked.
                 "AUTO_MASK" => {}
-                "RESOLVED" => cfg.resolved = crate::unit::parse_bool(&v).unwrap_or(true),
+                "RESOLVED" => {
+                    cfg.resolved = crate::unit::parse_bool(&v).unwrap_or(RESOLVED_DEFAULT)
+                }
                 // The system bus: read by the dbus s6 service's run script.
                 "BUS" => {}
                 "TRANSIENT_DIR" => cfg.transient_dir = PathBuf::from(&v),

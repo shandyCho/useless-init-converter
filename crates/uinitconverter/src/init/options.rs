@@ -110,45 +110,61 @@ pub(super) fn parse_args(args: &[String]) -> Result<Option<Opts>, String> {
 }
 
 /// Whether uinitconverter.conf text sets KEY to a true value (the last setting
-/// counts; unset is true, as both keys default to yes).
-pub(super) fn conf_bool(text: &str, key: &str) -> bool {
+/// counts; unset is DEFAULT, config.rs's JOURNAL_DEFAULT/RESOLVED_DEFAULT).
+pub(super) fn conf_bool(text: &str, key: &str, default: bool) -> bool {
     let v = text
         .lines()
         .filter_map(|l| l.trim_start().strip_prefix(key)?.strip_prefix('='))
         .last()
         .map(|v| v.trim().to_ascii_lowercase());
-    !matches!(v.as_deref(), Some("no" | "false" | "0" | "off" | "n" | "f"))
+    match v.as_deref() {
+        Some("no" | "false" | "0" | "off" | "n" | "f") => false,
+        Some("yes" | "true" | "1" | "on" | "y" | "t") => true,
+        _ => default,
+    }
 }
 
-/// The marker line above a KEY=no that init wrote.
-pub(super) fn conf_marker(key: &str) -> String {
+/// The marker line above a KEY=yes|no that init (or the package's update
+/// scriptlet) wrote.
+pub(super) fn conf_marker(key: &str, val: bool) -> String {
     format!(
-        "# set by uinitconverter init --{}=no",
-        key.to_ascii_lowercase()
+        "# set by uinitconverter init --{}={}",
+        key.to_ascii_lowercase(),
+        if val { "yes" } else { "no" }
     )
 }
 
-/// uinitconverter.conf text with KEY set: false writes KEY=no, true removes the
-/// setting (the default). Other lines are kept. None if nothing changes.
-pub(super) fn set_conf_key(text: &str, key: &str, val: bool) -> Option<String> {
-    if conf_bool(text, key) == val {
+/// uinitconverter.conf text with KEY set: a value other than DEFAULT is
+/// written as KEY=yes|no under init's marker, the default removes the
+/// setting. Other lines are kept. None if nothing changes.
+fn is_setting(line: &str, key: &str) -> bool {
+    line.trim_start()
+        .strip_prefix(key)
+        .is_some_and(|r| r.starts_with('='))
+}
+
+pub(super) fn set_conf_key(text: &str, key: &str, val: bool, default: bool) -> Option<String> {
+    if conf_bool(text, key, default) == val
+        && (val != default || !text.lines().any(|l| is_setting(l, key)))
+    {
         return None;
     }
-    let marker = conf_marker(key);
-    let old_marker = format!("# set by setup-fedora.sh --no-{}", key.to_ascii_lowercase());
+    let markers = [
+        conf_marker(key, true),
+        conf_marker(key, false),
+        format!("# set by setup-fedora.sh --no-{}", key.to_ascii_lowercase()),
+    ];
     let kept: Vec<&str> = text
         .lines()
-        .filter(|l| {
-            let setting = l
-                .trim_start()
-                .strip_prefix(key)
-                .is_some_and(|r| r.starts_with('='));
-            !setting && *l != marker && *l != old_marker
-        })
+        .filter(|l| !is_setting(l, key) && !markers.iter().any(|m| m == l))
         .collect();
     let mut out = kept.join("\n").trim_end_matches('\n').to_string();
-    if !val {
-        out.push_str(&format!("\n\n{marker}\n{key}=no"));
+    if val != default {
+        out.push_str(&format!(
+            "\n\n{}\n{key}={}",
+            conf_marker(key, val),
+            if val { "yes" } else { "no" }
+        ));
     }
     out.push('\n');
     Some(out)
@@ -231,8 +247,12 @@ pub(super) fn boot_args(enforcing: bool) -> String {
 pub(super) fn resolve(o: &Opts, cfg: &Config) -> Settings {
     let conf = fs::read_to_string(&cfg.config_path).unwrap_or_default();
     Settings {
-        journal: o.journal.unwrap_or_else(|| conf_bool(&conf, "JOURNAL")),
-        resolved: o.resolved.unwrap_or_else(|| conf_bool(&conf, "RESOLVED")),
+        journal: o
+            .journal
+            .unwrap_or_else(|| conf_bool(&conf, "JOURNAL", JOURNAL_DEFAULT)),
+        resolved: o
+            .resolved
+            .unwrap_or_else(|| conf_bool(&conf, "RESOLVED", RESOLVED_DEFAULT)),
         broker: o.broker.unwrap_or_else(|| conf_broker(&conf)),
         syslog: o
             .syslog

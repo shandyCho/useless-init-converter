@@ -159,6 +159,9 @@ systemctl --failed --no-legend --no-pager 2>&1 | sed 's/^/   /'
 # The s6 oneshots in place of systemd-user-sessions, -vconsole-setup and
 # -backlight (rule 2): logins open, and the early steps said nothing.
 [ ! -e /run/nologin ] && ok "no /run/nologin (user-sessions)" || bad "/run/nologin is there"
+# DNS, with systemd-resolved or NetworkManager alone (RESOLVED=).
+r=$(grep -E '^[[:space:]]*RESOLVED=' /etc/uinitconverter/uinitconverter.conf | tail -1)
+until_ok 'getent ahosts fedoraproject.org >/dev/null' 60 && ok "DNS resolves (${r:-RESOLVED default})" || bad "no DNS (${r:-RESOLVED default}): $(cat /etc/resolv.conf 2>&1 | head -3 | tr '\n' ' ')"
 s6-rc -a list | grep -qx user-sessions && ok "user-sessions is up" || bad "user-sessions isn't up"
 w=$({ journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current 2>/dev/null; } | grep "uinitconverter early:" | sort -u)
 [ -z "$w" ] && ok "no early-boot warnings" || bad "early-boot warnings: $(echo "$w" | head -5 | tr '\n' ' ')"
@@ -212,6 +215,8 @@ echo "   dnf took $(($(date +%s) - t0)) s"
 rpm -qa 'uinitconverter*' | sort | sed 's/^/   /'
 rpm -q uinitconverter-user >/dev/null && bad "uinitconverter-user is still installed" || ok "uinitconverter-user is gone (Obsoletes)"
 [ -e /etc/systemd/system/user@.service.d/90-uinitconverter.conf ] && bad "the drop-in is still there" || ok "the drop-in is gone"
+# RESOLVED's default became no: the update keeps this install's resolved.
+grep -q '^RESOLVED=yes' /etc/uinitconverter/uinitconverter.conf && ok "the update kept RESOLVED=yes" || bad "no RESOLVED=yes after the update"
 echo "-- right after dnf, before init:"
 daemon
 # The 0.3.0 package's %preun reloaded (the drop-in was there): the daemon

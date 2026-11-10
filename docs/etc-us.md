@@ -105,8 +105,8 @@ Workstation machine. The systemd numbers are from boots up to 2026-10-31.
   boots the database from before the last install.
 - **More of systemd can be replaced.** `--boot-only-s6=yes` removes systemd
   from the initramfs, `--journal=no` replaces journald with rsyslog and
-  s6-log's plain-text logs, and `--resolved=no` lets NetworkManager handle DNS
-  alone. The system bus is dbus-daemon with the default `--bus=daemon`.
+  s6-log's plain-text logs, and NetworkManager handles DNS alone (the default;
+  `--resolved=yes` runs systemd-resolved). The system bus is dbus-daemon with the default `--bus=daemon`.
 - **Normal Fedora still works.** dnf, SELinux enforcing, GNOME and the real
   `systemctl` keep working. This is the advantage over a non-systemd distro
   like Artix, which isn't Fedora.
@@ -489,7 +489,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 | PID 1 / services | s6-linux-init, s6-rc, uinitconverter |
 | System bus | dbus-daemon, or dbus-broker with `--bus=broker` (dbus-broker stays for the user bus) |
 | Logging | systemd-journald as an s6 service (`--journal=no`: rsyslog + s6-log) |
-| Network / DNS / time | NetworkManager, systemd-resolved (`--resolved=no`: NetworkManager alone), chrony |
+| Network / DNS / time | NetworkManager (DNS too; `--resolved=yes`: systemd-resolved), chrony |
 | OOM handling | earlyoom instead of systemd-oomd |
 | Radio state (rfkill) | util-linux `rfkill` from an s6 oneshot instead of systemd-rfkill |
 | Console keymap and font | kbd's `loadkeys`/`setfont` from the `vconsole` s6 oneshot instead of systemd-vconsole-setup |
@@ -727,7 +727,7 @@ and defaults). The most important keys:
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
 - `SYSLOG`: the daemon the s6 `syslog` service runs with `JOURNAL=no`: `rsyslog` (default) or `syslog-ng` (`initconvert init --syslog=`). Either way the distribution's `rsyslog.service` and `syslog-ng.service` are excluded. syslog-ng won't open `/dev/log` itself when `/run/systemd/system` exists (uinitconverter creates it for `sd_booted()`), so the run script binds it and passes it in `LISTEN_FDS`.
 - `BUS`: `daemon` (default) or `broker`, the system bus of the s6 boot (`initconvert init --bus=`); read by the `dbus` s6 service's run script.
-- `RESOLVED`: `yes` (default) runs systemd-resolved; `no` leaves its units out of `INCLUDE` (put the `resolv` s6 service into `uinitconverter-sysinit` too, as `initconvert init --resolved=no` does, or DNS breaks).
+- `RESOLVED`: `yes` runs systemd-resolved; `no` (the default since rule 2, part 220; an update keeps an existing install's resolved with `RESOLVED=yes`) leaves its units out of `INCLUDE` (put the `resolv` s6 service into `uinitconverter-sysinit` too, as `initconvert init --resolved=no` does, or DNS breaks).
 - `INIT`: the init system units are translated for. Only `s6` exists yet; any other value stops every tool with a configuration error.
 - `TOOLS`: replaces, by name, the programs from other packages that uinitconverter's programs run (`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`), so a package can be swapped or installed elsewhere without a rebuild. Names not listed are looked up in `PATH` as before. It covers the s6/s6-rc tools, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, the programs `initconvert init` runs (`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl`, …) and `s6-log` in generated loggers. A service's state is read from its `supervise/status` (s6 2.15's format) without starting `s6-svstat`, so `s6-svstat=` only applies when that file has another format. The shell scripts and s6 service definitions in `dist/` still run them by name.
 - `ALLOW_UIDS`: non-root users allowed to manage units.

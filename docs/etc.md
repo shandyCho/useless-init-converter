@@ -97,7 +97,7 @@ s6를 PID 1로 두고 s6의 도구로 관리하면서 Fedora와 GNOME을 쓸 수
   데이터베이스로 부팅합니다.
 - **systemd를 더 많이 대체할 수 있습니다.** `--boot-only-s6=yes`는 initramfs에서 systemd를
   없애고, `--journal=no`는 journald를 rsyslog와 s6-log의 일반 텍스트 로그로 바꾸며,
-  `--resolved=no`는 DNS를 NetworkManager에 맡깁니다. 시스템 버스는 기본값인 `--bus=daemon`이면
+  DNS는 NetworkManager가 혼자 처리합니다(기본값, `--resolved=yes`이면 systemd-resolved를 실행합니다). 시스템 버스는 기본값인 `--bus=daemon`이면
   dbus-daemon입니다.
 - **일반 Fedora가 그대로 동작합니다.** dnf, SELinux enforcing, GNOME, 실제 `systemctl`이 계속
   동작합니다. Artix 같은 비-systemd 배포판과 달리 Fedora를 그대로 쓸 수 있다는 점이 이점입니다.
@@ -425,7 +425,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 | PID 1 / 서비스 | s6-linux-init, s6-rc, uinitconverter |
 | 시스템 버스 | dbus-daemon, `--bus=broker`이면 dbus-broker (사용자 버스용으로 dbus-broker는 유지) |
 | 로그 | s6 서비스로 실행되는 systemd-journald (`--journal=no`: rsyslog + s6-log) |
-| 네트워크 / DNS / 시간 | NetworkManager, systemd-resolved(`--resolved=no`: NetworkManager만), chrony |
+| 네트워크 / DNS / 시간 | NetworkManager(DNS 포함, `--resolved=yes`: systemd-resolved), chrony |
 | OOM 처리 | systemd-oomd 대신 earlyoom |
 | 무선 상태(rfkill) | systemd-rfkill 대신 s6 oneshot에서 util-linux `rfkill` |
 | 콘솔 키맵과 글꼴 | systemd-vconsole-setup 대신 `vconsole` s6 oneshot에서 kbd의 `loadkeys`/`setfont` |
@@ -631,7 +631,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `LOG_DIR`: `JOURNAL=no`일 때 s6-log 디렉터리가 들어갈 위치.
 - `SYSLOG`: `JOURNAL=no`일 때 s6 `syslog` 서비스가 실행할 데몬, `rsyslog`(기본값) 또는 `syslog-ng`(`initconvert init --syslog=`). 두 경우 모두 배포판의 `rsyslog.service`, `syslog-ng.service`는 제외됩니다. syslog-ng는 `/run/systemd/system`이 있으면(uinitconverter가 `sd_booted()`용으로 만듭니다) `/dev/log`를 직접 열지 않으려 하므로, run 스크립트가 소켓을 열어 `LISTEN_FDS`로 전달합니다.
 - `BUS`: s6 부팅의 시스템 버스, `daemon`(기본값) 또는 `broker`(`initconvert init --bus=`). `dbus` s6 서비스의 run 스크립트가 읽습니다.
-- `RESOLVED`: `yes`(기본값)이면 systemd-resolved를 실행합니다. `no`이면 그 유닛들을 `INCLUDE`에서 뺍니다(`initconvert init --resolved=no`처럼 `resolv` s6 서비스도 `uinitconverter-sysinit`에 넣어야 DNS가 동작합니다).
+- `RESOLVED`: `yes`이면 systemd-resolved를 실행합니다. `no`(규칙 2에 따라 220부부터 기본값이며, 업데이트는 기존 설치에 `RESOLVED=yes`를 적어 resolved를 유지합니다)이면 그 유닛들을 `INCLUDE`에서 뺍니다(`initconvert init --resolved=no`처럼 `resolv` s6 서비스도 `uinitconverter-sysinit`에 넣어야 DNS가 동작합니다).
 - `INIT`: 유닛을 변환할 대상 init 시스템. 지금은 `s6`만 있고, 다른 값이면 모든 도구가 설정 오류로 멈춥니다.
 - `TOOLS`: uinitconverter 프로그램이 실행하는 다른 패키지의 프로그램을 이름별로 바꿉니다(`TOOLS="s6-svc=/opt/s6/bin/s6-svc mount=/usr/local/bin/mount"`). 패키지를 다른 것으로 바꾸거나 다른 위치에 설치했을 때 다시 빌드하지 않아도 됩니다. 목록에 없는 이름은 지금처럼 `PATH`에서 찾습니다. 대상은 s6/s6-rc 도구, `mount`/`umount`/`swapon`/`swapoff`, `useradd`, `journalctl`, `initconvert init`이 실행하는 프로그램(`restorecon`, `semanage`, `semodule`, `grub2-editenv`, `systemctl` 등), 생성된 로거의 `s6-log`입니다. 서비스 상태는 `s6-svstat`을 실행하지 않고 `supervise/status`(s6 2.15의 형식)에서 읽으므로, `s6-svstat=`은 그 파일의 형식이 다를 때만 쓰입니다. `dist/`의 셸 스크립트와 s6 서비스 정의는 아직 이름으로 실행합니다.
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.

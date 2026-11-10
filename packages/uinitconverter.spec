@@ -124,6 +124,16 @@ if [ -x /usr/sbin/semodule ]; then
     [ -p /run/service/s6-linux-init-shutdownd/fifo ] && restorecon /run/service/s6-linux-init-shutdownd/fifo || :
 fi
 
+# Defaults that changed (rule 2: RESOLVED=no): an update keeps what an
+# existing install runs, written as `initconvert init --KEY=yes` writes it;
+# init then changes it as asked.
+if [ "$1" -ge 2 ] && [ -f %{_sysconfdir}/uinitconverter/uinitconverter.conf ]; then
+    conf=%{_sysconfdir}/uinitconverter/uinitconverter.conf
+    if ! grep -q '^[[:space:]]*RESOLVED=' "$conf"; then
+        printf '\n# set by uinitconverter init --resolved=yes\nRESOLVED=yes\n' >>"$conf" || :
+    fi
+fi
+
 %posttrans
 # The s6 initramfs (initconvert init --boot-only-s6=yes) holds this package's
 # initramfs scripts: rebuild the images there are, so an update reaches the
