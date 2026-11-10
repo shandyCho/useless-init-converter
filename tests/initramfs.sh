@@ -16,7 +16,13 @@ W=${1:?usage: tests/initramfs.sh WORKDIR [KVER]}
 KVER=${2:-$(uname -r)}
 KERNEL=/boot/vmlinuz-$KVER
 PASS=uinitconverter-test
-MK=$TOP/dist/initramfs/mkinitramfs
+# initconvert's mkinitramfs (rule 6), by the name the package links it as.
+[ -x "$TOP/target/debug/initconvert" ] || { echo "run cargo build first" >&2; exit 1; }
+mkd=$(mktemp -d)
+MK=$mkd/mkinitramfs
+ln -s "$TOP/target/debug/initconvert" "$MK"
+trap 'rm -rf "$mkd"' EXIT
+export UINITCONVERTER_INITRAMFS_SOURCE=$TOP/dist/initramfs/root
 CONSOLE=$TOP/tests/qemu-console.py
 export UINITCONVERTER_INITRAMFS_PATH=${MDEVD_BIN:+$MDEVD_BIN:}/usr/bin:/usr/sbin
 # The test's own module list, not this host's /etc/uinitconverter one.

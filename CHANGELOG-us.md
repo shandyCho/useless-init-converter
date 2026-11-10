@@ -24,6 +24,11 @@ Details in `work_history.md`, parts 203-205.
   `systemctl` uses the `Manager` methods `…Unit`, which stay).
 
 ### Changed
+- **The s6 initramfs in Rust (rule 6):** `mkinitramfs` is a link to
+  `initconvert`, and inside the image the `rootfs` service (LUKS, the root
+  mount) and s6-svscan's finish (`switch_root`) are `initconvert initramfs
+  root|switch`; the image carries `initconvert`, bash stays for the rescue
+  shell. `UINITCONVERTER_INITRAMFS_SOURCE` moves the image's tree (tests).
 - **The kernel-install plugin in Rust (rule 6):** `90-uinitconverter.install`
   is a link to `initconvert`, which keeps the s6 boot entries as the shell
   plugin did (and sorts them as `ls -v` did).

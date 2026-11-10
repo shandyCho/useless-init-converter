@@ -448,8 +448,8 @@ press Esc while GRUB starts.
 **`--boot-only-s6=yes`: no systemd at all.** Fedora's initramfs is built by dracut
 and runs systemd as its PID 1 until it switches to the root. With this
 option the s6 entry boots with uinitconverter's own initramfs instead
-(`/boot/initramfs-KVER-s6.img`, built by `/usr/libexec/uinitconverter/mkinitramfs`
-for every kernel by the kernel-install plugin, and again for every kernel
+(`/boot/initramfs-KVER-s6.img`, built by `/usr/libexec/uinitconverter/mkinitramfs`, a link to
+`initconvert` (rule 6), for every kernel by the kernel-install plugin, and again for every kernel
 that has one when the uinitconverter package is updated; the systemd entry keeps
 Fedora's). Its `/init` (execline) execs **s6-svscan as PID 1**, which
 supervises **mdevd** (skarnet's uevent daemon: `mdevd-coldplug` makes it load
@@ -459,7 +459,9 @@ the drivers for the hardware found, from each device's modalias) and a
 command line, asks for the passphrase of any LUKS volume named there on the console (3
 tries; `discard` from `/etc/crypttab` is honoured), mounts the root on `/sysroot`
 and stops s6-svscan, whose `.s6-svscan/finish` moves `/dev`, `/proc`, `/sys`
-and `/run` and runs `switch_root` to `init=` (`/usr/sbin/init-selinux`).
+and `/run` and runs `switch_root` to `init=` (`/usr/sbin/init-selinux`). The `rootfs`
+service and the finish are `initconvert initramfs root|switch`: the image
+carries `initconvert`; bash is there only for the rescue shell.
 On a failure it opens a rescue shell; exiting it tries again. `rd.break`
 gives a shell before the switch, `uinitconverter.initrd.timeout=SECONDS` sets how
 long to wait for the disks (30). dracut is used only as a tool when the

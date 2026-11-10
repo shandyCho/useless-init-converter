@@ -90,7 +90,8 @@ cargo test --release --offline -p uinitconverter -p uinitconverter-version
 install -Dm0755 target/release/initconvert %{buildroot}%{_libexecdir}/uinitconverter/initconvert
 # The s6 services' early-boot steps are initconvert's (argv0 "early").
 ln -s initconvert %{buildroot}%{_libexecdir}/uinitconverter/early
-install -Dm0755 dist/initramfs/mkinitramfs %{buildroot}%{_libexecdir}/uinitconverter/mkinitramfs
+# The s6 initramfs builder: initconvert by argv0 (rule 6).
+ln -s initconvert %{buildroot}%{_libexecdir}/uinitconverter/mkinitramfs
 install -d %{buildroot}%{_bindir}
 ln -s ../libexec/uinitconverter/initconvert %{buildroot}%{_bindir}/initconvert
 install -Dm0644 dist/uinitconverter.conf %{buildroot}%{_sysconfdir}/uinitconverter/uinitconverter.conf

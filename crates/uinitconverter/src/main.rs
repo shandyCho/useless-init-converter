@@ -9,6 +9,7 @@ use std::process::{exit, Command};
 
 mod early;
 mod init;
+mod initramfs;
 mod kinstall;
 mod rc;
 mod svc;
@@ -157,6 +158,20 @@ fn main() {
         .is_some_and(|n| n == "90-uinitconverter.install")
     {
         kinstall::main(&args);
+    }
+    // The s6 initramfs: its builder (also /usr/libexec/uinitconverter/mkinitramfs,
+    // a link here) and its two steps inside the image.
+    if std::path::Path::new(&argv0)
+        .file_name()
+        .is_some_and(|n| n == "mkinitramfs")
+    {
+        initramfs::mkinitramfs(&args);
+    }
+    if args.first().is_some_and(|a| a == "mkinitramfs") {
+        initramfs::mkinitramfs(&args[1..]);
+    }
+    if args.first().is_some_and(|a| a == "initramfs") {
+        initramfs::main(&args[1..]);
     }
     // s6-linux-init's rc.init, rc.shutdown and rc.shutdown.final.
     if args.first().is_some_and(|a| a == "rc") {

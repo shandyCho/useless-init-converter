@@ -21,6 +21,10 @@
   이 이름을 가진 파일이 없습니다. `systemctl`은 그대로 남는 `Manager`의 `…Unit` 메서드를 씁니다).
 
 ### 변경
+- **s6 initramfs를 Rust로(규칙 6):** `mkinitramfs`는 `initconvert`의 링크이며, 이미지 안의 `rootfs`
+  서비스(LUKS, 루트 마운트)와 s6-svscan의 finish(`switch_root`)는 `initconvert initramfs root|switch`입니다.
+  이미지에 `initconvert`가 들어가고, bash는 복구 셸용으로만 남습니다. `UINITCONVERTER_INITRAMFS_SOURCE`로
+  이미지의 트리를 옮길 수 있습니다(테스트용).
 - **kernel-install 플러그인을 Rust로(규칙 6):** `90-uinitconverter.install`은 `initconvert`의 링크이며,
   셸 플러그인처럼 s6 부팅 항목을 유지합니다(`ls -v`와 같은 순서로 정렬).
 - **2단계 부팅, 종료, init-selinux를 Rust로(규칙 6):** s6-linux-init의 `rc.init`, `rc.shutdown`,
