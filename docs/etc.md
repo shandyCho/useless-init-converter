@@ -95,7 +95,7 @@ s6를 PID 1로 두고 s6의 도구로 관리하면서 Fedora와 GNOME을 쓸 수
 - **부팅이 예측 가능합니다.** 컴파일된 s6-rc 데이터베이스를 그대로 실행하고, 부팅 때 아무것도
   다시 생성하지 않습니다. 변경이 잘못되면 `uinitconverter.db=previous`로 마지막 설치 이전의
   데이터베이스로 부팅합니다.
-- **systemd를 더 많이 대체할 수 있습니다.** `--boot-only-s6=yes`는 initramfs에서 systemd를
+- **systemd를 더 많이 대체할 수 있습니다.** 루트를 부팅할 수 있으면 uinitconverter 자체의 initramfs가(`--boot-only-s6=auto`, 기본값) initramfs에서 systemd를
   없애고, journald는 rsyslog와 s6-log의 일반 텍스트 로그로 대체되며(기본값, `--journal=yes`이면 journald 실행),
   DNS는 NetworkManager가 혼자 처리합니다(기본값, `--resolved=yes`이면 systemd-resolved를 실행합니다). 시스템 버스는 기본값인 `--bus=daemon`이면
   dbus-daemon입니다.
@@ -371,14 +371,14 @@ tests/sandbox.sh ~/sdc-sandbox stop
 | `--resolved=yes\|no` | `no`: s6 부팅에서 systemd-resolved 없이 NetworkManager가 DNS를 직접 처리합니다 / `yes`: resolved로 되돌립니다 |
 | `--bus=daemon\|broker` | s6 부팅의 시스템 버스: dbus-daemon(기본값) 또는 systemd 부팅과 같은 dbus-broker. dbus-daemon은 설치된 채로 둡니다. dbus-broker가 설치되어 있지 않거나, 10초 뒤에도 journald의 소켓(journald, `JOURNAL=no`이면 journal-relay)이 없거나, 이번 부팅에서 `dbus-broker-launch`가 세 번 종료했으면 dbus-daemon으로 대신합니다 |
 | `--selinux=enforcing\|permissive` | s6 항목의 SELinux 모드(`permissive`이면 `enforcing=0` 추가). 처음 실행할 때는 permissive |
-| `--boot-only-s6=yes\|no` | `yes`: s6 항목을 Fedora의 initramfs 대신 uinitconverter의 initramfs로 부팅해 systemd가 전혀 실행되지 않게 합니다(아래 참고, `mdevd` 필요) / `no`: Fedora의 것으로 되돌립니다 |
+| `--boot-only-s6=yes\|no\|auto` | `yes`: s6 항목을 Fedora의 initramfs 대신 uinitconverter의 initramfs로 부팅해 systemd가 전혀 실행되지 않게 합니다(아래 참고, `mdevd` 필요) / `no`: Fedora의 것 / `auto`(기본값, 규칙 2-4): 루트가 그 initramfs가 못 하는 것(LVM, MD, multipath, 네트워크 루트, 별도 `/usr`, `resume=`, TPM2/FIDO2/PKCS#11 LUKS 키, `mdevd` 없음)을 요구하지 않으면 `yes`. Fedora의 것을 쓸 때는 이유를 알려 줍니다 |
 | `--default-s6` / `--default-systemd` | s6 항목을 기본 부팅 항목으로 합니다(나중에 설치되는 커널에도) / systemd 항목을 다시 기본값으로 합니다. 어느 쪽이든 systemd 항목은 메뉴에 남습니다 |
 | `--grub=yes\|no` | `no`: 부팅 항목을 추가하거나 수정하지 않습니다(다음 실행에 이어지지 않습니다) |
 | `--uninstall` | 부팅 항목, s6 initramfs 이미지, `/etc/s6-linux-init/current`, (init이 썼다면) `/etc/s6.conf`, 부팅 설정을 지웁니다. `/etc/uinitconverter`는 남깁니다. 그다음 패키지를 `dnf remove`하세요 |
 
 빠진 옵션은 지난 실행의 선택을 유지합니다. `/etc/uinitconverter/uinitconverter.conf`의
 `JOURNAL=`/`RESOLVED=`, `/etc/uinitconverter/boot-options`의 SELinux 모드,
-`/etc/uinitconverter/boot-only-s6`, `/etc/uinitconverter/boot-default`를 읽습니다. 그래서 패키지를
+`/etc/uinitconverter/boot-only-s6`(명시적 `no`이면 `boot-only-s6.off`, 둘 다 없으면 `auto`), `/etc/uinitconverter/boot-default`를 읽습니다. 그래서 패키지를
 업그레이드한 뒤 `sudo initconvert init`만 실행하면 같은 선택으로 설정을 다시 적용합니다.
 
 journal과 resolved 옵션은 이미 설치된 시스템도 전환합니다. `--resolved=no`이면 s6 oneshot `resolv`가 부팅 때 `/run/NetworkManager/conf.d/99-uinitconverter-no-resolved.conf`(`dns=default`, `rc-manager=symlink`)를 쓰고, `/etc/resolv.conf`가 가리키는 resolved의 stub 파일을 `/run/NetworkManager/resolv.conf`로 연결합니다. 모두 `/run`에 있으므로 systemd 부팅은 계속 resolved를 씁니다. `/etc/NetworkManager`에 `dns=` 설정이 있으면 그것이 우선합니다(NetworkManager는 `/run`을 먼저 읽습니다). `/etc/nsswitch.conf`의 nss-resolve는 resolved가 없으면 `dns`로 넘어갑니다.
@@ -421,7 +421,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 
 | 역할 | s6 + uinitconverter에서 |
 |---|---|
-| Initramfs | Fedora의 것(dracut, systemd가 PID 1). `--boot-only-s6=yes`이면 uinitconverter의 것: s6-svscan, mdevd, 설치되어 있으면 cryptsetup |
+| Initramfs | 루트를 부팅할 수 있으면 uinitconverter의 것(`--boot-only-s6=auto`): s6-svscan, mdevd, 설치되어 있으면 cryptsetup. 아니면 Fedora의 것(dracut, systemd가 PID 1) |
 | PID 1 / 서비스 | s6-linux-init, s6-rc, uinitconverter |
 | 시스템 버스 | dbus-daemon, `--bus=broker`이면 dbus-broker (사용자 버스용으로 dbus-broker는 유지) |
 | 로그 | rsyslog + s6-log (`--journal=yes`: s6 서비스로 실행되는 systemd-journald) |

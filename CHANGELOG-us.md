@@ -24,6 +24,12 @@ Details in `work_history.md`, parts 203-205.
   `systemctl` uses the `Manager` methods `…Unit`, which stay).
 
 ### Changed
+- **No systemd in the initramfs where possible (rules 2-4):**
+  `--boot-only-s6=auto` is the default: the s6 entry boots uinitconverter's
+  initramfs unless the root needs what it can't do (LVM, MD, multipath, a
+  network root, a separate `/usr`, `resume=`, a TPM2/FIDO2/PKCS#11 LUKS key,
+  no `mdevd`), and `initconvert init` says why when it keeps Fedora's. An
+  explicit `--boot-only-s6=no` is kept (`/etc/uinitconverter/boot-only-s6.off`).
 - **The s6 initramfs in Rust (rule 6):** `mkinitramfs` is a link to
   `initconvert`, and inside the image the `rootfs` service (LUKS, the root
   mount) and s6-svscan's finish (`switch_root`) are `initconvert initramfs

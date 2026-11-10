@@ -13,7 +13,8 @@ pub(super) struct Opts {
     pub(super) broker: Option<bool>,
     pub(super) syslog: Option<String>,
     pub(super) enforcing: Option<bool>,
-    pub(super) boot_only_s6: Option<bool>,
+    /// Some(None): auto.
+    pub(super) boot_only_s6: Option<Option<bool>>,
     pub(super) grub: bool,
 }
 
@@ -26,6 +27,10 @@ pub(super) struct Settings {
     pub(super) syslog: String,
     pub(super) enforcing: bool,
     pub(super) boot_only_s6: bool,
+    /// Why auto kept Fedora's initramfs (None: it didn't, or not auto).
+    pub(super) boot_only_s6_why: Option<String>,
+    /// An explicit --boot-only-s6=no, kept for the next runs.
+    pub(super) boot_only_s6_off: bool,
     pub(super) default_s6: bool,
     pub(super) grub: bool,
 }
@@ -78,7 +83,8 @@ pub(super) fn parse_args(args: &[String]) -> Result<Option<Opts>, String> {
                     SYSLOGS.join(" or ")
                 ))
             }
-            ("--boot-only-s6", Some(v)) => o.boot_only_s6 = Some(yes_no(name, v)?),
+            ("--boot-only-s6", Some("auto")) => o.boot_only_s6 = Some(None),
+            ("--boot-only-s6", Some(v)) => o.boot_only_s6 = Some(Some(yes_no(name, v)?)),
             ("--grub", Some(v)) => o.grub = yes_no(name, v)?,
             ("--selinux", Some("enforcing")) => o.enforcing = Some(true),
             ("--selinux", Some("permissive")) => o.enforcing = Some(false),
@@ -246,6 +252,22 @@ pub(super) fn boot_args(enforcing: bool) -> String {
 
 pub(super) fn resolve(o: &Opts, cfg: &Config) -> Settings {
     let conf = fs::read_to_string(&cfg.config_path).unwrap_or_default();
+    // --boot-only-s6: yes, no, auto (the default: uinitconverter's
+    // initramfs where it can boot this root, rules 2-4); left out, what the
+    // last run set (the plugin's file, or an explicit no's marker).
+    let explicit_s6 = match o.boot_only_s6 {
+        Some(v) => v,
+        None if exists(BOOT_ONLY_S6_FILE) => Some(true),
+        None if exists(BOOT_ONLY_S6_OFF_FILE) => Some(false),
+        None => None,
+    };
+    let (boot_only_s6, boot_only_s6_why) = match explicit_s6 {
+        Some(v) => (v, None),
+        None => match super::checks::s6_initramfs_blocker() {
+            None => (true, None),
+            Some(why) => (false, Some(why)),
+        },
+    };
     Settings {
         journal: o
             .journal
@@ -263,7 +285,9 @@ pub(super) fn resolve(o: &Opts, cfg: &Config) -> Settings {
         enforcing: o.enforcing.unwrap_or_else(|| {
             read(BOOT_OPTIONS).is_some_and(|t| !words(&t).iter().any(|w| w == "enforcing=0"))
         }),
-        boot_only_s6: o.boot_only_s6.unwrap_or_else(|| exists(BOOT_ONLY_S6_FILE)),
+        boot_only_s6,
+        boot_only_s6_why,
+        boot_only_s6_off: explicit_s6 == Some(false),
         default_s6: o
             .default_s6
             .unwrap_or_else(|| read(BOOT_DEFAULT_FILE).is_some_and(|t| words(&t) == ["s6"])),

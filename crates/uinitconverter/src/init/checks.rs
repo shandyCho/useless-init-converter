@@ -125,6 +125,57 @@ pub(super) fn unassembled_root(cmdline: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Why the s6 initramfs can't boot this system (--boot-only-s6=auto keeps
+/// Fedora's then), or None: it opens LUKS with a typed passphrase and mounts
+/// a root on a disk or partition; it has no LVM, MD or multipath tools, no
+/// network, mounts no /usr of its own, doesn't resume from hibernation and
+/// has no token plugins (TPM2, FIDO2, PKCS#11).
+pub(super) fn s6_initramfs_blocker() -> Option<String> {
+    if !in_path("mdevd") {
+        return Some("mdevd is not installed".into());
+    }
+    let cmdline = read("/proc/cmdline").unwrap_or_default();
+    let found = unassembled_root(&cmdline);
+    if !found.is_empty() {
+        return Some(format!("the kernel command line asks for {}", found.join(" ")));
+    }
+    if cmdline.split_whitespace().any(|w| w.starts_with("resume=")) {
+        return Some("resume= (hibernation) is on the kernel command line".into());
+    }
+    let crypttab = read("/etc/crypttab").unwrap_or_default();
+    if let Some(t) = ["tpm2-device", "fido2-device", "pkcs11-uri"]
+        .iter()
+        .find(|t| crypttab.contains(*t))
+    {
+        return Some(format!("/etc/crypttab unlocks a volume with {t}"));
+    }
+    if output(&["findmnt", "-n", "-o", "SOURCE", "/usr"]).is_some_and(|s| !s.trim().is_empty()) {
+        return Some("/usr is a filesystem of its own".into());
+    }
+    let src = output(&["findmnt", "-n", "-o", "SOURCE,FSTYPE", "/"]).unwrap_or_default();
+    let mut w = src.split_whitespace();
+    let dev = w.next().unwrap_or("");
+    let fstype = w.next().unwrap_or("");
+    if fstype.starts_with("nfs") || fstype == "cifs" || fstype == "smb3" {
+        return Some(format!("the root is on the network ({fstype})"));
+    }
+    // A btrfs subvolume's source is DEV[/subvol].
+    let dev = dev.split('[').next().unwrap_or(dev);
+    if !dev.starts_with("/dev/") {
+        return Some(format!("the root's source is {dev}"));
+    }
+    root_stack_blocker(&output(&["lsblk", "-s", "-n", "-o", "TYPE", dev]).unwrap_or_default())
+}
+
+/// What in the root's device stack (lsblk -s TYPE, the root first, then
+/// what it sits on) the s6 initramfs can't assemble.
+pub(super) fn root_stack_blocker(types: &str) -> Option<String> {
+    types
+        .split_whitespace()
+        .find(|t| *t == "lvm" || t.starts_with("raid") || *t == "md" || *t == "mpath" || *t == "loop")
+        .map(|t| format!("the root is on {t}"))
+}
+
 /// A root on LVM or MD doesn't boot with --boot-only-s6=yes: the s6 entry would
 /// stop at the initramfs's rescue shell. Fedora's initramfs handles them.
 pub(super) fn check_root_stack(ctx: &Ctx, s: &Settings) {

@@ -36,6 +36,8 @@ const SHARE: &str = "/usr/share/uinitconverter";
 const BOOT_OPTIONS: &str = "/etc/uinitconverter/boot-options";
 const BOOT_DEFAULT_FILE: &str = "/etc/uinitconverter/boot-default";
 const BOOT_ONLY_S6_FILE: &str = "/etc/uinitconverter/boot-only-s6";
+/// An explicit --boot-only-s6=no (auto would otherwise decide again).
+const BOOT_ONLY_S6_OFF_FILE: &str = "/etc/uinitconverter/boot-only-s6.off";
 /// The kernel-install plugin, from the uinitconverter package.
 const KI_PLUGIN: &str = "/usr/lib/kernel/install.d/90-uinitconverter.install";
 /// The copy the old setup-fedora.sh put in /etc, which would hide the
@@ -83,10 +85,14 @@ anything.
   --selinux=enforcing|permissive
                         SELinux mode of the s6 entry (first run: permissive,
                         until you have checked for denials)
-  --boot-only-s6=yes|no yes: the s6 entry boots uinitconverter's own initramfs, with
-                        s6-svscan as its PID 1 and mdevd loading the drivers,
-                        so no systemd runs at all (needs mdevd; a LUKS root is
-                        unlocked by a typed passphrase, no TPM2/FIDO2)
+  --boot-only-s6=yes|no|auto
+                        yes: the s6 entry boots uinitconverter's own initramfs,
+                        with s6-svscan as its PID 1 and mdevd loading the
+                        drivers, so no systemd runs at all (needs mdevd; a LUKS
+                        root is unlocked by a typed passphrase, no TPM2/FIDO2).
+                        auto (the default): yes unless this root needs what it
+                        can't do (LVM, MD, multipath, a network root, a
+                        separate /usr, resume=, a TPM2/FIDO2/PKCS#11 LUKS key)
   --grub=yes|no         no: do not add or update the boot entry
   --uninstall           remove the boot entry and what init wrote (not the
                         packages, /etc/uinitconverter or the logs)
@@ -596,7 +602,7 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(!o.grub);
-        assert_eq!((o.boot_only_s6, o.resolved), (Some(true), Some(true)));
+        assert_eq!((o.boot_only_s6, o.resolved), (Some(Some(true)), Some(true)));
         assert!(parse_args(&args(&["--help"])).unwrap().is_none());
         assert_eq!(
             parse_args(&args(&["--bus=broker"]))
@@ -704,6 +710,22 @@ mod tests {
             set_conf_key(old, "RESOLVED", false, false).unwrap(),
             "A=1\n"
         );
+    }
+
+    #[test]
+    fn boot_only_s6_auto() {
+        let o = parse_args(&args(&["--boot-only-s6=auto"])).unwrap().unwrap();
+        assert_eq!(o.boot_only_s6, Some(None));
+        let o = parse_args(&args(&["--boot-only-s6=no"])).unwrap().unwrap();
+        assert_eq!(o.boot_only_s6, Some(Some(false)));
+        // lsblk -s: the root first, then what it sits on.
+        assert_eq!(super::checks::root_stack_blocker("crypt\npart\ndisk\n"), None);
+        assert_eq!(super::checks::root_stack_blocker("part\ndisk\n"), None);
+        assert_eq!(
+            super::checks::root_stack_blocker("lvm\ncrypt\npart\ndisk\n").as_deref(),
+            Some("the root is on lvm")
+        );
+        assert!(super::checks::root_stack_blocker("raid1\npart\ndisk").is_some());
     }
 
     #[test]

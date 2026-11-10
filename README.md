@@ -160,7 +160,7 @@ sudo initconvert init
 | `--selinux=enforcing` | s6 부팅의 SELinux를 enforcing으로 |
 | `--default-s6` | s6를 기본 부팅 항목으로 |
 | `--journal=yes` | 기본값인 rsyslog와 일반 텍스트 로그 대신 systemd-journald 실행(`journalctl`, `systemctl status`의 로그) |
-| `--boot-only-s6=yes` | initramfs에서도 systemd를 쓰지 않음(루트가 LVM이나 MD에 있으면 쓸 수 없음) |
+| `--boot-only-s6=no` | Fedora의 initramfs 유지(기본값 `auto`는 루트를 부팅할 수 있으면 uinitconverter의 것을 써서 initramfs에서도 systemd를 쓰지 않음) |
 
 ### 5. s6로 부팅
 

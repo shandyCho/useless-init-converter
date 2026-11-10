@@ -164,7 +164,7 @@ below; all of them are in
 | `--selinux=enforcing` | Boot s6 with SELinux enforcing |
 | `--default-s6` | Make s6 the default boot entry |
 | `--journal=yes` | Run systemd-journald (`journalctl`, logs in `systemctl status`) instead of the default rsyslog and plain-text logs |
-| `--boot-only-s6=yes` | No systemd in the initramfs either (a root on LVM or MD can't use this) |
+| `--boot-only-s6=no` | Keep Fedora's initramfs (by default, `auto`, uinitconverter's own is used where it can boot the root: no systemd in the initramfs either) |
 
 ### 5. Boot with s6
 

@@ -74,6 +74,18 @@ pub(super) fn add_grub_entry(ctx: &Ctx, s: &Settings) {
     } else if exists(BOOT_ONLY_S6_FILE) {
         ctx.run(&["rm", "-f", BOOT_ONLY_S6_FILE]);
     }
+    if s.boot_only_s6_off {
+        ctx.put(
+            BOOT_ONLY_S6_OFF_FILE,
+            "# initconvert init --boot-only-s6=no: Fedora's initramfs, not auto.\n",
+            0o644,
+        );
+    } else if exists(BOOT_ONLY_S6_OFF_FILE) {
+        ctx.run(&["rm", "-f", BOOT_ONLY_S6_OFF_FILE]);
+    }
+    if let Some(why) = &s.boot_only_s6_why {
+        println!("  The s6 entries keep Fedora's initramfs: {why} (--boot-only-s6=auto).");
+    }
     // An old setup-fedora.sh copy in /etc would hide the packaged plugin.
     if exists(OLD_KI_PLUGIN) {
         println!("  removing {OLD_KI_PLUGIN} (the package's {KI_PLUGIN} is used)");

@@ -21,6 +21,11 @@
   이 이름을 가진 파일이 없습니다. `systemctl`은 그대로 남는 `Manager`의 `…Unit` 메서드를 씁니다).
 
 ### 변경
+- **가능하면 initramfs에서도 systemd 없음(규칙 2-4):** 기본값은 `--boot-only-s6=auto`입니다. 루트가
+  uinitconverter의 initramfs가 못 하는 것(LVM, MD, multipath, 네트워크 루트, 별도 `/usr`, `resume=`,
+  TPM2/FIDO2/PKCS#11 LUKS 키, `mdevd` 없음)을 요구하지 않으면 s6 항목은 그 initramfs로 부팅하고, Fedora의 것을
+  쓸 때는 `initconvert init`이 이유를 알려 줍니다. 명시적인 `--boot-only-s6=no`는 유지됩니다
+  (`/etc/uinitconverter/boot-only-s6.off`).
 - **s6 initramfs를 Rust로(규칙 6):** `mkinitramfs`는 `initconvert`의 링크이며, 이미지 안의 `rootfs`
   서비스(LUKS, 루트 마운트)와 s6-svscan의 finish(`switch_root`)는 `initconvert initramfs root|switch`입니다.
   이미지에 `initconvert`가 들어가고, bash는 복구 셸용으로만 남습니다. `UINITCONVERTER_INITRAMFS_SOURCE`로

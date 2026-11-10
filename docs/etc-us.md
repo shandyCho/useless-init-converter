@@ -103,8 +103,9 @@ Workstation machine. The systemd numbers are from boots up to 2026-10-31.
 - **Predictable boot.** The boot runs a compiled s6-rc database, and nothing
   is regenerated at boot. If a change goes wrong, `uinitconverter.db=previous`
   boots the database from before the last install.
-- **More of systemd can be replaced.** `--boot-only-s6=yes` removes systemd
-  from the initramfs, journald is replaced by rsyslog and s6-log's
+- **More of systemd can be replaced.** uinitconverter's own initramfs removes
+  systemd from the initramfs wherever it can boot the root (`--boot-only-s6=auto`,
+  the default), journald is replaced by rsyslog and s6-log's
   plain-text logs (the default; `--journal=yes` runs journald), and NetworkManager handles DNS alone (the default;
   `--resolved=yes` runs systemd-resolved). The system bus is dbus-daemon with the default `--bus=daemon`.
 - **Normal Fedora still works.** dnf, SELinux enforcing, GNOME and the real
@@ -422,14 +423,14 @@ Options:
 | `--resolved=yes\|no` | `no`: no systemd-resolved on the s6 boot, NetworkManager handles DNS itself / `yes`: back to resolved |
 | `--bus=daemon\|broker` | The s6 boot's system bus: dbus-daemon (default) or dbus-broker as on the systemd boot. dbus-daemon stays installed: the broker falls back to it when dbus-broker isn't installed, journald's socket (journald, or journal-relay with `JOURNAL=no`) isn't there after 10 s, or `dbus-broker-launch` has exited three times in this boot |
 | `--selinux=enforcing\|permissive` | SELinux mode of the s6 entry (`permissive` adds `enforcing=0`). The first run uses permissive |
-| `--boot-only-s6=yes\|no` | `yes`: boot the s6 entry with uinitconverter's own initramfs instead of Fedora's, so no systemd runs at all (see below; needs `mdevd`) / `no`: back to Fedora's |
+| `--boot-only-s6=yes\|no\|auto` | `yes`: boot the s6 entry with uinitconverter's own initramfs instead of Fedora's, so no systemd runs at all (see below; needs `mdevd`) / `no`: Fedora's / `auto` (the default, rules 2-4): `yes` unless the root needs what that initramfs can't do (LVM, MD, multipath, a network root, a separate `/usr`, `resume=`, a TPM2/FIDO2/PKCS#11 LUKS key, no `mdevd`); init says why when it keeps Fedora's |
 | `--default-s6` / `--default-systemd` | Make the s6 entry the default boot entry, also for kernels installed later / make the systemd entry the default again. The systemd entry stays in the menu either way |
 | `--grub=yes\|no` | `no`: don't add or update the boot entry (not kept for the next run) |
 | `--uninstall` | Remove the boot entries, the s6 initramfs images, `/etc/s6-linux-init/current`, `/etc/s6.conf` (if init wrote it) and the boot settings; keeps `/etc/uinitconverter`. Then `dnf remove` the packages |
 
 An option left out keeps what the last run set: `JOURNAL=`/`RESOLVED=` in
 `/etc/uinitconverter/uinitconverter.conf`, the SELinux mode in
-`/etc/uinitconverter/boot-options`, `/etc/uinitconverter/boot-only-s6` and
+`/etc/uinitconverter/boot-options`, `/etc/uinitconverter/boot-only-s6` (or `boot-only-s6.off` for an explicit `no`; neither: `auto`) and
 `/etc/uinitconverter/boot-default`. So a plain `sudo initconvert init` after a package
 upgrade redoes the setup with the same choices.
 
@@ -486,7 +487,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 
 | Role | Under s6 + uinitconverter |
 |---|---|
-| Initramfs | Fedora's (dracut, systemd as its PID 1); with `--boot-only-s6=yes` uinitconverter's: s6-svscan, mdevd, and cryptsetup if installed |
+| Initramfs | uinitconverter's where it can boot the root (`--boot-only-s6=auto`): s6-svscan, mdevd, and cryptsetup if installed; else Fedora's (dracut, systemd as its PID 1) |
 | PID 1 / services | s6-linux-init, s6-rc, uinitconverter |
 | System bus | dbus-daemon, or dbus-broker with `--bus=broker` (dbus-broker stays for the user bus) |
 | Logging | rsyslog + s6-log (`--journal=yes`: systemd-journald as an s6 service) |
