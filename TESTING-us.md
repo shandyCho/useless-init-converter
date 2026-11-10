@@ -178,8 +178,8 @@ tests/bpf-root.sh
 
 **Expected:** `test result: ok. 1 passed`.
 
-The services s6 starts with their unit's sandbox (rsyslog, earlyoom, udevd)
-need real root to switch user, so this runs them in QEMU, unprivileged: the
+The services s6 starts with their unit's sandbox (rsyslog, earlyoom, udevd,
+coredump) need real root to switch user, so this runs them in QEMU, unprivileged: the
 running kernel, this host's programs and unit files, `dist/s6`'s run scripts
 under `s6-supervise`. It also makes earlyoom kill a process under memory
 pressure, tests udevd's fallback, crashes a process to see its core file kept,
@@ -414,9 +414,9 @@ timestamps are local time, as `uptime -s` prints it).
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (twice, a few seconds apart) | `up (pid …) N seconds`, with N growing (not restarting) |
 | Shutdown order | after an s6 reboot from GNOME: `grep -E 'org.gnome.Shell@user.service: Consumed\|Activating special unit exit.target' /var/log/uinitconverter/user@1000.service/current \| tail -4` | the shell's `Consumed` line before `Activating special unit exit.target` |
 | `/run/service` labels restored on a running s6 boot | `sudo restorecon -R /run/service` (the restore `fixfiles` does when `selinux-policy-targeted` is updated with a package that has its own SELinux module; `/var/run` is a symlink, so that path doesn't reproduce it); `sudo ls -lZ /run/service/.s6-svscan/control`; `sudo find /run/service/ /run/uinitconverter -type p -context '*:var_run_t:*' -printf '%p\n'`; `sudo systemctl daemon-reload; echo $?` | `control` is `init_var_run_t`; `find` prints nothing; `0`; `sudo ausearch -m AVC -ts recent` shows no `s6` denials |
-| Display manager at shutdown | after s6 shutdowns from GNOME and from the login screen: `sudo abrt list \| grep -B2 gnome-session-i`; with `JOURNAL=no`, also `grep "Failed to start user service 'user@" /var/log/uinitconverter/systemd-logind.service/current \| tail -3` | no file or line timed at those shutdowns |
+| Display manager at shutdown | after s6 shutdowns from GNOME and from the login screen: `ls -lt /var/lib/systemd/coredump \| grep gnome-session-i \| head -3`; with `JOURNAL=no`, also `grep "Failed to start user service 'user@" /var/log/uinitconverter/systemd-logind.service/current \| tail -3` | no file or line timed at those shutdowns |
 | `PrivateNetwork=` | `sudo nsenter -t "$(pgrep -x polkitd)" -m ls /sys/class/net` and `sudo nsenter -t "$(pgrep -x polkitd)" -m ls -d /sys/fs/cgroup/system.slice /sys/fs/selinux/enforce` | only `lo`; both paths still there |
-| Core dumps | `cat /proc/sys/kernel/core_pattern; grep 'core file' /proc/1/limits; sh -c 'kill -SEGV $$'; sudo abrt list` | `\|/usr/libexec/abrt-hook-ccpp ...`; soft limit `unlimited`; a new problem for `sh` |
+| Core dumps | `cat /proc/sys/kernel/core_pattern; grep 'core file' /proc/1/limits; sh -c 'kill -SEGV $$'; sudo ls -l /var/lib/systemd/coredump` | `@@/run/systemd/coredumpd/kernel`; soft limit `unlimited`; a new `core.sh.*` file |
 | Log directory (`JOURNAL=no`) | `stat -c '%a %U:%G' /var/log/uinitconverter` | `750 root:wheel` |
 | Greeter's loggers (`JOURNAL=no`) | after logging in at the login screen: `sudo awk -v b="$(uptime -s)" '$0 >= b && /cannot create/' /var/log/uinitconverter/user@6*.service/current` | nothing, or one `logger of …: cannot create …, logging to …` line per service; no `mkdir: cannot create directory` |
 | On-demand services | `systemctl status virtlogd.service iscsid.service` and `ls -l /run/libvirt/virtlogd-sock`; then `sudo python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect("/run/libvirt/virtlogd-sock")'` and the status again | `inactive (dead)` with the socket file there; after the connection, `virtlogd` is `active (running)` |

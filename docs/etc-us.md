@@ -300,7 +300,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - Job modes: jobs on a unit run one after another, so `replace` cancels only a conflicting job that is still waiting, not a running one (systemd stops a running start). `ignore-dependencies` and `ignore-requirements` start a unit without its dependencies only when it runs outside s6-rc (instances, transient and user units); a unit in the s6-rc database still gets the dependencies s6-rc compiled in.
 - `PrivateNetwork=` in `[Socket]`, `JoinsNamespaceOf=` and `NetworkNamespacePath=`.
 - `KillMode=control-group` at the s6 boot's shutdown: s6-rc stops the database's services itself there, so a service's other processes get the signal only after its main process has exited (stops through the daemon signal them together as systemd does).
-- Unit settings of the services with their own s6 scripts in `dist/s6` (`dbus`, `udevd`, `earlyoom`, `syslog`): they take the cgroup, limits, sandbox and user from the unit, but the command line and the restart and stop behaviour are in the script. So drop-ins that change `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=` or `Type=` don't reach them.
+- Unit settings of the services with their own s6 scripts in `dist/s6` (`dbus`, `udevd`, `earlyoom`, `syslog`, `coredump`): they take the cgroup, limits, sandbox and user from the unit, but the command line and the restart and stop behaviour are in the script. So drop-ins that change `ExecStart=`, `Restart=`, `KillMode=`, `TimeoutStopSec=` or `Type=` don't reach them.
 
 ## Offline updates and kernel updates
 
@@ -512,13 +512,11 @@ one can't be applied, the service stays down and s6 keeps trying.
 With `JOURNAL=no`, services' output is in `/var/log/uinitconverter`, readable by
 root and the `wheel` group only (0750), like the journal.
 
-Core dumps go to abrt (rule 2, in place of systemd-coredump; the package
-recommends `abrt-addon-ccpp`): Fedora's `abrt-ccpp.service` points
-`kernel.core_pattern` at abrt's hook and `abrtd.service` keeps the problem
-reports in `/var/spool/abrt`, listed by `abrt` (abrt-cli) or GNOME's Problem
-Reporting; services start with an unlimited soft `RLIMIT_CORE`. Without abrt,
-`kernel.core_pattern` stays what `sysctl --system` set (Fedora's
-systemd-coredump pipe).
+Core dumps are kept as on systemd: the `coredump` s6 service runs
+`systemd-coredump --manager` with its unit's sandbox and points
+`kernel.core_pattern` at its socket, and services start with an unlimited soft
+`RLIMIT_CORE`. The files are in `/var/lib/systemd/coredump`. With `JOURNAL=no`
+`coredumpctl` lists nothing, as it reads the journal; the summary goes to syslog.
 
 What an s6 shutdown printed on the console is kept for the next boot in
 `/var/log/uinitconverter/last-shutdown-console.log` (s6's catch-all log) and

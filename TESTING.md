@@ -167,7 +167,7 @@ tests/bpf-root.sh
 
 **기대 결과:** `test result: ok. 1 passed`.
 
-s6가 유닛의 샌드박스로 시작하는 서비스(rsyslog, earlyoom, udevd)는 사용자를 바꾸려면 실제 root가
+s6가 유닛의 샌드박스로 시작하는 서비스(rsyslog, earlyoom, udevd, coredump)는 사용자를 바꾸려면 실제 root가
 필요합니다. 그래서 이 테스트는 QEMU에서 root 권한 없이 실행합니다. 실행 중인 커널, 이 컴퓨터의
 프로그램과 유닛 파일, `s6-supervise` 아래의 `dist/s6` run 스크립트를 씁니다. 메모리가 부족할 때
 earlyoom이 프로세스를 강제 종료하는지와 udevd의 대체 경로, 프로세스가 비정상 종료했을 때 코어 파일이 남는지도 확인하고,
@@ -363,9 +363,9 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | earlyoom | `sudo s6-svstat /run/service/earlyoom` (몇 초 간격으로 두 번) | `up (pid …) N seconds`, N이 늘어납니다(재시작하지 않음) |
 | 종료 순서 | GNOME에서 s6 재부팅한 뒤: `grep -E 'org.gnome.Shell@user.service: Consumed\|Activating special unit exit.target' /var/log/uinitconverter/user@1000.service/current \| tail -4` | 셸의 `Consumed` 줄이 `Activating special unit exit.target`보다 먼저 |
 | 실행 중인 s6 부팅에서 `/run/service` 레이블 복원 | `sudo restorecon -R /run/service`(`selinux-policy-targeted`와 자체 SELinux 모듈을 가진 패키지를 함께 업데이트할 때 `fixfiles`가 하는 복원, `/var/run`은 심볼릭 링크라 그 경로로는 재현되지 않습니다), `sudo ls -lZ /run/service/.s6-svscan/control`, `sudo find /run/service/ /run/uinitconverter -type p -context '*:var_run_t:*' -printf '%p\n'`, `sudo systemctl daemon-reload; echo $?` | `control`이 `init_var_run_t`이고, `find`는 아무것도 출력하지 않고 `0`이며, `sudo ausearch -m AVC -ts recent`에 `s6` 거부가 없습니다 |
-| 종료 시 디스플레이 관리자 | GNOME과 로그인 화면에서 각각 s6를 종료한 뒤: `sudo abrt list \| grep -B2 gnome-session-i`, `JOURNAL=no`이면 `grep "Failed to start user service 'user@" /var/log/uinitconverter/systemd-logind.service/current \| tail -3`도 | 그 종료 시각의 파일이나 줄이 없습니다 |
+| 종료 시 디스플레이 관리자 | GNOME과 로그인 화면에서 각각 s6를 종료한 뒤: `ls -lt /var/lib/systemd/coredump \| grep gnome-session-i \| head -3`, `JOURNAL=no`이면 `grep "Failed to start user service 'user@" /var/log/uinitconverter/systemd-logind.service/current \| tail -3`도 | 그 종료 시각의 파일이나 줄이 없습니다 |
 | `PrivateNetwork=` | `sudo nsenter -t "$(pgrep -x polkitd)" -m ls /sys/class/net`, `sudo nsenter -t "$(pgrep -x polkitd)" -m ls -d /sys/fs/cgroup/system.slice /sys/fs/selinux/enforce` | `lo`만 보이고, 두 경로는 그대로 있습니다 |
-| 코어 덤프 | `cat /proc/sys/kernel/core_pattern; grep 'core file' /proc/1/limits; sh -c 'kill -SEGV $$'; sudo abrt list` | `\|/usr/libexec/abrt-hook-ccpp ...`, 소프트 한도 `unlimited`, `sh`의 새 문제 |
+| 코어 덤프 | `cat /proc/sys/kernel/core_pattern; grep 'core file' /proc/1/limits; sh -c 'kill -SEGV $$'; sudo ls -l /var/lib/systemd/coredump` | `@@/run/systemd/coredumpd/kernel`, 소프트 한도 `unlimited`, 새 `core.sh.*` 파일 |
 | 로그 디렉터리(`JOURNAL=no`) | `stat -c '%a %U:%G' /var/log/uinitconverter` | `750 root:wheel` |
 | 로그인 화면의 로거(`JOURNAL=no`) | 로그인 화면에서 로그인한 뒤: `sudo awk -v b="$(uptime -s)" '$0 >= b && /cannot create/' /var/log/uinitconverter/user@6*.service/current` | 아무것도 없거나, 서비스마다 `logger of …: cannot create …, logging to …` 한 줄; `mkdir: cannot create directory`는 없습니다 |
 | 요청 시 서비스 | `systemctl status virtlogd.service iscsid.service`와 `ls -l /run/libvirt/virtlogd-sock`. 그다음 `sudo python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect("/run/libvirt/virtlogd-sock")'`을 실행하고 상태를 다시 봅니다 | 소켓 파일은 있고 `inactive (dead)`. 연결한 뒤 `virtlogd`는 `active (running)` |

@@ -24,10 +24,6 @@ Details in `work_history.md`, parts 203-205.
   `systemctl` uses the `Manager` methods `…Unit`, which stay).
 
 ### Changed
-- **Core dumps go to abrt (rule 2):** the `coredump` s6 service (systemd-coredump's
-  listener) is removed; the package recommends `abrt-addon-ccpp`, whose
-  Fedora units point `kernel.core_pattern` at abrt and keep the reports
-  (`abrt list`). Its SELinux rule went with it.
 - **systemd-journald is off by default (rule 2; reverses key decision 5):**
   `JOURNAL=no` is the new default: rsyslog (or syslog-ng, now required) and
   one s6-log directory per service under `/var/log/uinitconverter`;

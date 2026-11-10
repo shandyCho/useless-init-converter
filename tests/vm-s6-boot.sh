@@ -166,13 +166,9 @@ systemctl --failed --no-legend --no-pager 2>&1 | sed 's/^/   /'
 r=$(grep -E '^[[:space:]]*RESOLVED=' /etc/uinitconverter/uinitconverter.conf | tail -1)
 until_ok 'getent ahosts fedoraproject.org >/dev/null' 60 && ok "DNS resolves (${r:-RESOLVED default})" || bad "no DNS (${r:-RESOLVED default}): $(cat /etc/resolv.conf 2>&1 | head -3 | tr '\n' ' ')"
 s6-rc -a list | grep -qx backlight && ok "backlight is up" || bad "backlight isn't up"
-# Core dumps go to abrt (rule 2, in place of systemd-coredump).
-if rpm -q abrt-addon-ccpp >/dev/null 2>&1; then
-    case $(cat /proc/sys/kernel/core_pattern) in "|/usr/libexec/abrt-hook-ccpp"*) ok "core_pattern is abrt's hook" ;; *) bad "core_pattern: $(cat /proc/sys/kernel/core_pattern)" ;; esac
-    [ "$(systemctl is-active abrtd.service)" = active ] && ok "abrtd.service is active" || bad "abrtd.service: $(systemctl is-active abrtd.service)"
-else
-    bad "abrt-addon-ccpp isn't installed (the package recommends it)"
-fi
+# Core dumps: systemd-coredump's listener, the coredump s6 service (rule 3:
+# abrt 2.17 reads systemd-coredump's journal entries, it doesn't replace it).
+[ "$(cat /proc/sys/kernel/core_pattern)" = "@@/run/systemd/coredumpd/kernel" ] && ok "core_pattern is systemd-coredump's socket" || bad "core_pattern: $(cat /proc/sys/kernel/core_pattern)"
 w=$(logs | grep "uinitconverter early:" | sort -u)
 [ -z "$w" ] && ok "no early-boot warnings" || bad "early-boot warnings: $(echo "$w" | head -5 | tr '\n' ' ')"
 n=$(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep -c denied)

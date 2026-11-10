@@ -3,7 +3,8 @@
 # earlyoom, udevd) as real root, in QEMU, unprivileged: the running kernel, an
 # initramfs with this host's programs and unit files, dist/s6's run scripts
 # under s6-supervise. No SELinux policy is loaded in there; that takes a real
-# boot. Also runs dist/s6-linux-init/init-selinux, for the hard RLIMIT_NOFILE and soft RLIMIT_CORE,
+# boot. Also makes the coredump service keep a real crash's core dump, and runs
+# dist/s6-linux-init/init-selinux, for the hard RLIMIT_NOFILE and soft RLIMIT_CORE,
 # with the policy load and s6-linux-init replaced by stand-ins.
 #
 #   tests/confine-vm.sh WORKDIR [KVER]
@@ -44,7 +45,7 @@ for p in bash sh cat sed grep awk cut seq readlink mkdir ls stat kill sleep moun
     s6-notifyoncheck execlineb; do
     add "$(type -P "$p")"
 done
-add /usr/lib/systemd/systemd-udevd
+add /usr/lib/systemd/systemd-udevd /usr/lib/systemd/systemd-coredump
 # Opened at run time, so ldd doesn't list them.
 add /usr/lib64/libseccomp.so.2 /usr/lib64/libkmod.so.2 /usr/lib64/libzstd.so.1
 # s6-notifyoncheck's helper, wherever s6 keeps it.
@@ -54,7 +55,7 @@ mkdir -p "$R/usr/libexec/uinitconverter"
 cp "$TOP/target/debug/initconvert-runner" "$R/usr/libexec/uinitconverter/"
 add "$TOP/target/debug/initconvert-runner"
 rm -rf "$R${TOP:?}"
-cp /usr/lib/systemd/system/{rsyslog,earlyoom,systemd-udevd}.service "$R/usr/lib/systemd/system/"
+cp /usr/lib/systemd/system/{rsyslog,earlyoom,systemd-udevd,systemd-coredumpd}.service "$R/usr/lib/systemd/system/"
 mkdir -p "$R/usr/lib/udev"
 cp -r /usr/lib/udev/rules.d "$R/usr/lib/udev/"
 mkdir -p "$R"/etc/uinitconverter "$R"/etc/default "$R"/etc/udev/rules.d "$R"/service \
@@ -75,7 +76,7 @@ echo "EARLYOOM_ARGS=\"-r 0 -m 4 -M 409600 --avoid '^(no such|program)\$'\"" >"$R
 # shellcheck disable=SC2016  # for udevd
 echo 'KERNEL=="null", ACTION=="add", ENV{VM_TEST}="yes", RUN+="/bin/sh -c '\''id -u >/run/vm-rule-ran'\''"' >"$R/etc/udev/rules.d/99-vm.rules"
 cat /etc/machine-id >"$R/etc/machine-id"
-for s in syslog earlyoom udevd; do
+for s in syslog earlyoom udevd coredump; do
     mkdir "$R/service/$s"
     cp "$TOP/dist/s6/$s/run" "$R/service/$s/"
 done
@@ -271,6 +272,27 @@ e=$(pid_of earlyoom)
 is "earlyoom: user after a restart" "$(status "$e" Uid | tr -s '\t ' ' ')" "990 990 990 990"
 sleep 2
 is "earlyoom: up after a restart" "$(pid_of earlyoom)" "$e"
+
+echo '--- coredump'
+wait_for '[ "$(cat /proc/sys/kernel/core_pattern)" = @@/run/systemd/coredumpd/kernel ]' || bad "coredump: core_pattern is $(cat /proc/sys/kernel/core_pattern)"
+c=$(s6-svstat -p /service/coredump)
+is "coredump: the manager runs" "$(cat "/proc/$c/comm" 2>/dev/null)" systemd-coredum
+is "coredump: no_new_privs" "$(status "$c" NoNewPrivs)" 1
+is "coredump: seccomp" "$(status "$c" Seccomp)" 2
+is "coredump: cgroup" "$(cat "/proc/$c/cgroup")" "0::/system.slice/systemd-coredumpd.service"
+is "coredump: / read-only" "$(top_mount "$c" /)" ro
+is "coredump: state directory writable" "$(top_mount "$c" /var/lib/systemd/coredump)" rw
+is "coredump: runtime directory writable" "$(top_mount "$c" /run/systemd/coredumpd)" rw
+cores() { ls /var/lib/systemd/coredump 2>/dev/null | grep -c '^core\.bash\.'; }
+is "coredump: none yet" "$(cores)" 0
+# A shell that dies by SIGSEGV. Soft limit 0, what a service has unless
+# init-selinux raised it: nothing kept.
+bash -c 'ulimit -Sc 0; kill -SEGV $$' 2>/dev/null
+sleep 2
+is "coredump: soft limit 0 keeps nothing" "$(cores)" 0
+bash -c 'ulimit -Sc unlimited; kill -SEGV $$' 2>/dev/null
+wait_for '[ "$(cores)" = 1 ]' && ok "coredump: a crash's core file is kept" || bad "coredump: no core file: $(ls -la /var/lib/systemd/coredump 2>&1)"
+is "coredump: same manager after the crash" "$(s6-svstat -p /service/coredump)" "$c"
 
 echo '--- udevd fallback'
 is "udevd: one try" "$(cut -d' ' -f1 /run/uinitconverter/udevd-tries)" 1
