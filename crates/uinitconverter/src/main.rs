@@ -9,6 +9,7 @@ use std::process::{exit, Command};
 
 mod early;
 mod init;
+mod kinstall;
 mod rc;
 mod svc;
 
@@ -149,6 +150,13 @@ fn main() {
         .is_some_and(|n| n == "init-selinux")
     {
         rc::init_selinux(&args);
+    }
+    // The kernel-install plugin (90-uinitconverter.install, a link here).
+    if std::path::Path::new(&argv0)
+        .file_name()
+        .is_some_and(|n| n == "90-uinitconverter.install")
+    {
+        kinstall::main(&args);
     }
     // s6-linux-init's rc.init, rc.shutdown and rc.shutdown.final.
     if args.first().is_some_and(|a| a == "rc") {

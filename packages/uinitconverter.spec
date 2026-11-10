@@ -106,7 +106,9 @@ cp -a dist/initramfs/root %{buildroot}%{_datadir}/uinitconverter/initramfs
 install -d %{buildroot}%{_sbindir}
 ln -s ../libexec/uinitconverter/initconvert %{buildroot}%{_sbindir}/init-selinux
 install -Dm0644 dist/selinux/uinitconverter.cil %{buildroot}%{_datadir}/uinitconverter/selinux/uinitconverter.cil
-install -Dm0755 dist/kernel-install/90-uinitconverter.install %{buildroot}%{_prefix}/lib/kernel/install.d/90-uinitconverter.install
+# The kernel-install plugin: initconvert by argv0 (rule 6).
+install -d %{buildroot}%{_prefix}/lib/kernel/install.d
+ln -s ../../../libexec/uinitconverter/initconvert %{buildroot}%{_prefix}/lib/kernel/install.d/90-uinitconverter.install
 install -d %{buildroot}%{_localstatedir}/log/uinitconverter
 
 %post

@@ -21,6 +21,8 @@
   이 이름을 가진 파일이 없습니다. `systemctl`은 그대로 남는 `Manager`의 `…Unit` 메서드를 씁니다).
 
 ### 변경
+- **kernel-install 플러그인을 Rust로(규칙 6):** `90-uinitconverter.install`은 `initconvert`의 링크이며,
+  셸 플러그인처럼 s6 부팅 항목을 유지합니다(`ls -v`와 같은 순서로 정렬).
 - **2단계 부팅, 종료, init-selinux를 Rust로(규칙 6):** s6-linux-init의 `rc.init`, `rc.shutdown`,
   `rc.shutdown.final`, `runlevel`은 execline 한 줄이며, 일은 `initconvert rc init|shutdown|shutdown-final`이
   하고 `/usr/sbin/init-selinux`는 `initconvert`의 링크입니다. `initconvert init`(s6-linux-init를 다시 만듦)

@@ -24,6 +24,9 @@ Details in `work_history.md`, parts 203-205.
   `systemctl` uses the `Manager` methods `…Unit`, which stay).
 
 ### Changed
+- **The kernel-install plugin in Rust (rule 6):** `90-uinitconverter.install`
+  is a link to `initconvert`, which keeps the s6 boot entries as the shell
+  plugin did (and sorts them as `ls -v` did).
 - **Stage 2, the shutdown and init-selinux in Rust (rule 6):** s6-linux-init's
   `rc.init`, `rc.shutdown`, `rc.shutdown.final` and `runlevel` are one line
   of execline; `initconvert rc init|shutdown|shutdown-final` does the work,
