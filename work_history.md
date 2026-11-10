@@ -12949,3 +12949,31 @@ The owner stated the rules: "1. use s6 and their ecosystem's feature at first. 2
 | systemd-machine-id-setup | `dbus-uuidgen --ensure=/etc/machine-id` (dbus) | replaceable |
 
 Already replaced before: systemd-oomd (earlyoom), systemd-rfkill (util-linux `rfkill`), zram via zram-generator run by an s6 oneshot, fstab/remount/modules-load/sysctl/hostname by `dist/early` with util-linux/kmod/procps. Owner to choose which of the replaceable ones to replace.
+
+## 2026-11-11, part 220: rule 2 applied — what other packages can do, they do
+
+The owner chose to replace every piece part 219 found replaceable. Done in slices:
+
+1. **46ef317** — `dist/early` (shell) became `initconvert`'s `early` module (rule 6), reached as before through `/usr/libexec/uinitconverter/early`, now a link to `initconvert` (argv0 dispatch), so the s6 services and existing databases didn't change. systemd-vconsole-setup → kbd's `loadkeys`/`setfont` (with `/etc/vconsole.conf` and `vconsole.*` on the command line); systemd-backlight@ → the `backlight` oneshot (systemd-backlight's own files); systemd-machine-id-setup → `dbus-uuidgen --ensure` (Requires: dbus-tools; Recommends: kbd). Unit tests for the parsing. VM: 20/20 on both boots.
+2. **529d034** — `RESOLVED=no` by default (`RESOLVED_DEFAULT` in config.rs; init's conf helpers take each key's default). `%post` writes `RESOLVED=yes` into an existing install's config that doesn't set it, before the transaction's reload, so an update doesn't drop resolved under a running system (DNS would break until init or a reboot).
+3. **10e773b** — `JOURNAL=no` by default (**key decision 5 reversed**): rsyslog/syslog-ng (now Required) and s6-log directories; pinned on updates as RESOLVED. `tests/vm-s6-boot.sh` reads the boot's log from the journal or s6's logs; `tests/vm-user-manager.sh` runs `--journal=yes` (its checks read the user journal). Sandbox 388/388 and 395/395.
+4. **1652de4, reverted in 5b00340** — core dumps to abrt. abrt 2.17 in Fedora 45 has no core_pattern hook (no `abrt-ccpp.service`); `abrt-journal-core` reads what systemd-coredump logs to the journal. So abrt is built on systemd-coredump and journald, not a replacement: systemd-coredump is a **rule 3** piece and the `coredump` s6 service is back.
+
+**Bug found by the upgrade test, fixed in 3979564:** the update from 0.3.0 hung again. `backlight` had joined `uinitconverter-sysinit`, and after the RPM update the bundle dbus and initconvertd depend on gained a down service; 0.3.0's daemon has no dry run (part 215) and stopped itself. Also a `user-sessions` service mapped from `systemd-user-sessions.service` would have been new with gdm depending on it, and s6-rc-update restarts a service that gains a dependency on a new service (gdm, with the session). **Rule for updates: no new service joins `uinitconverter-sysinit`, and no new service gets dependents.** Now `backlight` is an always-on oneshot nothing depends on; `/run/nologin` is removed by the tmpfiles step and written by `rc.shutdown` (systemd-user-sessions.service maps to `tmpfiles-setup`, which is up). SELinux: `sshd_session_t` may write its inherited s6-log pipe (init_t pipefs), new with JOURNAL=no by default.
+
+**Tests (VM, b5f42b3's RPMs = 5b00340's product):** `default` 22/22 on both boots (logins open, backlight up, no early-step warning, DNS through NetworkManager, systemd-coredump's socket, no AVC denial); `rollback` all stages 22/5/7/22/4, `upgrade` 14/14 then 17+ after the reboot; the essential-restart check's own mistakes (syslog is already a member with JOURNAL=no; the daemon's line reaches the catch-all logger a moment later) fixed in b5f42b3. `cargo test` all pass; sandbox 388/388 (journald) and 395/395 (without).
+
+## 2026-11-11, part 221: plan — reworking the project around the six rules
+
+The owner: "remake our projects follow our rules. first you make a plan step by step, and do that follow step. I will follow your recommendations. commit when each step end." Measured state: the product's shell is the s6 services' run scripts with logic (dbus 62 lines, syslog 45, udevd 36, fdstore 17, journal-relay 14, linkwatch 11, earlyoom 9), s6-linux-init's scripts (rc.init 44, rc.shutdown 35, rc.shutdown.final 57) and init-selinux (22), the kernel-install plugin (96), and the s6 initramfs (mkinitramfs 203, its rootfs/run 130, init 18, finish 20). The fd store (standalone uinitconverter-fdstore, 690 lines, plus base's fdstore.rs, 841) duplicates s6's own s6-fdholderd. The default boot still runs systemd in dracut's initramfs.
+
+Steps, in order; each: implement, `cargo test`, sandbox, the VM where the boot is touched, docs pair, commit, a work_history entry:
+
+1. **Rule 6 — the s6 services' run scripts.** Their logic moves into Rust (`initconvert` subcommands), each `run` becomes a one-line exec (rule 1: s6 wants the file). A run file's change doesn't restart a running longrun (part 207), so updates are safe.
+2. **Rule 6 — s6-linux-init's scripts and init-selinux.** rc.init, rc.shutdown, rc.shutdown.final and init-selinux become `initconvert` subcommands; the skel scripts one-line execs.
+3. **Rule 6 — the kernel-install plugin and the s6 initramfs** (builder and the scripts inside it) in Rust.
+4. **Rule 1 — the fd store on s6-fdholderd.** Audit first (named fds, per-service retrieval, removal, listening sockets across daemon restarts, access rules, SELinux); if s6-fdholderd covers them, the runner and daemon use it and the standalone fdstore goes.
+5. **Rules 2-4 — the s6 initramfs by default where it can boot.** `--boot-only-s6=auto` (default): uinitconverter's initramfs unless the root needs what it can't do (LVM, MD), then dracut's.
+6. **Rule 5 — sweep.** Code left without a caller by steps 1-5 (the part 217 method), the docs pair, a final report.
+
+Kept as they are, with the reason: build and test scripts (`packages/*.sh`, `standalone/*/build-rpm.sh`, `dist/rpm/build-skarnet-rpms.sh`, `tests/*.sh`) — tooling around rpmbuild and QEMU, not the product; rule 6 is applied to the product. Rule 3 pieces: udevd, logind, `systemd --user`, hostnamed/localed/timedated, systemd-tmpfiles/sysusers, the sleep services, systemd-coredump.
