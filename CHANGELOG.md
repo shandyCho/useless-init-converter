@@ -21,6 +21,10 @@
   이 이름을 가진 파일이 없습니다. `systemctl`은 그대로 남는 `Manager`의 `…Unit` 메서드를 씁니다).
 
 ### 변경
+- **systemd-journald가 기본으로 꺼집니다(규칙 2, 핵심 결정 5를 뒤집음):** 새 기본값은 `JOURNAL=no`로,
+  rsyslog(또는 syslog-ng, 이제 필수)와 `/var/log/uinitconverter` 아래 서비스별 s6-log 디렉터리를 씁니다.
+  이때 `journalctl -u`와 `systemctl status`의 로그 줄은 비어 있습니다(`initconvert init --journal=yes`이면
+  journald 실행). 업데이트는 기존 설치의 journald를 유지합니다(설정이 없으면 `JOURNAL=yes`를 적음).
 - **systemd-resolved가 기본으로 꺼집니다(규칙 2):** 새 기본값은 `RESOLVED=no`이며, s6 부팅에서는
   NetworkManager가 DNS를 처리합니다(`initconvert init --resolved=yes`이면 resolved 실행). 업데이트는 기존
   설치를 그대로 둡니다. `uinitconverter.conf`에 설정이 없으면 패키지가 `RESOLVED=yes`를 적습니다.

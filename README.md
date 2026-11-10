@@ -40,7 +40,7 @@ D-Bus 클라이언트가 계속 동작하므로 dnf, SELinux enforcing, GNOME도
 | [`uinitconverter-linkwatch`](standalone/uinitconverter-linkwatch/README.md) | s6 경쟁 상태로 멈춘 daemon-reload를 풀어 줍니다 | 멈춘 `s6-rc-update`를 죽일 때까지 그 reload와 이후의 모든 s6-rc 명령이 멈춥니다 |
 | [`uinitconverter-fdstore`](standalone/uinitconverter-fdstore/README.md) | 서비스가 저장한 파일 디스크립터와 수신 소켓을 보관합니다 | `initconvertd`가 재시작할 때 사라지고, 요청 시 시작하는 서비스가 부팅 때 시작됩니다 |
 | [`uinitconverter-notify`](standalone/uinitconverter-notify/README.md) | `systemd-notify` 대체 도구입니다 | 프로그램들이 계속 설치되어 있는 `systemd-notify`를 씁니다 |
-| [`uinitconverter-journal-relay`](standalone/uinitconverter-journal-relay/README.md) | `--journal=no`일 때 journald의 클라이언트 소켓을 대신합니다 | `--journal=no`를 쓸 수 없습니다. 기본값인 journald를 쓰면 달라지는 것이 없습니다 |
+| [`uinitconverter-journal-relay`](standalone/uinitconverter-journal-relay/README.md) | journald가 없을 때(기본값) journald의 클라이언트 소켓을 대신합니다 | `--journal=yes`(journald)만 쓸 수 있습니다 |
 
 네 가지를 모두 설치하는 것이 가장 간단하며, 3단계도 그렇게 합니다.
 
@@ -159,7 +159,7 @@ sudo initconvert init
 |---|---|
 | `--selinux=enforcing` | s6 부팅의 SELinux를 enforcing으로 |
 | `--default-s6` | s6를 기본 부팅 항목으로 |
-| `--journal=no` | journald 대신 rsyslog와 일반 텍스트 로그 사용(`uinitconverter-journal-relay` 필요) |
+| `--journal=yes` | 기본값인 rsyslog와 일반 텍스트 로그 대신 systemd-journald 실행(`journalctl`, `systemctl status`의 로그) |
 | `--boot-only-s6=yes` | initramfs에서도 systemd를 쓰지 않음(루트가 LVM이나 MD에 있으면 쓸 수 없음) |
 
 ### 5. s6로 부팅

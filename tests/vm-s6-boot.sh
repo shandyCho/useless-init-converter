@@ -108,6 +108,9 @@ set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
 bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+# This boot's log: the journal with JOURNAL=yes; else s6's catch-all logger,
+# the per-service s6-log directories and the syslog (JOURNAL=no).
+logs() { journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current /var/log/uinitconverter/*/current /var/log/messages 2>/dev/null; }
 until_ok() { local t=0; until eval "$1"; do t=$((t + 1)); [ $t -ge "$2" ] && return 1; sleep 1; done; }
 u=$(id -u tester)
 cg=/sys/fs/cgroup/user.slice/user-$u.slice/user@$u.service
@@ -121,7 +124,7 @@ if [ "${3:-no}" = yes ]; then
     case $i in *-s6.img) ok "the entry boots uinitconverter's initramfs ($i)" ;; *) bad "the entry's initrd: ${i:-none}" ;; esac
     [ -s "/boot/initramfs-$(uname -r)-s6.img" ] && ok "the image for this kernel exists" || bad "no /boot/initramfs-$(uname -r)-s6.img"
     # dracut's initramfs runs systemd as PID 1, which logs "(initrd)".
-    n=$(journalctl -b --no-pager -o cat 2>/dev/null | grep -c "Running in initrd" || true)
+    n=$({ logs; dmesg 2>/dev/null; } | grep -c "Running in initrd" || true)
     [ "$n" = 0 ] && ok "no systemd ran in the initramfs" || bad "systemd ran in the initramfs ($n lines)"
     findmnt -no FSTYPE / | grep -q . && ok "root is $(findmnt -no SOURCE,FSTYPE,OPTIONS / | cut -c1-120)" || bad "no root mount"
     findmnt -no SOURCE /var >/dev/null 2>&1 && ok "/var is mounted: $(findmnt -no SOURCE,FSTYPE /var)" || echo "   /var is on the root file system"
@@ -163,13 +166,13 @@ systemctl --failed --no-legend --no-pager 2>&1 | sed 's/^/   /'
 r=$(grep -E '^[[:space:]]*RESOLVED=' /etc/uinitconverter/uinitconverter.conf | tail -1)
 until_ok 'getent ahosts fedoraproject.org >/dev/null' 60 && ok "DNS resolves (${r:-RESOLVED default})" || bad "no DNS (${r:-RESOLVED default}): $(cat /etc/resolv.conf 2>&1 | head -3 | tr '\n' ' ')"
 s6-rc -a list | grep -qx user-sessions && ok "user-sessions is up" || bad "user-sessions isn't up"
-w=$({ journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current 2>/dev/null; } | grep "uinitconverter early:" | sort -u)
+w=$(logs | grep "uinitconverter early:" | sort -u)
 [ -z "$w" ] && ok "no early-boot warnings" || bad "early-boot warnings: $(echo "$w" | head -5 | tr '\n' ' ')"
 n=$(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep -c denied)
 [ "$n" = 0 ] && ok "no AVC denials" || bad "$n AVC denials"
 ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep denied | sed -E 's/.*avc: +//' | sort | uniq -c | sort -rn | head -15 | cut -c1-200 | sed 's/^/   /'
 echo "-- the runner's lines for user@:"
-journalctl -b --no-pager -o cat 2>/dev/null | grep -E "^(uinitconverter\[)?user@[0-9]+\.service[]:]" | cut -c1-160 | tail -10 | sed 's/^/   /'
+logs | grep -E "(^|uinitconverter\[|: )user@[0-9]+\.service[]:]" | cut -c1-160 | tail -10 | sed 's/^/   /'
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
 EOS
@@ -182,6 +185,9 @@ set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
 bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+# This boot's log: the journal with JOURNAL=yes; else s6's catch-all logger,
+# the per-service s6-log directories and the syslog (JOURNAL=no).
+logs() { journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current /var/log/uinitconverter/*/current /var/log/messages 2>/dev/null; }
 u=$(id -u tester)
 cd ~tester/in
 echo "== 0.3.0's s6 boot"
@@ -262,6 +268,9 @@ set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
 bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+# This boot's log: the journal with JOURNAL=yes; else s6's catch-all logger,
+# the per-service s6-log directories and the syslog (JOURNAL=no).
+logs() { journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current /var/log/uinitconverter/*/current /var/log/messages 2>/dev/null; }
 H=/run/s6-rc/servicedirs/uinitconverter-units/data
 live() { readlink -f /run/s6-rc/compiled; }
 in_index() { grep -q rbtest "$H/index" 2>/dev/null; }
@@ -324,7 +333,7 @@ essential)
     [ "$(live)" = "$l0" ] && ok "the live database stayed" || bad "the live database changed: $(live)"
     b=$(readlink -f /var/lib/uinitconverter/compiled)
     [ "$b" != "$l0" ] && ok "the next boot's database is the new one" || bad "the boot database is still the live one"
-    timeout 30 journalctl -b --no-pager -o cat --since "@$t0" 2>/dev/null | grep -q "not applied to the running system" \
+    timeout 30 sh -c "$(declare -f logs); logs" | grep -q "not applied to the running system" \
         && ok "the daemon says why" || bad "no 'not applied to the running system' line"
     timeout 180 systemctl daemon-reload && ok "a reload without it" || bad "the reload without it failed"
     [ "$(live)" = "$(readlink -f /var/lib/uinitconverter/compiled)" ] && ok "applied live again" || bad "live $(live), boot $(readlink -f /var/lib/uinitconverter/compiled)"

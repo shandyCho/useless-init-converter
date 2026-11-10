@@ -45,7 +45,7 @@ starting work; append a new session entry when you finish.
    in state files; the runner of a dependent refuses to start (result
    `dependency`) when a `Requires=/BindsTo=/Requisite=` unit failed; the daemon
    retries failed requirements on start.
-5. **Real journald as an s6 service** (default `JOURNAL=yes`). The runner
+5. **Real journald as an s6 service** (default `JOURNAL=yes`; **reversed 2026-11-11, part 220: the default is `JOURNAL=no` under rule 2**, journald stays available with `JOURNAL=yes`). The runner
    connects service output to journald's stdout stream like PID 1 does, and
    the cgroup layout matches systemd's (`system.slice/<unit>`), so
    `journalctl -u` and `systemctl status` logs work. `JOURNAL=no` keeps

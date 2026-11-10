@@ -24,6 +24,13 @@ Details in `work_history.md`, parts 203-205.
   `systemctl` uses the `Manager` methods `…Unit`, which stay).
 
 ### Changed
+- **systemd-journald is off by default (rule 2; reverses key decision 5):**
+  `JOURNAL=no` is the new default: rsyslog (or syslog-ng, now required) and
+  one s6-log directory per service under `/var/log/uinitconverter`;
+  `journalctl -u` and the log lines in `systemctl status` are empty then
+  (`initconvert init --journal=yes` runs journald). An update keeps an
+  existing install's journald (`JOURNAL=yes` written into a config that
+  doesn't set it).
 - **systemd-resolved is off by default (rule 2):** `RESOLVED=no` is the new
   default, so NetworkManager handles DNS on the s6 boot
   (`initconvert init --resolved=yes` runs resolved). An update keeps an

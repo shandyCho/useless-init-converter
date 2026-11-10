@@ -96,7 +96,9 @@ fi
 if [ "$2" = s6 ]; then
     # The RPMs and init, as tests/vm-s6-boot.sh; built locally, so unsigned.
     dnf -y -q install --nogpgcheck ./*.rpm || { dnf clean metadata && dnf -y -q install --refresh --nogpgcheck ./*.rpm; }
-    initconvert init --yes --default-s6 --selinux=enforcing
+    # --journal=yes: the checks read the user journal (GNOME's messages, the
+    # shutdown timings); JOURNAL=no is checked by tests/vm-s6-boot.sh.
+    initconvert init --yes --default-s6 --selinux=enforcing --journal=yes
 fi
 EOS
 

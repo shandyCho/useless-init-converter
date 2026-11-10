@@ -96,7 +96,7 @@ s6를 PID 1로 두고 s6의 도구로 관리하면서 Fedora와 GNOME을 쓸 수
   다시 생성하지 않습니다. 변경이 잘못되면 `uinitconverter.db=previous`로 마지막 설치 이전의
   데이터베이스로 부팅합니다.
 - **systemd를 더 많이 대체할 수 있습니다.** `--boot-only-s6=yes`는 initramfs에서 systemd를
-  없애고, `--journal=no`는 journald를 rsyslog와 s6-log의 일반 텍스트 로그로 바꾸며,
+  없애고, journald는 rsyslog와 s6-log의 일반 텍스트 로그로 대체되며(기본값, `--journal=yes`이면 journald 실행),
   DNS는 NetworkManager가 혼자 처리합니다(기본값, `--resolved=yes`이면 systemd-resolved를 실행합니다). 시스템 버스는 기본값인 `--bus=daemon`이면
   dbus-daemon입니다.
 - **일반 Fedora가 그대로 동작합니다.** dnf, SELinux enforcing, GNOME, 실제 `systemctl`이 계속
@@ -340,8 +340,8 @@ tests/sandbox.sh ~/sdc-sandbox stop
 1. 설치된 빌드를 보여 줍니다(`initconvert --version`). 본체 패키지들은 한 빌드에서 나온 것이어야 합니다.
 2. `/etc/uinitconverter/`의 설정(`uinitconverter.conf`의 `JOURNAL=`, `RESOLVED=`, `uinitconverter-sysinit` 번들의
    s6 서비스)과 `s6` 명령용 `/etc/s6.conf`를 씁니다. s6 서비스(초기 부팅, dbus-daemon, 데몬,
-   earlyoom)는 패키지가 설치합니다. systemd-journald는 s6 서비스로 실행됩니다. `--journal=no`를
-   주면 s6 전용 rsyslog 설정을 쓰므로, journald가 `/dev/log`를 쓰는 systemd 부팅에는 영향이
+   earlyoom)는 패키지가 설치합니다. 기본값(`JOURNAL=no`)이면 systemd-journald 대신 s6 전용 rsyslog
+   설정을 쓰므로, journald가 `/dev/log`를 쓰는 systemd 부팅에는 영향이
    없습니다. 이때 s6 서비스 `journal-relay`가 journald의 클라이언트 소켓을 대신 열고 rsyslog로
    전달합니다(MESSAGE, 우선순위, 식별자만 남습니다).
 3. chronyd와 NetworkManager가 설치되어 있으면 활성화하고(없으면 경고만 합니다), gdm이
@@ -424,7 +424,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 | Initramfs | Fedora의 것(dracut, systemd가 PID 1). `--boot-only-s6=yes`이면 uinitconverter의 것: s6-svscan, mdevd, 설치되어 있으면 cryptsetup |
 | PID 1 / 서비스 | s6-linux-init, s6-rc, uinitconverter |
 | 시스템 버스 | dbus-daemon, `--bus=broker`이면 dbus-broker (사용자 버스용으로 dbus-broker는 유지) |
-| 로그 | s6 서비스로 실행되는 systemd-journald (`--journal=no`: rsyslog + s6-log) |
+| 로그 | rsyslog + s6-log (`--journal=yes`: s6 서비스로 실행되는 systemd-journald) |
 | 네트워크 / DNS / 시간 | NetworkManager(DNS 포함, `--resolved=yes`: systemd-resolved), chrony |
 | OOM 처리 | systemd-oomd 대신 earlyoom |
 | 무선 상태(rfkill) | systemd-rfkill 대신 s6 oneshot에서 util-linux `rfkill` |
@@ -627,7 +627,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `DEP_MAP`, `DEP_MAP_ADD`: systemd 유닛 → `EXTRA_SOURCE`의 s6 서비스 대응.
 - `EXTRA_SOURCE`: 생성된 스토어 다음에 저장소에 연결할 직접 작성한 s6-rc 스토어(기본값 `/etc/uinitconverter/s6:/etc/s6/sources`).
 - `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: 저장소(s6.conf의 `repodir`), 생성된 스토어, reload가 커밋하고 설치하는 세트, 그 커밋이 부팅용으로 만드는 번들(`default`).
-- `JOURNAL`: `yes`(기본값)이면 systemd-journald를 실행하고 서비스 출력을 보냅니다. `no`이면 `LOG_DIR` 아래 서비스별 s6-log 디렉터리를 쓰고, s6 `syslog` 서비스가 syslog 데몬(`SYSLOG`)이므로 배포판의 `rsyslog.service`와 `syslog-ng.service`는 제외합니다(`INCLUDE`로 다시 포함할 수 있습니다).
+- `JOURNAL`: `yes`이면 systemd-journald를 실행하고 서비스 출력을 보냅니다. `no`(규칙 2에 따라 220부부터 기본값이며, 업데이트는 기존 설치에 `JOURNAL=yes`를 적어 journald를 유지합니다)이면 `LOG_DIR` 아래 서비스별 s6-log 디렉터리를 쓰고, s6 `syslog` 서비스가 syslog 데몬(`SYSLOG`)이므로 배포판의 `rsyslog.service`와 `syslog-ng.service`는 제외합니다(`INCLUDE`로 다시 포함할 수 있습니다).
 - `LOG_DIR`: `JOURNAL=no`일 때 s6-log 디렉터리가 들어갈 위치.
 - `SYSLOG`: `JOURNAL=no`일 때 s6 `syslog` 서비스가 실행할 데몬, `rsyslog`(기본값) 또는 `syslog-ng`(`initconvert init --syslog=`). 두 경우 모두 배포판의 `rsyslog.service`, `syslog-ng.service`는 제외됩니다. syslog-ng는 `/run/systemd/system`이 있으면(uinitconverter가 `sd_booted()`용으로 만듭니다) `/dev/log`를 직접 열지 않으려 하므로, run 스크립트가 소켓을 열어 `LISTEN_FDS`로 전달합니다.
 - `BUS`: s6 부팅의 시스템 버스, `daemon`(기본값) 또는 `broker`(`initconvert init --bus=`). `dbus` s6 서비스의 run 스크립트가 읽습니다.

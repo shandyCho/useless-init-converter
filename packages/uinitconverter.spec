@@ -37,7 +37,8 @@ Requires:       uinitconverterd = %{version}-%{release}
 Requires(post): policycoreutils
 Requires(postun): policycoreutils
 # JOURNAL=no: the syslog daemon of the s6 boot (SYSLOG=, initconvert init --syslog=).
-Recommends:     (rsyslog or syslog-ng)
+# The s6 "syslog" service (JOURNAL=no, the default).
+Requires:       (rsyslog or syslog-ng)
 Recommends:     earlyoom
 # The console keymap and font (early vconsole).
 Recommends:     kbd
@@ -124,14 +125,17 @@ if [ -x /usr/sbin/semodule ]; then
     [ -p /run/service/s6-linux-init-shutdownd/fifo ] && restorecon /run/service/s6-linux-init-shutdownd/fifo || :
 fi
 
-# Defaults that changed (rule 2: RESOLVED=no): an update keeps what an
-# existing install runs, written as `initconvert init --KEY=yes` writes it;
-# init then changes it as asked.
+# Defaults that changed (rule 2: RESOLVED=no, JOURNAL=no): an update keeps
+# what an existing install runs, written as `initconvert init --KEY=yes`
+# writes it; init then changes it as asked.
 if [ "$1" -ge 2 ] && [ -f %{_sysconfdir}/uinitconverter/uinitconverter.conf ]; then
     conf=%{_sysconfdir}/uinitconverter/uinitconverter.conf
-    if ! grep -q '^[[:space:]]*RESOLVED=' "$conf"; then
-        printf '\n# set by uinitconverter init --resolved=yes\nRESOLVED=yes\n' >>"$conf" || :
-    fi
+    for k in RESOLVED JOURNAL; do
+        if ! grep -q "^[[:space:]]*$k=" "$conf"; then
+            o=$(echo "$k" | tr 'A-Z' 'a-z')
+            printf '\n# set by uinitconverter init --%s=yes\n%s=yes\n' "$o" "$k" >>"$conf" || :
+        fi
+    done
 fi
 
 %posttrans

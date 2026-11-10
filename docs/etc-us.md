@@ -104,8 +104,8 @@ Workstation machine. The systemd numbers are from boots up to 2026-10-31.
   is regenerated at boot. If a change goes wrong, `uinitconverter.db=previous`
   boots the database from before the last install.
 - **More of systemd can be replaced.** `--boot-only-s6=yes` removes systemd
-  from the initramfs, `--journal=no` replaces journald with rsyslog and
-  s6-log's plain-text logs, and NetworkManager handles DNS alone (the default;
+  from the initramfs, journald is replaced by rsyslog and s6-log's
+  plain-text logs (the default; `--journal=yes` runs journald), and NetworkManager handles DNS alone (the default;
   `--resolved=yes` runs systemd-resolved). The system bus is dbus-daemon with the default `--bus=daemon`.
 - **Normal Fedora still works.** dnf, SELinux enforcing, GNOME and the real
   `systemctl` keep working. This is the advantage over a non-systemd distro
@@ -389,9 +389,8 @@ the `dnf install` command. Backups of anything it overwrites go to
 2. Writes the settings in `/etc/uinitconverter/` (`JOURNAL=`, `RESOLVED=` in
    `uinitconverter.conf`, the s6 services in the `uinitconverter-sysinit` bundle) and
    `/etc/s6.conf` for the `s6` command. The package installs the s6 services
-   (early boot, dbus-daemon, the daemon, earlyoom). systemd-journald runs as
-   an s6 service. With `--journal=no`, an s6-only rsyslog config is used
-   instead, so the systemd boot, where journald owns `/dev/log`, is
+   (early boot, dbus-daemon, the daemon, earlyoom). By default (`JOURNAL=no`)
+   an s6-only rsyslog config is used instead of systemd-journald, so the systemd boot, where journald owns `/dev/log`, is
    unaffected; the s6 service `journal-relay` then serves journald's client
    sockets and forwards to rsyslog (only MESSAGE, priority and identifier are
    kept).
@@ -488,7 +487,7 @@ What systemd components are replaced, and why logind and `systemd --user` stay
 | Initramfs | Fedora's (dracut, systemd as its PID 1); with `--boot-only-s6=yes` uinitconverter's: s6-svscan, mdevd, and cryptsetup if installed |
 | PID 1 / services | s6-linux-init, s6-rc, uinitconverter |
 | System bus | dbus-daemon, or dbus-broker with `--bus=broker` (dbus-broker stays for the user bus) |
-| Logging | systemd-journald as an s6 service (`--journal=no`: rsyslog + s6-log) |
+| Logging | rsyslog + s6-log (`--journal=yes`: systemd-journald as an s6 service) |
 | Network / DNS / time | NetworkManager (DNS too; `--resolved=yes`: systemd-resolved), chrony |
 | OOM handling | earlyoom instead of systemd-oomd |
 | Radio state (rfkill) | util-linux `rfkill` from an s6 oneshot instead of systemd-rfkill |
@@ -723,7 +722,7 @@ and defaults). The most important keys:
 - `DEP_MAP`, `DEP_MAP_ADD`: systemd unit → s6 service from `EXTRA_SOURCE`.
 - `EXTRA_SOURCE`: hand-written s6-rc stores linked into the repository after the generated one (default `/etc/uinitconverter/s6:/etc/s6/sources`).
 - `REPO_DIR`, `STORE_DIR`, `SET`, `DEFAULT_BUNDLE`: the repository (s6.conf's `repodir`), the generated store, the set a reload commits and installs, and the bundle its commit makes for the boot (`default`).
-- `JOURNAL`: `yes` (default) runs systemd-journald and sends service output to it; `no` uses per-service s6-log directories under `LOG_DIR` and excludes the distribution's `rsyslog.service` and `syslog-ng.service`, since the s6 `syslog` service is the syslog daemon (`SYSLOG`; `INCLUDE` brings them back).
+- `JOURNAL`: `yes` runs systemd-journald and sends service output to it; `no` (the default since rule 2, part 220; an update keeps an existing install's journald with `JOURNAL=yes`) uses per-service s6-log directories under `LOG_DIR` and excludes the distribution's `rsyslog.service` and `syslog-ng.service`, since the s6 `syslog` service is the syslog daemon (`SYSLOG`; `INCLUDE` brings them back).
 - `LOG_DIR`: where those s6-log directories go when `JOURNAL=no`.
 - `SYSLOG`: the daemon the s6 `syslog` service runs with `JOURNAL=no`: `rsyslog` (default) or `syslog-ng` (`initconvert init --syslog=`). Either way the distribution's `rsyslog.service` and `syslog-ng.service` are excluded. syslog-ng won't open `/dev/log` itself when `/run/systemd/system` exists (uinitconverter creates it for `sd_booted()`), so the run script binds it and passes it in `LISTEN_FDS`.
 - `BUS`: `daemon` (default) or `broker`, the system bus of the s6 boot (`initconvert init --bus=`); read by the `dbus` s6 service's run script.

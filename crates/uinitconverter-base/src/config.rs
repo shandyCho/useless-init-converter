@@ -112,8 +112,9 @@ pub struct Config {
 /// The values INIT= accepts.
 pub const INITS: &[&str] = &["s6"];
 
-/// JOURNAL='s default: systemd-journald as an s6 service.
-pub const JOURNAL_DEFAULT: bool = true;
+/// JOURNAL='s default: no systemd-journald; rsyslog (or syslog-ng) and
+/// per-service s6-log directories (rule 2, work_history part 220).
+pub const JOURNAL_DEFAULT: bool = false;
 /// RESOLVED='s default: no systemd-resolved; NetworkManager handles DNS
 /// (rule 2, work_history part 220).
 pub const RESOLVED_DEFAULT: bool = false;

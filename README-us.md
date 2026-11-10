@@ -42,7 +42,7 @@ says:
 | [`uinitconverter-linkwatch`](standalone/uinitconverter-linkwatch/README-us.md) | Unblocks a daemon-reload stuck on an s6 race | Such a reload hangs, and so does every s6-rc command after it, until the stuck `s6-rc-update` is killed |
 | [`uinitconverter-fdstore`](standalone/uinitconverter-fdstore/README-us.md) | Holds services' stored file descriptors and listening sockets | They are lost when `initconvertd` restarts, and on-demand services start at boot |
 | [`uinitconverter-notify`](standalone/uinitconverter-notify/README-us.md) | `systemd-notify` replacement | Programs use `systemd-notify`, which stays installed |
-| [`uinitconverter-journal-relay`](standalone/uinitconverter-journal-relay/README-us.md) | Stands in for journald's client sockets with `--journal=no` | `--journal=no` can't be used; nothing changes with the default journald |
+| [`uinitconverter-journal-relay`](standalone/uinitconverter-journal-relay/README-us.md) | Stands in for journald's client sockets without journald (the default) | Only `--journal=yes` (journald) can be used |
 
 Installing all four is the simplest choice, and it's what step 3 does.
 
@@ -163,7 +163,7 @@ below; all of them are in
 |---|---|
 | `--selinux=enforcing` | Boot s6 with SELinux enforcing |
 | `--default-s6` | Make s6 the default boot entry |
-| `--journal=no` | Use rsyslog and plain-text logs instead of journald (needs `uinitconverter-journal-relay`) |
+| `--journal=yes` | Run systemd-journald (`journalctl`, logs in `systemctl status`) instead of the default rsyslog and plain-text logs |
 | `--boot-only-s6=yes` | No systemd in the initramfs either (a root on LVM or MD can't use this) |
 
 ### 5. Boot with s6
