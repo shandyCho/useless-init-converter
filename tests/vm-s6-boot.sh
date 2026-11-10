@@ -250,6 +250,9 @@ daemon
 s=$(timeout 30 systemctl is-system-running 2>&1)
 case $s in running | degraded) ok "is-system-running: $s" ;; *) bad "is-system-running: $s" ;; esac
 echo "   holder in the live database: $([ -e /run/s6-rc/servicedirs/uinitconverter-units ] && echo yes || echo no)"
+# 0.3.0's database had systemd-user-sessions.service; the update removes
+# it, its stop writes /run/nologin, and gen opens the logins again.
+[ ! -e /run/nologin ] && ok "logins stay open after the update" || bad "/run/nologin after the update: $(cat /run/nologin)"
 s=$(systemctl is-active sshd.service)
 [ "$s" = active ] && ok "sshd.service is active" || bad "sshd.service: $s"
 s=$(systemctl show -p NeedDaemonReload --value sshd.service)
@@ -351,7 +354,11 @@ essential)
     t=0
     until logs | grep "not applied to the running system" >/dev/null || [ $t -ge 10 ]; do sleep 1; t=$((t + 1)); done
     logs | grep "not applied to the running system" >/dev/null \
-        && ok "the daemon says why" || bad "no 'not applied to the running system' line"
+        && ok "the daemon says why" || {
+        bad "no 'not applied to the running system' line"
+        for f in /run/uncaught-logs/current /var/log/messages; do echo "   $f: $(grep -c "not applied" "$f" 2>&1)"; done
+        echo "   journal: $(journalctl -b --no-pager -o cat 2>&1 | grep -c "not applied")"
+    }
     timeout 180 systemctl daemon-reload && ok "a reload without it" || bad "the reload without it failed"
     [ "$(live)" = "$(readlink -f /var/lib/uinitconverter/compiled)" ] && ok "applied live again" || bad "live $(live), boot $(readlink -f /var/lib/uinitconverter/compiled)"
     s=$(timeout 30 systemctl is-system-running 2>&1)

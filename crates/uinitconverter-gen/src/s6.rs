@@ -824,6 +824,22 @@ fn pin_live(cfg: &Config) -> Result<(), String> {
     .map(|_| ())
 }
 
+const USER_SESSIONS: &str = "systemd-user-sessions.service";
+
+/// After an update that took systemd-user-sessions.service out of the
+/// running database: logins open again (its stop wrote /run/nologin), unless
+/// the system is going down.
+fn reopen_logins(cfg: &Config, changes: &mut Vec<String>) {
+    if cfg.run_dir.join("shutting-down").exists() {
+        return;
+    }
+    if fs::remove_file("/run/nologin").is_ok() {
+        changes.push(format!(
+            "{USER_SESSIONS} left the database; its stop wrote /run/nologin, removed (logins stay open)"
+        ));
+    }
+}
+
 /// The essential services that are up and that installing the set's
 /// compiled database live would stop: s6-rc-update's dry run (its down
 /// transition, as s6-rc-dryrun prints it) against s6-rc's flags of the
@@ -927,6 +943,14 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
     let old_boot = fs::canonicalize(cfg.boot_db()).ok();
     swap_symlink(&source_abs, &store)?;
     let mut set_changes = Vec::new();
+    // systemd-user-sessions.service in the live database (0.3.0 included it;
+    // it is replaced since, rule 2): an update that removes it stops it, and
+    // its ExecStop= writes /run/nologin, which shuts out every non-root
+    // login until the next boot.
+    let user_sessions_live = update_live
+        && uinitconverter_base::index::Index::load(cfg)
+            .units
+            .contains_key(USER_SESSIONS);
     let res = repo_sync(cfg)
         .and_then(|_| sync_essentials(cfg, &mut set_changes))
         .and_then(|_| sync_loggers(cfg, &mut set_changes))
@@ -935,7 +959,12 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
         .and_then(|_| sync_holder(cfg, &mut set_changes))
         .and_then(|_| commit_and_install(cfg, update_live, &mut set_changes));
     let updated_live = match res {
-        Ok(r) => r,
+        Ok(r) => {
+            if r && user_sessions_live && !plan.units.contains_key(USER_SESSIONS) {
+                reopen_logins(cfg, &mut set_changes);
+            }
+            r
+        }
         Err(e) => {
             match &old_store {
                 Some(old) => {

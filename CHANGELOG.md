@@ -70,6 +70,10 @@
   업데이트), `rollback`(`uinitconverter.db=previous`)입니다.
 
 ### 수정
+- **0.3.0에서 업데이트한 뒤 로그인이 막히던 문제.** 0.3.0의 데이터베이스는 `systemd-user-sessions.service`를
+  실행했습니다. 업데이트가 이를 빼므로(규칙 2) s6-rc-update가 멈추고, 그 `ExecStop=`이 `/run/nologin`을 써서
+  다음 부팅까지 root가 아닌 모든 로그인(로그아웃 뒤 GDM 로그인, SSH)을 거부했습니다. 이제 그런 업데이트 뒤에는
+  시스템이 종료 중이 아니면 gen이 `/run/nologin`을 다시 지웁니다.
 - **s6 부팅에서 업데이트하면 시스템 매니저가 멈출 수 있었습니다.** 패키지가 `syslog`와 `journal-relay`를
   `uinitconverter-sysinit` 번들의 멤버로 넣어 두었고, `initconvert init`이 이를 지웠습니다(journald
   설치). 이 디렉터리는 `%config`라서 RPM 업데이트 때마다 둘이 되살아났고, dbus와 initconvertd가 의존하는

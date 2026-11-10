@@ -91,6 +91,12 @@ Details in `work_history.md`, parts 203-205.
   (`uinitconverter.db=previous`).
 
 ### Fixed
+- **Logins locked out after the update from 0.3.0.** 0.3.0's database ran
+  `systemd-user-sessions.service`; the update takes it out (rule 2), so
+  s6-rc-update stops it and its `ExecStop=` writes `/run/nologin`, which
+  refused every non-root login (a logout, then a login at GDM; SSH) until
+  the next boot. After such an update gen removes `/run/nologin` again,
+  unless the system is going down.
 - **An update on the s6 boot could hang the system manager.** The package
   shipped `syslog` and `journal-relay` as members of the
   `uinitconverter-sysinit` bundle, and `initconvert init` removed them
