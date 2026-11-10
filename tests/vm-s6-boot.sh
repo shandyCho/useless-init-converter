@@ -112,9 +112,9 @@ set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
 bad() { fail=$((fail + 1)); echo "FAIL $*"; }
-# This boot's log: the journal with JOURNAL=yes; else s6's catch-all logger,
-# the per-service s6-log directories and the syslog (JOURNAL=no).
-logs() { journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current /var/log/uinitconverter/*/current /var/log/messages 2>/dev/null; }
+# This boot's log, nothing older: the journal with JOURNAL=yes, and s6's
+# catch-all logger (initconvertd, the early steps; in /run).
+logs() { journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current 2>/dev/null; }
 until_ok() { local t=0; until eval "$1"; do t=$((t + 1)); [ $t -ge "$2" ] && return 1; sleep 1; done; }
 u=$(id -u tester)
 cg=/sys/fs/cgroup/user.slice/user-$u.slice/user@$u.service
@@ -129,7 +129,7 @@ if [ -e /etc/uinitconverter/boot-only-s6 ]; then
     case $i in *-s6.img) ok "the entry boots uinitconverter's initramfs ($i)" ;; *) bad "the entry's initrd: ${i:-none}" ;; esac
     [ -s "/boot/initramfs-$(uname -r)-s6.img" ] && ok "the image for this kernel exists" || bad "no /boot/initramfs-$(uname -r)-s6.img"
     # dracut's initramfs runs systemd as PID 1, which logs "(initrd)".
-    n=$({ logs; dmesg 2>/dev/null; } | grep -c "Running in initrd" || true)
+    n=$(dmesg 2>/dev/null | grep -c "Running in initrd" || true)
     [ "$n" = 0 ] && ok "no systemd ran in the initramfs" || bad "systemd ran in the initramfs ($n lines)"
     findmnt -no FSTYPE / | grep -q . && ok "root is $(findmnt -no SOURCE,FSTYPE,OPTIONS / | cut -c1-120)" || bad "no root mount"
     findmnt -no SOURCE /var >/dev/null 2>&1 && ok "/var is mounted: $(findmnt -no SOURCE,FSTYPE /var)" || echo "   /var is on the root file system"
@@ -193,9 +193,9 @@ set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
 bad() { fail=$((fail + 1)); echo "FAIL $*"; }
-# This boot's log: the journal with JOURNAL=yes; else s6's catch-all logger,
-# the per-service s6-log directories and the syslog (JOURNAL=no).
-logs() { journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current /var/log/uinitconverter/*/current /var/log/messages 2>/dev/null; }
+# This boot's log, nothing older: the journal with JOURNAL=yes, and s6's
+# catch-all logger (initconvertd, the early steps; in /run).
+logs() { journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current 2>/dev/null; }
 u=$(id -u tester)
 cd ~tester/in
 echo "== 0.3.0's s6 boot"
@@ -279,9 +279,9 @@ set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
 bad() { fail=$((fail + 1)); echo "FAIL $*"; }
-# This boot's log: the journal with JOURNAL=yes; else s6's catch-all logger,
-# the per-service s6-log directories and the syslog (JOURNAL=no).
-logs() { journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current /var/log/uinitconverter/*/current /var/log/messages 2>/dev/null; }
+# This boot's log, nothing older: the journal with JOURNAL=yes, and s6's
+# catch-all logger (initconvertd, the early steps; in /run).
+logs() { journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current 2>/dev/null; }
 H=/run/s6-rc/servicedirs/uinitconverter-units/data
 live() { readlink -f /run/s6-rc/compiled; }
 in_index() { grep -q rbtest "$H/index" 2>/dev/null; }
@@ -330,11 +330,11 @@ current)
     ;;
 essential)
     echo "== a reload that would restart the essential services"
-    # A new s6 service (in /etc/s6/sources, EXTRA_SOURCE) put into the
-    # bundle: dbus and initconvertd would gain a dependency on a service
-    # that wasn't up.
+    # A new s6 service (beside the package's, always in EXTRA_SOURCE) put
+    # into the bundle: dbus and initconvertd would gain a dependency on a
+    # service that wasn't up.
     m=/etc/uinitconverter/s6/uinitconverter-sysinit/contents.d/vmtest-down
-    v=/etc/s6/sources/vmtest-down
+    v=/etc/uinitconverter/s6/vmtest-down
     mkdir -p "$v"
     echo oneshot >"$v/type"
     echo true >"$v/up"

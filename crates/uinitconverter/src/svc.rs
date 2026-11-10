@@ -82,17 +82,18 @@ fn oom_score_adj(v: i32) {
 
 /// A try counter in RUN_DIR: how many starts in a row (within `window`
 /// seconds of the last, if given) the service has had in this boot.
-fn count_try(file: &str, window: Option<u64>) -> u32 {
+fn count_try(file: &str, window: Option<i64>) -> u32 {
     let _ = fs::create_dir_all("/run/uinitconverter");
     let up = fs::read_to_string("/proc/uptime")
         .ok()
-        .and_then(|s| s.split('.').next().and_then(|n| n.parse::<u64>().ok()))
+        .and_then(|s| s.split('.').next().and_then(|n| n.parse::<i64>().ok()))
         .unwrap_or(0);
     let old = fs::read_to_string(file).unwrap_or_default();
     let mut w = old.split_whitespace();
     let mut n: u32 = w.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let last: u64 = w.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    if window.is_some_and(|win| up.saturating_sub(last) > win) {
+    // Signed, as the shell's arithmetic was: a hand-made "N -100" counts.
+    let last: i64 = w.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    if window.is_some_and(|win| up - last > win) {
         n = 0;
     }
     n += 1;

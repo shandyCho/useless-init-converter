@@ -22,7 +22,14 @@ KERNEL=/boot/vmlinuz-$KVER
 [ -x "$TOP/target/debug/initconvert-runner" ] || { echo "run cargo build first" >&2; exit 1; }
 rm -rf "$W"
 R=$W/root
-mkdir -p "$R"/usr/bin "$R"/usr/sbin "$R"/usr/lib64 "$R"/usr/lib/systemd/system
+mkdir -p "$R"/usr/bin "$R"/usr/lib64 "$R"/usr/lib/systemd/system
+# The host's /usr/sbin as it is (Fedora: a link to bin), so a program found
+# as /usr/sbin/x is also /usr/bin/x in here, as #!/bin/bash needs.
+if [ -L /usr/sbin ]; then
+    ln -s "$(readlink /usr/sbin)" "$R/usr/sbin"
+else
+    mkdir -p "$R/usr/sbin"
+fi
 ln -s usr/bin "$R/bin"
 ln -s usr/sbin "$R/sbin"
 ln -s usr/lib64 "$R/lib64"
