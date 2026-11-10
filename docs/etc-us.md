@@ -42,6 +42,34 @@ does it too" is not a reason. A feature is added only for a real caller
 [below](#the-s6-user-manager-removed)): it reimplemented `systemd --user`
 itself, which no caller needs.
 
+Both large systemd-shaped parts are frozen at what they do now (audit of
+2026-11-11, `work_history.md` part 216):
+
+- **The D-Bus surface** (`org.freedesktop.systemd1`): no method or property
+  is added without a program that calls it. Seen calling in the VM (GNOME
+  session, logout and login, user switch, lingering, RPM transactions):
+
+  | Caller | Calls |
+  |---|---|
+  | systemd-logind | `StartTransientUnit`, `Scope.Abandon`, `StartUnit`, `StopUnit`, `Subscribe`; `ActiveState`, `LoadState`, `Job.State` |
+  | polkitd | `GetUnitByPIDFD`; `Service.NoNewPrivileges` |
+  | uresourced | `SetUnitProperties` |
+  | gsd-power | `Manager.Virtualization` |
+  | RPM scriptlets (`systemd-update-helper`, `%systemd_*` through systemctl) | `Reload`, `ReloadUnit`, `EnqueueMarkedJobs`, `SetUnitProperties`, `ListUnitsByPatterns`, `PresetUnitFiles`, `EnableUnitFiles`, `DisableUnitFilesWithFlagsAndInstallInfo`, `GetUnit`, `NeedDaemonReload` |
+  | systemd-run (logind's and GNOME's scopes, `--pipe`) | `StartTransientUnit`, `GetAll`, `InvocationID` |
+  | uinitconverter's runner and timers | `LoadUnit`, `StartUnit`, `ActiveState` |
+  | `systemd --user` | `AttachProcessesToUnit` |
+
+  The other methods are the systemctl verbs an admin uses. One method is
+  called and not implemented, on purpose: `EnqueueUnitJobMany` (systemctl
+  from systemd-update-helper), which carries on without it.
+- **The sandbox** (`uinitconverter-exec`): Fedora's own services use it
+  (of 248 non-systemd services, 47 set `ProtectSystem=`, 32
+  `SystemCallFilter=`, 15 `IPAddressDeny=`, 13 `DeviceAllow=`), and no
+  systemd program can apply it outside PID 1, so it stays. No directive is
+  added without a Fedora unit that needs it; directives it doesn't know are
+  ignored and listed in the report.
+
 ## Compared with booting systemd
 
 **There is little measurable benefit over booting with systemd. The main gain

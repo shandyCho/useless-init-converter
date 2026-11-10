@@ -41,6 +41,31 @@ uinitconverter는 systemd 유닛을 s6로 잇는 다리이지, 두 번째 system
 이 때문입니다([아래](#s6-사용자-매니저-삭제됨) 참고). 그것은 `systemd --user`
 자체를 다시 구현한 것이었고, 그것을 필요로 하는 쪽은 없었습니다.
 
+systemd를 닮은 큰 두 부분은 지금 하는 일에서 동결합니다(2026-11-11 점검,
+`work_history.md` 216부).
+
+- **D-Bus 인터페이스**(`org.freedesktop.systemd1`): 호출하는 프로그램이 없으면 메서드나 속성을
+  추가하지 않습니다. VM(GNOME 세션, 로그아웃과 로그인, 사용자 전환, linger, RPM 트랜잭션)에서 본
+  호출은 다음과 같습니다.
+
+  | 호출하는 쪽 | 호출 |
+  |---|---|
+  | systemd-logind | `StartTransientUnit`, `Scope.Abandon`, `StartUnit`, `StopUnit`, `Subscribe`; `ActiveState`, `LoadState`, `Job.State` |
+  | polkitd | `GetUnitByPIDFD`; `Service.NoNewPrivileges` |
+  | uresourced | `SetUnitProperties` |
+  | gsd-power | `Manager.Virtualization` |
+  | RPM 스크립틀릿(`systemd-update-helper`, systemctl을 통한 `%systemd_*`) | `Reload`, `ReloadUnit`, `EnqueueMarkedJobs`, `SetUnitProperties`, `ListUnitsByPatterns`, `PresetUnitFiles`, `EnableUnitFiles`, `DisableUnitFilesWithFlagsAndInstallInfo`, `GetUnit`, `NeedDaemonReload` |
+  | systemd-run(logind와 GNOME의 scope, `--pipe`) | `StartTransientUnit`, `GetAll`, `InvocationID` |
+  | uinitconverter의 러너와 타이머 | `LoadUnit`, `StartUnit`, `ActiveState` |
+  | `systemd --user` | `AttachProcessesToUnit` |
+
+  나머지 메서드는 관리자가 쓰는 systemctl 명령용입니다. 호출되지만 일부러 구현하지 않은 메서드가 하나
+  있습니다. `EnqueueUnitJobMany`(systemd-update-helper의 systemctl)이며, 없어도 계속 동작합니다.
+- **샌드박스**(`uinitconverter-exec`): Fedora 자체 서비스가 사용하고(systemd가 아닌 서비스 248개 중
+  `ProtectSystem=` 47개, `SystemCallFilter=` 32개, `IPAddressDeny=` 15개, `DeviceAllow=` 13개),
+  PID 1 밖에서 이것을 적용할 수 있는 systemd 프로그램이 없으므로 유지합니다. 필요로 하는 Fedora 유닛이
+  없으면 지시어를 추가하지 않고, 모르는 지시어는 무시하고 보고서에 적습니다.
+
 ## systemd 부팅과 비교
 
 **systemd로 부팅할 때보다 측정할 수 있는 이점은 거의 없습니다. 주된 이점은 제어권입니다.**

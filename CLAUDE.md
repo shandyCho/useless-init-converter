@@ -24,7 +24,10 @@ if they turned out to be wrong.
   caller in work_history.md. See "Scope" in the docs/etc pair. Direction
   (part 215): keep the project small; use s6's and its ecosystem's own
   features (a skarnet tool's behaviour over a Rust re-model of it), and
-  leave what only systemd can do to the real systemd program.
+  leave what only systemd can do to the real systemd program. The D-Bus
+  surface and the sandbox are frozen (part 216): no method, property or
+  sandbox directive without a named caller or Fedora unit; the caller table
+  is in "Scope" in the docs/etc pair.
 - Layout: the core is one Cargo workspace (`crates/`); its crates may depend
   on each other. `standalone/*` are separate projects (each its own
   `[workspace]`, Cargo.lock, README pair and spec) and must not depend on the

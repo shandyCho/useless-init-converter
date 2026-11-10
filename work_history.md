@@ -12855,3 +12855,28 @@ Not pushed: parts 205-215. The update from 0.3.0, the rollback boot and a reload
 
 1. Owner: push.
 2. Part 205's steps 4 and 5 (best-effort sandboxing, the D-Bus surface), audited against real callers and the part 215 direction: what systemd's own programs can do is left to them.
+
+## 2026-11-11, part 216: part 205's steps 4 and 5 — the audit; the sandbox and the D-Bus surface frozen
+
+Steps 4 (best-effort sandboxing) and 5 (freeze the D-Bus surface to known callers) were to be decided from an audit of real callers.
+
+**D-Bus callers, measured.** A temporary trace build (not committed: one log line per method call with the caller's comm and its parent's) ran `BOOT=s6 tests/vm-user-manager.sh lifecycle` (all stages passed: 20, 8, 7, 4, 9, 5, 5, 8, 4) and then `dnf reinstall rsyslog chrony`, `dnf install nginx`, `systemctl enable --now nginx`, `dnf remove nginx`. 820 calls:
+- systemd-logind: StartTransientUnit 31, Scope.Abandon 29, StartUnit 15, StopUnit 3, Subscribe 2; Get ActiveState 72, LoadState 22, Job.State 15.
+- polkitd: GetUnitByPIDFD 153 and Get Service.NoNewPrivileges 153.
+- uresourced: SetUnitProperties 63. gsd-power: Get Manager.Virtualization 7. `systemd --user`: AttachProcessesToUnit 1.
+- systemctl from `systemd-update-helper` (RPM scriptlets): Reload, ReloadUnit, EnqueueMarkedJobs, SetUnitProperties, ListUnitsByPatterns, PresetUnitFiles, DisableUnitFilesWithFlagsAndInstallInfo, GetUnit, NeedDaemonReload, and **EnqueueUnitJobMany, which isn't implemented** (the helper carries on; the RPM update helper stage passed).
+- systemd-run (logind's and the tests' `--scope`/`--pipe`): StartTransientUnit, GetAll, InvocationID. Our runner and timers: LoadUnit, StartUnit, ActiveState. `systemctl` from scripts and sudo: EnableUnitFiles, GetUnit, Reload, StartUnit, GetAll.
+- Every other method is a systemctl verb an admin uses. (`AttachProcessesToUnit` is implemented, `manager.rs`, but missing from the introspection XML; harmless.)
+
+**Sandbox use, measured** in the VM image (`/usr/lib/systemd/system`): of 248 non-`systemd-*` services, ProtectSystem 47, PrivateTmp 42, ProtectHome 40, CapabilityBoundingSet 40, SystemCallFilter 32, NoNewPrivileges 31, PrivateDevices 26, PrivateNetwork 17, IPAddressDeny 15, DeviceAllow 13; the 157 `systemd-*` services (journald, logind, udevd, resolved… run under our runner) use them as much. No systemd program can apply a unit's sandbox outside PID 1 (`systemd-executor` takes PID 1's internal serialization), so it can't be left to systemd.
+
+**Owner's decisions** (asked with the data): step 4 **keep and freeze** (no directive added without a Fedora unit that needs it; unknown directives stay ignored and reported); step 5 **freeze with the caller table**, no removals (EnqueueUnitJobMany stays unimplemented: its caller carries on). Recorded in the docs/etc pair ("Scope": the caller table and the sandbox numbers) and CLAUDE.md. No code changed.
+
+### Current state
+
+Not pushed: parts 205-216. Part 205's five steps are done: 1 and 2 (scope rule, user manager removed), 3 (generation time: slices 1-4), 4 and 5 (audited, frozen).
+
+### Next steps
+
+1. Owner: push.
+2. Under the part 215 direction, look for code with no caller left after the removals (e.g. properties nobody reads beyond `systemctl show`), measured the same way, before removing anything.
