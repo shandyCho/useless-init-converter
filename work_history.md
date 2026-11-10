@@ -12806,3 +12806,28 @@ As in part 212, now checked in the VM. Not pushed. **Not checked:** the RPM upda
 1. Owner: push (parts 205-213).
 2. The upgrade from 0.3.0 with `uinitconverter-user` installed (part 205's step 3), and a rollback boot.
 3. Part 205's steps 4 and 5 (best-effort sandboxing, the D-Bus surface), each after an audit of real callers.
+
+## 2026-11-11, part 214: the upgrade from 0.3.0 and the rollback boot in the VM; a hang on update fixed
+
+New `tests/vm-s6-boot.sh` modes (d2c5dae): `upgrade` (0.3.0's release RPMs, a7fcfb1, in `OLD_RPMS=`, default `DIR/rpmbuild/core-0.3.0`, with `initconvert-user-setup on`, booted with s6; there `dnf upgrade` and `initconvert init --yes` as the README updates, then a reboot) and `rollback` (`rbtest.service` enabled with `--no-reload` and one `daemon-reload`, a boot with `uinitconverter.db=previous`, a boot without it). The first rollback run failed only in the test: `systemctl enable` reloads by itself, so with a second `daemon-reload` "previous" was the database in between.
+
+**Bug found (in 0.3.0 already, not from slices 1-4): an update on the s6 boot hung the system manager.** The upgrade run hung at `initconvert init` for hours; `systemctl` said "offline" right after dnf and SSH logins stopped (connection reset). A watcher writing to the serial console showed the 0.3.0 daemon (handling the reload of `uinitconverter-user`'s `%preun`) in `s6-rc-set-install` → `s6-rc-update -e` → `s6-rc -D change` of dbus, everything using it and `uinitconverterd`, with `s6-svlisten -D … s6-svc -d uinitconverterd` waiting: the daemon waited on the update that waited on the daemon's stop. Reproduced on a 0.3.0 s6 boot: a plain reload is fine, removing the drop-in and reloading is fine, the new packages' files (`rpm -U --noscripts`) then a plain reload hang. Cause: `dist/s6/uinitconverter-sysinit/contents.d/{syslog,journal-relay}` were shipped and `initconvert init` removes them on journald installs; the directory is `%config(noreplace)` and RPM restores deleted config files at an update, so both came back as down members of the bundle dbus (and through dbus initconvertd) depends on, and s6-rc-update restarts a service that gains a dependency on a down service. Any reload between `dnf upgrade` and `initconvert init` (any package's file trigger in the same transaction) hit it.
+
+**Fix (d2c5dae):** the package ships neither member; `initconvert init` adds them for `--journal=no`, as it already did `resolv`. From 0.3.0: on a journald install nothing comes back; on a `--journal=no` install the unmodified config files are removed by RPM (losing a member restarts nothing) and init adds them back as unowned files. CHANGELOG pair (Fixed), TESTING pair (the modes), CLAUDE.md.
+
+**`-E` tried and reverted (42fab15, reverted in 981e1a5).** The owner chose installing the live database with `s6-rc-set-install -E`, so that an update never stops an essential service. In s6-rc 0.8.0.2 it doesn't do that: `-E` makes s6-rc-update call `s6-rc -d` instead of `-D`, which skips the essential service's orderly stop, but the service stays flagged for restart, gets a new service directory, and the old one is unlinked with `s6_supervise_unlink(…, 3)` (`s6rc_servicedir_unsupervise`, keepsupervisor false), which kills its supervisor and the service. In the VM check (a down `syslog` put into the bundle, then a reload) dbus was killed and initconvertd lost the bus. Reverted; the check went with it.
+
+**Tests (VM, SELinux enforcing):**
+- `upgrade` on d2c5dae's RPMs: 13/13 on the 0.3.0 s6 boot through `dnf upgrade` and `init` (uinitconverter-user and its drop-in gone, initconvertd on the bus throughout, syslog/journal-relay not restored), 17/17 after the reboot, the holder in the live database. Again on 42fab15's RPMs: same.
+- `rollback` (42fab15's RPMs; the rollback path doesn't touch `-E`): 17/17 first boot; second database 5/5; the rollback boot 7/7 (the first database live, its index, no rbtest, NeedDaemonReload false) and 17/17; the boot without it 4/4.
+- `cargo test` all pass; sandbox 388/388.
+
+### Current state
+
+Not pushed: parts 205-214. The update from 0.3.0 and the rollback boot work. **Still open:** an update whose new database restarts an essential service (dbus, initconvertd, early boot) during a reload hangs the system manager the same way; d2c5dae removes the known trigger, not the mechanism. `-E` doesn't prevent it (above).
+
+### Next steps
+
+1. Owner: decide the remaining mechanism. Recommended: before the live install, gen asks `s6-rc-update -n` (dry run) what it would stop; if an essential service is among it, install the database for the next boot only (`--no-update`) and say so, as systemd's daemon-reload restarts nothing. Alternative: leave it (no known trigger left).
+2. Owner: push.
+3. Part 205's steps 4 and 5.
