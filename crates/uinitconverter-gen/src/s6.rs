@@ -947,10 +947,15 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
     // it is replaced since, rule 2): an update that removes it stops it, and
     // its ExecStop= writes /run/nologin, which shuts out every non-root
     // login until the next boot.
+    // Asked of the live s6-rc itself: the index files can be newer than
+    // the live database after an install for the next boot only.
     let user_sessions_live = update_live
-        && uinitconverter_base::index::Index::load(cfg)
-            .units
-            .contains_key(USER_SESSIONS);
+        && run(Command::new(tools::path("s6-rc"))
+            .arg("-l")
+            .arg(&cfg.live_dir)
+            .arg("-a")
+            .arg("list"))
+        .is_ok_and(|out| out.lines().any(|l| l.trim() == USER_SESSIONS));
     let res = repo_sync(cfg)
         .and_then(|_| sync_essentials(cfg, &mut set_changes))
         .and_then(|_| sync_loggers(cfg, &mut set_changes))
