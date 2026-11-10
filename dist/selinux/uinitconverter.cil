@@ -89,6 +89,11 @@
 ; write init_t's stream socket, which is journald's stdout under systemd;
 ; the same for its pipe.
 (allow networkmanager_dispatcher_plugin init_t (fifo_file (write append ioctl getattr)))
+; syslog-ng (SYSLOG=syslog-ng) watches the directory of its configuration
+; file, /etc/uinitconverter/syslog-ng.conf (etc_t; Fedora's own is in
+; syslog_conf_t /etc/syslog-ng, which it may watch). Its execmem denial is
+; not ours: the stock systemd boot has it too.
+(allow syslogd_t etc_t (dir (watch)))
 ; The same for sshd's per-login process (sshd-session), which inherits
 ; sshd's stderr, its s6-log pipe (JOURNAL=no, the default since part 220).
 (allow sshd_session_t init_t (fifo_file (write append ioctl getattr)))

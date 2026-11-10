@@ -25,6 +25,9 @@
 # OLD_RPMS (upgrade): 0.3.0's core RPMs, uinitconverter-user among them;
 # default DIR/rpmbuild/core-0.3.0.
 # SELINUX=permissive|enforcing (default enforcing) is init's --selinux=.
+# BUS=daemon|broker (default daemon) is init's --bus=, SYSLOG=rsyslog|syslog-ng
+# (default rsyslog) its --syslog= (syslog-ng is installed for it); the checks
+# add which bus and syslog daemon run.
 # BOOT_ONLY_S6=yes|no|auto (default auto, init's default): init's
 # --boot-only-s6= (uinitconverter's own initramfs, with mdevd; no systemd at
 # all). When init chose it, the checks add that the entry boots it.
@@ -44,6 +47,10 @@ STANDALONE=${STANDALONE_RPMS:-$D/rpmbuild/standalone/rpms}
 SKARNET=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/rpms}
 SELINUX=${SELINUX:-enforcing}
 BOOT_ONLY_S6=${BOOT_ONLY_S6:-auto}
+BUS=${BUS:-daemon}
+SYSLOG=${SYSLOG:-rsyslog}
+case $BUS in daemon | broker) ;; *) echo "BUS=$BUS: daemon or broker" >&2; exit 2 ;; esac
+case $SYSLOG in rsyslog | syslog-ng) ;; *) echo "SYSLOG=$SYSLOG: rsyslog or syslog-ng" >&2; exit 2 ;; esac
 S=$(mktemp -d)
 if [ "${VM_KEEP:-no}" = yes ]; then
     trap 'cp "$D/serial.log" "$D/s6boot-$MODE-serial.log" 2>/dev/null; rm -rf "$S"' EXIT
@@ -83,7 +90,7 @@ done
 cat >"$S/setup.sh" <<'EOS'
 #!/bin/bash
 # As root in the VM, on the systemd boot: install, configure, init.
-# $1: the mode, $2: --selinux=, $3: --boot-only-s6=.
+# $1: the mode, $2: --selinux=, $3: --boot-only-s6=, $4: --bus=, $5: --syslog=.
 set -euo pipefail
 cd ~tester/in
 # Built locally, so unsigned. The base image's metadata cache can be stale
@@ -97,17 +104,24 @@ fi
 if [ "$1" = upgrade ]; then
     initconvert-user-setup on
 fi
-# auto is the default; 0.3.0's init (mode upgrade) knows only yes and no.
-o=
-[ "${3:-auto}" = auto ] || o=--boot-only-s6=$3
-initconvert init --yes --default-s6 --selinux="$2" ${o:+"$o"}
+if [ "${5:-rsyslog}" = syslog-ng ]; then
+    dnf -y -q install syslog-ng || { dnf clean metadata && dnf -y -q install --refresh syslog-ng; }
+fi
+# Options only when they aren't the default: auto is the default, and
+# 0.3.0's init (mode upgrade) knows only yes and no.
+opts=()
+[ "${3:-auto}" = auto ] || opts+=("--boot-only-s6=$3")
+[ "${4:-daemon}" = daemon ] || opts+=("--bus=$4")
+[ "${5:-rsyslog}" = rsyslog ] || opts+=("--syslog=$5")
+initconvert init --yes --default-s6 --selinux="$2" "${opts[@]}"
 grubby --default-title
 EOS
 
 cat >"$S/check.sh" <<'EOS'
 #!/bin/bash
 # As root in the VM, on the s6 boot. $1: the mode (unused), $2: a label, $3:
-# init's --boot-only-s6= (the initramfs checks run when init chose it).
+# init's --boot-only-s6= (the initramfs checks run when init chose it), $4:
+# --bus=, $5: --syslog=.
 set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
@@ -176,9 +190,41 @@ s6-rc -a list | grep -qx backlight && ok "backlight is up" || bad "backlight isn
 [ "$(cat /proc/sys/kernel/core_pattern)" = "@@/run/systemd/coredumpd/kernel" ] && ok "core_pattern is systemd-coredump's socket" || bad "core_pattern: $(cat /proc/sys/kernel/core_pattern)"
 w=$(logs | grep "uinitconverter early:" | sort -u)
 [ -z "$w" ] && ok "no early-boot warnings" || bad "early-boot warnings: $(echo "$w" | head -5 | tr '\n' ' ')"
-n=$(ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep -c denied)
+# The system bus (BUS=): its owner of org.freedesktop.DBus, and a service
+# it activates through uinitconverter (hostnamed, D-Bus activated).
+# The program the s6 service runs (dbus-broker-launch is the broker's
+# launcher, its supervised process).
+exe_of() { basename "$(readlink "/proc/$(s6-svstat -p "/run/service/$1")/exe" 2>/dev/null)"; }
+b=$(exe_of dbus)
+case ${4:-daemon} in
+broker) [ "$b" = dbus-broker-launch ] && ok "the system bus is dbus-broker ($b)" || bad "the system bus runs ${b:-nothing}, not dbus-broker-launch" ;;
+*) [ "$b" = dbus-daemon ] && ok "the system bus is dbus-daemon" || bad "the system bus runs ${b:-nothing}, not dbus-daemon" ;;
+esac
+h=$(timeout 30 busctl get-property org.freedesktop.hostname1 /org/freedesktop/hostname1 org.freedesktop.hostname1 Hostname 2>&1)
+case $h in s\ *) ok "bus activation (hostnamed): $h" ;; *) bad "bus activation (hostnamed): $h" ;; esac
+# The syslog daemon with JOURNAL=no (SYSLOG=): it runs, rsyslog's or
+# syslog-ng's alone, and takes a message on /dev/log into /var/log/messages.
+if ! grep -q '^[[:space:]]*JOURNAL=yes' /etc/uinitconverter/uinitconverter.conf; then
+    case ${5:-rsyslog} in
+    syslog-ng) d=syslog-ng other=rsyslogd ;;
+    *) d=rsyslogd other=syslog-ng ;;
+    esac
+    x=$(exe_of syslog)
+    [ "$x" = "$d" ] && ok "$d runs (the s6 syslog service)" || bad "the s6 syslog service runs ${x:-nothing}, not $d"
+    pgrep -f "^(/usr/s?bin/)?$other( |$)" >/dev/null && bad "$other runs too" || ok "no $other"
+    tag="vmtest-$$-$RANDOM"
+    logger -t "$tag" "through /dev/log"
+    until_ok 'grep -q "$tag" /var/log/messages' 10 && ok "/dev/log reaches /var/log/messages ($d)" || bad "the message on /dev/log isn't in /var/log/messages"
+fi
+# Known and not ours: syslog-ng's execmem, denied on the stock systemd boot
+# as well (Fedora 45's policy and syslog-ng 4.12).
+known='comm="syslog-ng-main".*execmem|execmem.*comm="syslog-ng-main"'
+avc() { ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep denied; }
+k=$(avc | grep -cE "$known")
+[ "$k" = 0 ] || echo "   ($k known denial(s) not counted: syslog-ng's execmem, as on the stock boot)"
+n=$(avc | grep -vcE "$known")
 [ "$n" = 0 ] && ok "no AVC denials" || bad "$n AVC denials"
-ausearch -m avc -ts boot --input-logs </dev/null 2>/dev/null | grep denied | sed -E 's/.*avc: +//' | sort | uniq -c | sort -rn | head -15 | cut -c1-200 | sed 's/^/   /'
+avc | grep -vE "$known" | sed -E 's/.*avc: +//' | sort | uniq -c | sort -rn | head -15 | cut -c1-200 | sed 's/^/   /'
 echo "-- the runner's lines for user@:"
 logs | grep -E "(^|uinitconverter\[|: )user@[0-9]+\.service[]:]" | cut -c1-160 | tail -10 | sed 's/^/   /'
 echo "passed: $pass  failed: $fail"
@@ -398,7 +444,7 @@ ssh_up
 "$VM" copy "$D" "$S/setup.sh" "$S/check.sh" "$S/upgrade.sh" "$S/rollback.sh"
 "$VM" copy "$D" "$S"/rpms/*
 echo "== install and init (systemd boot)"
-"$VM" ssh "$D" sudo bash in/setup.sh "$MODE" "$SELINUX" "$BOOT_ONLY_S6"
+"$VM" ssh "$D" sudo bash in/setup.sh "$MODE" "$SELINUX" "$BOOT_ONLY_S6" "$BUS" "$SYSLOG"
 echo "== reboot into the s6 boot"
 t0=$(date +%s)
 reboot_vm
@@ -415,7 +461,7 @@ if [ "$MODE" = upgrade ]; then
     echo "== reboot after the upgrade"
     reboot_vm || exit 1
 fi
-"$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'first s6 boot'" "$BOOT_ONLY_S6" || rc=$?
+"$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'first s6 boot'" "$BOOT_ONLY_S6" "$BUS" "$SYSLOG" || rc=$?
 "$VM" screenshot "$D" "$D/s6boot-$MODE.png" || true
 if [ "$MODE" = upgrade ]; then
     "$VM" ssh "$D" "sudo test -e /run/s6-rc/servicedirs/uinitconverter-units" &&
@@ -426,7 +472,7 @@ if [ "$MODE" = rollback ]; then
     echo "== reboot with uinitconverter.db=previous"
     reboot_vm || exit 1
     "$VM" ssh "$D" sudo bash in/rollback.sh previous || rc=$?
-    "$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'rollback boot'" "$BOOT_ONLY_S6" || rc=$?
+    "$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'rollback boot'" "$BOOT_ONLY_S6" "$BUS" "$SYSLOG" || rc=$?
     echo "== reboot without it"
     reboot_vm || exit 1
     "$VM" ssh "$D" sudo bash in/rollback.sh current || rc=$?
@@ -439,6 +485,6 @@ if [ "$MODE" = default ]; then
     echo "   SSH up $(($(date +%s) - t0)) s after the reboot"
     echo "-- the last boot's shutdown (s6 boot):"
     "$VM" ssh "$D" "sudo journalctl -b -1 --no-pager -o short-monotonic 2>/dev/null | tail -15 | cut -c1-160" | sed 's/^/   /' || true
-    "$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'second s6 boot'" "$BOOT_ONLY_S6" || rc=$?
+    "$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'second s6 boot'" "$BOOT_ONLY_S6" "$BUS" "$SYSLOG" || rc=$?
 fi
 exit $rc
