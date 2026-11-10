@@ -61,6 +61,9 @@ systemd를 닮은 큰 두 부분은 지금 하는 일에서 동결합니다(2026
 
   나머지 메서드는 관리자가 쓰는 systemctl 명령용입니다. 호출되지만 일부러 구현하지 않은 메서드가 하나
   있습니다. `EnqueueUnitJobMany`(systemd-update-helper의 systemctl)이며, 없어도 계속 동작합니다.
+  Fedora의 `/usr`에서 이름을 가진 파일이 하나도 없는 메서드는 지웠습니다(217부: `Manager.AbandonScope`,
+  `GetJob`, `UnrefUnit`, `Unit.TryRestart`, `ReloadOrRestart`, `ReloadOrTryRestart`).
+  `systemctl show`만 출력하는 속성은 남깁니다. 관리자가 유닛 설정을 읽는 방법이기 때문입니다.
 - **샌드박스**(`uinitconverter-exec`): Fedora 자체 서비스가 사용하고(systemd가 아닌 서비스 248개 중
   `ProtectSystem=` 47개, `SystemCallFilter=` 32개, `IPAddressDeny=` 15개, `DeviceAllow=` 13개),
   PID 1 밖에서 이것을 적용할 수 있는 systemd 프로그램이 없으므로 유지합니다. 필요로 하는 Fedora 유닛이

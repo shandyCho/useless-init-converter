@@ -16,6 +16,9 @@
   "범위"를 참고하세요. 업데이트하면 이 패키지가 제거되고(`uinitconverterd`가 Obsoletes),
   `initconvert-user-setup on`이 썼던 `user@` drop-in도 함께 지워집니다. `USER_MANAGER=`,
   `USER_EXCLUDE=`, `USER_FALLBACK_ON=`과 `uinitconverter.user_manager=`는 무시됩니다.
+- **호출하는 프로그램이 없는 D-Bus 메서드:** `Manager.AbandonScope`, `GetJob`, `UnrefUnit`,
+  `Unit` 인터페이스의 `TryRestart`, `ReloadOrRestart`, `ReloadOrTryRestart`(Fedora의 `/usr`에서
+  이 이름을 가진 파일이 없습니다. `systemctl`은 그대로 남는 `Manager`의 `…Unit` 메서드를 씁니다).
 
 ### 변경
 - **서비스는 자기 데이터베이스의 유닛을 실행합니다.** gen이 만드는 s6-rc 데이터베이스에 각 유닛을 쓰고

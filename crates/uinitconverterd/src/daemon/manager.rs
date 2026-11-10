@@ -290,30 +290,14 @@ impl Daemon {
             }
             "EnqueueMarkedJobs" => self.enqueue_marked(c, msg).await,
             // Reference counting is accepted and ignored.
-            "RefUnit" | "UnrefUnit" | "AbandonScope" => {
+            // RefUnit only: UnrefUnit, AbandonScope (logind abandons through
+            // the scope's own Scope.Abandon) and GetJob have no caller on
+            // Fedora (work_history part 217).
+            "RefUnit" => {
                 let (name,): (String,) = Self::args(msg)?;
-                self.mac_unit(
-                    c,
-                    msg,
-                    &name,
-                    if member == "AbandonScope" {
-                        "stop"
-                    } else {
-                        "start"
-                    },
-                )
-                .await?;
+                self.mac_unit(c, msg, &name, "start").await?;
                 self.require_privileged(c, msg).await?;
                 self.reply(c, msg, &()).await
-            }
-            "GetJob" => {
-                let (id,): (u32,) = Self::args(msg)?;
-                if let Some(u) = self.job_unit(id) {
-                    self.mac_unit(c, msg, &u, "status").await?;
-                    self.reply(c, msg, &(op(job_path(id)),)).await
-                } else {
-                    Err(err(E_NO_JOB, format!("Job {id} does not exist.")))
-                }
             }
             "CancelJob" => {
                 let (id,): (u32,) = Self::args(msg)?;

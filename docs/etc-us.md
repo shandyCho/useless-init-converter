@@ -63,6 +63,10 @@ Both large systemd-shaped parts are frozen at what they do now (audit of
   The other methods are the systemctl verbs an admin uses. One method is
   called and not implemented, on purpose: `EnqueueUnitJobMany` (systemctl
   from systemd-update-helper), which carries on without it.
+  Methods no file in Fedora's `/usr` names were removed (part 217:
+  `Manager.AbandonScope`, `GetJob`, `UnrefUnit`, `Unit.TryRestart`,
+  `ReloadOrRestart`, `ReloadOrTryRestart`). Properties only `systemctl
+  show` prints stay: it is how an admin reads a unit's settings.
 - **The sandbox** (`uinitconverter-exec`): Fedora's own services use it
   (of 248 non-systemd services, 47 set `ProtectSystem=`, 32
   `SystemCallFilter=`, 15 `IPAddressDeny=`, 13 `DeviceAllow=`), and no

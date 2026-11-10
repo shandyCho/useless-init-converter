@@ -231,9 +231,6 @@ impl Daemon {
             "Stop" => "stop",
             "Reload" => "reload",
             "Restart" => "restart",
-            "TryRestart" => "try-restart",
-            "ReloadOrRestart" => "reload-or-restart",
-            "ReloadOrTryRestart" => "reload-or-try-restart",
             "Kill" => {
                 let (whom, sig): (String, i32) = Self::args(msg)?;
                 return self.kill_unit(c, msg, name, &whom, sig).await;

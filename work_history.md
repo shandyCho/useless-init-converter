@@ -12880,3 +12880,24 @@ Not pushed: parts 205-216. Part 205's five steps are done: 1 and 2 (scope rule, 
 
 1. Owner: push.
 2. Under the part 215 direction, look for code with no caller left after the removals (e.g. properties nobody reads beyond `systemctl show`), measured the same way, before removing anything.
+
+## 2026-11-11, part 217: code with no caller, found and removed
+
+Part 216's next step, under the part 215 direction. Three searches:
+
+1. **Static, the workspace:** `pub fn`s whose name appears nowhere else (tests included): `util::group_name`, `UnitFile::has_section`, `Loader::load_implicit` (the user manager's implicit slices), `client::unit_active_state`, `cgroup::unit_cgroup_rel`, `socket::unmark_requested`. Removed; a second scan found nothing more.
+2. **`prop_order.rs`:** systemd's order for 1,821 properties, 909 of which nothing here serves (not in any GetAll in the sandbox — 305 served names — nor a CamelCase literal anywhere in the crates). Removed; the served ones keep their relative order: every GetAll in the sandbox (all units, each interface) has the same key order before and after. (83806ae: 972 lines.)
+3. **Fedora's `/usr`, every file:** each method and property name we serve, grepped as a whole word (`grep -a -o -w -F`) in the VM image (ELF, scripts, Python; unit files, completions, docs and unrelated data filtered out). Real callers the part 216 trace hadn't exercised showed up: podman/crun/quadlet (go-systemd: most `…Unit` methods, `ListUnits*`, `KillUnit`, `ResetFailedUnit`, `SetUnitProperties`, `AttachProcessesToUnit`), dbus-broker-launch (`StartUnit`, `StartTransientUnit`, `LoadUnit`, `SetEnvironment`, `ActiveState`…), gnome-control-center and gnome-settings-daemon (`Enable/DisableUnitFiles`, `GetUnitFileState`, `StartUnit`, `StopUnit`), gnome-shell (`StartUnit`, `StopUnit`, `GetUnit`), gnome-session-init-worker (`ResetFailed`, `UnsetAndSetEnvironment`), flatpak (`StartTransientUnit`), dnf5's needs-restarting plugin (`ListUnits`, `MainPID`, `ActiveEnterTimestamp`, `FragmentPath`, `ControlGroup`), libvirt, sssd, fwupd, polkit. Names no file outside systemd's own PID 1 contains: the methods `Manager.AbandonScope`, `GetJob`, `UnrefUnit`, `Unit.TryRestart`/`ReloadOrRestart`/`ReloadOrTryRestart`, and ~27 properties (`…Monotonic` timestamps, `TimeoutStartUSec`, `RestartUSec`, `WatchdogUSec`, …) that only a generic `systemctl show` prints.
+
+**Owner's decision:** remove the six methods; keep the properties (`systemctl show` is how an admin reads a unit's settings). `RefUnit` stays (systemctl's library names it). CHANGELOG pair (Removed), docs/etc pair ("Scope").
+
+**Tests:** `cargo test` all pass; sandbox **388/388** after each change.
+
+### Current state
+
+Not pushed: parts 205-217. The core is about 1,000 lines smaller than at part 216.
+
+### Next steps
+
+1. Owner: push.
+2. The same `/usr` search can be repeated after a Fedora release upgrade, to see whether a caller appeared for something missing (`EnqueueUnitJobMany`) or disappeared for something kept.

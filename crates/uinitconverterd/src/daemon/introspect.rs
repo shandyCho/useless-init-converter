@@ -20,7 +20,6 @@ pub const MANAGER: &str = r#"
   <method name="SetUnitProperties"><arg type="s" direction="in"/><arg type="b" direction="in"/><arg type="a(sv)" direction="in"/></method>
   <method name="EnqueueMarkedJobs"><arg type="ao" direction="out"/></method>
   <method name="StartTransientUnit"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="a(sv)" direction="in"/><arg type="a(sa(sv))" direction="in"/><arg type="o" direction="out"/></method>
-  <method name="GetJob"><arg type="u" direction="in"/><arg type="o" direction="out"/></method>
   <method name="CancelJob"><arg type="u" direction="in"/></method>
   <method name="ClearJobs"/>
   <method name="ListUnits"><arg type="a(ssssssouso)" direction="out"/></method>
@@ -70,9 +69,6 @@ pub const UNIT: &str = r#"
   <method name="Stop"><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
   <method name="Reload"><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
   <method name="Restart"><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
-  <method name="TryRestart"><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
-  <method name="ReloadOrRestart"><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
-  <method name="ReloadOrTryRestart"><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
   <method name="Kill"><arg type="s" direction="in"/><arg type="i" direction="in"/></method>
   <method name="ResetFailed"/>
  </interface>

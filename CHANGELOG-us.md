@@ -18,6 +18,10 @@ Details in `work_history.md`, parts 203-205.
   it) together with the `user@` drop-in `initconvert-user-setup on` wrote.
   `USER_MANAGER=`, `USER_EXCLUDE=`, `USER_FALLBACK_ON=` and
   `uinitconverter.user_manager=` are ignored.
+- **D-Bus methods no program calls:** `Manager.AbandonScope`, `GetJob`,
+  `UnrefUnit`, and the `Unit` interface's `TryRestart`, `ReloadOrRestart`
+  and `ReloadOrTryRestart` (no file in Fedora's `/usr` names them;
+  `systemctl` uses the `Manager` methods `…Unit`, which stay).
 
 ### Changed
 - **Services run the units of their database.** gen writes each unit into
