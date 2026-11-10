@@ -97,7 +97,10 @@ fi
 if [ "$1" = upgrade ]; then
     initconvert-user-setup on
 fi
-initconvert init --yes --default-s6 --selinux="$2" --boot-only-s6="${3:-auto}"
+# auto is the default; 0.3.0's init (mode upgrade) knows only yes and no.
+o=
+[ "${3:-auto}" = auto ] || o=--boot-only-s6=$3
+initconvert init --yes --default-s6 --selinux="$2" ${o:+"$o"}
 grubby --default-title
 EOS
 
