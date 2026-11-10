@@ -244,6 +244,9 @@ cat >"$S/rollback.sh" <<'EOS'
 #             boot uinitconverter.db=previous next
 #   previous: on that boot: the first database, its units and its index
 #   current:  after a boot without it: the second database again
+#   essential: a down service put into the bundle dbus depends on, then a
+#             reload: s6-rc-update would restart dbus and initconvertd; both
+#             stay up (-E), the daemon on the bus
 set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
@@ -293,6 +296,23 @@ current)
     in_index && ok "rbtest is in the live index" || bad "rbtest isn't in the live index"
     s=$(systemctl is-active rbtest.service)
     [ "$s" = active ] && ok "rbtest.service is active (enabled in this database)" || bad "rbtest.service: $s"
+    ;;
+essential)
+    echo "== a reload that would restart the essential services"
+    m=/etc/uinitconverter/s6/uinitconverter-sysinit/contents.d/syslog
+    s6-svstat /run/service/syslog 2>/dev/null | grep -q '^up' && echo "   syslog is up; the check needs it down"
+    d0=$(pgrep -x initconvertd); b0=$(s6-svstat -p /run/service/dbus)
+    touch "$m"
+    timeout 180 systemctl daemon-reload; r=$?
+    rm -f "$m"
+    [ "$r" = 0 ] && ok "daemon-reload returned" || bad "daemon-reload: exit $r"
+    [ "$(pgrep -x initconvertd)" = "$d0" ] && ok "initconvertd kept running (PID $d0)" || bad "initconvertd: $d0 -> $(pgrep -x initconvertd)"
+    [ "$(s6-svstat -p /run/service/dbus)" = "$b0" ] && ok "dbus kept running" || bad "dbus: $b0 -> $(s6-svstat -p /run/service/dbus)"
+    o=$(timeout 10 busctl status org.freedesktop.systemd1 2>/dev/null | sed -n 's/^PID=//p')
+    [ "$o" = "$d0" ] && ok "initconvertd is on the bus" || bad "org.freedesktop.systemd1: ${o:-no owner}"
+    timeout 180 systemctl daemon-reload && ok "a reload without it" || bad "the reload without it failed"
+    s=$(timeout 30 systemctl is-system-running 2>&1)
+    case $s in running | degraded) ok "is-system-running: $s" ;; *) bad "is-system-running: $s" ;; esac
     ;;
 esac
 echo "passed: $pass  failed: $fail"
@@ -357,6 +377,7 @@ if [ "$MODE" = rollback ]; then
     echo "== reboot without it"
     reboot_vm || exit 1
     "$VM" ssh "$D" sudo bash in/rollback.sh current || rc=$?
+    timeout 600 "$VM" ssh "$D" sudo bash in/rollback.sh essential || rc=$?
 fi
 if [ "$MODE" = default ]; then
     echo "== reboot from the s6 boot, tester's session open"

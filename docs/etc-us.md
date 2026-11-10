@@ -637,6 +637,14 @@ Notes:
   (`flag-essential`, or membership in `uinitconverter-sysinit`, which
   `initconvert init` changes for syslog, journal-relay and resolv); a reload
   puts them back if a set moves them.
+- **`-E`**: a reload installs the live database with `s6-rc-set-install -E`,
+  so s6-rc-update never stops an essential service (dbus, initconvertd, the
+  early boot): s6-rc skips it ("marked as essential, not stopping it") and
+  the update goes on; what changed in it applies from the next boot. Other
+  services an update must restart (a new dependency that is down, a type
+  change) still restart. The package ships none of the bundle members
+  `initconvert init` adds or removes, so an RPM update doesn't change the
+  bundle behind its back.
 - `s6 live start/stop` and `s6 process restart` act below uinitconverter: there is
   no systemd job, so units are better started and stopped with `systemctl`.
   `s6 live stop` runs `ExecStop=` (through `UNIT.stop`, see above);
