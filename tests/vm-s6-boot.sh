@@ -365,6 +365,9 @@ if [ "$MODE" = upgrade ]; then
     new=()
     for f in "$S"/new/*; do new+=("./$(basename "$f")"); done
     timeout 2400 "$VM" ssh "$D" sudo bash in/upgrade.sh "${new[@]}" || rc=$?
+    # Still booted by 0.3.0's rc.init (the live state on the boot link): a
+    # deferred install must pin it first.
+    timeout 600 "$VM" ssh "$D" sudo bash in/rollback.sh essential || rc=$?
     echo "== reboot after the upgrade"
     reboot_vm || exit 1
 fi
