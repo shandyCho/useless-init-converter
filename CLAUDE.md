@@ -21,7 +21,10 @@ if they turned out to be wrong.
   PID 1 (logind, `systemd --user`, journald) and what it takes to run
   Fedora's unit files under s6-rc. "systemd does it too" is not a reason to
   add a feature; add one only for a named real caller, and record that
-  caller in work_history.md. See "Scope" in the docs/etc pair.
+  caller in work_history.md. See "Scope" in the docs/etc pair. Direction
+  (part 215): keep the project small; use s6's and its ecosystem's own
+  features (a skarnet tool's behaviour over a Rust re-model of it), and
+  leave what only systemd can do to the real systemd program.
 - Layout: the core is one Cargo workspace (`crates/`); its crates may depend
   on each other. `standalone/*` are separate projects (each its own
   `[workspace]`, Cargo.lock, README pair and spec) and must not depend on the

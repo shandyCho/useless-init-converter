@@ -62,6 +62,11 @@ starting work; append a new session entry when you finish.
    Fedora's unit files under s6-rc. "systemd does it too" is not a reason;
    a feature is added only for a named real caller, recorded here. The s6
    user manager was removed under this rule.
+   Added 2026-11-11 (part 215): the project must stay maintainable by
+   getting smaller, using more of s6's and its ecosystem's own features,
+   and leaving what only systemd can do to the real systemd program. Prefer
+   a skarnet tool's own behaviour (e.g. `s6-rc-update -n`) over re-modelling
+   it in Rust.
 
 ## Session 1: 2026-10-18 to 2026-10-19
 
@@ -12831,3 +12836,22 @@ Not pushed: parts 205-214. The update from 0.3.0 and the rollback boot work. **S
 1. Owner: decide the remaining mechanism. Recommended: before the live install, gen asks `s6-rc-update -n` (dry run) what it would stop; if an essential service is among it, install the database for the next boot only (`--no-update`) and say so, as systemd's daemon-reload restarts nothing. Alternative: leave it (no known trigger left).
 2. Owner: push.
 3. Part 205's steps 4 and 5.
+
+## 2026-11-11, part 215: a reload never restarts an essential service; the live state keeps its database
+
+The owner chose part 214's recommendation, and stated the maintenance direction (key decision 8): smaller, more of s6's own features, what only systemd can do left to systemd.
+
+- **134db66:** before the live install, gen runs `s6-rc-update -n` (its dry run; `s6-rc-dryrun` prints the `s6-rc … -D|-d -- change NAMES` of the down transition) and `s6-rc -a -c list` (the up services' flags). If an essential service that is up would be stopped, the set is installed for the next boot only (`--no-update`) and the set changes say "not applied to the running system: the update would restart … (essential); the new database runs from the next boot" (the daemon logs them, `initconvert reload` prints them). A failed dry run warns and installs as before. s6-rc's restart rules are not re-modelled; its dry run decides. Unit test `essential_restarts_from_the_dry_run`.
+- **Bug found by its VM check:** `/run/s6-rc/compiled` pointed at the boot link `/var/lib/uinitconverter/compiled` (rc.init gave `s6-rc-init` the link), so switching the link for the next boot switched the database live s6-rc reads under its state. **3857991:** rc.init passes `readlink -f` of the database; on a system booted before (still on the link), `pin_live` first runs `s6-rc-update` to the very database it runs, which restarts nothing (sandbox: the same PIDs for every service; the live link then names the directory).
+- **9b9e0f7:** `vm-s6-boot.sh` `rollback` ends with `essential` (a down `syslog` put into `uinitconverter-sysinit`, a reload, then a reload without it); `upgrade` runs it too after `dnf upgrade` and `init`, while still booted by 0.3.0's rc.init (the `pin_live` path).
+
+**Tests:** `cargo test` all pass; sandbox **388/388**. VM (3857991's RPMs, SELinux enforcing): `rollback` 17/17, 5/5, 7/7, 17/17, 4/4, essential 10/10 (reload returns, initconvertd and dbus keep their PIDs, the daemon on the bus, the live database stays, the next boot's is the new one, the daemon says why, a reload without the member applies live again); `upgrade` 13/13, essential on the link-booted system 10/10, 17/17 after the reboot, the holder live.
+
+### Current state
+
+Not pushed: parts 205-215. The update from 0.3.0, the rollback boot and a reload that would restart an essential service are checked in the VM. A deferred database runs from the next boot; until then the live system keeps the old one (and, on a live database without the holder, the index of `state/current`, which is the new one: only on a 0.3.0-generated live database, until the next boot).
+
+### Next steps
+
+1. Owner: push.
+2. Part 205's steps 4 and 5 (best-effort sandboxing, the D-Bus surface), audited against real callers and the part 215 direction: what systemd's own programs can do is left to them.
