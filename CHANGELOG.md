@@ -21,6 +21,10 @@
   이 이름을 가진 파일이 없습니다. `systemctl`은 그대로 남는 `Manager`의 `…Unit` 메서드를 씁니다).
 
 ### 변경
+- **2단계 부팅, 종료, init-selinux를 Rust로(규칙 6):** s6-linux-init의 `rc.init`, `rc.shutdown`,
+  `rc.shutdown.final`, `runlevel`은 execline 한 줄이며, 일은 `initconvert rc init|shutdown|shutdown-final`이
+  하고 `/usr/sbin/init-selinux`는 `initconvert`의 링크입니다. `initconvert init`(s6-linux-init를 다시 만듦)
+  뒤에 적용됩니다.
 - **직접 작성한 s6 서비스를 Rust로 시작합니다(규칙 6):** `/etc/uinitconverter/s6`의 각 `run`(dbus,
   syslog, udevd, earlyoom, journal-relay, fd 저장소, linkwatch, initconvertd)은 execline 한 줄입니다.
   셸이 하던 일(버스 선택과 dbus-broker 대체, syslog 선택, udevd 샌드박스 대체, earlyoom 인자)은

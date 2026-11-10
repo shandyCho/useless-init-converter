@@ -700,7 +700,10 @@ mod tests {
         );
         // The old script's marker goes too.
         let old = "A=1\n\n# set by setup-fedora.sh --no-resolved\nRESOLVED=no\n";
-        assert_eq!(set_conf_key(old, "RESOLVED", false, false).unwrap(), "A=1\n");
+        assert_eq!(
+            set_conf_key(old, "RESOLVED", false, false).unwrap(),
+            "A=1\n"
+        );
     }
 
     #[test]

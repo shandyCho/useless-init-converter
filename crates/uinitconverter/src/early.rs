@@ -19,12 +19,12 @@ use std::process::{exit, Command, Stdio};
 
 const USAGE: &str = "usage: early mount-api|mount-fs|umount-fs|udev-trigger|modules-load|hostname|tmpfiles|sysusers|sysctl|vconsole|rfkill|rfkill-save|backlight|backlight-save|user-sessions|user-sessions-stop|resolv|zram|zram-stop";
 
-fn warn(msg: &str) {
+pub(crate) fn warn(msg: &str) {
     eprintln!("uinitconverter early: {msg}");
 }
 
 /// Run a program; its exit code, or None if it couldn't start or was killed.
-fn run(prog: &str, args: &[&str]) -> Option<i32> {
+pub(crate) fn run(prog: &str, args: &[&str]) -> Option<i32> {
     Command::new(prog)
         .args(args)
         .status()
@@ -33,7 +33,7 @@ fn run(prog: &str, args: &[&str]) -> Option<i32> {
 }
 
 /// Run a program quietly (no stdout/stderr): true if it exited 0.
-fn quiet(prog: &str, args: &[&str]) -> bool {
+pub(crate) fn quiet(prog: &str, args: &[&str]) -> bool {
     Command::new(prog)
         .args(args)
         .stdout(Stdio::null())
@@ -44,7 +44,7 @@ fn quiet(prog: &str, args: &[&str]) -> bool {
 }
 
 /// A program's stdout, if it exited 0.
-fn output(prog: &str, args: &[&str]) -> Option<String> {
+pub(crate) fn output(prog: &str, args: &[&str]) -> Option<String> {
     let o = Command::new(prog)
         .args(args)
         .stderr(Stdio::null())
@@ -55,13 +55,13 @@ fn output(prog: &str, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
-fn has(prog: &str) -> bool {
+pub(crate) fn has(prog: &str) -> bool {
     std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).any(|d| d.join(prog).is_file()))
         .unwrap_or(false)
 }
 
-fn cmdline() -> String {
+pub(crate) fn cmdline() -> String {
     fs::read_to_string("/proc/cmdline").unwrap_or_default()
 }
 
@@ -71,7 +71,7 @@ fn restore_state_off(cmdline: &str) -> bool {
         .any(|w| w == "systemd.restore_state=0")
 }
 
-fn restorecon(args: &[&str]) {
+pub(crate) fn restorecon(args: &[&str]) {
     if has("restorecon") {
         quiet("restorecon", args);
     }
@@ -575,7 +575,7 @@ const NOLOGIN: &str = "/run/nologin";
 /// tmpfiles.d/systemd-nologin.conf) and refused again when the shutdown
 /// starts (rc.shutdown runs `early user-sessions-stop`; pam_nologin reads
 /// the file).
-fn user_sessions(stop: bool) {
+pub(crate) fn user_sessions(stop: bool) {
     if stop {
         let msg = "System is going down, unprivileged users are not permitted to log in anymore. For technical details, see pam_nologin(8).\n";
         if fs::write(NOLOGIN, msg).is_err() {

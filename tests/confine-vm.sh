@@ -4,7 +4,7 @@
 # initramfs with this host's programs and unit files, dist/s6's run scripts
 # under s6-supervise. No SELinux policy is loaded in there; that takes a real
 # boot. Also makes the coredump service keep a real crash's core dump, and runs
-# dist/s6-linux-init/init-selinux, for the hard RLIMIT_NOFILE and soft RLIMIT_CORE,
+# init-selinux (initconvert by argv0), for the hard RLIMIT_NOFILE and soft RLIMIT_CORE,
 # with the policy load and s6-linux-init replaced by stand-ins.
 #
 #   tests/confine-vm.sh WORKDIR [KVER]
@@ -125,14 +125,14 @@ pu_unit pu-no PrivateUsers=no
 pu_unit pu-chroot PrivateUsers=yes RootDirectory=/pu-root
 pu_unit pu-strict PrivateUsers=yes ProtectSystem=strict
 # init-selinux, with stand-ins for what it loads and execs.
-cp "$TOP/dist/s6-linux-init/init-selinux" "$R/usr/sbin/"
+ln -s ../libexec/uinitconverter/initconvert "$R/usr/sbin/init-selinux"
 printf '#!/bin/sh\nexit 0\n' >"$R/usr/sbin/load_policy"
 mkdir -p "$R/etc/s6-linux-init/current/bin"
 cat >"$R/etc/s6-linux-init/current/bin/init" <<'STANDIN'
 #!/bin/bash
 echo "$* $(ulimit -Sn) $(ulimit -Hn) $(ulimit -Sn 65535 2>/dev/null && ulimit -Sn) $(ulimit -Sc)"
 STANDIN
-chmod +x "$R/usr/sbin/init-selinux" "$R/usr/sbin/load_policy" "$R/etc/s6-linux-init/current/bin/init"
+chmod +x "$R/usr/sbin/load_policy" "$R/etc/s6-linux-init/current/bin/init"
 
 cat >"$R/init" <<'EOF'
 #!/bin/bash

@@ -9,6 +9,7 @@ use std::process::{exit, Command};
 
 mod early;
 mod init;
+mod rc;
 mod svc;
 
 const USAGE: &str = "\
@@ -141,6 +142,17 @@ fn main() {
     }
     if args.first().is_some_and(|a| a == "early") {
         early::main(&args[1..]);
+    }
+    // PID 1 with init=/usr/sbin/init-selinux (a link to this program).
+    if std::path::Path::new(&argv0)
+        .file_name()
+        .is_some_and(|n| n == "init-selinux")
+    {
+        rc::init_selinux(&args);
+    }
+    // s6-linux-init's rc.init, rc.shutdown and rc.shutdown.final.
+    if args.first().is_some_and(|a| a == "rc") {
+        rc::main(&args[1..]);
     }
     // The hand-written s6 services' start (their run is `exec initconvert svc NAME`).
     if args.first().is_some_and(|a| a == "svc") {

@@ -24,6 +24,11 @@ Details in `work_history.md`, parts 203-205.
   `systemctl` uses the `Manager` methods `…Unit`, which stay).
 
 ### Changed
+- **Stage 2, the shutdown and init-selinux in Rust (rule 6):** s6-linux-init's
+  `rc.init`, `rc.shutdown`, `rc.shutdown.final` and `runlevel` are one line
+  of execline; `initconvert rc init|shutdown|shutdown-final` does the work,
+  and `/usr/sbin/init-selinux` is a link to `initconvert`. They take effect
+  after `initconvert init` (it regenerates s6-linux-init).
 - **The hand-written s6 services start through Rust (rule 6):** each `run`
   in `/etc/uinitconverter/s6` (dbus, syslog, udevd, earlyoom, journal-relay,
   the fd store, linkwatch, initconvertd) is one line of execline;

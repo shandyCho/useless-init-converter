@@ -102,7 +102,9 @@ install -Dm0644 dist/rsyslog.conf %{buildroot}%{_datadir}/uinitconverter/rsyslog
 install -Dm0644 dist/syslog-ng.conf %{buildroot}%{_datadir}/uinitconverter/syslog-ng.conf
 install -Dm0644 dist/s6.conf %{buildroot}%{_datadir}/uinitconverter/s6.conf
 cp -a dist/initramfs/root %{buildroot}%{_datadir}/uinitconverter/initramfs
-install -Dm0755 dist/s6-linux-init/init-selinux %{buildroot}%{_sbindir}/init-selinux
+# PID 1 before s6-linux-init: initconvert by argv0 (rule 6).
+install -d %{buildroot}%{_sbindir}
+ln -s ../libexec/uinitconverter/initconvert %{buildroot}%{_sbindir}/init-selinux
 install -Dm0644 dist/selinux/uinitconverter.cil %{buildroot}%{_datadir}/uinitconverter/selinux/uinitconverter.cil
 install -Dm0755 dist/kernel-install/90-uinitconverter.install %{buildroot}%{_prefix}/lib/kernel/install.d/90-uinitconverter.install
 install -d %{buildroot}%{_localstatedir}/log/uinitconverter
