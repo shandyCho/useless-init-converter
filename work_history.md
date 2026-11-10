@@ -13019,3 +13019,7 @@ The owner asked to test what part 222 left unchecked. `tests/vm-s6-boot.sh` got 
 1. Owner: push (parts 205-223).
 2. Untested on real hardware: a laptop's backlight and keymap.
 3. A release (0.4.0).
+
+## 2026-11-11, part 224: Peer.Ping — no bug
+
+During part 222's debugging a serial watcher reported `busctl call org.freedesktop.systemd1 / org.freedesktop.DBus.Peer Ping` as blocked on every sample, also on 0.3.0. Checked: the sandbox answers Ping and GetMachineId on `/` and `/org/freedesktop/systemd1` at once; on a real s6 boot (dbus-daemon, 63bd2fb's RPMs) root gets Ping in 4 ms and tester in about 10 ms on both paths. The watcher was wrong: its script was written through Python with `2>\&1 \&\&`, so the shell passed `&1` and `&&` to busctl as arguments and the failure read as "BLOCKED". Nothing to change. (Through dbus-broker Ping wasn't called separately; the daemon's other calls through it passed in part 223.)
