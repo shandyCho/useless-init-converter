@@ -41,6 +41,10 @@
   `systemctl`도 새 SSH 로그인도 되지 않았습니다. 이제 패키지는 이 멤버들을 넣지 않고, `--journal=no`일 때
   `initconvert init`이 추가합니다(`resolv`와 같은 방식). 이 수정이 있으면 0.3.0에서의 업데이트도
   안전합니다(멤버가 되살아나지 않고, `--journal=no` 설치에서는 RPM이 지운 뒤 init이 다시 추가합니다).
+- **reload가 essential 서비스를 재시작하지 않습니다.** 새 데이터베이스를 라이브로 설치하면 dbus,
+  initconvertd, 초기 부팅 서비스가 재시작되는 경우(`s6-rc-update -n`으로 확인) 다음 부팅용으로만 설치하고
+  그렇다고 알립니다. systemd의 daemon-reload도 아무것도 재시작하지 않습니다. 전에는 이런 reload가 위와 같이
+  그 업데이트를 기다리던 initconvertd를 멈췄습니다.
 
 ## 0.3.0 (2026-11-09)
 
