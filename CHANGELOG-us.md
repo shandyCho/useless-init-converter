@@ -51,12 +51,6 @@ Details in `work_history.md`, parts 203-205.
   already did `resolv`. The update from 0.3.0 is safe with this fix (the
   members aren't restored; on a `--journal=no` install RPM removes them and
   init adds them back).
-- **A reload no longer stops essential services.** The live database is
-  installed with `s6-rc-set-install -E`: s6-rc-update leaves dbus,
-  initconvertd and the early boot services running even when it would
-  restart them (as `systemctl daemon-reload` restarts nothing on systemd);
-  their changes apply from the next boot. Before, such a reload stopped
-  initconvertd, which was waiting on that same update, as above.
 
 ## 0.3.0 (2026-11-09)
 

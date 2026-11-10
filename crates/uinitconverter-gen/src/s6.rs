@@ -693,13 +693,6 @@ fn commit_and_install(
         .arg(&cfg.set_name))?;
 
     let live = update_live && fs::symlink_metadata(cfg.live_dir.join("compiled")).is_ok();
-    // -E (s6-rc-update without -e): essential services (dbus, initconvertd,
-    // the early boot) are never stopped by an update, as systemd's
-    // daemon-reload restarts nothing; s6-rc skips them with a warning and
-    // the update goes on. With -e, an update that wanted to restart dbus
-    // stopped initconvertd too, which runs this update and waited on it:
-    // the system manager hung off the bus (work_history part 214). What
-    // changed in an essential service applies from the next boot.
     let install = |extra: &[&str]| -> Result<String, String> {
         run(Command::new(tools::path("s6-rc-set-install"))
             .arg("-r")
@@ -710,7 +703,6 @@ fn commit_and_install(
             .arg(&cfg.live_dir)
             // -K: the replaced database stays, as compiled.previous.
             .arg("-K")
-            .arg("-E")
             .arg("--no-snapshot")
             .args(extra)
             .arg(&cfg.set_name))
@@ -778,7 +770,7 @@ fn commit_and_install(
         res = match &copy {
             Some((name, path)) if live_db.is_some() && live_db == fs::canonicalize(path).ok() => {
                 run(Command::new(tools::path("s6-rc-update"))
-                    .arg("-E")
+                    .arg("-e")
                     .arg("-l")
                     .arg(&cfg.live_dir)
                     .arg(path))

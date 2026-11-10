@@ -554,11 +554,6 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - **초기 부팅 서비스**는 스토어에 그렇게 지정되어 있을 때(`flag-essential`, 또는 `initconvert init`이
   syslog, journal-relay, resolv에 대해 바꾸는 `uinitconverter-sysinit` 소속) 정확히 `always`입니다.
   세트에서 옮겨도 reload가 되돌립니다.
-- **`-E`**: reload는 라이브 데이터베이스를 `s6-rc-set-install -E`로 설치하므로, s6-rc-update가
-  essential 서비스(dbus, initconvertd, 초기 부팅)를 멈추지 않습니다. s6-rc는 그 서비스를 건너뛰고("marked
-  as essential, not stopping it") 업데이트는 계속됩니다. 그 서비스의 변경은 다음 부팅부터 적용됩니다. 업데이트가
-  재시작해야 하는 다른 서비스(내려가 있는 새 의존성, 종류 변경)는 그대로 재시작됩니다. 패키지는 `initconvert
-  init`이 넣고 빼는 번들 구성원을 하나도 넣지 않으므로, RPM 업데이트가 몰래 번들을 바꾸지 않습니다.
 - `s6 live start/stop`과 `s6 process restart`는 uinitconverter 아래에서 동작합니다. systemd
   작업(job)이 없으므로 유닛의 시작과 중지는 `systemctl`이 낫습니다. `s6 live stop`은
   `ExecStop=`을 실행하고(`UNIT.stop`을 통해, 위 참고), `s6 process restart`는 실행하지 않습니다.
