@@ -430,7 +430,7 @@ kernel-install 플러그인이 새 커널마다 s6 항목을 추가합니다. `-
 | 무선 상태(rfkill) | systemd-rfkill 대신 s6 oneshot에서 util-linux `rfkill` |
 | 콘솔 키맵과 글꼴 | systemd-vconsole-setup 대신 `vconsole` s6 oneshot에서 kbd의 `loadkeys`/`setfont` |
 | 부팅 사이 밝기 | systemd-backlight@ 대신 `backlight` s6 oneshot |
-| 로그인 차단(`/run/nologin`) | systemd-user-sessions 대신 `user-sessions` s6 oneshot |
+| 로그인 차단(`/run/nologin`) | systemd-user-sessions 대신 tmpfiles 단계와 `rc.shutdown` |
 | 머신 ID | systemd-machine-id-setup 대신 dbus의 `dbus-uuidgen` |
 | 압축 스왑(zram) | systemd generator 대신 s6 oneshot `zram`이 Fedora의 zram-generator를 실행(같은 `zram-generator.conf`, 크기, 우선순위) |
 | 장치 | 일반 서비스로 실행되는 systemd-udevd |
@@ -638,7 +638,7 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - `ALLOW_UIDS`: 유닛을 관리할 수 있는 root 외 사용자.
 - `USER_MANAGER`, `USER_EXCLUDE`, `USER_FALLBACK_ON`: [s6 사용자 매니저](#s6-사용자-매니저-삭제됨)와 함께 삭제되었습니다. 아직 받아들이지만 무시합니다.
 - `UDEV_DIR`, `UDEV_MONITOR`: udev 데이터베이스 위치(`/run/udev`, 비우면 장치가 요청하는 유닛을 시작하지 않음)와 udevd 이벤트를 따를지 여부.
-- `INCLUDE`: 기본값으로 uinitconverter에서 동작하는 systemd 서비스(logind, hostnamed, localed, timedated, resolved, 절전 서비스)를 포함합니다. 다음은 s6 oneshot으로 대체했습니다(규칙 2). 콘솔 키맵과 글꼴(`vconsole`: systemd-vconsole-setup 대신 `/etc/vconsole.conf`로 kbd의 `loadkeys`와 `setfont`), 부팅 사이에 유지하는 화면·키보드 밝기(`backlight`, systemd-backlight 자신의 파일 `/var/lib/systemd/backlight`), 시스템이 올라온 뒤 일반 사용자 로그인 허용(`user-sessions`: systemd-user-sessions 대신 `/run/nologin`을 지우고 종료할 때 다시 씀). `/etc/machine-id`가 없으면 dbus의 `dbus-uuidgen`이 만듭니다. 초기 부팅 단계는 `initconvert` 자신이 합니다(`/usr/libexec/uinitconverter/early STEP`은 그 링크입니다). 무선 상태(rfkill)는 systemd-rfkill 대신 `rfkill` s6 oneshot이 유지합니다. 부팅 때 util-linux `rfkill`로 장치마다 soft block을 복원하고, 종료할 때 상태를 systemd-rfkill 자신의 파일(`/var/lib/systemd/rfkill/ID_PATH:TYPE`)에 저장하므로 systemd 부팅 항목과 상태를 공유합니다. systemd-rfkill과 달리 정상 종료할 때만 저장하며, 부팅 중 udev settle 뒤에 나타난 장치는 상태를 그대로 둡니다.
+- `INCLUDE`: 기본값으로 uinitconverter에서 동작하는 systemd 서비스(logind, hostnamed, localed, timedated, resolved, 절전 서비스)를 포함합니다. 다음은 s6 oneshot으로 대체했습니다(규칙 2). 콘솔 키맵과 글꼴(`vconsole`: systemd-vconsole-setup 대신 `/etc/vconsole.conf`로 kbd의 `loadkeys`와 `setfont`), 부팅 사이에 유지하는 화면·키보드 밝기(`backlight`, systemd-backlight 자신의 파일 `/var/lib/systemd/backlight`), tmpfiles가 끝난 뒤 일반 사용자 로그인 허용(systemd-user-sessions 대신 tmpfiles 단계가 `/run/nologin`을 지우고 `rc.shutdown`이 다시 씀). `/etc/machine-id`가 없으면 dbus의 `dbus-uuidgen`이 만듭니다. 초기 부팅 단계는 `initconvert` 자신이 합니다(`/usr/libexec/uinitconverter/early STEP`은 그 링크입니다). 무선 상태(rfkill)는 systemd-rfkill 대신 `rfkill` s6 oneshot이 유지합니다. 부팅 때 util-linux `rfkill`로 장치마다 soft block을 복원하고, 종료할 때 상태를 systemd-rfkill 자신의 파일(`/var/lib/systemd/rfkill/ID_PATH:TYPE`)에 저장하므로 systemd 부팅 항목과 상태를 공유합니다. systemd-rfkill과 달리 정상 종료할 때만 저장하며, 부팅 중 udev settle 뒤에 나타난 장치는 상태를 그대로 둡니다.
 
 ## 소스 구조
 

@@ -17,6 +17,8 @@
 # it leaves, initconvertd stops again when s6-rc takes it down.
 mkdir -p /run/uinitconverter && : > /run/uinitconverter/shutting-down
 echo "uinitconverter: shutdown starts" > /dev/kmsg 2>/dev/null
+# No new unprivileged logins from here (systemd-user-sessions' stop).
+/usr/libexec/uinitconverter/early user-sessions-stop
 timeout -s KILL 120 /usr/libexec/uinitconverter/initconvertd stop-instances
 case $? in
 0) ;;

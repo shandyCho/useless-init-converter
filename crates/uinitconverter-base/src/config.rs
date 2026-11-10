@@ -321,8 +321,8 @@ impl Config {
                 "systemd-resolved-monitor.socket",
                 // systemd-vconsole-setup, systemd-backlight@ and
                 // systemd-user-sessions are replaced by the s6 oneshots
-                // vconsole (kbd), backlight and user-sessions (rule 2,
-                // work_history part 220).
+                // vconsole (kbd) and backlight and the tmpfiles step
+                // (rule 2, work_history part 220).
             ]
             .iter()
             .map(|s| s.to_string())
@@ -340,7 +340,7 @@ impl Config {
                 ("systemd-tmpfiles-setup.service", "tmpfiles-setup"),
                 ("systemd-sysusers.service", "sysusers"),
                 ("systemd-remount-fs.service", "mount-fs"),
-                ("systemd-user-sessions.service", "user-sessions"),
+                ("systemd-user-sessions.service", "tmpfiles-setup"),
                 ("systemd-vconsole-setup.service", "vconsole"),
             ]
             .iter()

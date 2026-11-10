@@ -159,13 +159,13 @@ f=$(as systemctl --user list-units --failed --no-legend 2>&1)
 [ -z "$f" ] && ok "no failed user units" || bad "failed user units: $f"
 echo "-- failed system units:"
 systemctl --failed --no-legend --no-pager 2>&1 | sed 's/^/   /'
-# The s6 oneshots in place of systemd-user-sessions, -vconsole-setup and
+# What replaces systemd-user-sessions (the tmpfiles step), -vconsole-setup and
 # -backlight (rule 2): logins open, and the early steps said nothing.
-[ ! -e /run/nologin ] && ok "no /run/nologin (user-sessions)" || bad "/run/nologin is there"
+[ ! -e /run/nologin ] && ok "no /run/nologin (logins open)" || bad "/run/nologin is there"
 # DNS, with systemd-resolved or NetworkManager alone (RESOLVED=).
 r=$(grep -E '^[[:space:]]*RESOLVED=' /etc/uinitconverter/uinitconverter.conf | tail -1)
 until_ok 'getent ahosts fedoraproject.org >/dev/null' 60 && ok "DNS resolves (${r:-RESOLVED default})" || bad "no DNS (${r:-RESOLVED default}): $(cat /etc/resolv.conf 2>&1 | head -3 | tr '\n' ' ')"
-s6-rc -a list | grep -qx user-sessions && ok "user-sessions is up" || bad "user-sessions isn't up"
+s6-rc -a list | grep -qx backlight && ok "backlight is up" || bad "backlight isn't up"
 # Core dumps go to abrt (rule 2, in place of systemd-coredump).
 if rpm -q abrt-addon-ccpp >/dev/null 2>&1; then
     case $(cat /proc/sys/kernel/core_pattern) in "|/usr/libexec/abrt-hook-ccpp"*) ok "core_pattern is abrt's hook" ;; *) bad "core_pattern: $(cat /proc/sys/kernel/core_pattern)" ;; esac

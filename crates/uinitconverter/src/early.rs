@@ -570,10 +570,11 @@ fn backlight(save: bool) {
 
 const NOLOGIN: &str = "/run/nologin";
 
-/// In place of systemd-user-sessions.service (rule 1: an s6 oneshot):
-/// unprivileged logins are allowed once the boot is up (systemd-tmpfiles
-/// creates /run/nologin at boot, tmpfiles.d/systemd-nologin.conf) and
-/// refused again when the system goes down (pam_nologin reads the file).
+/// In place of systemd-user-sessions.service: unprivileged logins are
+/// allowed once tmpfiles has run (it creates /run/nologin at boot,
+/// tmpfiles.d/systemd-nologin.conf) and refused again when the shutdown
+/// starts (rc.shutdown runs `early user-sessions-stop`; pam_nologin reads
+/// the file).
 fn user_sessions(stop: bool) {
     if stop {
         let msg = "System is going down, unprivileged users are not permitted to log in anymore. For technical details, see pam_nologin(8).\n";
@@ -593,6 +594,12 @@ fn tmpfiles_setup() {
         &["--create", "--remove", "--boot", "--exclude-prefix=/dev"],
         "systemd-tmpfiles",
     );
+    // tmpfiles.d/systemd-nologin.conf just made /run/nologin; logins open
+    // here, in place of systemd-user-sessions (no service of its own: one
+    // that units depend on would be new at an update, and s6-rc-update
+    // restarts what gains a dependency on a new service: gdm with the
+    // session, work_history part 220). rc.shutdown writes it again.
+    user_sessions(false);
 }
 
 fn sysusers() {

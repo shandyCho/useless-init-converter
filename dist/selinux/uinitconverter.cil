@@ -89,6 +89,9 @@
 ; write init_t's stream socket, which is journald's stdout under systemd;
 ; the same for its pipe.
 (allow networkmanager_dispatcher_plugin init_t (fifo_file (write append ioctl getattr)))
+; The same for sshd's per-login process (sshd-session), which inherits
+; sshd's stderr, its s6-log pipe (JOURNAL=no, the default since part 220).
+(allow sshd_session_t init_t (fifo_file (write append ioctl getattr)))
 ;
 ; A service directory's event/ is s6's fifodir: s6-svc -w, s6-svwait,
 ; s6-svlisten and s6-rc's waits (s6-ftrigr) create a fifo in it that
