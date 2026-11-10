@@ -10,11 +10,20 @@
 #   tests/vm-s6-boot.sh DIR old-config  # USER_MANAGER=s6 left in uinitconverter.conf (as
 #                                       # 0.3.0's s6 user manager wrote it): ignored,
 #                                       # user@ runs systemd --user
+#   tests/vm-s6-boot.sh DIR upgrade     # 0.3.0 (OLD_RPMS) with its s6 user manager on,
+#                                       # booted with s6; `dnf upgrade` to these RPMs and
+#                                       # `initconvert init --yes` there, as the README
+#                                       # updates; checks, then a reboot and the same checks
+#   tests/vm-s6-boot.sh DIR rollback    # a new unit enabled and daemon-reload (a second
+#                                       # database); a boot with uinitconverter.db=previous
+#                                       # runs the first one, a boot without it the second
 #
 # RPMS: the core RPMs (packages/build-rpms.sh's OUTDIR/rpms) and the
 # standalone ones, default DIR/rpmbuild/core/rpms and
 # DIR/rpmbuild/standalone/rpms (the newest build of each package);
 # SKARNET_RPMS: default ~/rpmbuild-skarnet/rpms (devel packages left out).
+# OLD_RPMS (upgrade): 0.3.0's core RPMs, uinitconverter-user among them;
+# default DIR/rpmbuild/core-0.3.0.
 # SELINUX=permissive|enforcing (default enforcing) is init's --selinux=.
 # BOOT_ONLY_S6=yes: init's --boot-only-s6=yes (uinitconverter's own initramfs,
 # with mdevd; no systemd at all); the checks add that the entry boots it.
@@ -24,11 +33,12 @@ set -euo pipefail
 
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 VM=$TOP/tests/gnome-vm.sh
-D=${1:?usage: tests/vm-s6-boot.sh DIR [default|old-config]}
+D=${1:?usage: tests/vm-s6-boot.sh DIR [default|old-config|upgrade|rollback]}
 D=$(cd "$D" && pwd)
 MODE=${2:-default}
-case $MODE in default | old-config) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
+case $MODE in default | old-config | upgrade | rollback) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
 CORE=${CORE_RPMS:-$D/rpmbuild/core/rpms}
+OLD=${OLD_RPMS:-$D/rpmbuild/core-0.3.0}
 STANDALONE=${STANDALONE_RPMS:-$D/rpmbuild/standalone/rpms}
 SKARNET=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/rpms}
 SELINUX=${SELINUX:-enforcing}
@@ -44,12 +54,20 @@ fi
 newest() {
     find "$1" -maxdepth 1 -name "$2-[0-9]*.rpm" | sort | tail -1
 }
-mkdir "$S/rpms"
-for p in uinitconverter uinitconverterd uinitconverter-gen uinitconverter-runner uinitconverter-timers; do
+mkdir "$S/rpms" "$S/new"
+core=(uinitconverter uinitconverterd uinitconverter-gen uinitconverter-runner uinitconverter-timers)
+for p in "${core[@]}"; do
     f=$(newest "$CORE" $p)
     [ -n "$f" ] || { echo "no $p RPM in $CORE (packages/build-rpms.sh)" >&2; exit 1; }
-    cp "$f" "$S/rpms/"
+    if [ "$MODE" = upgrade ]; then cp "$f" "$S/new/"; else cp "$f" "$S/rpms/"; fi
 done
+if [ "$MODE" = upgrade ]; then
+    for p in "${core[@]}" uinitconverter-user; do
+        f=$(newest "$OLD" $p)
+        [ -n "$f" ] || { echo "no $p RPM in $OLD (0.3.0's)" >&2; exit 1; }
+        cp "$f" "$S/rpms/"
+    done
+fi
 for p in uinitconverter-fdstore uinitconverter-notify uinitconverter-linkwatch uinitconverter-journal-relay; do
     f=$(newest "$STANDALONE" $p)
     [ -n "$f" ] || { echo "no $p RPM in $STANDALONE (standalone/*/build-rpm.sh)" >&2; exit 1; }
@@ -74,6 +92,9 @@ rpm -qa 'uinitconverter*' | sort
 mkdir -p /etc/uinitconverter
 if [ "$1" = old-config ]; then
     printf 'USER_MANAGER=s6\nUSER_FALLBACK_ON=gnome-session-shutdown.target\n' >>/etc/uinitconverter/uinitconverter.conf
+fi
+if [ "$1" = upgrade ]; then
+    initconvert-user-setup on
 fi
 initconvert init --yes --default-s6 --selinux="$2" --boot-only-s6="${3:-no}"
 grubby --default-title
@@ -144,6 +165,140 @@ echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
 EOS
 
+cat >"$S/upgrade.sh" <<'EOS'
+#!/bin/bash
+# As root in the VM, on 0.3.0's s6 boot (mode upgrade). $1...: the new core
+# RPMs' file names in ~tester/in. The README's update: dnf upgrade, init.
+set -uo pipefail
+pass=0 fail=0
+ok() { pass=$((pass + 1)); echo "PASS $*"; }
+bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+u=$(id -u tester)
+cd ~tester/in
+echo "== 0.3.0's s6 boot"
+c=$(cat /proc/1/comm)
+[ "$c" = s6-svscan ] && ok "PID 1 is s6-svscan" || bad "PID 1 is $c"
+rpm -q uinitconverter-user >/dev/null && ok "uinitconverter-user is installed" || bad "no uinitconverter-user"
+main=$(systemctl show -p MainPID --value "user@$u.service")
+echo "   user@$u.service: $(systemctl is-active "user@$u.service"), PID $main: $(tr '\0' ' ' <"/proc/$main/cmdline" 2>/dev/null)"
+[ -e /etc/systemd/system/user@.service.d/90-uinitconverter.conf ] && ok "initconvert-user-setup's drop-in is there" || bad "no drop-in"
+[ -e /run/s6-rc/servicedirs/uinitconverter-units ] && bad "0.3.0's database has the holder" || ok "0.3.0's database has no holder"
+# The daemon's state: its process, s6's view, its bus name, the live
+# database (all with time limits: a daemon off the bus hangs systemctl).
+daemon() {
+    echo "   initconvertd: $(pgrep -x initconvertd | tr '\n' ' ')/ $(s6-svstat /run/service/uinitconverterd 2>&1)"
+    echo "   bus name: $(timeout 10 busctl status org.freedesktop.systemd1 2>&1 | sed -n 's/^PID=//p;s/^Failed.*/&/p' | head -1)"
+    echo "   live database: $(readlink -f /run/s6-rc/compiled); holder: $([ -e /run/s6-rc/servicedirs/uinitconverter-units ] && echo yes || echo no)"
+}
+echo "-- before dnf:"
+daemon
+# A daemon off the bus takes SSH with it (logins wait on it): what runs then
+# goes to the serial console (DIR/s6boot-upgrade-serial.log).
+setsid sh -c 'for t in 20 60; do sleep 20; {
+    echo "=== upgrade watch ${t}s"
+    ps -eo pid,ppid,stat,etime,args | grep -E "initconvert|s6-rc|s6-svc|dnf|systemctl" | grep -v grep | cut -c1-240
+    for d in /run/service/*/; do n=$(basename "$d"); s=$(s6-svstat "$d" 2>/dev/null); case $s in *"want down"*|down*) echo "$n: $s" ;; esac; done
+    echo "=== end"; } >/dev/ttyS0 2>&1; done' </dev/null >/dev/null 2>&1 &
+t0=$(date +%s)
+echo "== dnf upgrade to the new RPMs"
+timeout 900 dnf -y -q upgrade --nogpgcheck "$@" 2>&1 | tail -20 | sed 's/^/   /'
+echo "   dnf took $(($(date +%s) - t0)) s"
+rpm -qa 'uinitconverter*' | sort | sed 's/^/   /'
+rpm -q uinitconverter-user >/dev/null && bad "uinitconverter-user is still installed" || ok "uinitconverter-user is gone (Obsoletes)"
+[ -e /etc/systemd/system/user@.service.d/90-uinitconverter.conf ] && bad "the drop-in is still there" || ok "the drop-in is gone"
+echo "-- right after dnf, before init:"
+daemon
+# The 0.3.0 package's %preun reloaded (the drop-in was there): the daemon
+# must have stayed up and on the bus through it.
+o=$(timeout 10 busctl status org.freedesktop.systemd1 2>/dev/null | sed -n 's/^PID=//p')
+[ -n "$o" ] && [ "$o" = "$(pgrep -x initconvertd)" ] && ok "initconvertd stayed on the bus" || bad "initconvertd off the bus: $(s6-svstat /run/service/uinitconverterd 2>&1)"
+for m in syslog journal-relay; do
+    [ -e /etc/uinitconverter/s6/uinitconverter-sysinit/contents.d/$m ] && bad "the update put $m back into uinitconverter-sysinit" || ok "$m isn't back in uinitconverter-sysinit"
+done
+echo "   is-system-running: $(timeout 30 systemctl is-system-running 2>&1)"
+echo "-- initconvertd's lines since dnf:"
+timeout 30 journalctl -b --no-pager -o short-monotonic --since "@$t0" 2>/dev/null | grep -E "initconvert|s6-rc" | tail -40 | cut -c1-220 | sed 's/^/   /'
+echo "== initconvert init --yes"
+timeout 600 initconvert init --yes 2>&1 | tail -15 | sed 's/^/   /'
+echo "   init: exit ${PIPESTATUS[0]}"
+daemon
+s=$(timeout 30 systemctl is-system-running 2>&1)
+case $s in running | degraded) ok "is-system-running: $s" ;; *) bad "is-system-running: $s" ;; esac
+echo "   holder in the live database: $([ -e /run/s6-rc/servicedirs/uinitconverter-units ] && echo yes || echo no)"
+s=$(systemctl is-active sshd.service)
+[ "$s" = active ] && ok "sshd.service is active" || bad "sshd.service: $s"
+s=$(systemctl show -p NeedDaemonReload --value sshd.service)
+[ "$s" = no ] && ok "NeedDaemonReload=no" || bad "NeedDaemonReload=$s"
+s=$(systemctl is-active "user@$u.service")
+[ "$s" = active ] && ok "user@$u.service stays active until the reboot" || bad "user@$u.service: $s"
+echo "-- failed system units:"
+systemctl --failed --no-legend --no-pager 2>&1 | sed 's/^/   /'
+echo "passed: $pass  failed: $fail"
+[ "$fail" -eq 0 ]
+EOS
+
+cat >"$S/rollback.sh" <<'EOS'
+#!/bin/bash
+# As root in the VM, on the s6 boot (mode rollback). $1: step.
+#   new:      enable rbtest.service, daemon-reload (a second database), and
+#             boot uinitconverter.db=previous next
+#   previous: on that boot: the first database, its units and its index
+#   current:  after a boot without it: the second database again
+set -uo pipefail
+pass=0 fail=0
+ok() { pass=$((pass + 1)); echo "PASS $*"; }
+bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+H=/run/s6-rc/servicedirs/uinitconverter-units/data
+live() { readlink -f /run/s6-rc/compiled; }
+in_index() { grep -q rbtest "$H/index" 2>/dev/null; }
+case $1 in
+new)
+    echo "== a second database: rbtest.service enabled"
+    l0=$(live)
+    in_index && bad "rbtest is in the first database" || ok "rbtest isn't in the first database"
+    printf '[Unit]\nDescription=rollback test\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n' >/etc/systemd/system/rbtest.service
+    # One reload, one new database: `systemctl enable` reloads by itself.
+    systemctl enable --no-reload rbtest.service 2>&1 | sed 's/^/   /'
+    systemctl daemon-reload
+    l1=$(live)
+    [ "$l1" != "$l0" ] && ok "daemon-reload installed another database ($l0 -> $l1)" || bad "the live database is still $l0"
+    in_index && ok "rbtest is in the new database's index" || bad "rbtest isn't in the new index"
+    systemctl start rbtest.service
+    s=$(systemctl is-active rbtest.service)
+    [ "$s" = active ] && ok "rbtest.service is active" || bad "rbtest.service: $s"
+    p=$(readlink -f /var/lib/uinitconverter/compiled.previous)
+    [ "$p" = "$l0" ] && ok "compiled.previous is the first database" || bad "compiled.previous: $p, the first: $l0"
+    echo "$l0" >/root/rb-first; echo "$l1" >/root/rb-second
+    grubby --update-kernel=DEFAULT --args=uinitconverter.db=previous
+    ;;
+previous)
+    echo "== the rollback boot"
+    grep -qw uinitconverter.db=previous /proc/cmdline && ok "booted with uinitconverter.db=previous" || bad "cmdline: $(cat /proc/cmdline)"
+    l=$(live)
+    [ "$l" = "$(cat /root/rb-first)" ] && ok "the live database is the first one" || bad "the live database: $l, the first: $(cat /root/rb-first)"
+    [ -e "$H/index" ] && ok "it has the holder" || bad "no holder"
+    in_index && bad "rbtest is in the live index" || ok "rbtest isn't in the live index"
+    s6-rc -a list | grep -q rbtest && bad "s6-rc has rbtest up" || ok "s6-rc has no rbtest"
+    s=$(systemctl is-active rbtest.service)
+    [ "$s" = inactive ] && ok "rbtest.service is inactive (not in this database)" || bad "rbtest.service: $s"
+    s=$(systemctl show -p NeedDaemonReload --value sshd.service)
+    [ "$s" = no ] && ok "sshd.service: NeedDaemonReload=no" || bad "sshd.service: NeedDaemonReload=$s"
+    grubby --update-kernel=DEFAULT --remove-args=uinitconverter.db=previous
+    ;;
+current)
+    echo "== a boot without uinitconverter.db=previous"
+    grep -qw uinitconverter.db=previous /proc/cmdline && bad "still booted with uinitconverter.db=previous" || ok "booted without uinitconverter.db=previous"
+    l=$(live)
+    [ "$l" = "$(cat /root/rb-second)" ] && ok "the live database is the second one" || bad "the live database: $l, the second: $(cat /root/rb-second)"
+    in_index && ok "rbtest is in the live index" || bad "rbtest isn't in the live index"
+    s=$(systemctl is-active rbtest.service)
+    [ "$s" = active ] && ok "rbtest.service is active (enabled in this database)" || bad "rbtest.service: $s"
+    ;;
+esac
+echo "passed: $pass  failed: $fail"
+[ "$fail" -eq 0 ]
+EOS
+
 # ssh with a time limit: QEMU's port forward accepts the connection even
 # when the guest's sshd isn't up (a boot stuck in stage 2), and ssh then
 # waits for the greeting with no end (ConnectTimeout covers only the connect).
@@ -170,7 +325,7 @@ reboot_vm() {
 
 "$VM" start "$D"
 ssh_up
-"$VM" copy "$D" "$S/setup.sh" "$S/check.sh"
+"$VM" copy "$D" "$S/setup.sh" "$S/check.sh" "$S/upgrade.sh" "$S/rollback.sh"
 "$VM" copy "$D" "$S"/rpms/*
 echo "== install and init (systemd boot)"
 "$VM" ssh "$D" sudo bash in/setup.sh "$MODE" "$SELINUX" "$BOOT_ONLY_S6"
@@ -179,8 +334,30 @@ t0=$(date +%s)
 reboot_vm
 echo "   SSH up $(($(date +%s) - t0)) s after the reboot"
 rc=0
+if [ "$MODE" = upgrade ]; then
+    "$VM" copy "$D" "$S"/new/*
+    new=()
+    for f in "$S"/new/*; do new+=("./$(basename "$f")"); done
+    timeout 2400 "$VM" ssh "$D" sudo bash in/upgrade.sh "${new[@]}" || rc=$?
+    echo "== reboot after the upgrade"
+    reboot_vm || exit 1
+fi
 "$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'first s6 boot'" "$BOOT_ONLY_S6" || rc=$?
 "$VM" screenshot "$D" "$D/s6boot-$MODE.png" || true
+if [ "$MODE" = upgrade ]; then
+    "$VM" ssh "$D" "sudo test -e /run/s6-rc/servicedirs/uinitconverter-units" &&
+        echo "PASS the live database has the holder" || { echo "FAIL no holder after the reboot"; rc=1; }
+fi
+if [ "$MODE" = rollback ]; then
+    "$VM" ssh "$D" sudo bash in/rollback.sh new || rc=$?
+    echo "== reboot with uinitconverter.db=previous"
+    reboot_vm || exit 1
+    "$VM" ssh "$D" sudo bash in/rollback.sh previous || rc=$?
+    "$VM" ssh "$D" sudo bash in/check.sh "$MODE" "'rollback boot'" "$BOOT_ONLY_S6" || rc=$?
+    echo "== reboot without it"
+    reboot_vm || exit 1
+    "$VM" ssh "$D" sudo bash in/rollback.sh current || rc=$?
+fi
 if [ "$MODE" = default ]; then
     echo "== reboot from the s6 boot, tester's session open"
     t0=$(date +%s)

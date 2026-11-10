@@ -58,7 +58,7 @@ if they turned out to be wrong.
   up for `tests/gnome-vm.sh ssh`. The s6 boot itself (the RPMs,
   `initconvert init`, `rc.init`, the runner's `user@`):
   `tests/vm-s6-boot.sh ~/uinitconverter-vm MODE`, modes `default`,
-  `old-config`, after `packages/build-rpms.sh --test DIR` with
+  `old-config`, `upgrade` (from 0.3.0, `OLD_RPMS=`), `rollback`, after `packages/build-rpms.sh --test DIR` with
   `CORE_RPMS=DIR/rpms` and `SKARNET_RPMS=~/rpmbuild-skarnet/rpms` (the
   standalone RPMs from `standalone/*/build-rpm.sh
   ~/uinitconverter-vm/rpmbuild/standalone`).

@@ -271,6 +271,8 @@ tester의 자동 로그인 세션(자기 유닛 안의 gnome-shell, 세션 타�
 |---|---|
 | `default`(기본) | 모든 패키지. 이어서 s6 부팅에서 재부팅하고 같은 확인 |
 | `old-config` | 모든 패키지, `uinitconverter.conf`에 `USER_MANAGER=s6`과 `USER_FALLBACK_ON=`을 남김(0.3.0의 s6 사용자 매니저가 쓰던 것): 무시됨 |
+| `upgrade` | 0.3.0 코어 RPM(`OLD_RPMS=`, 기본 `DIR/rpmbuild/core-0.3.0`, `uinitconverter-user` 포함)을 `initconvert-user-setup on`과 함께 설치해 s6로 부팅하고, 거기서 README의 업데이트대로 새 RPM으로 `dnf upgrade`와 `initconvert init --yes`: `uinitconverter-user`와 드롭인 제거, 그동안 데몬이 계속 버스에 있음, 그 뒤 재부팅하고 확인 |
+| `rollback` | 확인 뒤 `rbtest.service`를 켜고 `daemon-reload` 한 번(두 번째 데이터베이스). `uinitconverter.db=previous`로 부팅하면 첫 번째 데이터베이스(그 인덱스, `rbtest` 없음, 확인 항목), 옵션 없이 부팅하면 두 번째 |
 
 RPM을 빨리 다시 빌드하려면 `packages/build-rpms.sh --test DIR`(packages README 참고)과 `CORE_RPMS=DIR/rpms`.
 콘솔은 `~/uinitconverter-vm/s6boot-MODE-serial.log`에, 화면은 `s6boot-MODE.png`에 남습니다.

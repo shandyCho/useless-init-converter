@@ -28,7 +28,19 @@
   `systemctl status`가 경고합니다.
 - `tests/vm-user-manager.sh`는 GNOME 아래의 `systemd --user`(세션, 로그인 화면, 앱, 수명 주기,
   제한된 사용자)를 systemd 부팅에서, `BOOT=s6`이면 s6 부팅에서 확인합니다. `tests/vm-s6-boot.sh`의
-  모드는 `default`와 `old-config`입니다.
+  모드는 `default`, `old-config`, `upgrade`(s6 사용자 매니저를 켠 0.3.0에서 s6 부팅 중에 README대로
+  업데이트), `rollback`(`uinitconverter.db=previous`)입니다.
+
+### 수정
+- **s6 부팅에서 업데이트하면 시스템 매니저가 멈출 수 있었습니다.** 패키지가 `syslog`와 `journal-relay`를
+  `uinitconverter-sysinit` 번들의 멤버로 넣어 두었고, `initconvert init`이 이를 지웠습니다(journald
+  설치). 이 디렉터리는 `%config`라서 RPM 업데이트 때마다 둘이 되살아났고, dbus와 initconvertd가 의존하는
+  번들에 내려가 있는 서비스로 들어갔습니다. 그 상태에서 `initconvert init` 전에 reload가 일어나면(같은
+  트랜잭션의 다른 패키지가 부르는 `systemctl daemon-reload`) s6-rc-update가 dbus, 그것을 쓰는 모든
+  서비스, initconvertd 자신을 재시작하려 했고, initconvertd는 자기 자신이 멈추기를 기다렸습니다.
+  `systemctl`도 새 SSH 로그인도 되지 않았습니다. 이제 패키지는 이 멤버들을 넣지 않고, `--journal=no`일 때
+  `initconvert init`이 추가합니다(`resolv`와 같은 방식). 이 수정이 있으면 0.3.0에서의 업데이트도
+  안전합니다(멤버가 되살아나지 않고, `--journal=no` 설치에서는 RPM이 지운 뒤 init이 다시 추가합니다).
 
 ## 0.3.0 (2026-11-09)
 

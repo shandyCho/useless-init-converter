@@ -143,6 +143,11 @@ pub(super) fn configure(ctx: &Ctx, s: &Settings) {
     }
     // With journald, it owns /dev/log; the s6-only rsyslog is not started.
     // Without it, journal-relay serves journald's client sockets instead.
+    // The package ships none of these three members (the directory is
+    // %config): a member init removed came back with the next RPM update,
+    // as a down service in the bundle dbus and initconvertd depend on, and
+    // a reload before `initconvert init` then had s6-rc-update restart
+    // them, initconvertd waiting on its own stop (work_history part 214).
     sysinit_member(ctx, "syslog", !s.journal);
     sysinit_member(ctx, "journal-relay", !s.journal);
     // Without resolved, "resolv" hands DNS to NetworkManager at boot.

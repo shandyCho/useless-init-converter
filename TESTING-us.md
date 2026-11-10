@@ -309,6 +309,8 @@ subvolumes). `user@1000` must run `systemd --user`, owning
 |---|---|
 | `default` (default) | every package; then a reboot from the s6 boot and the same checks |
 | `old-config` | every package, with `USER_MANAGER=s6` and `USER_FALLBACK_ON=` left in `uinitconverter.conf` (as 0.3.0's s6 user manager wrote them): ignored |
+| `upgrade` | 0.3.0's core RPMs (`OLD_RPMS=`, default `DIR/rpmbuild/core-0.3.0`, `uinitconverter-user` among them) with `initconvert-user-setup on`, booted with s6; there `dnf upgrade` to the new RPMs and `initconvert init --yes`, as the README updates: `uinitconverter-user` and its drop-in gone, the daemon on the bus throughout, then a reboot and the checks |
+| `rollback` | after the checks, `rbtest.service` enabled and one `daemon-reload` (a second database); a boot with `uinitconverter.db=previous` runs the first database (its index, no `rbtest`, the checks), a boot without it the second |
 
 For quick rebuilds of the RPMs, `packages/build-rpms.sh --test DIR` (see the
 packages README) and `CORE_RPMS=DIR/rpms`. The console is kept in

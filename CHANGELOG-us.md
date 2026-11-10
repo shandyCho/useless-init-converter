@@ -32,8 +32,25 @@ Details in `work_history.md`, parts 203-205.
   warns when a unit file changed on disk since the last reload.
 - `tests/vm-user-manager.sh` checks `systemd --user` under GNOME (session,
   greeter, apps, lifecycle, confined users) on the systemd boot and, with
-  `BOOT=s6`, on the s6 boot. `tests/vm-s6-boot.sh` has the modes `default`
-  and `old-config`.
+  `BOOT=s6`, on the s6 boot. `tests/vm-s6-boot.sh` has the modes `default`,
+  `old-config`, `upgrade` (from 0.3.0 with its s6 user manager on, updated
+  on the s6 boot as the README says) and `rollback`
+  (`uinitconverter.db=previous`).
+
+### Fixed
+- **An update on the s6 boot could hang the system manager.** The package
+  shipped `syslog` and `journal-relay` as members of the
+  `uinitconverter-sysinit` bundle, and `initconvert init` removed them
+  (journald installs). The directory is `%config`, so each RPM update put
+  them back, as down services in the bundle that dbus and initconvertd
+  depend on. A reload before `initconvert init` (a package's
+  `systemctl daemon-reload` in the same transaction) then had s6-rc-update
+  restart dbus, everything using it and initconvertd itself, which waited
+  on its own stop: no `systemctl`, no new SSH logins. The package now ships
+  none of them; `initconvert init` adds them for `--journal=no`, as it
+  already did `resolv`. The update from 0.3.0 is safe with this fix (the
+  members aren't restored; on a `--journal=no` install RPM removes them and
+  init adds them back).
 
 ## 0.3.0 (2026-11-09)
 
