@@ -777,15 +777,19 @@ crates/                    the core (one Cargo workspace)
     daemon/mod.rs          the Daemon type, unit loading, the main loop
     daemon/                dispatch.rs, manager.rs (Manager methods), jobs.rs,
                            scopes.rs (StartTransientUnit), caller.rs, errors.rs, ...
-  uinitconverter/                the initconvert command, which runs the right tool, and `initconvert init`
+  uinitconverter/                the initconvert command, which runs the right tool, and `initconvert init`;
+                                 the boot's own steps (rule 6): early.rs (early boot), svc.rs (the
+                                 hand-written s6 services' start), rc.rs (stage 2, shutdown,
+                                 init-selinux), kinstall.rs (the kernel-install plugin),
+                                 initramfs.rs (the s6 initramfs and its steps)
 standalone/                separate projects, each with its own README and spec
   uinitconverter-fdstore/        file descriptor store server
   uinitconverter-journal-relay/  journald's client sockets to syslog (JOURNAL=no)
   uinitconverter-linkwatch/      unblocks s6-rc-update waits that missed a start event
   uinitconverter-notify/         systemd-notify replacement
-dist/                      config, D-Bus policy, s6 services, early-boot helper,
-                           s6-linux-init skeleton, kernel-install plugin,
-                           SELinux module (selinux/), s6 initramfs (initramfs/)
+dist/                      config, D-Bus policy, s6 services (one-line execline runs),
+                           s6-linux-init skeleton (one-line execline scripts),
+                           SELinux module (selinux/), the s6 initramfs's tree (initramfs/)
 packages/                  RPM specs for the core tools (one per tool), their build script, github-release.sh
 dist/rpm/                  specs and build script for the skarnet packages in dist/skarnet.versions
 tests/                     unprivileged sandbox, scenario checks, systemctl wrapper,

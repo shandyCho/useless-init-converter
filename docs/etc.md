@@ -679,15 +679,18 @@ crates/                    본체 (Cargo 작업공간 하나)
     daemon/mod.rs          Daemon 타입, 유닛 불러오기, 메인 루프
     daemon/                dispatch.rs, manager.rs(Manager 메서드), jobs.rs,
                            scopes.rs(StartTransientUnit), caller.rs, errors.rs, ...
-  uinitconverter/                알맞은 도구를 실행하는 initconvert 명령과 `initconvert init`
+  uinitconverter/                알맞은 도구를 실행하는 initconvert 명령과 `initconvert init`.
+                                 부팅 자체의 단계(규칙 6): early.rs(초기 부팅), svc.rs(직접 작성한
+                                 s6 서비스의 시작), rc.rs(2단계, 종료, init-selinux),
+                                 kinstall.rs(kernel-install 플러그인), initramfs.rs(s6 initramfs와 그 단계)
 standalone/                별도 프로젝트. 각각 README와 spec이 있습니다
   uinitconverter-fdstore/        파일 디스크립터 저장소 서버
   uinitconverter-journal-relay/  journald 클라이언트 소켓을 syslog로 전달(JOURNAL=no)
   uinitconverter-linkwatch/      시작 이벤트를 놓친 s6-rc-update의 대기를 해제
   uinitconverter-notify/         systemd-notify 대체
-dist/                      설정, D-Bus 정책, s6 서비스, 초기 부팅 도우미,
-                           s6-linux-init 골격, kernel-install 플러그인,
-                           SELinux 모듈(selinux/), s6 initramfs(initramfs/)
+dist/                      설정, D-Bus 정책, s6 서비스(execline 한 줄 run),
+                           s6-linux-init 골격(execline 한 줄 스크립트),
+                           SELinux 모듈(selinux/), s6 initramfs의 트리(initramfs/)
 packages/                  본체 도구의 RPM spec(도구마다 하나), 빌드 스크립트, github-release.sh
 dist/rpm/                  dist/skarnet.versions에 있는 skarnet 패키지의 spec과 빌드 스크립트
 tests/                     비특권 샌드박스, 시나리오 검사, systemctl 래퍼,
