@@ -193,7 +193,8 @@ s6-rc -a list | grep -qx backlight && ok "backlight is up" || bad "backlight isn
 # Units wanted by devices: initconvert-devices (its own s6 service) asks the
 # daemon to start them.
 s6-rc -a list | grep -qx uinitconverter-devices && ok "uinitconverter-devices is up" || bad "uinitconverter-devices isn't up"
-until_ok 'logs | grep -q "wanted by device"' 20 && ok "units wanted by devices were started ($(logs | grep -c "wanted by device"))" || bad "no unit wanted by a device was started: $(head -3 /run/uinitconverter/devices 2>&1 | tr '\n' ' ')"
+# (grep without -q: with pipefail, -q ends `logs` with SIGPIPE on a long journal.)
+until_ok 'logs | grep "wanted by device" >/dev/null' 20 && ok "units wanted by devices were started ($(logs | grep "initconvertd: .* wanted by device" | sort -u | wc -l))" || bad "no unit wanted by a device was started: $(head -3 /run/uinitconverter/devices 2>&1 | tr '\n' ' ')"
 w=$(logs | grep "uinitconverter early:" | sort -u)
 [ -z "$w" ] && ok "no early-boot warnings" || bad "early-boot warnings: $(echo "$w" | head -5 | tr '\n' ' ')"
 # The system bus (BUS=): its owner of org.freedesktop.DBus, and a service
@@ -400,7 +401,12 @@ essential)
     touch "$m"
     timeout 180 systemctl daemon-reload; r=$?
     rm -f "$m"; rm -rf "$v"
-    [ "$r" = 0 ] && ok "daemon-reload returned" || bad "daemon-reload: exit $r"
+    [ "$r" = 0 ] && ok "daemon-reload returned" || {
+        bad "daemon-reload: exit $r"
+        # Who holds s6-rc's lock, if that was it.
+        echo "   s6-rc and gen processes:"
+        ps -eo pid,ppid,etimes,args | grep -E '[s]6-rc|[i]nitconvert-gen|[s]6-svlisten|[s]6-ftrig' | sed 's/^/     /' | cut -c1-200
+    }
     [ "$(pgrep -x initconvertd)" = "$d0" ] && ok "initconvertd kept running (PID $d0)" || bad "initconvertd: $d0 -> $(pgrep -x initconvertd)"
     [ "$(s6-svstat -p /run/service/dbus)" = "$b0" ] && ok "dbus kept running" || bad "dbus: $b0 -> $(s6-svstat -p /run/service/dbus)"
     o=$(timeout 10 busctl status org.freedesktop.systemd1 2>/dev/null | sed -n 's/^PID=//p')

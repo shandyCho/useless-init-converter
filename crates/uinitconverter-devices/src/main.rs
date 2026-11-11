@@ -59,14 +59,8 @@ async fn start_wanted(cfg: Arc<Config>, unit: String, dev: String) {
             )
             .await;
         match r {
-            Ok(m) => {
-                let result: String = m.body().deserialize().unwrap_or_default();
-                // Excluded units (systemd-backlight@, ...) are not ours to run.
-                if !result.is_empty() {
-                    eprintln!("initconvert-devices: {unit} wanted by device {dev}: {result}");
-                }
-                return;
-            }
+            // The daemon logs the job's result ("... wanted by device ...").
+            Ok(_) => return,
             // The daemon's answer about the unit: final.
             Err(zbus::Error::MethodError(_, msg, _)) => {
                 eprintln!(

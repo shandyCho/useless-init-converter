@@ -39,6 +39,12 @@ Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
   update, the units of newly plugged devices start once the new service
   runs: at once if the reload applies live, else from the next boot.
 
+### Fixed
+- **A reload failed when s6-rc's lock was busy** ("unable to take lock on
+  /run/s6-rc ... Device or resource busy": another s6-rc change or query at
+  that moment). The reload's `s6-rc-update`, `s6-rc-set-install` and `s6-rc`
+  calls now wait for the lock (`-b`), as the daemon's own calls did.
+
 ## 0.4.0 (2026-11-11)
 
 Changes since 0.3.0. Details in `work_history.md`, parts 200-240.

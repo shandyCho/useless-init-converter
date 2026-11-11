@@ -585,6 +585,9 @@ fn commit_and_install(
             .arg(cfg.boot_db())
             .arg("-l")
             .arg(&cfg.live_dir)
+            // -b: wait for s6-rc's lock (a change in progress, a status
+            // query) instead of failing the reload.
+            .arg("-b")
             // -K: the replaced database stays, as compiled.previous.
             .arg("-K")
             .arg("--no-snapshot")
@@ -677,6 +680,7 @@ fn commit_and_install(
         res = match &copy {
             Some((name, path)) if live_db.is_some() && live_db == fs::canonicalize(path).ok() => {
                 run(Command::new(tools::path("s6-rc-update"))
+                    .arg("-b")
                     .arg("-e")
                     .arg("-l")
                     .arg(&cfg.live_dir)
@@ -705,6 +709,7 @@ fn pin_live(cfg: &Config) -> Result<(), String> {
         return Ok(());
     }
     run(Command::new(tools::path("s6-rc-update"))
+        .arg("-b")
         .arg("-l")
         .arg(&cfg.live_dir)
         .arg(&db))
@@ -734,6 +739,7 @@ fn running_restarts(cfg: &Config) -> Result<Vec<String>, String> {
     let compiled = fs::canonicalize(cfg.repo_dir.join("compiled").join(&cfg.set_name))
         .map_err(|e| format!("the set's compiled database: {e}"))?;
     let dry = run(Command::new(tools::path("s6-rc-update"))
+        .arg("-b")
         .arg("-n")
         .arg("-v1")
         .arg("-l")
@@ -744,6 +750,7 @@ fn running_restarts(cfg: &Config) -> Result<Vec<String>, String> {
         return Ok(Vec::new());
     }
     let list = run(Command::new(tools::path("s6-rc"))
+        .arg("-b")
         .arg("-l")
         .arg(&cfg.live_dir)
         .arg("-a")
@@ -840,6 +847,7 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
     // the live database after an install for the next boot only.
     let user_sessions_live = update_live
         && run(Command::new(tools::path("s6-rc"))
+            .arg("-b")
             .arg("-l")
             .arg(&cfg.live_dir)
             .arg("-a")

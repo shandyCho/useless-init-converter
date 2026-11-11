@@ -37,6 +37,12 @@
   업데이트 뒤 새로 꽂은 장치의 유닛은 새 서비스가 실행된 뒤에 시작됩니다. reload가
   바로 적용되면 즉시, 아니면 다음 부팅부터입니다.
 
+### 수정
+- **s6-rc의 잠금이 사용 중이면 reload가 실패했습니다**("unable to take lock on
+  /run/s6-rc ... Device or resource busy": 그 순간의 다른 s6-rc 변경이나 조회).
+  reload의 `s6-rc-update`, `s6-rc-set-install`, `s6-rc` 호출이 이제 잠금을
+  기다립니다(`-b`). 데몬 자신의 호출은 원래 그랬습니다.
+
 ## 0.4.0 (2026-11-11)
 
 0.3.0 이후의 변경. 자세한 내용은 `work_history.md` 200-240부에 있습니다.
