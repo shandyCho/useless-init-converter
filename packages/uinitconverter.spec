@@ -132,7 +132,9 @@ fi
 
 # Defaults that changed (rule 2: RESOLVED=no, JOURNAL=no): an update keeps
 # what an existing install runs, written as `initconvert init --KEY=yes`
-# writes it; init then changes it as asked.
+# writes it; init then changes it as asked. A missing key means init hasn't
+# run since the change: init writes KEY=no too, never removes the key
+# (work_history part 231).
 if [ "$1" -ge 2 ] && [ -f %{_sysconfdir}/uinitconverter/uinitconverter.conf ]; then
     conf=%{_sysconfdir}/uinitconverter/uinitconverter.conf
     for k in RESOLVED JOURNAL; do

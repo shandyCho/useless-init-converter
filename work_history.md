@@ -13121,3 +13121,31 @@ Decision (owner): left as it is. The same happens under the stock systemd boot, 
 
 1. Part 226's reload 53 s into the boot (supervisors losing their directories).
 2. The index test's isolation from the live s6-rc database.
+
+## 2026-11-11, part 231: part 226's reload at 53 s — the f6be011 upgrade turned journald and resolved back on; the next reload restarted everything
+
+Read from the code, the laptop's two databases (both still in /var/lib/uinitconverter), the journal of that boot (-5) and the catch-all excerpt the owner had pasted (kept in the session transcripts).
+
+- Trigger: initconvertd's own reload (db stamp `1794370617635413-1817`, 13:16:57.6 to 13:17:05.6, `reloaded: 303 units`, `set current: NetworkManager-wait-online.service from usable to active`). The old database had no NetworkManager-wait-online.service at all, so a start job on it hit check_job's "new unit file since the last reload" path (jobs.rs, `allow_reload`) and reloaded. Who asked for it wasn't logged.
+- Why the reload restarted ~250 services: the old database (11:11, `.current:...nVyi1v`) has no systemd-journald/journal-flush/resolved and a `NAME.log` s6-log logger per service (110 of them); the new one (`.current:...HvSpem`) has rsyslog, systemd-journald, systemd-journal-flush and systemd-resolved, and nearly every service gained a dependency on the three. s6-rc-update restarts every up service that depends on a new service (its doc, "Restarts"). dbus and uinitconverterd didn't change, so essential_restarts() let it through as designed. The stop wave is in the journal at 53.96 s (auditd `audit_pid=0`, Wi-Fi DEAUTH_LEAVING); the restarts (logind, gdm: the greeter's gnome-session SIGABRT) at 59.3 s.
+- Why the databases differ: at 09:21 the owner ran `uinitconverter init --journal=no --resolved=no --boot-only-s6=yes --selinux=enforcing --bus=broker` (shell history; setup-backup 20261111-092109). Since 529d034/10e773b `no` is the default, so set_conf_key() removed the RESOLVED= and JOURNAL= lines. At 13:14:50 the f6be011 upgrade ran uinitconverter.spec's `%post`, which appends `RESOLVED=yes`/`JOURNAL=yes` when the key is absent, taking absence for "an install from before the default changed". uinitconverter.conf's mtime is 13:14:56 and its last two blocks are those appended lines. The 13:16 boot still ran the 11:11 database; the first reload compiled the new configuration live.
+- **Bug: init and the scriptlet disagree on what a missing key means.** init writes a default as "no line"; `%post` reads "no line" as "set before the defaults changed". Every upgrade after an `init --journal=no`/`--resolved=no` turns them back on, against the owner's explicit choice, and the next reload applies it to the running system.
+- Not explained yet: the `s6-supervise: fatal: unable to chdir to NAME` deaths at 13:17:03.54 during that update (supervisors spawned on scan-directory links that pointed nowhere at that moment). initconvertd's "starting it beside" starts (colord 13:16:58.7, NetworkManager-dispatcher 58.99) ran during the update; whether one of their rescans landed inside s6-rc-update's switch is a guess.
+- The laptop now runs JOURNAL=yes and RESOLVED=yes (since 13:17:05), not what the owner chose.
+
+
+## 2026-11-11, part 232: init writes JOURNAL=/RESOLVED= with either value (fix for part 231)
+
+The owner chose option A over B (B: `%post` compares the release it upgrades from with the default change).
+
+- `set_conf_key()` (crates/uinitconverter/src/init/options.rs) no longer takes the default: it writes `KEY=yes` or `KEY=no` under init's marker whenever the last setting doesn't already say so (a missing key counts as not saying so), and never removes the key. So after any `initconvert init` both keys are present and `%post` leaves them alone; a 0.3.0 install, which never had them, is still migrated to `yes`. Another spelling of the same value (`RESOLVED=off`) is left as written. configure_uinitconverter() calls it without the defaults.
+- Tests: `conf_keys` covers writing `no` on a config without the key, the switch both ways, the laptop's case (the scriptlet's appended `RESOLVED=yes` replaced by `no` under init's marker) and the old setup-fedora.sh marker being replaced. The spec's `%post` comment and the docs pair ("An option left out keeps ...") say init writes both values and why.
+- `cargo build` clean; `cargo test --workspace --no-fail-fast`: 156 passed, 1 failed: `index::tests::render_and_load_round_trip`, which fails without this change too (it reads the live s6-rc database on this host, booted under s6; next step 4). Sandbox and VM suites not run: the change is confined to init's config text, and tests/vm-s6-boot.sh's upgrade check (`the update kept RESOLVED=yes` from 0.3.0) still holds by the reasoning above, not re-run.
+- Not committed yet.
+
+### Next steps
+
+1. Owner: build and install the RPMs with this fix, then `sudo initconvert init --journal=no --resolved=no` and a reboot (not a reload: removing journald live restarts everything again, part 231). Check that uinitconverter.conf ends with `JOURNAL=no` and `RESOLVED=no` under init's markers.
+2. Whether a reload should be allowed to restart non-essential session services (logind, gdm) at all.
+3. The chdir deaths during the update (part 231).
+4. The index test's isolation from the live s6-rc database.

@@ -140,19 +140,20 @@ pub(super) fn conf_marker(key: &str, val: bool) -> String {
     )
 }
 
-/// uinitconverter.conf text with KEY set: a value other than DEFAULT is
-/// written as KEY=yes|no under init's marker, the default removes the
-/// setting. Other lines are kept. None if nothing changes.
 fn is_setting(line: &str, key: &str) -> bool {
     line.trim_start()
         .strip_prefix(key)
         .is_some_and(|r| r.starts_with('='))
 }
 
-pub(super) fn set_conf_key(text: &str, key: &str, val: bool, default: bool) -> Option<String> {
-    if conf_bool(text, key, default) == val
-        && (val != default || !text.lines().any(|l| is_setting(l, key)))
-    {
+/// uinitconverter.conf text with KEY=yes|no written under init's marker,
+/// the default too: the package's update scriptlet reads a missing key as
+/// "set up before the default changed" and writes the old default, so a
+/// removed KEY=no came back as KEY=yes at the next upgrade (work_history
+/// part 231). Other lines are kept. None if the last setting already says
+/// so.
+pub(super) fn set_conf_key(text: &str, key: &str, val: bool) -> Option<String> {
+    if text.lines().any(|l| is_setting(l, key)) && conf_bool(text, key, !val) == val {
         return None;
     }
     let markers = [
@@ -165,14 +166,11 @@ pub(super) fn set_conf_key(text: &str, key: &str, val: bool, default: bool) -> O
         .filter(|l| !is_setting(l, key) && !markers.iter().any(|m| m == l))
         .collect();
     let mut out = kept.join("\n").trim_end_matches('\n').to_string();
-    if val != default {
-        out.push_str(&format!(
-            "\n\n{}\n{key}={}",
-            conf_marker(key, val),
-            if val { "yes" } else { "no" }
-        ));
-    }
-    out.push('\n');
+    out.push_str(&format!(
+        "\n\n{}\n{key}={}\n",
+        conf_marker(key, val),
+        if val { "yes" } else { "no" }
+    ));
     Some(out)
 }
 

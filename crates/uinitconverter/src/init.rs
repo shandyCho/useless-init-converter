@@ -264,11 +264,8 @@ fn configure_uinitconverter(ctx: &Ctx, s: &Settings) {
     match read(conf_path) {
         Some(mut text) => {
             let mut changed = false;
-            for (key, val, default) in [
-                ("JOURNAL", s.journal, JOURNAL_DEFAULT),
-                ("RESOLVED", s.resolved, RESOLVED_DEFAULT),
-            ] {
-                if let Some(t) = set_conf_key(&text, key, val, default) {
+            for (key, val) in [("JOURNAL", s.journal), ("RESOLVED", s.resolved)] {
+                if let Some(t) = set_conf_key(&text, key, val) {
                     println!("  {key}={} in {conf_path}", if val { "yes" } else { "no" });
                     text = t;
                     changed = true;
@@ -649,27 +646,33 @@ mod tests {
         assert!(!conf_bool(base, "JOURNAL", false));
         assert!(!conf_bool("JOURNAL=yes\n  JOURNAL= Off\n", "JOURNAL", true));
         assert!(conf_bool("JOURNALX=no\n", "JOURNAL", true));
-        assert_eq!(set_conf_key(base, "JOURNAL", true, true), None);
-        let off = set_conf_key(base, "JOURNAL", false, true).unwrap();
+        // Both values are written, the default (no) too: the update
+        // scriptlet takes a missing key for an install from before the
+        // default changed and writes yes (work_history part 231).
+        let off = set_conf_key(base, "JOURNAL", false).unwrap();
         assert_eq!(
             off,
             "# comment\nDEBUG=no\n\n# set by uinitconverter init --journal=no\nJOURNAL=no\n"
         );
-        assert_eq!(set_conf_key(&off, "JOURNAL", false, true), None);
-        assert_eq!(set_conf_key(&off, "JOURNAL", true, true).unwrap(), base);
-        // A key whose default is no: yes is written, no removes it.
-        let on = set_conf_key(base, "RESOLVED", true, false).unwrap();
+        assert_eq!(set_conf_key(&off, "JOURNAL", false), None);
+        let on = set_conf_key(&off, "JOURNAL", true).unwrap();
         assert_eq!(
             on,
-            "# comment\nDEBUG=no\n\n# set by uinitconverter init --resolved=yes\nRESOLVED=yes\n"
+            "# comment\nDEBUG=no\n\n# set by uinitconverter init --journal=yes\nJOURNAL=yes\n"
         );
-        assert!(conf_bool(&on, "RESOLVED", false));
-        assert_eq!(set_conf_key(&on, "RESOLVED", true, false), None);
-        assert_eq!(set_conf_key(&on, "RESOLVED", false, false).unwrap(), base);
-        // An explicit RESOLVED=no (the old init's) goes, as it is the default now.
-        let old =
-            "# comment\nDEBUG=no\n\n# set by uinitconverter init --resolved=no\nRESOLVED=no\n";
-        assert_eq!(set_conf_key(old, "RESOLVED", false, false).unwrap(), base);
+        assert!(conf_bool(&on, "JOURNAL", false));
+        assert_eq!(set_conf_key(&on, "JOURNAL", true), None);
+        assert_eq!(set_conf_key(&on, "JOURNAL", false).unwrap(), off);
+        // The laptop's case: init had removed RESOLVED=no, the scriptlet
+        // appended RESOLVED=yes; init --resolved=no writes no back.
+        let appended =
+            "# comment\nDEBUG=no\n\n# set by uinitconverter init --resolved=yes\nRESOLVED=yes\n";
+        assert_eq!(
+            set_conf_key(appended, "RESOLVED", false).unwrap(),
+            "# comment\nDEBUG=no\n\n# set by uinitconverter init --resolved=no\nRESOLVED=no\n"
+        );
+        // Another spelling of the same value is left as written.
+        assert_eq!(set_conf_key("RESOLVED=off\n", "RESOLVED", false), None);
         // BUS=: dbus-daemon unless the last setting says broker; BUS_ADDRESS is another key.
         assert!(!conf_broker("BUS_ADDRESS=broker\n") && conf_broker("BUS=daemon\nBUS= Broker\n"));
         assert_eq!(set_conf_bus(base, false), None);
@@ -704,11 +707,11 @@ mod tests {
             set_conf_choice(base, "SYSLOG", "syslog", "rsyslog", "rsyslog"),
             None
         );
-        // The old script's marker goes too.
-        let old = "A=1\n\n# set by setup-fedora.sh --no-resolved\nRESOLVED=no\n";
+        // The old script's marker is replaced by init's.
+        let old = "A=1\n\n# set by setup-fedora.sh --no-resolved\nRESOLVED=yes\n";
         assert_eq!(
-            set_conf_key(old, "RESOLVED", false, false).unwrap(),
-            "A=1\n"
+            set_conf_key(old, "RESOLVED", false).unwrap(),
+            "A=1\n\n# set by uinitconverter init --resolved=no\nRESOLVED=no\n"
         );
     }
 

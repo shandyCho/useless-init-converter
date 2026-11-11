@@ -379,7 +379,7 @@ tests/sandbox.sh ~/sdc-sandbox stop
 빠진 옵션은 지난 실행의 선택을 유지합니다. `/etc/uinitconverter/uinitconverter.conf`의
 `JOURNAL=`/`RESOLVED=`, `/etc/uinitconverter/boot-options`의 SELinux 모드,
 `/etc/uinitconverter/boot-only-s6`(명시적 `no`이면 `boot-only-s6.off`, 둘 다 없으면 `auto`), `/etc/uinitconverter/boot-default`를 읽습니다. 그래서 패키지를
-업그레이드한 뒤 `sudo initconvert init`만 실행하면 같은 선택으로 설정을 다시 적용합니다.
+업그레이드한 뒤 `sudo initconvert init`만 실행하면 같은 선택으로 설정을 다시 적용합니다. init은 `JOURNAL=`과 `RESOLVED=`를 값이 `no`여도 항상 씁니다. 키가 없으면 패키지 업데이트는 `no`가 기본값이 되기 전의 설치로 보고 `yes`를 씁니다.
 
 journal과 resolved 옵션은 이미 설치된 시스템도 전환합니다. `--resolved=no`이면 s6 oneshot `resolv`가 부팅 때 `/run/NetworkManager/conf.d/99-uinitconverter-no-resolved.conf`(`dns=default`, `rc-manager=symlink`)를 쓰고, `/etc/resolv.conf`가 가리키는 resolved의 stub 파일을 `/run/NetworkManager/resolv.conf`로 연결합니다. 모두 `/run`에 있으므로 systemd 부팅은 계속 resolved를 씁니다. `/etc/NetworkManager`에 `dns=` 설정이 있으면 그것이 우선합니다(NetworkManager는 `/run`을 먼저 읽습니다). `/etc/nsswitch.conf`의 nss-resolve는 resolved가 없으면 `dns`로 넘어갑니다.
 

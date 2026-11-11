@@ -432,7 +432,7 @@ An option left out keeps what the last run set: `JOURNAL=`/`RESOLVED=` in
 `/etc/uinitconverter/uinitconverter.conf`, the SELinux mode in
 `/etc/uinitconverter/boot-options`, `/etc/uinitconverter/boot-only-s6` (or `boot-only-s6.off` for an explicit `no`; neither: `auto`) and
 `/etc/uinitconverter/boot-default`. So a plain `sudo initconvert init` after a package
-upgrade redoes the setup with the same choices.
+upgrade redoes the setup with the same choices. init writes `JOURNAL=` and `RESOLVED=` with either value, `no` too: a key that is missing is what the package's update takes for an install from before `no` became the default, and it writes `yes`.
 
 The journal and resolved options also switch an existing install. With `--resolved=no`, the s6 oneshot `resolv` writes `/run/NetworkManager/conf.d/99-uinitconverter-no-resolved.conf` (`dns=default`, `rc-manager=symlink`) at boot and points the resolved stub file that `/etc/resolv.conf` links to at `/run/NetworkManager/resolv.conf`. Everything is in `/run`, so the systemd boot keeps using resolved. A `dns=` setting in `/etc/NetworkManager` overrides it (NetworkManager reads `/run` first). nss-resolve in `/etc/nsswitch.conf` finds no resolved and falls through to `dns`.
 
