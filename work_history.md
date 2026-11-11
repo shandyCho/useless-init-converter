@@ -13237,6 +13237,11 @@ Part 238's next step 4, asked by the owner. A start (or bus activation) of a uni
 - Tests: `why_a_unit_is_not_managed` (the decision table). `cargo build` clean; `cargo test --workspace --no-fail-fast` 160 passed, 0 failed; sandbox suite 388 passed, 0 failed.
 - VM (RPMs from the working tree on 35eefdb, `tests/vm-s6-boot.sh default` with `VM_KEEP=yes`: 33 passed), scratchpad script heldback.sh as root: a drop-in giving systemd-logind.service a dependency on a new heldtest.service, `daemon-reload` held back (live != boot), then `systemctl start heldtest.service` failed with exit 6 and the "only in the s6 database for the next boot" message; logind kept its PID; the cleanup reload applied live. Then a new Type=dbus freshtest.service with a D-Bus service file and policy, activated with busctl: initconvertd logged "activation of freshtest.service failed: ... it is not in the running s6 database yet (run systemctl daemon-reload)" (09:16:25 and 09:16:45, two runs). The script's own check of that line failed both times: first it grepped `FreshTest` (the line names the unit in lower case), then s6-log rotated the catch-all `current` between the script's line count and its read; the lines were in the archived file. (The first run's busctl was refused by dbus-daemon's policy before the test added one.) is-system-running: degraded, mcelog.service only.
 
+
+## 2026-11-11, part 240: the part 232 fix holds across an upgrade on the laptop
+
+The owner did part 239's next step 3: after another RPM upgrade (the upgrade's `%post` ran after part 237's `initconvert init`), /etc/uinitconverter/uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`. This is the case part 231's bug broke (`%post` re-adding `yes` for a key init had left out), so the fix (287cf79) is now shown on real hardware, not only reasoned.
+
 ### Current state
 
 Not pushed: 287cf79, 2dc9aed, b16833a, and parts 237-239's commits. The laptop runs JOURNAL=no and RESOLVED=no.
@@ -13245,5 +13250,4 @@ Not pushed: 287cf79, 2dc9aed, b16833a, and parts 237-239's commits. The laptop r
 
 1. Owner: push.
 2. Maybe the same dependency-change check on the laptop (done in the VM).
-3. Owner: after the next RPM upgrade, check that uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`.
-4. A release (0.4.0).
+3. A release (0.4.0).
