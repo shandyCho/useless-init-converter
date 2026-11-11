@@ -13039,3 +13039,85 @@ The owner's laptop (ThinkPad E16 Gen 3, s6 boot, s6 initramfs, e53bed7's RPMs): 
 
 1. Owner: install the f6be011 RPMs (`sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`), turn Bluetooth off, reboot into s6, then `sudo grep -a 'early: rfkill' /run/uncaught-logs/current` and `rfkill` (before logging in to GNOME, on a text console). The log says which case it is; then the fix.
 2. The index test's isolation from the live s6-rc database.
+
+## 2026-11-11, part 226: rfkill, the owner's log after f6be011 (diagnosis continues)
+
+The owner booted the f6be011 RPMs into s6 with Bluetooth off (boot 13:16:04) and sent `early: rfkill` from the catch-all log plus `rfkill`:
+
+- The restore worked: at 13:16:26.87 (about 22.8 s, the RTC and wall clock agree, no step) it unblocked phy0 and blocked tpacpi_bluetooth_sw (rfkill0) and hci0 (rfkill1), each `soft now 1`. Part 225's leading guess (skipped without ID_PATH) is wrong.
+- Yet both were unblocked afterwards (`rfkill` was run after a GNOME login, 13:18). Something unblocked them after the restore.
+- This boot's daemons (journald, logind, NetworkManager, bluetoothd, gdm, upowerd, ModemManager) all started at about 59.3 s, about 36 s after the restore; journald imported the kernel's earlier lines at 59.1 s, among them an `rfkill: input handler disabled`/`enabled` pair (someone opened /dev/rfkill with RFKILL_IOCTL_NOINPUT and closed it, before 59.1 s), and a third `hci0: Device setup` (MediaTek runs setup on each power-on) at about 59.5 s right after bluetoothd: hci0 was unblocked by then.
+- Ruled out live (as the seat user, /dev/rfkill has a uaccess ACL): blocking rfkill0 then rfkill1 by hand with bluetoothd, NetworkManager and gsd-rfkill running, watched with `rfkill event` for 8 s: both stay blocked, no side effect (blocking tpacpi_bluetooth_sw does not re-create hci0). bluetoothd 5.88 has no rfkill write (its rfkill.c only reads and reacts to unblock events). systemd-rfkill is not run under s6 (excluded, no service). So the unblocker runs once during boot, between 22.8 s and about 59.5 s.
+- Not yet known: who. The kernel's own times (dmesg, root only) and the catch-all log around the restore are needed to order it.
+- Correction, from the owner's dmesg and catch-all log: the clock anchor (audit 1794370581.726 at 17.141 s) puts boot 0 at 04:16:04.585 UTC, so the restore ran at 22.29 s (not 22.8). bluetoothd was started at about 22.47 s (`initconvertd: start bluetooth.service ... beside`; BNEP/`MGMT ver` in dmesg at 22.56), and hci0 powered on at 23.48 s (second `Device setup`), so it was unblocked between 22.29 and 23.48 s. A /dev/rfkill NOINPUT holder 23.9-29.0 s, unknown (systemd-rfkill is excluded by the `systemd-*` glob, its socket too).
+- Also replayed with gsd-rfkill stopped (its `.target` can be stopped by hand, the service refuses manual stop) so the kernel's rfkill input handler was on: blocking by hand still held. The input handler is not the cause.
+- Separate, bigger finding: at 53.05 s initconvertd built a new database (`/var/lib/uinitconverter/db/1794370617635413-1817`) and at 59.0 s about 250 supervisors died with `s6-supervise: fatal: unable to chdir to X: No such file or directory` (logind, gdm, bluetooth, NetworkManager, ...); they all restarted at 59.3 s, the greeter's gnome-session aborted (SIGABRT), auditd was stopped (audit_pid=0 at 53.96 s). What triggered a reload 30 s into the boot, and why the swap removed live service directories instead of s6-rc-update transitioning them, is not known yet.
+- bluetoothd ruled out by the owner as root: both blocked, `s6-svc -r /run/service/bluetooth.service`, they stay blocked and hci0 is not powered (no `Device setup`).
+- The audit watch first recorded nothing: Fedora's rules carry `-a never,task`, which turns off syscall auditing for every task forked after it. With `-d task,never` the watch recorded `comm=rfkill`. For one boot the owner put `/etc/audit/rules.d/99-rfkdbg.rules` (`-d task,never`, `-w /dev/rfkill -p rw -k rfkdbg`) in place: audit-rules.service loads it at about 17.5 s, before the restore, so `ausearch -k rfkdbg -i` names every opener of /dev/rfkill. Remove the file afterwards.
+
+## 2026-11-11, part 227: rfkill, the audit-watch boot recorded nothing (rule file sorted first)
+
+The owner booted into s6 with `/etc/audit/rules.d/99-rfkdbg.rules` (boot 13:38:06.578 KST by the audit anchor at 15.974 s). Bluetooth unblocked again; `ausearch -k rfkdbg` had only the previous boot's manual test (13:35).
+
+- Why: audit-rules.service failed (`Error sending delete rule data request (No such file or directory)`, `There was an error in line 5 of /etc/audit/audit.rules`, `No rules`, augenrules exit 1), so no rule at all was loaded this boot, Fedora's included. augenrules joins `rules.d/*.rules` in `ls -v` order, so `99-rfkdbg.rules` comes before `audit.rules`: its `-d task,never` ran before Fedora's `-a task,never` existed, and auditctl stops at the first error. auditd itself runs (pid 1288); its `start command failed: exit status 1` is likely the same augenrules call in its ExecStartPost (not checked). Fix for the next boot: name the file so it sorts after `audit.rules` (`zz-rfkdbg.rules`).
+- Same timeline as part 226: restore 21.07-21.08 s (both Bluetooth devices `soft now 1`), bluetoothd started 21.23 s (`start bluetooth.service ... beside`, `MGMT ver` 21.27 s), hci0 powered on at 22.31 s (second `Device setup`), so it was unblocked within 1.2 s of the restore. The first /dev/rfkill NOINPUT opener is at 22.74 s, after the power-on.
+- This boot had no database rebuild and no `unable to chdir` supervisor deaths (part 226's reload at 53 s didn't recur).
+- Follow-up: the owner's `mv` found no `99-rfkdbg.rules` (already removed after the boot), and `augenrules --load` then left only Fedora's `-a never,task` loaded. The file has to be written anew as `zz-rfkdbg.rules`.
+
+### Next steps
+
+1. Owner: `sudo mv /etc/audit/rules.d/99-rfkdbg.rules /etc/audit/rules.d/zz-rfkdbg.rules`, `sudo augenrules --check`/`--load` to see it load cleanly, turn Bluetooth off, reboot into s6, then the same copy command (ausearch, dmesg, catch-all log). Remove the file afterwards.
+2. Part 226's reload 53 s into the boot (supervisors losing their directories).
+3. The index test's isolation from the live s6-rc database.
+
+## 2026-11-11, part 228: rfkill, the audit watch names every /dev/rfkill opener — none unblocked Bluetooth through it
+
+The owner booted into s6 with the watch loaded (`zz-rfkdbg.rules`) and sent `ausearch -k rfkdbg -i` and dmesg. Anchor: audit(1794372957.245) at 19.657 s, so boot 0 is 13:55:37.588 KST. The anchor checks out: gsd-rfkill's O_WRONLY open (its NOINPUT fd) works out to 26.539 s, and dmesg's `rfkill: input handler disabled` is at 26.5396 s.
+
+- Every /dev/rfkill open, in order: the restore (`rfkill unblock 2`, `block 0`, `block 1`, 24.73-24.74 s, unconfined_service_t); bluetoothd O_RDWR three times at 24.93 s (its start, `MGMT ver` 24.934) and once at 25.975 s; NetworkManager O_RDWR|O_NONBLOCK twice at 25.988 s; **hci0 powered on at 26.083 s** (second `HW/SW Version`/`Device setup`; the kernel refuses to open an rfkilled hci after setup, so hci0 was unblocked by then); after that, greeter gsd-rfkill 26.535/26.539 s, wpa_supplicant (read-only) 27.1 s, udev-worker (O_PATH) 41.3 s, user gsd-rfkill 42.40 s.
+- So the unblock happened between 24.74 and 26.08 s. The only processes that opened /dev/rfkill in that window were bluetoothd and NetworkManager. NetworkManager's open comes after bluetoothd's fourth, and NetworkManager writes CHANGE_ALL only for WLAN/WWAN. bluetoothd 5.88's rfkill strings show only reading and reacting (`RFKILL unblock for hci%d`), and part 226's restart test held. Its fourth open, 0.1 s before the power-on, fits a reaction to an unblock event. Likely, not proven: the unblock went through sysfs (`rfkillN/soft`/`state`) or came from inside the kernel (rfkill-input's SW_RFKILL_ALL restore, thinkpad_acpi), neither of which a /dev/rfkill watch sees.
+- Ruled out on the host: tuned (balanced has no bluetooth script), TLP and power-profiles-daemon (not installed), and udev rules (only uaccess/mode/path_id/the systemd-rfkill socket, which isn't used under s6). Among installed programs, only rfkill, wpa_supplicant, NetworkManager, bluetoothd and `initconvert` mention rfkill's sysfs.
+- Next diagnostic (nothing changes in the project): a kernel function trace that catches every path. The boot's PATH starts with `/usr/local/sbin` (`s6-linux-init-maker -p`), so a temporary `/usr/local/sbin/rfkill` wrapper sets up a tracefs instance `rfkdbg` on its first call, just before the restore. It traces rfkill_set_block, rfkill_fop_write, soft_store, state_store (the rfkill module's), rfkill_set_sw_state/states, __rfkill_switch_all, rfkill_restore_states, rfkill_epo, rfkill_op_handler, rfkill_schedule_global_op, rfkill_event, rfkill_start, hci_rfkill_set_block and tpacpi_rfk_hook_set_block, with func_stack_trace, and then execs /usr/bin/rfkill. Each line gives comm/pid and the kernel stack, so the trace names the caller whatever the route. (Boot-time `ftrace_filter=` can't select functions in a module that isn't loaded yet, which is why a wrapper.) The rfkill oneshot runs as unconfined_service_t, so it may write tracefs.
+
+### Next steps
+
+1. Owner: `sudo install -m755 /tmp/claude-1000/-home-fraufaust37-sdcompat/5a554e15-f618-4d81-8f11-6ed2d111e2ab/scratchpad/rfkill /usr/local/sbin/rfkill`, `sudo restorecon /usr/local/sbin/rfkill`, turn Bluetooth off, reboot into s6, then `sudo cat /sys/kernel/tracing/instances/rfkdbg/trace` and `sudo grep -a rfkdbg /run/uncaught-logs/current`. Afterwards: `sudo rm /usr/local/sbin/rfkill`, `echo 0 | sudo tee /sys/kernel/tracing/instances/rfkdbg/tracing_on` (the instance goes away at reboot), and `/etc/audit/rules.d/zz-rfkdbg.rules`.
+2. Part 226's reload 53 s into the boot (supervisors losing their directories).
+3. The index test's isolation from the live s6-rc database.
+
+## 2026-11-11, part 229: rfkill, the function trace names the unblocker: an input event Mutter wrote, through the kernel's rfkill input handler
+
+The owner booted with part 228's wrapper (`rfkdbg: armed (16 functions)` at 14:30:32) and sent the trace, then removed the wrapper and `zz-rfkdbg.rules`.
+
+- 40.598-40.612 s: the restore (`rfkill` pids 1405, 1423, 1425): phy0 unblocked, tpacpi_bluetooth_sw blocked (tpacpi_rfk_hook_set_block, rfkill_set_sw_state), hci0 blocked (hci_rfkill_set_block). It works.
+- 41.816 s: NetworkManager writes /dev/rfkill twice (one rfkill_set_block, the WLAN device; the second write touches nothing). Not the cause.
+- **41.863 s: thread `Mutter Input Th` (pid 1986, the greeter's gnome-shell) write()s to an evdev node: evdev_write → input_inject_event → input_handle_event → input_pass_values → rfkill_event (the kernel's rfkill-input handler, called twice: one value and the SYN) → rfkill_schedule_global_op.** The kworker then runs rfkill_op_handler → rfkill_switch_all for all 9 types (ALL: tpacpi, hci0, phy0; WLAN: phy0; BLUETOOTH: tpacpi, hci0; the rest have no devices), all unblocking: rfkill_set_sw_state on tpacpi, hci_rfkill_set_block on hci0. No rfkill_restore_states and no rfkill_epo, so the op was the global unblock (rfkill-input's `master_switch_mode` default, 2 = unblock all), which only the SW_RFKILL_ALL switch's "on" path schedules (a KEY_* toggle schedules one type, not a global op).
+- That is why the /dev/rfkill audit watch (part 228) saw nothing: the route is an evdev write, not /dev/rfkill or sysfs. And why the hand replays held: nothing re-injected an input event.
+- The only input device with the rfkill handler on this laptop is `ThinkPad Extra Buttons` (event8, `Handlers=kbd event8 rfkill`, `SW=8` = SW_RFKILL_ALL). The input handler was still enabled at 41.86 s: core rfkill_switch_all returns early while a /dev/rfkill holder has NOINPUT, and __rfkill_switch_all ran, so the greeter's gsd-rfkill had not taken NOINPUT yet.
+- Not yet known: the exact event Mutter wrote (libinput's LED sync writes EV_LED+SYN to every keyboard-class device, but Extra Buttons has no EV_LED), and why it changed the SW_RFKILL_ALL state (input core drops an injected switch value equal to the current one); and whether a systemd boot gets the same injection (if it does, something there makes it harmless, e.g. NOINPUT taken earlier).
+- Next diagnostic (nothing changes in the project): a new temporary wrapper `/usr/local/sbin/rfkill` that adds kprobes `rfkdbg/inject` (input_inject_event: type, code, value, handle and device names), `rfkdbg/rfkev` (rfkill:rfkill_event), `rfkdbg/globalop` (op) and `rfkdbg/switchall` (type, blocked) to the `rfkdbg` instance. The `input_handle` offsets (name +16, dev +24) are from this kernel's BTF. Passes `bash -n` and `shellcheck -S warning`.
+
+### Next steps
+
+1. Owner: `sudo install -m755 /tmp/claude-1000/-home-fraufaust37-sdcompat/13db802d-b12a-4c46-8e83-804903bb922f/scratchpad/rfkill /usr/local/sbin/rfkill`, `sudo restorecon /usr/local/sbin/rfkill`, turn Bluetooth off, reboot into s6, then `sudo cat /sys/kernel/tracing/instances/rfkdbg/trace` and `sudo grep -a rfkdbg /run/uncaught-logs/current`. Afterwards `sudo rm /usr/local/sbin/rfkill`. Also: does Bluetooth stay off across a systemd boot?
+2. Then the fix, on uinitconverter's side if there is one (e.g. the restore's timing against the greeter, or holding NOINPUT); a kernel option (`rfkill.master_switch_mode`) or a Mutter change is the owner's decision.
+3. Part 226's reload 53 s into the boot (supervisors losing their directories).
+4. The index test's isolation from the live s6-rc database.
+
+## 2026-11-11, part 230: rfkill, the cause: Mutter's first injected SYN flushes a pending SW_RFKILL_ALL=1 on ThinkPad Extra Buttons
+
+The owner booted with part 229's kprobe wrapper (`rfkdbg: armed (4 probes)` at 14:44:08), sent the `rfkdbg` trace, and removed `/usr/local/sbin/rfkill`.
+
+- From about 20.29 s the greeter's `Mutter Input Th` (pid 1978) writes EV_LED codes 0-4 (value 0) plus SYN_REPORT to every keyboard-class evdev node, one device per ~10 ms as libinput adds them (Video Bus, Power Button, Sleep Button, AT keyboard, ThinkPad Extra Buttons = event13 this boot), repeated at each LED sync (20.8, 21.2, 21.5, 157, 163 s; the user session's Mutter, pid 6227, from 164.49 s with NumLock value 1).
+- **The first write to ThinkPad Extra Buttons (20.365969-20.365973) is followed by `rfkev type=5 code=3 value=1` (EV_SW, SW_RFKILL_ALL, on) and the SYN, then `globalop op=3` and the kworker's `switchall` for types 0-8, all `blocked=0`.** Every later write to the same device (20.376 s onwards, also the user session's) produces no rfkill event.
+- Reading: Extra Buttons has no EV_LED (`EV=33`: SYN, KEY, MSC, SW), so input core drops the injected LED values; only the SYN_REPORT passes, and it flushes values the device had queued without a SYN. One of them was SW_RFKILL_ALL=1 (radio switch "on"), which rfkill-input turns into the global unblock (master_switch_mode default 2). That it fires on the first SYN only, and never again, fits a value queued without `input_sync` by the driver (thinkpad_acpi reports the switch's initial state in its hotkey setup; that it doesn't sync there is an inference from this trace, the kernel source wasn't read). So the "unblock" is a stale switch report delivered late, by whoever first sends a SYN to that device: under s6 that is the greeter's Mutter, after the restore.
+- Why the replays held (parts 226, 228): the queued value was already flushed. Why the /dev/rfkill watch saw nothing: the route is evdev → input core → rfkill-input → kworker.
+- systemd-rfkill (Fedora's, checked by `strings`) doesn't take RFKILL_IOCTL_NOINPUT either. The owner confirmed that a systemd boot loses the Bluetooth state the same way.
+- Host facts: `/sys/module/rfkill/parameters/default_state` 1; master_switch_mode isn't exported, the default (2, unblock all) matches op=3 in the trace.
+
+Decision (owner): left as it is. The same happens under the stock systemd boot, so it isn't a difference the s6 boot introduces, and working around a kernel/driver behaviour that systemd has too is outside the scope (part 205). The options considered, for the record: in `early rfkill`, take RFKILL_IOCTL_NOINPUT, write a SYN_REPORT to each SW_RFKILL_ALL evdev node, wait out rfkill-input's 200 ms op delay, then restore; or hold NOINPUT for the whole boot; or `rfkill.master_switch_mode=0` on the kernel command line (the owner's, outside the project). `early rfkill` stays as f6be011 left it (restore, and one log line per device).
+
+### Next steps
+
+1. Part 226's reload 53 s into the boot (supervisors losing their directories).
+2. The index test's isolation from the live s6-rc database.
