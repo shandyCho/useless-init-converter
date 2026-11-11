@@ -13272,7 +13272,8 @@ The owner installed RPMs built from b5a563d (core 0.4.0-1.20261111214455.gb5a563
 - /etc/uinitconverter/uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no` after this upgrade (part 232's fix, a third time).
 - Boot database: `current` points to the one installed at 22:11 by the upgrade, `previous` to the one before, so `uinitconverter.db=previous` has a target.
 - Service logs under /var/log/uinitconverter from this boot: only messages the services themselves print and that were there before (accounts-daemon's homed lookup, malcontent-timerd assertions, NetworkManager-dispatcher's iscsi reload, bolt's NHI id, the GlobalShortcutsProvider helper exiting 1 in the greeter's `systemd --user`, as on earlier boots). Nothing from initconvertd, the runner or gen.
-- Not checked (needs root): /run/uncaught-logs/current, last-shutdown-*.log, dmesg (restricted), and the dependency-change reload check that was done in the VM (part 238).
+- As root, by the owner afterwards: the tail of /run/uncaught-logs/current (22:13:08-22:14:01) shows the boot's s6-rc change finishing (timers, cups.path, gdm, NetworkManager, NetworkManager-wait-online at 22:13:18), initconvertd's device-wanted targets done, StopWhenUnneeded= targets stopped once nothing needed them, and "s6-rc is busy with another change, starting it beside" for bus-activated or device-wanted services during the boot change (accounts-daemon, bolt, bluetooth, colord, localed, geoclue, wpa_supplicant, ...), the designed path (part 235 forbids it only during our own reload). One at 22:14:01 (dnf5daemon-server), after the boot change ended: some other s6-rc change held the lock then, around the greeter's login; which one isn't in the log. dnf5daemon-server is active (`systemctl is-active`) and logged no error. The last shutdown's console log (22:12:25) ends in order: rfkill saved the three devices, fdstore and s6rc-fdholder, tmp.mount, mount-fs, udevd, mount-api, s6rc-oneshot-runner stopped; no errors in its tail.
+- Not checked: dmesg (restricted), and the dependency-change reload check that was done in the VM (part 238).
 
 ### Current state
 
@@ -13280,4 +13281,4 @@ Everything up to b5a563d is pushed and 0.4.0 is published. The laptop runs 0.4.0
 
 ### Next steps
 
-1. Maybe, as root on the laptop: the catch-all and shutdown logs of this boot, and part 238's dependency-change check.
+1. Maybe part 238's dependency-change check on the laptop.
