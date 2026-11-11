@@ -13252,10 +13252,11 @@ The owner asked to prepare 0.4.0 (docs/PACKAGEBUILD pair, section 2).
 - `cargo fmt --check` failed already at 06d83fb (11 places in 8 files, two from parts 238-239); `cargo fmt` applied, whitespace only.
 - tests/vm-s6-boot.sh's essential step: "applied live again" is expected only when the live database was the boot one before the step. In mode upgrade the live database is still 0.3.0's until the reboot (holder: no), and with part 238 every reload until then is held back (installing it live would restart running services); the old essential-only guard let it apply by restarting them, part 231's wave. Now it checks "still held back until the reboot" there.
 - Tests on the release tree: `cargo fmt --check` clean; `cargo test --workspace` 160 passed; standalone fdstore 10, journal-relay 7, linkwatch 6, notify 10; sandbox 388 / `SANDBOX_JOURNAL=no` 395 / `SANDBOX_FDSTORE=no` 376, 0 failed. VM on RPMs of this tree (`build-rpms.sh --test`, 0.4.0-1...g06d83fb.dirty): vm-s6-boot default 66/0, rollback 92/0, upgrade from 0.3.0 54/1 (the check above), rerun with the fixed check 55/0; `BOOT=s6 vm-user-manager.sh session` 22/0. mcelog.service failed in every run (the VM's AMD CPU, part 238). Not run this time: vm-user-manager's lifecycle and confined modes, vm-s6-boot old-config, a real boot on the laptop with these RPMs.
+- Release build: `packages/github-release.sh` on 4a65724 ("Release 0.4.0"), exit 0, `%check` ran in each rpmbuild. ~/uinitconverter-release/assets: 9 RPMs (core 0.4.0-1.20261111211932.g4a65724.fc45: uinitconverter, uinitconverterd, -gen, -runner, -timers; standalone 0.2.0: fdstore, journal-relay, linkwatch, notify) and SHA256SUMS (`sha256sum -c`: all OK); NOTES.md carries the 0.4.0 notes. Publish line: `gh release create v0.4.0 -R shandyCho/useless-init-converter --target 4a65724da54a0ed18e2be318422bbc01f99fa2d5 --title "uinitconverter 0.4.0" --notes-file ~/uinitconverter-release/NOTES.md ~/uinitconverter-release/assets/*`.
 
 ### Current state
 
-Everything up to f1ad602 (part 240) is pushed (the owner, 2026-11-11); 06d83fb and the release commit aren't. The laptop runs JOURNAL=no and RESOLVED=no. 0.4.0 is committed; its assets are built by `packages/github-release.sh` into ~/uinitconverter-release (see part 241's result line) but not published.
+Everything up to f1ad602 (part 240) is pushed (the owner, 2026-11-11); 06d83fb and the release commit aren't. The laptop runs JOURNAL=no and RESOLVED=no. 0.4.0 is committed; its assets are built (~/uinitconverter-release, part 241) but not published.
 
 ### Next steps
 
