@@ -136,7 +136,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 
 | 도구 | 명령 | 역할 |
 |---|---|---|
-| `initconvert-gen` | `reload`, `plan` | 모든 유닛을 s6-rc 스토어로 변환하고, 그것과 직접 작성한 스토어(`EXTRA_SOURCE`)로 s6-rc 저장소를 동기화한 뒤, 세트 `current`를 커밋해 부팅 및 live 데이터베이스로 설치합니다(`s6-rc-set-install`). 변환 보고서를 남깁니다. s6로 부팅된 상태에서는 `systemctl daemon-reload`처럼 `reload`를 initconvertd에 위임합니다. [`s6` 명령](#s6-명령-s6-frontend) 참고. |
+| `initconvert-gen` | `reload`, `plan` | 모든 유닛을 s6-rc 스토어로 변환하고, 그것과 직접 작성한 스토어(`EXTRA_SOURCE`)로 s6-rc 저장소를 동기화한 뒤, 세트 `current`를 커밋해 부팅 및 live 데이터베이스로 설치합니다(`s6-rc-set-install`). 변환 보고서를 남깁니다. s6로 부팅된 상태에서는 `systemctl daemon-reload`처럼 `reload`를 initconvertd에 요청합니다. initconvertd는 잠금을 잡고 작업을 붙잡아 둔 채 `initconvert-gen reload --direct`를 프로그램으로 실행하고 그 출력을 읽습니다(생성기를 품고 있지 않습니다). [`s6` 명령](#s6-명령-s6-frontend) 참고. |
 | | `enable/disable/mask/unmask/preset/is-enabled` | 오프라인 유닛 파일 관리입니다. |
 | `initconvertd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
 | `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine`, `accept/accept-finish`, `connection` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 longrun의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. `confine UNIT -- COMMAND`는 s6가 직접 시작하는 프로그램에 유닛의 cgroup, 제한, 샌드박스를 적용합니다(`--bus=broker`의 시스템 버스). `accept`/`accept-finish`는 `Accept=yes` 소켓의 `run`/`finish`이고(s6-ipcserverd나 s6-tcpserverd를 exec합니다), 그 서버가 클라이언트마다 `connection`을 실행합니다. |
@@ -666,6 +666,8 @@ crates/                    본체 (Cargo 작업공간 하나)
     timerspec.rs, pathspec.rs, mountunit.rs   .timer/.path/.mount 유닛의 내용
     acceptspec.rs          Accept=yes .socket 유닛의 내용과 그중 지원하는 것
     snapshot.rs            데이터베이스를 생성할 때의 유닛, 데이터베이스에 함께 담김
+    servicedir.rs          유닛을 실행하는 s6 서비스 디렉터리의 파일(execline run/finish, 타임아웃)
+    genout.rs              initconvert-gen이 출력하고 데몬이 읽는 줄(reload 결과, plan 보고서)
   uinitconverter-install/        enable/disable/mask/preset, 유닛 파일 상태
   uinitconverter-exec/           서비스 프로세스를 준비하는 부분:
     sandbox.rs             네임스페이스, 마운트, capability
@@ -726,6 +728,7 @@ tests/                     비특권 샌드박스, 시나리오 검사, systemct
 | fd 저장소 프로토콜 | `base/fdstore.rs`(맨 위에 설명) | 본체의 클라이언트와 대체 저장소, 독립 도구 `initconvert-fdstore`(공유 코드 없음) | `fdstore::tests::protocol_conformance_*`: 본체의 클라이언트로 같은 경우들을 두 서버에 실행(독립 도구는 빌드되어 있으면, 아니면 메모를 남기고 건너뜀) |
 | `uinitconverter.conf`의 키 | `base/config.rs`, `KEYS`, `REMOVED_KEYS` | 파서, `dist/uinitconverter.conf`, `initconvert init` | `config::contract_tests`(파서의 키, dist 파일), `init::tests::init_writes_known_keys` |
 | 유닛 스냅샷: 데이터베이스를 만든 유닛(longrun은 자기 `data/unit`, 나머지와 인덱스는 `uinitconverter-units` 보관 서비스의 `data/`) | `base/snapshot.rs`(형식은 맨 위) | gen이 쓰고, 러너, 타이머, 데몬이 읽음 | `snapshot::tests`(다시 읽으면 로드한 유닛과 같음), gen의 `database_carries_its_units`, `check.sh`(라이브 데이터베이스의 보관 서비스, `usable` 유지) |
+| `initconvert-gen reload`와 `plan`의 출력 | `base/genout.rs`(형식은 파일 맨 위), `Reloaded`, `plan_entry` | gen이 출력하고 데몬이 읽습니다(reload의 유닛 수, 데이터베이스, 세트 변경. 유닛을 관리할 수 없는 이유) | `genout::tests`(출력과 해석의 왕복. gen은 이 함수들로만 출력합니다) |
 | 생성된 데이터베이스의 색인 | `base/index.rs`, `Index::render`와 `Index::load` | gen이 쓰고 러너와 데몬이 읽음 | `index::tests::render_and_load_round_trip` |
 
 도구들이 부르는 데몬의 D-Bus 메서드(`LoadUnit`, `StartUnit`, `Reload`, `StopInstances` 등)에는 따로

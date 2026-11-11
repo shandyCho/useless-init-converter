@@ -27,6 +27,10 @@ Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
   s6-supervise's death tally instead of a list of the runner's own. Every
   death in the interval counts, manual stops and clean exits too, as systemd
   counts every start. `systemctl reset-failed` clears the tally.
+- **A reload runs `initconvert-gen` as a program.** `initconvertd` no
+  longer contains the generator: for `daemon-reload` it holds its locks and
+  runs `initconvert-gen reload --direct`, reading what it prints. The
+  `uinitconverterd` package now requires `uinitconverter-gen`.
 
 ## 0.4.0 (2026-11-11)
 

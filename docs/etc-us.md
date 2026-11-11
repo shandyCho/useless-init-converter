@@ -150,7 +150,7 @@ on its own, and the core works without them.
 
 | Tool | Commands | Role |
 |---|---|---|
-| `initconvert-gen` | `reload`, `plan` | Translates every unit into an s6-rc store, syncs the s6-rc repository with it and the hand-written stores (`EXTRA_SOURCE`), then commits the set `current` and installs it as the boot and live database (`s6-rc-set-install`). Writes a coverage report. On a running s6 boot `reload` asks initconvertd to do it, as `systemctl daemon-reload` does. See [The `s6` command](#the-s6-command-s6-frontend). |
+| `initconvert-gen` | `reload`, `plan` | Translates every unit into an s6-rc store, syncs the s6-rc repository with it and the hand-written stores (`EXTRA_SOURCE`), then commits the set `current` and installs it as the boot and live database (`s6-rc-set-install`). Writes a coverage report. On a running s6 boot `reload` asks initconvertd, as `systemctl daemon-reload` does; initconvertd holds the locks and jobs back and runs `initconvert-gen reload --direct` as a program, reading what it prints (it doesn't contain the generator). See [The `s6` command](#the-s6-command-s6-frontend). |
 | | `enable/disable/mask/unmask/preset/is-enabled` | Offline unit file management. |
 | `initconvertd` | `daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
 | `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine`, `accept/accept-finish`, `connection` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. `stop-atom` is the `down` of a longrun's `UNIT.stop` oneshot (its `ExecStop=`). `confine UNIT -- COMMAND` gives a program s6 starts itself the unit's cgroup, limits and sandbox (the system bus with `--bus=broker`). `accept`/`accept-finish` are the `run`/`finish` of an `Accept=yes` socket (they exec s6-ipcserverd or s6-tcpserverd), which runs `connection` for each client. |
@@ -767,6 +767,8 @@ crates/                    the core (one Cargo workspace)
     timerspec.rs, pathspec.rs, mountunit.rs   what .timer/.path/.mount units say
     acceptspec.rs          what an Accept=yes .socket says, and what of it is supported
     snapshot.rs            the units a database was generated from, carried in it
+    servicedir.rs          the files of an s6 service directory that runs a unit (execline run/finish, timeouts)
+    genout.rs              the lines initconvert-gen prints and the daemon reads (reload's result, plan's report)
   uinitconverter-install/        enable/disable/mask/preset, unit file state
   uinitconverter-exec/           how a service process is set up:
     sandbox.rs             namespaces, mounts and capabilities
@@ -829,6 +831,7 @@ together.
 | The fd store protocol | `base/fdstore.rs` (documented at the top) | the core's client and fallback store, and the standalone `initconvert-fdstore` (no shared code) | `fdstore::tests::protocol_conformance_*`: the same cases through the core's client against both servers (the standalone one if built, else skipped with a note) |
 | The keys of `uinitconverter.conf` | `base/config.rs`, `KEYS`, `REMOVED_KEYS` | the parser, `dist/uinitconverter.conf`, `initconvert init` | `config::contract_tests` (the parser's keys, the dist file); `init::tests::init_writes_known_keys` |
 | The unit snapshot: the units a database was generated from (a longrun's `data/unit`; the others and the index in the `uinitconverter-units` holder's `data/`) | `base/snapshot.rs` (format at the top) | gen writes it; the runner, the timers and the daemon read it | `snapshot::tests` (read back, it is the unit as loaded); gen's `database_carries_its_units`; `check.sh` (the holder in the live database, kept `usable`) |
+| What `initconvert-gen reload` and `plan` print | `base/genout.rs` (format at the top), `Reloaded`, `plan_entry` | gen prints, the daemon reads (a reload's unit count, database and set changes; why a unit isn't managed) | `genout::tests` (render and parse round trip; gen prints only through these functions) |
 | The index of a generated database | `base/index.rs`, `Index::render` and `Index::load` | gen writes, the runner and the daemon read | `index::tests::render_and_load_round_trip` |
 
 The daemon's D-Bus methods that the tools call (`LoadUnit`, `StartUnit`,

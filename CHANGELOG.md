@@ -26,6 +26,10 @@
   목록 대신 s6-supervise의 death tally를 셉니다. 간격 안의 모든 종료를 세며,
   수동 정지와 정상 종료도 포함됩니다. systemd가 모든 시작을 세는 것과 같습니다.
   `systemctl reset-failed`가 tally를 지웁니다.
+- **reload는 `initconvert-gen`을 프로그램으로 실행합니다.** `initconvertd`는 더는
+  생성기를 품지 않습니다. `daemon-reload` 때 잠금을 잡은 채
+  `initconvert-gen reload --direct`를 실행하고 그 출력을 읽습니다.
+  `uinitconverterd` 패키지가 이제 `uinitconverter-gen`을 요구합니다.
 
 ## 0.4.0 (2026-11-11)
 

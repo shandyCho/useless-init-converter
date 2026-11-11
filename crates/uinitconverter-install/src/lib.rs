@@ -594,6 +594,17 @@ pub fn set_default_target(cfg: &Config, name: &str) -> Result<Vec<Change>, Strin
     Ok(changes)
 }
 
+/// The services AUTO_MASK= (removed) masked that are still masked in the
+/// set: each reload puts them back in the database. initconvertd holds
+/// their jobs during the reload, and stops those running as dynamic
+/// instances first (see gen's undo_auto_mask).
+pub fn auto_masked(cfg: &Config) -> BTreeSet<String> {
+    uinitconverter_base::automask::masked(cfg)
+        .into_iter()
+        .filter(|n| set_rx(cfg, n) == Some("masked"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

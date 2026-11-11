@@ -406,7 +406,7 @@ impl Daemon {
             self.dynamic.lock().unwrap().insert(
                 id.clone(),
                 super::dynamic::Dynamic {
-                    kind: crate::gen::Kind::Oneshot,
+                    kind: crate::index::Kind::Oneshot,
                     active: false,
                 },
             );

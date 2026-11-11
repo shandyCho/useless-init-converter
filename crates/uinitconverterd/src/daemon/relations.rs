@@ -123,7 +123,7 @@ impl Daemon {
             }
             if !matches!(
                 self.kind_of(&did),
-                Some(crate::gen::Kind::Oneshot | crate::gen::Kind::Longrun)
+                Some(crate::index::Kind::Oneshot | crate::index::Kind::Longrun)
             ) {
                 continue;
             }

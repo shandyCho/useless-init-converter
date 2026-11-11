@@ -192,10 +192,19 @@ impl Daemon {
                 let why = if self.cfg.is_excluded(&id) {
                     "excluded by uinitconverter configuration".to_string()
                 } else {
-                    let plan = gen::plan(&self.cfg);
+                    // What gen makes of the unit files as they are now.
+                    let report = self
+                        .gen_command(&["plan"])
+                        .stdin(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .output()
+                        .await
+                        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                        .unwrap_or_default();
+                    let entry = crate::genout::plan_entry(&report, &id);
                     not_managed_why(
-                        plan.skipped.get(&id).map(String::as_str),
-                        plan.units.contains_key(&id),
+                        entry.skipped.as_deref(),
+                        entry.translated,
                         self.next_boot_db_differs(),
                     )
                 };

@@ -10,7 +10,7 @@ executables, so they are used only to build and are not packaged.
 | Package | Contains | Needs at run time (`Requires`) |
 |---|---|---|
 | `uinitconverter-runner` | `initconvert-runner` | s6, shadow-utils. Recommends `uinitconverterd` (`OnFailure=`/`OnSuccess=` units are started through the daemon) |
-| `uinitconverterd` | `initconvertd`, the D-Bus policy (`uinitconverter.conf`) | s6, `uinitconverter-runner`. Recommends `uinitconverter-timers` (`systemd-run --on-calendar`). Obsoletes `uinitconverter-user` (the s6 user manager, removed after 0.3.0; see the docs/etc pair) |
+| `uinitconverterd` | `initconvertd`, the D-Bus policy (`uinitconverter.conf`) | s6, `uinitconverter-runner`, `uinitconverter-gen` (a reload runs it). Recommends `uinitconverter-timers` (`systemd-run --on-calendar`). Obsoletes `uinitconverter-user` (the s6 user manager, removed after 0.3.0; see the docs/etc pair) |
 | `uinitconverter-timers` | `initconvert-timers` | `uinitconverterd` (timers start units through the daemon) |
 | `uinitconverter-gen` | `initconvert-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (the generated services run them) |
 | `uinitconverter` | the `initconvert` command (with `initconvert init`, the boot setup), `early`, configuration, s6 services, s6-linux-init skeleton, SELinux module, kernel-install plugin, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, and the four tool packages above |

@@ -9,130 +9,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use uinitconverter_base::config::{runner_cmd, timers_cmd};
+use uinitconverter_base::config::runner_cmd;
+use uinitconverter_base::servicedir::{command_line, refs, script, tool_words};
 use uinitconverter_base::snapshot::{self, Snapshot};
 
 use super::*;
 use uinitconverter_base::automask;
-
-/// A logger's run script: s6-log into LOG_DIR/ID (`notify`: readiness on fd
-/// 3, s6-rc's loggers).
-pub fn logger_run(log_dir: &Path, id: &str, notify: bool) -> String {
-    let logdir = util::el_quote(&log_dir.join(id).display().to_string());
-    let s6log = util::el_quote(&tools::path("s6-log"));
-    let d3 = if notify { " -d3" } else { "" };
-    format!(
-        "{}if {{ mkdir -p {logdir} }}\n{s6log}{d3} n10 s1000000 T {logdir}\n",
-        util::EXECLINE
-    )
-}
-
-/// A script that passes its arguments on to `words`: s6 runs `finish` with
-/// the exit code, the signal, the service name and the process group. In
-/// execline, unless a word holds a `$` (execline would substitute it):
-/// then, and only then, a shell script.
-fn passing_args(words: &[&str]) -> String {
-    if words.iter().all(|w| util::el_plain(w)) {
-        let w: Vec<String> = words.iter().map(|w| util::el_quote(w)).collect();
-        format!("{}{} $@\n", util::EXECLINE_ARGS, w.join(" "))
-    } else {
-        let w: Vec<String> = words.iter().map(|w| util::sh_quote(w)).collect();
-        format!("#!/bin/sh\nexec {} \"$@\"\n", w.join(" "))
-    }
-}
-
-/// `words` as one execline command line (an s6-rc oneshot's `up`/`down`).
-fn command_line(words: &[&str]) -> String {
-    let w: Vec<String> = words.iter().map(|w| util::el_quote(w)).collect();
-    format!("{}\n", w.join(" "))
-}
-
-/// A script that runs `words`.
-fn script(words: &[&str]) -> String {
-    format!("{}{}", util::EXECLINE, command_line(words))
-}
-
-/// The words of a tool's command line for a unit: the tool, its command,
-/// `--config PATH` if needed, the command's options, then the unit
-/// (index::unit_arg's two words).
-fn tool_words(cfg: &Config, tool: &Path, cmd: &str, opts: &[&str], id: &str) -> Vec<String> {
-    let mut w = vec![tool.display().to_string(), cmd.to_string()];
-    if let Some(path) = cfg.runner_args().strip_prefix(" --config ") {
-        w.push("--config".into());
-        w.push(path.into());
-    }
-    w.extend(opts.iter().map(|o| o.to_string()));
-    w.extend(unit_arg(id).split(' ').map(String::from));
-    w
-}
-
-fn refs(w: &[String]) -> Vec<&str> {
-    w.iter().map(String::as_str).collect()
-}
-
-/// The files of a longrun's directory that s6-rc's source format and a
-/// plain s6 service directory share: (name, contents, executable).
-/// `on_demand`: the runner binds the sockets and waits for activity before
-/// the first start (see Planned::on_demand).
-pub fn longrun_files(
-    cfg: &Config,
-    id: &str,
-    t: &Timings,
-    on_demand: bool,
-) -> Vec<(&'static str, String, bool)> {
-    let words = |tool: &Path, cmd: &str| tool_words(cfg, tool, cmd, &[], id);
-    if id.ends_with(".timer") || id.ends_with(".path") {
-        let sub = if id.ends_with(".timer") {
-            timers_cmd::TIMER_RUN
-        } else {
-            timers_cmd::PATH_RUN
-        };
-        return vec![
-            ("run", script(&refs(&words(&cfg.timer_runner, sub))), true),
-            ("notification-fd", "3\n".into(), false),
-        ];
-    }
-    // Accept=yes: s6-ipcserverd on the bound socket, one connection
-    // instance per client. SIGTERM stops accepting; running connections
-    // go on, as systemd's instances are units of their own.
-    if id.ends_with(".socket") {
-        return vec![
-            (
-                "run",
-                script(&refs(&words(&cfg.runner, runner_cmd::ACCEPT))),
-                true,
-            ),
-            (
-                "finish",
-                passing_args(&refs(&words(&cfg.runner, runner_cmd::ACCEPT_FINISH))),
-                true,
-            ),
-            ("notification-fd", "3\n".into(), false),
-        ];
-    }
-    let lazy: &[&str] = if on_demand { &["--on-demand"] } else { &[] };
-    let run_words = tool_words(cfg, &cfg.runner, runner_cmd::RUN, lazy, id);
-    let mut out = vec![
-        ("run", script(&refs(&run_words)), true),
-        (
-            "finish",
-            passing_args(&refs(&words(&cfg.runner, runner_cmd::FINISH))),
-            true,
-        ),
-        ("notification-fd", "3\n".into(), false),
-        ("timeout-up", format!("{}\n", t.up_ms), false),
-        ("timeout-down", format!("{}\n", t.down_ms), false),
-        ("timeout-kill", format!("{}\n", t.down_ms), false),
-        ("timeout-finish", format!("{}\n", t.finish_ms), false),
-    ];
-    if let Some(n) = t.max_death_tally {
-        out.push(("max-death-tally", format!("{n}\n"), false));
-    }
-    if let Some(sig) = &t.down_signal {
-        out.push(("down-signal", format!("{sig}\n"), false));
-    }
-    out
-}
 
 fn write_file(path: &Path, content: &str, exec: bool) -> std::io::Result<()> {
     fs::write(path, content)?;
@@ -565,17 +447,6 @@ fn set_change_groups(cfg: &Config, rx: &str, groups: &[(String, Vec<String>)]) -
         }
     }
     moved
-}
-
-/// The services AUTO_MASK= (removed) masked that are still masked in the
-/// set: each reload puts them back in the database. initconvertd holds
-/// their jobs during the reload, and stops those running as dynamic
-/// instances first (see undo_auto_mask).
-pub fn auto_masked(cfg: &Config) -> BTreeSet<String> {
-    automask::masked(cfg)
-        .into_iter()
-        .filter(|n| install::set_rx(cfg, n) == Some("masked"))
-        .collect()
 }
 
 /// AUTO_MASK= used to mask unused services in the set and run them as
@@ -1079,29 +950,6 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
 
 #[cfg(test)]
 mod tests {
-
-    /// The generated scripts are execline; only a `$` in a word of a script
-    /// that passes its arguments on makes it a shell script.
-    #[test]
-    fn generated_scripts_are_execline() {
-        use super::{command_line, passing_args, script};
-        assert_eq!(
-            script(&["/usr/libexec/x/runner", "run", "--", "a.service"]),
-            "#!/usr/bin/execlineb -P\n/usr/libexec/x/runner run -- a.service\n"
-        );
-        assert_eq!(
-            command_line(&["/opt/my tools/runner", "up", "--config", "/etc/a\"b"]),
-            "\"/opt/my tools/runner\" up --config \"/etc/a\\\"b\"\n"
-        );
-        assert_eq!(
-            passing_args(&["/r", "finish", "--", "a.service"]),
-            "#!/usr/bin/execlineb -S0\n/r finish -- a.service $@\n"
-        );
-        assert_eq!(
-            passing_args(&["/opt/$x/r", "finish"]),
-            "#!/bin/sh\nexec '/opt/$x/r' finish \"$@\"\n"
-        );
-    }
 
     /// What s6-rc-update -n prints: its down transition, not the up
     /// transition; and the services s6-rc lists as up, whatever their flag.

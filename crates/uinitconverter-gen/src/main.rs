@@ -147,20 +147,16 @@ fn main() {
             match gen::regenerate(&cfg, update) {
                 Ok(r) => {
                     let first = gen::report(&r.plan);
-                    println!("{}", first.lines().next().unwrap_or(""));
-                    println!(
-                        "database: {}{}",
-                        r.db_dir.display(),
-                        if r.updated_live {
-                            " (live state updated)"
-                        } else {
-                            ""
-                        }
+                    let out = uinitconverter_base::genout::Reloaded {
+                        units: r.plan.units.len(),
+                        db_dir: r.db_dir,
+                        updated_live: r.updated_live,
+                        set_changes: r.set_changes,
+                    };
+                    print!(
+                        "{}",
+                        out.render(first.lines().next().unwrap_or(""), &cfg.set_name)
                     );
-                    println!("report:   {}", r.db_dir.join("report.txt").display());
-                    for c in &r.set_changes {
-                        println!("set {}: {c}", cfg.set_name);
-                    }
                     0
                 }
                 Err(e) => die(&e),

@@ -20,6 +20,8 @@ Requires:       s6
 # requires them.
 # Transient services (systemd-run) and the stop/reload commands run it.
 Requires:       uinitconverter-runner = %{version}-%{release}
+# A reload (daemon-reload) runs `initconvert-gen reload --direct`.
+Requires:       uinitconverter-gen = %{version}-%{release}
 # Transient timers (systemd-run --on-calendar) run it.
 Recommends:     uinitconverter-timers = %{version}-%{release}
 # The s6 user manager is gone (user@UID runs systemd --user): updating

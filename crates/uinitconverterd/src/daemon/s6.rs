@@ -10,7 +10,7 @@ use tokio::process::Command;
 
 use super::Daemon;
 use crate::config::runner_cmd;
-use crate::gen::{self, Kind};
+use crate::index::{stop_atom, Kind};
 use crate::loader::Unit;
 use crate::state::{self, keys};
 use crate::tools;
@@ -879,7 +879,7 @@ impl Daemon {
             let Some(base) = a.strip_suffix(".stop") else {
                 continue;
             };
-            if gen::stop_atom(base) != *a || !active.contains(base) || active.contains(a) {
+            if stop_atom(base) != *a || !active.contains(base) || active.contains(a) {
                 continue;
             }
             if let Ok(g) = self.unit_lock(base).try_lock_owned() {
@@ -1233,7 +1233,7 @@ impl Daemon {
                         keep.extend(self.all_dependencies(n).await.unwrap_or_default());
                     }
                     for a in keep {
-                        let stop = gen::stop_atom(&a);
+                        let stop = stop_atom(&a);
                         if order.contains(&stop) {
                             names.push(stop);
                         }
@@ -1433,7 +1433,7 @@ impl Daemon {
                 // oneshot goes down first).
                 if kind == Kind::Longrun
                     && !waiting
-                    && !active.contains(&gen::stop_atom(id))
+                    && !active.contains(&stop_atom(id))
                     && !unit.get_all("Service", "ExecStop").is_empty()
                 {
                     let pid = self.svstat(id).await.map(|s| s.pid).filter(|&p| p > 0);

@@ -555,6 +555,20 @@ impl Config {
     }
 
     /// Arguments generated scripts pass to the runner so it loads this config.
+    /// initconvert-gen, which initconvertd runs for a reload: TOOLS='s
+    /// `initconvert-gen=`, else beside the runner.
+    pub fn gen_tool(&self) -> PathBuf {
+        const NAME: &str = "initconvert-gen";
+        let mapped = crate::tools::path(NAME);
+        if mapped != NAME {
+            return PathBuf::from(mapped);
+        }
+        self.runner
+            .parent()
+            .unwrap_or(Path::new("/usr/libexec/uinitconverter"))
+            .join(NAME)
+    }
+
     pub fn runner_args(&self) -> String {
         if self.config_path == Path::new(DEFAULT_CONFIG) {
             String::new()

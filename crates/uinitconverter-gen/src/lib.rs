@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 use uinitconverter_base::acceptspec;
 use uinitconverter_base::config::Config;
+use uinitconverter_base::genout;
 pub use uinitconverter_base::index::{stop_atom, unit_arg, Index, Kind};
 use uinitconverter_base::loader::{self, LoadState, Loader, Unit};
 use uinitconverter_base::tools;
@@ -25,7 +26,8 @@ use uinitconverter_base::util;
 use uinitconverter_install as install;
 
 mod s6;
-pub use s6::{logger_run, longrun_files, stores, write_source};
+pub use s6::{stores, write_source};
+pub use uinitconverter_base::servicedir::{logger_run, longrun_files, Timings};
 
 #[derive(Debug, Clone)]
 pub struct Planned {
@@ -47,65 +49,6 @@ pub struct Planned {
     pub on_demand: bool,
     pub warnings: Vec<String>,
     pub timings: Timings,
-}
-
-/// What s6 needs of a unit's timeouts (milliseconds, 0 = none) and stop
-/// signal; gen's database and the daemon's dynamic instances both use it.
-#[derive(Debug, Clone, Default)]
-pub struct Timings {
-    /// s6-rc's timeout-up: only a backstop, the runner enforces
-    /// TimeoutStartSec= itself (soft failure). 32-bit for s6-rc-compile.
-    pub up_ms: u64,
-    pub down_ms: u64,
-    pub finish_ms: u64,
-    pub down_signal: Option<String>,
-    /// s6-supervise's max-death-tally, when StartLimitBurst= is beyond the
-    /// 100 deaths it records by default (the runner counts them, see
-    /// supervisor::recent_deaths).
-    pub max_death_tally: Option<u32>,
-}
-
-impl Timings {
-    pub fn of(unit: &Unit) -> Timings {
-        let start = unit.start_timeout_usec();
-        let restart_sec = unit
-            .get("Service", "RestartSec")
-            .and_then(|v| uinitconverter_base::unit::parse_timespan_usec(&v, 1_000_000))
-            .unwrap_or(100_000);
-        let down_signal = unit
-            .get("Service", "KillSignal")
-            .and_then(|s| util::signal_number(&s))
-            .filter(|&s| s != libc::SIGTERM)
-            // s6-supervise reads down-signal with skalibs' sig0_scan(), which
-            // takes a number too (SIGRTMIN+n has no name there).
-            .map(|s| match util::signal_name(s) {
-                n if n.parse::<i32>().is_ok() => n,
-                n => format!("SIG{n}"),
-            });
-        // Type=notify: none. EXTEND_TIMEOUT_USEC= can push the start past
-        // any fixed backstop (s6-rc would then bring the service down), and
-        // the notify helper enforces the timeout, extended or not, and
-        // releases s6-rc either way.
-        let notify = matches!(
-            unit.get("Service", "Type").as_deref(),
-            Some("notify" | "notify-reload")
-        );
-        Timings {
-            up_ms: if start == u64::MAX || notify {
-                0
-            } else {
-                (ms(start) + 15_000).min(u32::MAX as u64)
-            },
-            down_ms: ms(unit.stop_timeout_usec()).min(u32::MAX as u64),
-            finish_ms: ms(restart_sec).saturating_add(5000),
-            down_signal,
-            max_death_tally: unit
-                .get("Unit", "StartLimitBurst")
-                .and_then(|v| v.parse::<u32>().ok())
-                .filter(|&b| b >= 100)
-                .map(|b| b.saturating_add(1).min(4096)),
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -389,14 +332,6 @@ fn extra_names(cfg: &Config) -> BTreeSet<String> {
         }
     }
     out
-}
-
-fn ms(usec: u64) -> u64 {
-    if usec == u64::MAX {
-        0
-    } else {
-        usec / 1000
-    }
 }
 
 /// Raw dependency names before filtering: (requires, wants, after, before).
@@ -1077,7 +1012,7 @@ pub fn regenerate_plan(cfg: &Config, plan: Plan, update_live: bool) -> Result<Ge
     s6::regenerate(cfg, plan, update_live)
 }
 
-pub use s6::auto_masked;
+pub use uinitconverter_install::auto_masked;
 
 pub fn report(plan: &Plan) -> String {
     let mut s = String::new();
@@ -1089,11 +1024,13 @@ pub fn report(plan: &Plan) -> String {
         .count();
     let _ = writeln!(
         s,
-        "translated: {} longrun, {} oneshot, {} bundle ({} services without warnings)",
-        count(Kind::Longrun),
-        count(Kind::Oneshot),
-        count(Kind::Bundle),
-        clean
+        "{}",
+        genout::translated_line(
+            count(Kind::Longrun),
+            count(Kind::Oneshot),
+            count(Kind::Bundle),
+            clean
+        )
     );
     let _ = writeln!(s, "skipped: {}", plan.skipped.len());
     if !plan.broken_cycles.is_empty() {
@@ -1101,7 +1038,7 @@ pub fn report(plan: &Plan) -> String {
     }
     let _ = writeln!(s);
     for p in plan.units.values() {
-        let _ = writeln!(s, "{} [{}]", p.id, p.kind.as_str());
+        let _ = writeln!(s, "{}", genout::unit_line(&p.id, p.kind.as_str()));
         if p.on_demand {
             let _ = writeln!(
                 s,
@@ -1121,9 +1058,9 @@ pub fn report(plan: &Plan) -> String {
             let _ = writeln!(s, "    warning: {w}");
         }
     }
-    let _ = writeln!(s, "\nskipped units:");
+    let _ = writeln!(s, "\n{}", genout::skipped_heading());
     for (n, why) in &plan.skipped {
-        let _ = writeln!(s, "    {n}: {why}");
+        let _ = writeln!(s, "{}", genout::skipped_line(n, why));
     }
     s
 }

@@ -13405,12 +13405,25 @@ Step 2, what part 246's table marked "Replace", plus a leftover found on the way
 - Docs pair (the restart line, the execline note, the svc list, the contract table), CHANGELOG pair.
 - Tests: `cargo test --workspace` 162 passed, 0 failed (new: `generated_scripts_are_execline`, `deaths_in_the_interval_before_the_last_one`); sandbox suite 388 passed, 0 failed, and `SANDBOX_JOURNAL=no` 395 passed, 0 failed (the execline loggers; "flappy hit start limit" passes on the death tally). `cargo fmt` was applied after those runs (whitespace only; not rebuilt since). **Not finished when this was committed:** `tests/confine-vm.sh` (the coredump service in QEMU) was still running, its log is the scratchpad's confine.log; **not run:** `SANDBOX_FDSTORE=no`, the VM (`tests/vm-s6-boot.sh`) on step 2, and reset-failed clearing the tally has no test.
 
+- Finished afterwards (2026-11-12), all on 5265f2c: `cargo build` clean after the fmt, `cargo test --workspace` 162 passed; `tests/confine-vm.sh` 115 passed, 0 failed (the coredump checks on the Rust start: the manager runs confined, a crash's core file is kept, same manager after the crash); `SANDBOX_FDSTORE=no` 376 passed, 0 failed; VM on RPMs of 5265f2c: `vm-s6-boot.sh default` 66 passed, 0 failed (33 per boot; "core_pattern is systemd-coredump's socket" on both), `upgrade` from 0.3.0 56 passed, 0 failed (0.3.0's database keeps its `/bin/sh` scripts until the reload; the boot after it runs the execline ones).
+
+
+## 2026-11-12, part 249: step 3 of part 246 — the daemon runs initconvert-gen
+
+- **A reload is a program run.** daemon/mod.rs `reload_db` no longer calls the generator: with `s6.lock` and the units' locks held and `reloading` set as before, `run_gen_reload` runs `initconvert-gen [--config PATH] reload --direct` (`Config::gen_tool`: TOOLS' `initconvert-gen=`, else beside RUNNER), forwards its stderr to the daemon's log and reads its stdout. The daemon's log lines are the same ("reloaded: N units, database D", "set NAME: ..."), so tests and docs that quote them stand. A failed reload returns the tool's last stderr line as the D-Bus error.
+- **The output is a contract** (crates/uinitconverter-base/src/genout.rs): `Reloaded` (render and parse) for `reload`'s lines, and `translated_line`/`unit_line`/`skipped_line` with `plan_entry` for the report. gen prints only through these (main.rs, `report()`), the daemon only parses through them. Added to the contract table in the docs pair.
+- **Why a unit isn't managed** (jobs.rs, part 239): the reason comes from `initconvert-gen plan`'s report (`plan_entry`), run when the error is made, so a unit file newer than the last reload is still seen as translated ("not in the running s6 database yet").
+- **What both sides write of a service directory** moved from gen to base (servicedir.rs): `Timings`, `longrun_files`, `logger_run` and the execline script helpers; gen re-exports them. `auto_masked` moved to the install crate (it needs only automask and `set_rx`). `Kind`, `Index`, `stop_atom` were already in base.
+- `uinitconverterd` no longer depends on the `uinitconverter-gen` crate; its RPM `Requires: uinitconverter-gen` (packages README pair). Debug binary: initconvertd 121 MB (it was not measured before; the release sizes come with the RPMs).
+- Docs pair (the gen row, the layout tree, the contract table), CHANGELOG pair.
+- Tests: `cargo build` and `cargo fmt --check` clean; `cargo test --workspace` 164 passed, 0 failed (new: `genout::tests` ×2); sandbox 388 / `SANDBOX_JOURNAL=no` 395 / `SANDBOX_FDSTORE=no` 376 passed, 0 failed, every reload in them through the child ("reloaded: 93 units" in the daemon's log). Not run yet: the VM (the child under SELinux enforcing; rollback's held-back reload; upgrade); it runs after this commit.
+
 ### Current state
 
-Not pushed: 452ee7e (plan), 18b6711 (step 1, VM-checked) and step 2's commit. Steps 3 (the daemon runs `initconvert-gen`) and 4 (`initconvert-devices`) of part 246 are not started; for step 3 only the reload path was read (daemon/mod.rs reload_db uses gen::plan, gen::auto_masked and gen::regenerate_plan; it needs the unit count, the database directory and the set changes back, which `initconvert-gen reload --direct` already prints).
+Not pushed: 452ee7e, 18b6711, 5265f2c and this commit. Steps 1-3 of part 246 are done; step 4 (`initconvert-devices`) is not started.
 
 ### Next steps
 
-1. Step 2's missing checks: `cargo build && cargo test`, `tests/confine-vm.sh`, `SANDBOX_FDSTORE=no`, then RPMs and `tests/vm-s6-boot.sh default` (and `upgrade`: old databases keep their `/bin/sh` scripts until the reload).
-2. Step 3, then step 4, each as part 246 says.
+1. The VM on step 3: `vm-s6-boot.sh default`, `rollback`, `upgrade`.
+2. Step 4.
 3. Owner: push; the getty/isolate decision (part 245); the held-back grep after the next Fedora update.

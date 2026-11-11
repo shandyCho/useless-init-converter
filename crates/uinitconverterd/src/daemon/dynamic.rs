@@ -16,7 +16,7 @@ use tokio::process::Command;
 
 use super::Daemon;
 use crate::config::runner_cmd;
-use crate::gen::Kind;
+use crate::index::Kind;
 use crate::loader::{self, Unit};
 use crate::tools;
 
@@ -143,9 +143,12 @@ impl Daemon {
         let e = |e: std::io::Error| e.to_string();
         // The same scripts and timings as the database's longruns (gen);
         // `down`: s6-svlink -d links it down, dyn_start brings it up.
-        for (name, text, exec) in
-            crate::gen::longrun_files(&self.cfg, id, &crate::gen::Timings::of(unit), false)
-        {
+        for (name, text, exec) in crate::servicedir::longrun_files(
+            &self.cfg,
+            id,
+            &crate::servicedir::Timings::of(unit),
+            false,
+        ) {
             write(dir.join(name), &text, exec).map_err(e)?;
         }
         write(dir.join("down"), "", false).map_err(e)?;
@@ -157,7 +160,7 @@ impl Daemon {
             fs::create_dir_all(&ldir).map_err(e)?;
             write(
                 ldir.join("run"),
-                &crate::gen::logger_run(log_dir, id, false),
+                &crate::servicedir::logger_run(log_dir, id, false),
                 true,
             )
             .map_err(e)?;

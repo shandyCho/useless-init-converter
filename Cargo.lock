@@ -756,7 +756,6 @@ dependencies = [
  "tokio",
  "uinitconverter-base",
  "uinitconverter-exec",
- "uinitconverter-gen",
  "uinitconverter-install",
  "uinitconverter-version",
  "zbus",

@@ -35,7 +35,7 @@ use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 use zbus::{Connection, Message, MessageStream};
 
 use crate::config::Config;
-use crate::gen::{self, Index, Kind};
+use crate::index::{Index, Kind};
 use crate::install;
 use crate::loader::{LoadState, Loader, Unit};
 use crate::state::{self, keys, result};
@@ -383,17 +383,50 @@ impl Daemon {
         self.conn.read().unwrap().clone()
     }
 
+    /// `initconvert-gen [--config PATH] COMMAND...`, the tool that translates
+    /// the units (rule 5: the daemon runs it, it doesn't contain it).
+    pub(super) fn gen_command(&self, args: &[&str]) -> tokio::process::Command {
+        let mut c = tokio::process::Command::new(self.cfg.gen_tool());
+        if let Some(path) = self.cfg.runner_args().strip_prefix(" --config ") {
+            c.args(["--config", path]);
+        }
+        c.args(args);
+        c
+    }
+
+    /// The reload itself: `initconvert-gen reload --direct`, with s6.lock
+    /// held by the caller. Its stdout is the result (genout::Reloaded);
+    /// its stderr goes to our log, and its last line is the error when it
+    /// fails.
+    async fn run_gen_reload(&self) -> Result<crate::genout::Reloaded, String> {
+        let out = self
+            .gen_command(&["reload", "--direct"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await
+            .map_err(|e| format!("{}: {e}", self.cfg.gen_tool().display()))?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        for l in stderr.lines() {
+            eprintln!("{l}");
+        }
+        let parsed = crate::genout::Reloaded::parse(
+            &String::from_utf8_lossy(&out.stdout),
+            &self.cfg.set_name,
+        );
+        match parsed {
+            Some(r) if out.status.success() => Ok(r),
+            _ => Err(stderr
+                .lines()
+                .last()
+                .map(|l| l.trim_start_matches("initconvert-gen: ").to_string())
+                .unwrap_or_else(|| format!("initconvert-gen reload: {}", out.status))),
+        }
+    }
+
     async fn reload_db(&self) -> Result<(), String> {
         self.emit(MANAGER_PATH, MANAGER_IFACE, "Reloading", &(true,))
             .await;
-        let cfg = self.cfg.clone();
-        let (plan, moving) = tokio::task::spawn_blocking(move || {
-            let plan = gen::plan(&cfg);
-            let moving = gen::auto_masked(&cfg);
-            (plan, moving)
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+        let moving = crate::install::auto_masked(&self.cfg);
         // What AUTO_MASK= masked goes back into the database: no job runs
         // on them until the new database and index are in place (a start
         // from the old database would be stopped by s6-rc-update, a dynamic
@@ -419,16 +452,13 @@ impl Daemon {
                 restart.join(" ")
             );
         }
-        let cfg = self.cfg.clone();
         let res = {
             let _guard = self.s6.lock.lock().await;
             // No start beside the update (s6.rs, beside_allowed()).
             let _reloading = self.s6.reloading();
             // s6-rc-update must see those units as up, or it keeps them down.
             self.reconcile_beside_locked().await;
-            let res = tokio::task::spawn_blocking(move || gen::regenerate_plan(&cfg, plan, true))
-                .await
-                .map_err(|e| e.to_string())?;
+            let res = self.run_gen_reload().await;
             // Before s6.lock and the units' locks go: a job must find each
             // unit where the new database has it.
             *self.index.write().unwrap() = Index::load(&self.cfg);
@@ -438,7 +468,7 @@ impl Daemon {
         if let Ok(r) = &res {
             eprintln!(
                 "initconvertd: reloaded: {} units, database {}",
-                r.plan.units.len(),
+                r.units,
                 r.db_dir.display()
             );
             for c in &r.set_changes {

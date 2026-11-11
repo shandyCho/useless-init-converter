@@ -14,7 +14,6 @@ uinitconverter-version.workspace = true
 uinitconverter-base.workspace = true
 uinitconverter-install.workspace = true
 uinitconverter-exec.workspace = true
-uinitconverter-gen.workspace = true
 zbus.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
