@@ -13174,3 +13174,19 @@ The owner approved part 234's proposal.
 
 1. Owner: build and install the RPMs with 287cf79, then `sudo initconvert init --journal=no --resolved=no` and a reboot (not a reload: removing journald live restarts everything again, part 231). Check that uinitconverter.conf ends with `JOURNAL=no` and `RESOLVED=no` under init's markers.
 2. Whether a reload should be allowed to restart non-essential session services (logind, gdm) at all (owner).
+
+## 2026-11-11, part 236: backlight and keymap checked on the laptop
+
+The owner checked the replacements for systemd-backlight and systemd-vconsole-setup (part 222) on the laptop under the s6 boot: both work. This closes the last item parts 222-223 left untested on real hardware.
+
+### Current state
+
+Not pushed: 287cf79, 2dc9aed, b16833a (parts 231-235). The laptop still runs JOURNAL=yes and RESOLVED=yes from the f6be011 upgrade (part 231).
+
+### Next steps
+
+1. Owner: push.
+2. Owner: build and install the RPMs with 287cf79 and b16833a, then `sudo initconvert init --journal=no --resolved=no` and a reboot (not a reload, part 231). Check that uinitconverter.conf ends with `JOURNAL=no` and `RESOLVED=no` under init's markers.
+3. Whether a reload should be allowed to restart non-essential session services (logind, gdm) at all (owner).
+4. Not checked yet: a D-Bus activation during a reload (b16833a), on the laptop or in the VM.
+5. A release (0.4.0).
