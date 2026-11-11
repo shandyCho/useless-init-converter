@@ -13452,3 +13452,24 @@ Not pushed: 452ee7e, 18b6711, 5265f2c, 74afcbe and this commit. All four steps o
 1. VM on step 4: `vm-s6-boot.sh default`, `rollback`, `upgrade` (more than once, for the intermittent failure's message), `BOOT=s6 vm-user-manager.sh session`; check that `uinitconverter-devices` is up and bluetooth.target/sound.target still start.
 2. An upgrade from 0.4.0 (the release RPMs in ~/uinitconverter-release) to this tree: is the reload held back, and does the devices service come up before the reboot.
 3. Owner: push; the getty/isolate decision (part 245); the held-back grep after the next Fedora update.
+
+
+## 2026-11-12, part 251: the VM on step 4; the intermittent reload failure found; a reload waits for s6-rc's lock
+
+**VM on step 4** (RPMs of baee9aa, six core packages): `vm-s6-boot.sh default` 70 passed, 0 failed (35 per boot, with the two new checks: `uinitconverter-devices` is up, units wanted by devices were started); `rollback` 96 passed, 0 failed; `BOOT=s6 vm-user-manager.sh session` 22 passed, 0 failed; `upgrade` from 0.3.0 three times: 57/1, 54/4, 57/1.
+- The one failure in each, "no unit wanted by a device was started" after the reboot, was the new check's own bug: `logs | grep -q` under pipefail ends `logs` with SIGPIPE when the journal is long (JOURNAL=yes is kept on this path). In the kept VM both mounts had been started ("initconvertd: sys-kernel-config.mount wanted by device +module:configfs: done"). Fixed (grep without -q). The tool no longer prints the result a second time; the daemon's line is the record.
+- The intermittent failure (part 250) came back in the second run with its message: `s6-rc-set-install ... failed: s6-rc-update: fatal: unable to take lock on /run/s6-rc and /run/s6-rc/compiled: Device or resource busy`. gen's `s6-rc-update` (dry run, pin, update), `s6-rc-set-install` and `s6-rc -a list` took s6-rc's lock without waiting, so any s6-rc change in progress failed the reload; the daemon's own `s6-rc` calls always used `-b`. **Fixed (e5143b1): gen passes `-b`** (s6-rc-update's and s6-rc-set-install's own option: rule 1).
+
+**VM on e5143b1:** `default` 70 passed, 0 failed; `rollback` 96 passed, 0 failed; `upgrade` three times: 58/0, 57/1, 58/0.
+- The one failure, with the diagnostics added to the test (the s6-rc processes when a reload fails): `systemctl daemon-reload` gave up after 90 s ("Connection timed out") while `initconvert-gen reload --direct` waited for the lock, held for 100 s by `s6-rc -l /run/s6-rc -b -u change packagekit.service` with parent PID 1 (`s6-svlisten -U -t 105000` under it). So: dnf bus-activates PackageKit at the end of the transaction, 0.3.0's daemon starts it, `initconvert init --yes` restarts the daemon in the same moment, and that start never becomes ready; its s6-rc change holds the lock until its 105 s timeout. Before the fix the reload failed at once with "busy", now it waits and the client times out; the reload after it passed. The same commands ran in-process before step 3, so the race is older than this cycle; it was seen in 4 of 9 `upgrade` runs since step 3 and in none of the 3 before, which may be timing or chance.
+- **Open:** why that start hangs when the daemon is restarted under it (Type=dbus readiness is the runner's own helper, not the daemon's), and whether `initconvert init` should wait for running start jobs before it restarts the daemon. Only the mixed state between `dnf upgrade` and the reboot is affected, and only when an activation is in flight.
+
+### Current state
+
+Not pushed: 452ee7e, 18b6711, 5265f2c, 74afcbe, dba8403, baee9aa, e5143b1 and this entry. Part 246's four steps are done and checked: unit tests 164, sandbox 388/395/376, `tests/confine-vm.sh` 115 (on step 2), VM default 70, rollback 96, session 22, upgrade 58 (2 of 3 runs; the third as above). The core is six packages. Not re-run on the final tree: `tests/confine-vm.sh`, `vm-user-manager.sh` lifecycle and confined, `tests/initramfs.sh`.
+
+### Next steps
+
+1. The stuck start under a daemon restart (above): reproduce outside the upgrade (a slow Type=dbus start, `s6-svc -r` on uinitconverterd), then decide.
+2. An upgrade from 0.4.0's release RPMs (~/uinitconverter-release) to this tree: the new `uinitconverter-devices` service and the held-back reload before the reboot. At the next release the `upgrade` mode moves to 0.4.0 anyway (part 244).
+3. Owner: push; the getty/isolate decision (part 245); the held-back grep after the next Fedora update; whether `supervise/status` goes back to `s6-svstat` (part 246's table).
