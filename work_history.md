@@ -13023,3 +13023,19 @@ The owner asked to test what part 222 left unchecked. `tests/vm-s6-boot.sh` got 
 ## 2026-11-11, part 224: Peer.Ping — no bug
 
 During part 222's debugging a serial watcher reported `busctl call org.freedesktop.systemd1 / org.freedesktop.DBus.Peer Ping` as blocked on every sample, also on 0.3.0. Checked: the sandbox answers Ping and GetMachineId on `/` and `/org/freedesktop/systemd1` at once; on a real s6 boot (dbus-daemon, 63bd2fb's RPMs) root gets Ping in 4 ms and tester in about 10 ms on both paths. The watcher was wrong: its script was written through Python with `2>\&1 \&\&`, so the shell passed `&1` and `&&` to busctl as arguments and the failure read as "BLOCKED". Nothing to change. (Through dbus-broker Ping wasn't called separately; the daemon's other calls through it passed in part 223.)
+
+## 2026-11-11, part 225: Bluetooth unblocked after an s6 reboot (rfkill restore), being diagnosed
+
+The owner's laptop (ThinkPad E16 Gen 3, s6 boot, s6 initramfs, e53bed7's RPMs): Bluetooth turned off in GNOME, rebooted into s6, Bluetooth on again. Not fixed yet; the change below is diagnostics.
+
+- The save worked: at the shutdown (12:36:36) `/var/lib/systemd/rfkill/` got `1` for `platform-thinkpad_acpi:bluetooth` and `pci-0000:65:00.3-usb-0:5:1.0:bluetooth`, `0` for `pci-0000:02:00.0:wlan`. The ID_PATHs `udevadm info` gives now match the files.
+- `early rfkill` run by hand blocks both and exits 0 (rfkill's syslog: `block set for id 0/1`); they stay blocked with bluetoothd and gsd-rfkill running. The code and the files are right.
+- At boot the oneshot ran at about 21.7 s (12:37:17.249-.268, no warning); both devices existed since 17.4 s (tpacpi_bluetooth_sw) and 17.7 s (hci0). bluetoothd (up about 21.9 s) powered hci0 at 22.9 s without an rfkill error, so hci0 was unblocked about a second after the restore, before any GNOME process (first /dev/rfkill user at 23.3 s, "rfkill: input handler disabled"). rsyslogd started 10 ms after the oneshot ended, so rfkill's own syslog lines from the boot are lost.
+- Leading guess, not proven: the restore skipped the devices silently (no ID_PATH from `udevadm info` at that moment): about 6 ms per device, one `udevadm info` (4 ms here) and no `rfkill`. 
+- Change (uncommitted): `early rfkill`/`rfkill-save` now log each device to stderr (the catch-all log): skipped without ID_PATH, no saved state, what it did and `soft` afterwards, what it saved.
+- Tests: `cargo build`; `cargo test --no-fail-fast` all pass but `uinitconverter-base` `index::tests::render_and_load_round_trip`, which fails without this change too: on a host booted on s6 `Index::load` reads the live database (`snapshot::live_holder`) instead of the test's state dir. A separate test-isolation bug, not fixed. Sandbox not run (only a log line added).
+
+### Next steps
+
+1. Owner: commit, rebuild and install the RPMs, turn Bluetooth off, reboot into s6, then `sudo grep -a 'early: rfkill' /run/uncaught-logs/current` and `rfkill` (before logging in to GNOME, on a text console). The log says which case it is; then the fix.
+2. The index test's isolation from the live s6-rc database.

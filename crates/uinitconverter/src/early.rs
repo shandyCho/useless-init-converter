@@ -481,24 +481,42 @@ fn rfkill(save: bool) {
         let Some(kind) = read_trim(&d.join("type")) else {
             continue;
         };
-        // systemd-rfkill skips devices without ID_PATH too.
-        let Some(path) = id_path(&d) else { continue };
-        let f = Path::new(dir).join(format!("{path}:{kind}"));
         let name = e.file_name().to_string_lossy().into_owned();
+        let label = format!(
+            "rfkill: {name} ({})",
+            read_trim(&d.join("name")).unwrap_or_default()
+        );
+        // systemd-rfkill skips devices without ID_PATH too.
+        let Some(path) = id_path(&d) else {
+            warn(&format!("{label}: no ID_PATH from udev, skipped"));
+            continue;
+        };
+        let f = Path::new(dir).join(format!("{path}:{kind}"));
         let idx = name.trim_start_matches("rfkill");
         if save {
             let soft = read_trim(&d.join("soft")).unwrap_or_default();
             if fs::write(&f, format!("{soft}\n")).is_err() {
                 warn(&format!("saving {} failed", f.display()));
+            } else {
+                warn(&format!("{label}: saved {soft} to {}", f.display()));
             }
         } else {
             let op = match read_trim(&f).as_deref() {
                 Some("1") => "block",
                 Some("0") => "unblock",
-                _ => continue,
+                _ => {
+                    warn(&format!("{label}: no saved state in {}", f.display()));
+                    continue;
+                }
             };
             if run("rfkill", &[op, idx]) != Some(0) {
                 warn(&format!("rfkill {op} {name}"));
+            } else {
+                let soft = read_trim(&d.join("soft")).unwrap_or_default();
+                warn(&format!(
+                    "{label}: {op} from {}, soft now {soft}",
+                    f.display()
+                ));
             }
         }
     }
