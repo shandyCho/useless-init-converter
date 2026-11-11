@@ -13262,3 +13262,22 @@ Everything up to f3b19ae is pushed, and 0.4.0 is published on GitHub (the owner,
 ### Next steps
 
 1. Maybe the same dependency-change check on the laptop (done in the VM), and a boot of the 0.4.0 RPMs there (every VM mode passed on them).
+
+
+## 2026-11-11, part 242: the 0.4.0 RPMs booted on the laptop
+
+The owner installed RPMs built from b5a563d (core 0.4.0-1.20261111214455.gb5a563d, standalone 0.2.0) on the laptop and rebooted (part 241's next step 1, the boot half). Checked unprivileged, about 3 minutes after boot:
+
+- PID 1 is `s6-svscan -X3 -- /run/service`; `systemctl is-system-running`: running; `systemctl --failed`: none; 158 services up in `s6-rc -a list`; `systemctl --user is-system-running`: running. The owner's GNOME session (tty2) and its `user@1000` manager are there.
+- /etc/uinitconverter/uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no` after this upgrade (part 232's fix, a third time).
+- Boot database: `current` points to the one installed at 22:11 by the upgrade, `previous` to the one before, so `uinitconverter.db=previous` has a target.
+- Service logs under /var/log/uinitconverter from this boot: only messages the services themselves print and that were there before (accounts-daemon's homed lookup, malcontent-timerd assertions, NetworkManager-dispatcher's iscsi reload, bolt's NHI id, the GlobalShortcutsProvider helper exiting 1 in the greeter's `systemd --user`, as on earlier boots). Nothing from initconvertd, the runner or gen.
+- Not checked (needs root): /run/uncaught-logs/current, last-shutdown-*.log, dmesg (restricted), and the dependency-change reload check that was done in the VM (part 238).
+
+### Current state
+
+Everything up to b5a563d is pushed and 0.4.0 is published. The laptop runs 0.4.0 under s6 with JOURNAL=no and RESOLVED=no; the boot came up `running` with no failed units.
+
+### Next steps
+
+1. Maybe, as root on the laptop: the catch-all and shutdown logs of this boot, and part 238's dependency-change check.
