@@ -13277,7 +13277,7 @@ The owner installed RPMs built from b5a563d (core 0.4.0-1.20261111214455.gb5a563
 
 ### Current state
 
-Everything up to b5a563d is pushed and 0.4.0 is published. The laptop runs 0.4.0 under s6 with JOURNAL=no and RESOLVED=no; the boot came up `running` with no failed units.
+Everything up to bc71f99 is pushed (the owner) and 0.4.0 is published. The laptop runs 0.4.0 under s6 with JOURNAL=no and RESOLVED=no; the boot came up `running` with no failed units.
 
 ### Next steps
 
