@@ -323,7 +323,7 @@ starting or writing anything:
 
 ```sh
 cargo build --release
-sudo ./target/release/uinitconverter plan > ~/uinitconverter-plan.txt
+sudo ./target/release/initconvert plan > ~/uinitconverter-plan.txt
 head -3 ~/uinitconverter-plan.txt
 grep -A3 -E '^(gdm|NetworkManager|systemd-logind|chronyd|accounts-daemon)\.service ' ~/uinitconverter-plan.txt
 ```
@@ -576,7 +576,7 @@ sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm ~/rpmbuild-uinitconverter-
 sudo initconvert init --yes
 ```
 
-(From a GitHub release: download the next release's files, `sudo dnf upgrade ./*.rpm`, then `sudo uinitconverter init --yes`.)
+(From a GitHub release: download the next release's files, `sudo dnf upgrade ./*.rpm`, then `sudo initconvert init --yes`.)
 
 An install from before the project was renamed (sdcompat packages,
 `/etc/sdcompat`) can't be upgraded this way: remove it and install

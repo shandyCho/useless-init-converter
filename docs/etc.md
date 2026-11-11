@@ -141,9 +141,9 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | `initconvertd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | 데몬용 최소 클라이언트(private 소켓 또는 버스)와, 서비스 로그 보기(`journalctl -u`, `JOURNAL=no`이면 s6-log 디렉터리)입니다. |
 | | `stop-instances` | `rc.shutdown`이 실행합니다. s6-rc가 서비스를 멈추기 전에, 그 서비스들 뒤에 순서가 잡힌 요청 시 인스턴스(`user@UID` 등)를 멈추라고 데몬에 요청합니다. |
-| `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 longrun의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. `confine UNIT -- COMMAND`는 s6가 직접 시작하는 프로그램에 유닛의 cgroup, 제한, 샌드박스를 적용합니다(`--bus=broker`의 시스템 버스). |
+| `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine`, `accept/accept-finish`, `connection` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 longrun의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. `confine UNIT -- COMMAND`는 s6가 직접 시작하는 프로그램에 유닛의 cgroup, 제한, 샌드박스를 적용합니다(`--bus=broker`의 시스템 버스). `accept`/`accept-finish`는 `Accept=yes` 소켓의 `run`/`finish`이고(s6-ipcserverd나 s6-tcpserverd를 exec합니다), 그 서버가 클라이언트마다 `connection`을 실행합니다. |
 | `initconvert-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
-| `initconvert` | 위의 모든 명령(`stop-instances`/`stop-atom`/`confine` 제외) | 사용자가 쓰는 명령(`/usr/bin/initconvert`)입니다. 해당 명령을 처리하는 도구를 실행하므로 `initconvert reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
+| `initconvert` | 위의 모든 명령(`stop-instances`/`stop-atom`/`confine`/`accept`/`accept-finish`/`connection` 제외) | 사용자가 쓰는 명령(`/usr/bin/initconvert`)입니다. 해당 명령을 처리하는 도구를 실행하므로 `initconvert reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
 | | `init` | s6 부팅 항목을 설정합니다([`initconvert init`이 하는 일](#initconvert-init이-하는-일) 참고). |
 | | `--version` | 자신의 빌드와 설치된 각 도구의 빌드를 보여 줍니다. 본체 도구가 서로 다른 빌드이면 그 사실을 표시하고 종료 상태 1로 끝납니다. 도구마다 `--version`도 있습니다. |
 
@@ -484,7 +484,7 @@ tests/systemctl.sh status notifier.service
 `initconvert plan`은 아무것도 시작하지 않고 Fedora 자체 유닛이 어떻게 변환되는지 보여줍니다.
 
 ```sh
-sudo uinitconverter --config /etc/uinitconverter/uinitconverter.conf plan | less
+sudo initconvert --config /etc/uinitconverter/uinitconverter.conf plan | less
 ```
 
 ## GNOME과 사용자 매니저
@@ -516,7 +516,7 @@ cgroup을 만드는 `StartTransientUnit`, 실제 logind와 `systemd --user`)은 
 확인했습니다: GDM 로그인, 사용자 매니저가 있는 GNOME 세션, GNOME 메뉴에서 전원 끄기. 다른
 머신은 테스트하지 않았으니 먼저 VM에서 진행하세요. 로그인이 실패하면
 `journalctl -u systemd-logind`와 `journalctl -u user@1000.service`(또는 `JOURNAL=no`에서도
-동작하는 `uinitconverter log UNIT`)를 확인하세요.
+동작하는 `initconvert log UNIT`)를 확인하세요.
 
 ### s6 사용자 매니저 (삭제됨)
 
@@ -659,6 +659,8 @@ crates/                    본체 (Cargo 작업공간 하나)
     fdstore.rs             fd 저장소 클라이언트와, 데몬이 대신 쓰는 저장소
     calendar.rs            OnCalendar= 파서와 다음 실행 시각 검색
     timerspec.rs, pathspec.rs, mountunit.rs   .timer/.path/.mount 유닛의 내용
+    acceptspec.rs          Accept=yes .socket 유닛의 내용과 그중 지원하는 것
+    snapshot.rs            데이터베이스를 생성할 때의 유닛, 데이터베이스에 함께 담김
   uinitconverter-install/        enable/disable/mask/preset, 유닛 파일 상태
   uinitconverter-exec/           서비스 프로세스를 준비하는 부분:
     sandbox.rs             네임스페이스, 마운트, capability
@@ -674,7 +676,9 @@ crates/                    본체 (Cargo 작업공간 하나)
   uinitconverter-runner/         실행 환경, 준비 완료 신호, 재시작 정책 (도구 initconvert-runner)
     runner.rs              Runner 타입과 run, finish, up, down 명령
     runner/                exec.rs, environment.rs, stdio.rs, sockets.rs, forking.rs,
-                           notify.rs(준비 완료 도우미), status.rs(종료 결과)
+                           notify.rs(준비 완료 도우미), status.rs(종료 결과),
+                           connection.rs(Accept=yes: accept와 connection)
+    supervisor.rs          러너가 s6-supervise에 묻는 것
   uinitconverter-timers/         타이머와 path 유닛 러너 (도구 initconvert-timers)
   uinitconverterd/               D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓,
                            요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs),
@@ -682,7 +686,8 @@ crates/                    본체 (Cargo 작업공간 하나)
                            (access.rs) (도구 initconvertd)
     daemon/mod.rs          Daemon 타입, 유닛 불러오기, 메인 루프
     daemon/                dispatch.rs, manager.rs(Manager 메서드), jobs.rs,
-                           scopes.rs(StartTransientUnit), caller.rs, errors.rs, ...
+                           scopes.rs(StartTransientUnit), accept.rs(Accept=yes
+                           연결 인스턴스), caller.rs, errors.rs, ...
   uinitconverter/                알맞은 도구를 실행하는 initconvert 명령과 `initconvert init`.
                                  부팅 자체의 단계(규칙 6): early.rs(초기 부팅), svc.rs(직접 작성한
                                  s6 서비스의 시작), rc.rs(2단계, 종료, init-selinux),

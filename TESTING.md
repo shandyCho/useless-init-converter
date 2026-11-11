@@ -286,7 +286,7 @@ RPM을 빨리 다시 빌드하려면 `packages/build-rpms.sh --test DIR`(package
 
 ```sh
 cargo build --release
-sudo ./target/release/uinitconverter plan > ~/uinitconverter-plan.txt
+sudo ./target/release/initconvert plan > ~/uinitconverter-plan.txt
 head -3 ~/uinitconverter-plan.txt
 grep -A3 -E '^(gdm|NetworkManager|systemd-logind|chronyd|accounts-daemon)\.service ' ~/uinitconverter-plan.txt
 ```
@@ -521,7 +521,7 @@ sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm ~/rpmbuild-uinitconverter-
 sudo initconvert init --yes
 ```
 
-(GitHub 릴리스에서는 다음 릴리스의 파일을 받아 `sudo dnf upgrade ./*.rpm` 다음 `sudo uinitconverter init --yes`.)
+(GitHub 릴리스에서는 다음 릴리스의 파일을 받아 `sudo dnf upgrade ./*.rpm` 다음 `sudo initconvert init --yes`.)
 
 프로젝트 이름이 바뀌기 전의 설치(sdcompat 패키지, `/etc/sdcompat`)는 이렇게 업데이트할 수
 없습니다. [packages/README.md](packages/README.md#sdcompat에서-이전하기)의 "sdcompat에서

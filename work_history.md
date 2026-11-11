@@ -13283,3 +13283,27 @@ Everything up to bc71f99 is pushed (the owner) and 0.4.0 is published. The lapto
 ### Next steps
 
 None open from this cycle; the owner decides what comes next.
+
+
+## 2026-11-11, part 243: docs checked against the code
+
+The owner asked to update the docs from the code. The current state's "pushed" line in part 242 is stale: everything up to 8e43611 is pushed (the owner).
+
+Checked mechanically against the built tools and sources: every `--option` the docs name (against each tool's `--help` and the scripts' own option parsing), the `uinitconverter.*` kernel options, the config keys (`KEYS`, `dist/uinitconverter.conf`), `initconvert init`'s options, the D-Bus names in "Scope" (all present, or listed as removed or not implemented on purpose), the contract table's test names, the test scripts' modes and variables against TESTING, the standalone READMEs against their tools' usage, stale package names and counts, and that each ko/en pair has the same headings, table rows and code blocks.
+
+Fixed:
+- Old command names left from the rename (6743cd8): `sudo uinitconverter --config ... plan` (etc pair), `uinitconverter log UNIT` (etc.md), `./target/release/uinitconverter plan` and `sudo uinitconverter init --yes` (TESTING pair). All now `initconvert`; `./target/debug/initconvert plan`, `--config ... plan` and `log` checked to work. CHANGELOG entries keep the names their releases had.
+- Source layout (etc pair): added base/acceptspec.rs, base/snapshot.rs, runner/connection.rs, runner/supervisor.rs, daemon/accept.rs.
+- Command table (etc pair): the runner's `accept`/`accept-finish`/`connection` (Accept=yes sockets), and `initconvert` doesn't forward them.
+- tests/vm-s6-boot.sh's header named an `RPMS` variable; it is `CORE_RPMS` and `STANDALONE_RPMS` (comment only; bash -n and shellcheck clean).
+
+Not checked: prose claims about behaviour beyond names and options (each was updated with its change, per CLAUDE.md), and the "Not implemented yet" list item by item.
+
+### Current state
+
+Everything up to 8e43611 is pushed; part 243 (the doc fixes) is not.
+
+### Next steps
+
+1. Owner: push.
+2. Maybe: tests/vm-s6-boot.sh's `upgrade` mode still upgrades from 0.3.0; from now on the release users upgrade from is 0.4.0 (owner's call).

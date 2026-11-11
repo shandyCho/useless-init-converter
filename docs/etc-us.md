@@ -155,9 +155,9 @@ on its own, and the core works without them.
 | `initconvertd` | `daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
 | | `start/stop/restart UNIT`, `log UNIT [-f]` | Minimal client for the daemon (private socket or bus); a service's log (`journalctl -u`, or the s6-log directory with `JOURNAL=no`). |
 | | `stop-instances` | Run by `rc.shutdown`: asks the daemon to stop the on-demand instances (`user@UID`, ...) before s6-rc stops the services they are ordered after. |
-| `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. `stop-atom` is the `down` of a longrun's `UNIT.stop` oneshot (its `ExecStop=`). `confine UNIT -- COMMAND` gives a program s6 starts itself the unit's cgroup, limits and sandbox (the system bus with `--bus=broker`). |
+| `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine`, `accept/accept-finish`, `connection` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. `stop-atom` is the `down` of a longrun's `UNIT.stop` oneshot (its `ExecStop=`). `confine UNIT -- COMMAND` gives a program s6 starts itself the unit's cgroup, limits and sandbox (the system bus with `--bus=broker`). `accept`/`accept-finish` are the `run`/`finish` of an `Accept=yes` socket (they exec s6-ipcserverd or s6-tcpserverd), which runs `connection` for each client. |
 | `initconvert-timers` | `timer-run`, `path-run` | Runs one `.timer` (computes elapses) or `.path` unit (inotify) as an s6 longrun and asks the daemon to start the unit. |
-| `initconvert` | any of the above (not `stop-instances`/`stop-atom`/`confine`) | The command users know (`/usr/bin/initconvert`): runs the tool that handles the command, so `initconvert reload` still works. `fdstore`, `journal-relay`, `linkwatch` and `notify` run the standalone tools when they are installed. |
+| `initconvert` | any of the above (not `stop-instances`/`stop-atom`/`confine`/`accept`/`accept-finish`/`connection`) | The command users know (`/usr/bin/initconvert`): runs the tool that handles the command, so `initconvert reload` still works. `fdstore`, `journal-relay`, `linkwatch` and `notify` run the standalone tools when they are installed. |
 | | `init` | Sets up the s6 boot entry (see [What `initconvert init` does](#what-initconvert-init-does)). |
 | | `--version` | This build and each installed tool's build. Says so and exits 1 when the core tools are from different builds. Each tool also has `--version`. |
 
@@ -561,7 +561,7 @@ root-owned VM. The report and `initconvert plan` show how Fedora's own units are
 translated without starting anything:
 
 ```sh
-sudo uinitconverter --config /etc/uinitconverter/uinitconverter.conf plan | less
+sudo initconvert --config /etc/uinitconverter/uinitconverter.conf plan | less
 ```
 
 ## GNOME and the user manager
@@ -760,6 +760,8 @@ crates/                    the core (one Cargo workspace)
     fdstore.rs             fd store client and the daemon's fallback store
     calendar.rs            OnCalendar= parser and next-elapse search
     timerspec.rs, pathspec.rs, mountunit.rs   what .timer/.path/.mount units say
+    acceptspec.rs          what an Accept=yes .socket says, and what of it is supported
+    snapshot.rs            the units a database was generated from, carried in it
   uinitconverter-install/        enable/disable/mask/preset, unit file state
   uinitconverter-exec/           how a service process is set up:
     sandbox.rs             namespaces, mounts and capabilities
@@ -775,7 +777,9 @@ crates/                    the core (one Cargo workspace)
   uinitconverter-runner/         exec environment, readiness, restart policy (tool initconvert-runner)
     runner.rs              the Runner type and the run, finish, up and down commands
     runner/                exec.rs, environment.rs, stdio.rs, sockets.rs, forking.rs,
-                           notify.rs (readiness helpers), status.rs (exit results)
+                           notify.rs (readiness helpers), status.rs (exit results),
+                           connection.rs (Accept=yes: accept and connection)
+    supervisor.rs          what the runner asks of s6-supervise
   uinitconverter-timers/         timer and path unit runners (tool initconvert-timers)
   uinitconverterd/               D-Bus API: dispatch, properties, s6 backend, private socket,
                            on-demand instances (dynamic.rs), systemd-run (transient.rs),
@@ -783,7 +787,8 @@ crates/                    the core (one Cargo workspace)
                            checks (access.rs) (tool initconvertd)
     daemon/mod.rs          the Daemon type, unit loading, the main loop
     daemon/                dispatch.rs, manager.rs (Manager methods), jobs.rs,
-                           scopes.rs (StartTransientUnit), caller.rs, errors.rs, ...
+                           scopes.rs (StartTransientUnit), accept.rs (Accept=yes
+                           connection instances), caller.rs, errors.rs, ...
   uinitconverter/                the initconvert command, which runs the right tool, and `initconvert init`;
                                  the boot's own steps (rule 6): early.rs (early boot), svc.rs (the
                                  hand-written s6 services' start), rc.rs (stage 2, shutdown,

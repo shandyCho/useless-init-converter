@@ -18,7 +18,7 @@
 #                                       # database); a boot with uinitconverter.db=previous
 #                                       # runs the first one, a boot without it the second
 #
-# RPMS: the core RPMs (packages/build-rpms.sh's OUTDIR/rpms) and the
+# CORE_RPMS and STANDALONE_RPMS: the core RPMs (packages/build-rpms.sh's OUTDIR/rpms) and the
 # standalone ones, default DIR/rpmbuild/core/rpms and
 # DIR/rpmbuild/standalone/rpms (the newest build of each package);
 # SKARNET_RPMS: default ~/rpmbuild-skarnet/rpms (devel packages left out).
