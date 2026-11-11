@@ -13273,7 +13273,8 @@ The owner installed RPMs built from b5a563d (core 0.4.0-1.20261111214455.gb5a563
 - Boot database: `current` points to the one installed at 22:11 by the upgrade, `previous` to the one before, so `uinitconverter.db=previous` has a target.
 - Service logs under /var/log/uinitconverter from this boot: only messages the services themselves print and that were there before (accounts-daemon's homed lookup, malcontent-timerd assertions, NetworkManager-dispatcher's iscsi reload, bolt's NHI id, the GlobalShortcutsProvider helper exiting 1 in the greeter's `systemd --user`, as on earlier boots). Nothing from initconvertd, the runner or gen.
 - As root, by the owner afterwards: the tail of /run/uncaught-logs/current (22:13:08-22:14:01) shows the boot's s6-rc change finishing (timers, cups.path, gdm, NetworkManager, NetworkManager-wait-online at 22:13:18), initconvertd's device-wanted targets done, StopWhenUnneeded= targets stopped once nothing needed them, and "s6-rc is busy with another change, starting it beside" for bus-activated or device-wanted services during the boot change (accounts-daemon, bolt, bluetooth, colord, localed, geoclue, wpa_supplicant, ...), the designed path (part 235 forbids it only during our own reload). One at 22:14:01 (dnf5daemon-server), after the boot change ended: some other s6-rc change held the lock then, around the greeter's login; which one isn't in the log. dnf5daemon-server is active (`systemctl is-active`) and logged no error. The last shutdown's console log (22:12:25) ends in order: rfkill saved the three devices, fdstore and s6rc-fdholder, tmp.mount, mount-fs, udevd, mount-api, s6rc-oneshot-runner stopped; no errors in its tail.
-- Not checked: dmesg (restricted), and the dependency-change reload check that was done in the VM (part 238).
+- Not checked: dmesg (restricted).
+- Part 238's dependency-change check, on the laptop (the owner ran a scratchpad script deptest.sh as root, in the live GNOME session): a new oneshot deptest.service and a drop-in giving systemd-logind.service `Requires=`/`After=deptest.service`, then `systemctl daemon-reload`. 12 passed, 0 failed: before, live = boot; the reload returned, the live database stayed and the boot database became the new one, and initconvertd logged "set current: not applied to the running system: the update would restart systemd-logind.service; the new database runs from the next boot" (22:22:05). Removing both files and reloading applied live again (live = boot). systemd-logind (PID 1871), gdm (1879) and user@1000 (6346) kept their PIDs, sessions 2 3 5 c4 stayed, is-system-running: running. Same result as in the VM (only logind listed).
 
 ### Current state
 
@@ -13281,4 +13282,4 @@ Everything up to bc71f99 is pushed (the owner) and 0.4.0 is published. The lapto
 
 ### Next steps
 
-1. Maybe part 238's dependency-change check on the laptop.
+None open from this cycle; the owner decides what comes next.
