@@ -59,6 +59,9 @@ install -Dm0755 target/release/initconvert-runner %{buildroot}%{_libexecdir}/uin
 %{_libexecdir}/uinitconverter/initconvert-runner
 
 %changelog
+* Wed Nov 11 2026 uinitconverter developers
+- 0.4.0, see CHANGELOG-us.md
+
 * Mon Nov 09 2026 uinitconverter developers
 - 0.3.0, see CHANGELOG-us.md
 

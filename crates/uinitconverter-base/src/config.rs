@@ -436,9 +436,7 @@ impl Config {
                 "POWEROFF_CMD" => cfg.poweroff_cmd = v,
                 "REBOOT_CMD" => cfg.reboot_cmd = v,
                 "HALT_CMD" => cfg.halt_cmd = v,
-                "JOURNAL" => {
-                    cfg.journal = crate::unit::parse_bool(&v).unwrap_or(JOURNAL_DEFAULT)
-                }
+                "JOURNAL" => cfg.journal = crate::unit::parse_bool(&v).unwrap_or(JOURNAL_DEFAULT),
                 "SYSLOG" => cfg.syslog = v,
                 // Removed (see automask.rs); a reload undoes what it masked.
                 "AUTO_MASK" => {}

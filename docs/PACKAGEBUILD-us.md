@@ -13,7 +13,7 @@ There are three sets of packages, each with its own build script:
 | Set | Packages | Script | Result (default) |
 |---|---|---|---|
 | skarnet.org | skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd, s6-dns, s6-networking | `dist/rpm/build-skarnet-rpms.sh` | `~/rpmbuild-skarnet/rpms` |
-| Core | uinitconverter, uinitconverterd, uinitconverter-gen, -runner, -timers, -user | `packages/build-rpms.sh` | `~/rpmbuild-uinitconverter/rpms` |
+| Core | uinitconverter, uinitconverterd, uinitconverter-gen, -runner, -timers | `packages/build-rpms.sh` | `~/rpmbuild-uinitconverter/rpms` |
 | Standalone tools | uinitconverter-fdstore, -notify, -linkwatch, -journal-relay | `standalone/*/build-rpm.sh` | `~/rpmbuild-uinitconverter-standalone/rpms` |
 
 None of the scripts installs anything or needs sudo. rpmbuild builds without
@@ -26,7 +26,7 @@ network: the Rust crates are vendored into the source tarball.
 | For | trying a change: in the VM, on your own machine | publishing on GitHub |
 | Core command | `packages/build-rpms.sh --test DIR` | `packages/github-release.sh` |
 | Tree | may have uncommitted changes (release gets `.dirty`) | must be committed |
-| Time (six core packages) | about 3-4 min, less when the cache is kept | about 11 min |
+| Time (the core packages) | about 3-4 min, less when the cache is kept | about 11 min |
 | `cargo test` in rpmbuild (`%check`) | skipped | runs |
 | debuginfo/debugsource packages | none | built (not published) |
 | Version bump, changelogs, notes | no | yes |
@@ -77,7 +77,7 @@ for s in standalone/*/build-rpm.sh; do "$s"; done             # standalone (only
 | `--nocheck` | rpmbuild skips `%check`, so no `cargo test` runs inside it. Run the tests in the tree instead (below) |
 
 Keep using the same `DIR` for test builds: the kept cache is what makes the
-next one fast. Times on the development machine, six core packages: about
+next one fast. Times on the development machine, the core packages (six then, with -user): about
 11 min without options, 253 s with `--test` and an empty cache, 198 s with
 the cache kept. Most of the rest is the optimized (LTO) link of each binary.
 
@@ -134,7 +134,7 @@ sudo initconvert init --yes
 ```
 
 `rpms/` holds only the last build's packages, so `*.rpm` is always one
-matching set (the six core packages require each other's exact
+matching set (the five core packages require each other's exact
 version-release).
 
 ## 2. Release build
@@ -157,7 +157,7 @@ not in it: users build them as in step 0.
 4. **Release notes pair.** Write `packages/release-notes/VERSION.md` and
    `VERSION-us.md` (copy the previous ones for the layout). `github-release.sh`
    puts them in the release text.
-5. **Spec changelogs.** Add an entry to the `%changelog` of each of the six
+5. **Spec changelogs.** Add an entry to the `%changelog` of each of the five
    specs in `packages/`. The specs carry no version or release;
    `build-rpms.sh` sets them.
 
@@ -231,7 +231,7 @@ so they rebuild offline as they are:
 
 ```sh
 dist/rpm/build-skarnet-rpms.sh --srpm          # ~/rpmbuild-skarnet/srpms; build in skarnet.versions order
-packages/build-rpms.sh --srpm                  # ~/rpmbuild-uinitconverter/srpms; the six go together
+packages/build-rpms.sh --srpm                  # ~/rpmbuild-uinitconverter/srpms; the five go together
 standalone/uinitconverter-fdstore/build-rpm.sh --srpm
 ```
 

@@ -874,7 +874,10 @@ fn running_restarts(cfg: &Config) -> Result<Vec<String>, String> {
 fn dry_run_stops(out: &str) -> Vec<String> {
     out.lines()
         .filter(|l| l.starts_with("s6-rc-dryrun:"))
-        .filter_map(|l| l.split_once(" -D -- change ").or_else(|| l.split_once(" -d -- change ")))
+        .filter_map(|l| {
+            l.split_once(" -D -- change ")
+                .or_else(|| l.split_once(" -d -- change "))
+        })
         .flat_map(|(_, names)| names.split_whitespace().map(str::to_string))
         .collect()
 }
@@ -1070,8 +1073,14 @@ mod tests {
     fn running_restarts_from_the_dry_run() {
         let dry = "s6-rc-dryrun: s6-rc -v 1 -t 0 -l /run/s6-rc -D -- change gdm.service uinitconverterd dbus\n\
                    s6-rc-dryrun: s6-rc -v 1 -t 0 -l /run/s6-rc -u -- change syslog dbus uinitconverterd gdm.service\n";
-        assert_eq!(dry_run_stops(dry), ["gdm.service", "uinitconverterd", "dbus"]);
-        assert!(dry_run_stops("s6-rc-dryrun: s6-rc -v 1 -t 0 -l /run/s6-rc -u -- change a\n").is_empty());
+        assert_eq!(
+            dry_run_stops(dry),
+            ["gdm.service", "uinitconverterd", "dbus"]
+        );
+        assert!(
+            dry_run_stops("s6-rc-dryrun: s6-rc -v 1 -t 0 -l /run/s6-rc -u -- change a\n")
+                .is_empty()
+        );
         let list = "dbus/longrun/essential/up/explicit\n\
                     uinitconverterd/longrun/essential/up/pulled\n\
                     gdm.service/longrun//up/explicit\n\

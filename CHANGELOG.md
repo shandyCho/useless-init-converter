@@ -5,9 +5,9 @@
 버전은 본체 패키지의 버전입니다. 독립 도구는 버전이 따로 있습니다.
 릴리스 노트: [packages/release-notes](packages/release-notes).
 
-## 출시 전
+## 0.4.0 (2026-11-11)
 
-자세한 내용은 `work_history.md` 203-205부에 있습니다.
+0.3.0 이후의 변경. 자세한 내용은 `work_history.md` 200-240부에 있습니다.
 
 ### 삭제
 - **s6 사용자 매니저**(`uinitconverter-user`, `initconvertd user-manager`,
@@ -44,9 +44,11 @@
   rsyslog(또는 syslog-ng, 이제 필수)와 `/var/log/uinitconverter` 아래 서비스별 s6-log 디렉터리를 씁니다.
   이때 `journalctl -u`와 `systemctl status`의 로그 줄은 비어 있습니다(`initconvert init --journal=yes`이면
   journald 실행). 업데이트는 기존 설치의 journald를 유지합니다(설정이 없으면 `JOURNAL=yes`를 적음).
+  `initconvert init`은 `JOURNAL=`을 어느 값이든 적으므로, 이후의 업데이트가 `--journal=no`를 되돌리지 않습니다.
 - **systemd-resolved가 기본으로 꺼집니다(규칙 2):** 새 기본값은 `RESOLVED=no`이며, s6 부팅에서는
   NetworkManager가 DNS를 처리합니다(`initconvert init --resolved=yes`이면 resolved 실행). 업데이트는 기존
   설치를 그대로 둡니다. `uinitconverter.conf`에 설정이 없으면 패키지가 `RESOLVED=yes`를 적습니다.
+  `initconvert init`은 `RESOLVED=`를 어느 값이든 적으므로, 이후의 업데이트가 `--resolved=no`를 되돌리지 않습니다.
 - **systemd 프로그램을 더 대체했습니다(규칙 2):** systemd-vconsole-setup은 kbd의 `loadkeys`/`setfont`
   (`vconsole` s6 oneshot)로, systemd-backlight@는 `backlight` s6 oneshot(같은 파일
   `/var/lib/systemd/backlight`)으로, systemd-user-sessions는 tmpfiles 단계와 `rc.shutdown`
@@ -68,6 +70,10 @@
   제한된 사용자)를 systemd 부팅에서, `BOOT=s6`이면 s6 부팅에서 확인합니다. `tests/vm-s6-boot.sh`의
   모드는 `default`, `old-config`, `upgrade`(s6 사용자 매니저를 켠 0.3.0에서 s6 부팅 중에 README대로
   업데이트), `rollback`(`uinitconverter.db=previous`)입니다.
+- 유닛 파일은 있지만 실행 중인 s6 데이터베이스에 없는 유닛을 시작하면 이유를 알려 줍니다. 다음 부팅용
+  데이터베이스에만 있거나(미뤄진 reload, 아래 참고), `systemctl daemon-reload`가 필요합니다(새 유닛 파일의
+  버스 활성화는 reload하지 않음). 전에는 "not translated to s6-rc"라고 했습니다.
+- 초기 부팅의 rfkill 복원이 장치마다 로그를 남깁니다(복원, 저장, `ID_PATH`가 없어 건너뜀).
 
 ### 수정
 - **0.3.0에서 업데이트한 뒤 로그인이 막히던 문제.** 0.3.0의 데이터베이스는 `systemd-user-sessions.service`를
@@ -83,10 +89,16 @@
   `systemctl`도 새 SSH 로그인도 되지 않았습니다. 이제 패키지는 이 멤버들을 넣지 않고, `--journal=no`일 때
   `initconvert init`이 추가합니다(`resolv`와 같은 방식). 이 수정이 있으면 0.3.0에서의 업데이트도
   안전합니다(멤버가 되살아나지 않고, `--journal=no` 설치에서는 RPM이 지운 뒤 init이 다시 추가합니다).
-- **reload가 essential 서비스를 재시작하지 않습니다.** 새 데이터베이스를 라이브로 설치하면 dbus,
-  initconvertd, 초기 부팅 서비스가 재시작되는 경우(`s6-rc-update -n`으로 확인) 다음 부팅용으로만 설치하고
-  그렇다고 알립니다. systemd의 daemon-reload도 아무것도 재시작하지 않습니다. 전에는 이런 reload가 위와 같이
-  그 업데이트를 기다리던 initconvertd를 멈췄습니다.
+- **reload가 실행 중인 서비스를 재시작하지 않습니다.** 새 데이터베이스를 라이브로 설치하면 실행 중인
+  서비스가 하나라도 재시작되는 경우(`s6-rc-update -n`으로 확인) 다음 부팅용으로만 설치하고 그렇다고
+  알립니다("not applied to the running system: the update would restart ..."). systemd의 daemon-reload도
+  아무것도 재시작하지 않습니다. s6-rc-update는 새 서비스에 대한 의존성이 생긴 서비스를 모두 재시작합니다.
+  journald를 켜자 logind와 gdm을 포함해 거의 모든 서비스가 재시작되었고, dbus를 재시작하는 reload는 위와
+  같이 그 업데이트를 기다리던 initconvertd를 멈췄습니다. 아무것도 재시작하지 않는 reload(새 유닛, 바뀐
+  명령줄)는 그대로 라이브로 적용됩니다.
+- **reload 중의 D-Bus 활성화가 더 이상 이전 데이터베이스에서 서비스를 시작하지 않습니다.** initconvertd가
+  업데이트 옆에서(`s6-svc -u`) 시작했고, s6-rc-update의 전환이 다시 끝냈습니다. 이제 reload를 기다렸다가
+  새 데이터베이스에서 시작합니다.
 
 ## 0.3.0 (2026-11-09)
 

@@ -5,9 +5,9 @@
 Versions apply to the core packages. The standalone tools have their own
 versions. Release notes: [packages/release-notes](packages/release-notes).
 
-## Unreleased
+## 0.4.0 (2026-11-11)
 
-Details in `work_history.md`, parts 203-205.
+Changes since 0.3.0. Details in `work_history.md`, parts 200-240.
 
 ### Removed
 - **The s6 user manager** (`uinitconverter-user`, `initconvertd
@@ -55,12 +55,15 @@ Details in `work_history.md`, parts 203-205.
   `journalctl -u` and the log lines in `systemctl status` are empty then
   (`initconvert init --journal=yes` runs journald). An update keeps an
   existing install's journald (`JOURNAL=yes` written into a config that
-  doesn't set it).
+  doesn't set it); `initconvert init` writes `JOURNAL=` with either value,
+  so a later update never undoes `--journal=no`.
 - **systemd-resolved is off by default (rule 2):** `RESOLVED=no` is the new
   default, so NetworkManager handles DNS on the s6 boot
   (`initconvert init --resolved=yes` runs resolved). An update keeps an
   existing install as it is: the package writes `RESOLVED=yes` into a
-  `uinitconverter.conf` that doesn't set it.
+  `uinitconverter.conf` that doesn't set it; `initconvert init` writes
+  `RESOLVED=` with either value, so a later update never undoes
+  `--resolved=no`.
 - **More systemd programs replaced (rule 2):** systemd-vconsole-setup by
   kbd's `loadkeys`/`setfont` (the `vconsole` s6 oneshot), systemd-backlight@
   by the `backlight` s6 oneshot (same files in `/var/lib/systemd/backlight`),
@@ -89,6 +92,13 @@ Details in `work_history.md`, parts 203-205.
   `old-config`, `upgrade` (from 0.3.0 with its s6 user manager on, updated
   on the s6 boot as the README says) and `rollback`
   (`uinitconverter.db=previous`).
+- A start of a unit that has a unit file but isn't in the running s6
+  database says why: it is only in the database for the next boot (a
+  held-back reload, see below), or it needs `systemctl daemon-reload` (a bus
+  activation of a new unit file, which never reloads). It used to say "not
+  translated to s6-rc".
+- The early boot's rfkill restore logs each device (restored, saved, or
+  skipped without `ID_PATH`).
 
 ### Fixed
 - **Logins locked out after the update from 0.3.0.** 0.3.0's database ran
@@ -110,12 +120,20 @@ Details in `work_history.md`, parts 203-205.
   already did `resolv`. The update from 0.3.0 is safe with this fix (the
   members aren't restored; on a `--journal=no` install RPM removes them and
   init adds them back).
-- **A reload no longer restarts essential services.** When installing the
-  new database live would restart dbus, initconvertd or an early boot
-  service (`s6-rc-update -n` tells), it is installed for the next boot only
-  and the reload says so, as systemd's daemon-reload restarts nothing.
-  Before, such a reload stopped initconvertd, which was waiting on that same
-  update, as above.
+- **A reload no longer restarts running services.** When installing the
+  new database live would restart any service that is up (`s6-rc-update -n`
+  tells), it is installed for the next boot only and the reload says so
+  ("not applied to the running system: the update would restart ..."), as
+  systemd's daemon-reload restarts nothing. s6-rc-update restarts every
+  service that gains a dependency on a new one: turning journald on
+  restarted nearly every service, logind and gdm among them, and a reload
+  that restarted dbus stopped initconvertd, which was waiting on that same
+  update, as above. Reloads that restart nothing (a new unit, a changed
+  command line) still apply live.
+- **A D-Bus activation during a reload no longer starts the service in the
+  old database.** initconvertd started it beside the update (`s6-svc -u`),
+  and s6-rc-update's switch then ended it again. Now it waits for the reload
+  and starts from the new database.
 
 ## 0.3.0 (2026-11-09)
 

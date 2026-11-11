@@ -13242,11 +13242,22 @@ Part 238's next step 4, asked by the owner. A start (or bus activation) of a uni
 
 The owner did part 239's next step 3: after another RPM upgrade (the upgrade's `%post` ran after part 237's `initconvert init`), /etc/uinitconverter/uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`. This is the case part 231's bug broke (`%post` re-adding `yes` for a key init had left out), so the fix (287cf79) is now shown on real hardware, not only reasoned.
 
+
+## 2026-11-11, part 241: release 0.4.0 prepared
+
+The owner asked to prepare 0.4.0 (docs/PACKAGEBUILD pair, section 2).
+
+- Version 0.4.0 (Cargo.toml, Cargo.lock), README pair `VERSION=0.4.0`, CHANGELOG pair: `Unreleased` became `0.4.0 (2026-11-11)` ("parts 200-240"), with what was missing since part 223: the reload entry rewritten for part 238 (any running service, not only the essentials), the D-Bus activation fix (b16833a; 0.3.0 had the same start-beside path), init writing both JOURNAL=/RESOLVED= values (287cf79), the clearer error (30f85f1), rfkill's per-device log (f6be011). Left out as never released: 7650339's udevd window and 793f0c2 (both fix code new in this cycle). Release notes pair `packages/release-notes/0.4.0*.md`; spec `%changelog` entries in the five specs. The standalone tools stay at 0.2.0 (only a7fcfb1's version bump since).
+- PACKAGEBUILD pair: the core is five packages since `-user` went (the table, "six" in four places).
+- `cargo fmt --check` failed already at 06d83fb (11 places in 8 files, two from parts 238-239); `cargo fmt` applied, whitespace only.
+- tests/vm-s6-boot.sh's essential step: "applied live again" is expected only when the live database was the boot one before the step. In mode upgrade the live database is still 0.3.0's until the reboot (holder: no), and with part 238 every reload until then is held back (installing it live would restart running services); the old essential-only guard let it apply by restarting them, part 231's wave. Now it checks "still held back until the reboot" there.
+- Tests on the release tree: `cargo fmt --check` clean; `cargo test --workspace` 160 passed; standalone fdstore 10, journal-relay 7, linkwatch 6, notify 10; sandbox 388 / `SANDBOX_JOURNAL=no` 395 / `SANDBOX_FDSTORE=no` 376, 0 failed. VM on RPMs of this tree (`build-rpms.sh --test`, 0.4.0-1...g06d83fb.dirty): vm-s6-boot default 66/0, rollback 92/0, upgrade from 0.3.0 54/1 (the check above), rerun with the fixed check 55/0; `BOOT=s6 vm-user-manager.sh session` 22/0. mcelog.service failed in every run (the VM's AMD CPU, part 238). Not run this time: vm-user-manager's lifecycle and confined modes, vm-s6-boot old-config, a real boot on the laptop with these RPMs.
+
 ### Current state
 
-Everything up to f1ad602 (part 240) is pushed (the owner, 2026-11-11). The laptop runs JOURNAL=no and RESOLVED=no.
+Everything up to f1ad602 (part 240) is pushed (the owner, 2026-11-11); 06d83fb and the release commit aren't. The laptop runs JOURNAL=no and RESOLVED=no. 0.4.0 is committed; its assets are built by `packages/github-release.sh` into ~/uinitconverter-release (see part 241's result line) but not published.
 
 ### Next steps
 
-1. Maybe the same dependency-change check on the laptop (done in the VM).
-2. A release (0.4.0).
+1. Owner: push, then publish 0.4.0 with the `gh release create` line github-release.sh prints (tag v0.4.0 on the release commit).
+2. Maybe the same dependency-change check on the laptop (done in the VM), and a boot of the 0.4.0 RPMs there.

@@ -94,7 +94,7 @@ sudo grub2-editenv - unset menu_auto_hide
 
 ```sh
 sudo dnf install -y git curl rpm-build gcc make cpio
-VERSION=0.3.0
+VERSION=0.4.0
 git clone --branch "v$VERSION" https://github.com/shandyCho/useless-init-converter.git
 cd useless-init-converter
 ```

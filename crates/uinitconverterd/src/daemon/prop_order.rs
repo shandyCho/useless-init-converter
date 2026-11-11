@@ -692,11 +692,7 @@ pub(super) const ORDER: &[(&str, &[&str])] = &[
     ),
     (
         "org.freedesktop.systemd1.Automount",
-        &[
-            "Where",
-            "DirectoryMode",
-            "Result",
-        ],
+        &["Where", "DirectoryMode", "Result"],
     ),
     ("org.freedesktop.systemd1.Device", &["SysFSPath"]),
     (

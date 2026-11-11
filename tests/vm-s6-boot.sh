@@ -320,7 +320,9 @@ cat >"$S/rollback.sh" <<'EOS'
 #   current:  after a boot without it: the second database again
 #   essential: a down service put into the bundle dbus depends on, then a
 #             reload: installing it live would restart dbus and initconvertd,
-#             so it is installed for the next boot only; both keep running
+#             so it is installed for the next boot only; both keep running.
+#             The reload without it applies live again, unless the live
+#             database was already older (an update without a reboot)
 set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
@@ -385,6 +387,10 @@ essential)
     echo oneshot >"$v/type"
     echo true >"$v/up"
     d0=$(pgrep -x initconvertd); b0=$(s6-svstat -p /run/service/dbus); l0=$(live)
+    # After an update without a reboot (mode upgrade) the live database is
+    # older than the boot one, and installing the new one live would restart
+    # running services: every reload until the reboot is held back.
+    current=no; [ "$l0" = "$(readlink -f /var/lib/uinitconverter/compiled)" ] && current=yes
     touch "$m"
     timeout 180 systemctl daemon-reload; r=$?
     rm -f "$m"; rm -rf "$v"
@@ -406,7 +412,11 @@ essential)
         echo "   journal: $(journalctl -b --no-pager -o cat 2>&1 | grep -c "not applied")"
     }
     timeout 180 systemctl daemon-reload && ok "a reload without it" || bad "the reload without it failed"
-    [ "$(live)" = "$(readlink -f /var/lib/uinitconverter/compiled)" ] && ok "applied live again" || bad "live $(live), boot $(readlink -f /var/lib/uinitconverter/compiled)"
+    if [ "$current" = yes ]; then
+        [ "$(live)" = "$(readlink -f /var/lib/uinitconverter/compiled)" ] && ok "applied live again" || bad "live $(live), boot $(readlink -f /var/lib/uinitconverter/compiled)"
+    else
+        [ "$(live)" = "$l0" ] && ok "still held back until the reboot (the live database was older)" || bad "the live database changed before the reboot: $(live)"
+    fi
     s=$(timeout 30 systemctl is-system-running 2>&1)
     case $s in running | degraded) ok "is-system-running: $s" ;; *) bad "is-system-running: $s" ;; esac
     ;;

@@ -55,6 +55,9 @@ install -Dm0755 target/release/initconvert-timers %{buildroot}%{_libexecdir}/uin
 %{_libexecdir}/uinitconverter/initconvert-timers
 
 %changelog
+* Wed Nov 11 2026 uinitconverter developers
+- 0.4.0, see CHANGELOG-us.md
+
 * Mon Nov 09 2026 uinitconverter developers
 - 0.3.0, see CHANGELOG-us.md
 

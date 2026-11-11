@@ -67,6 +67,9 @@ install -Dm0644 dist/dbus/uinitconverter.conf %{buildroot}%{_datadir}/dbus-1/sys
 %{_datadir}/dbus-1/system.d/uinitconverter.conf
 
 %changelog
+* Wed Nov 11 2026 uinitconverter developers
+- 0.4.0, see CHANGELOG-us.md
+
 * Tue Nov 10 2026 uinitconverter developers
 - The s6 user manager is removed: no `initconvertd user-manager`; Obsoletes
   uinitconverter-user

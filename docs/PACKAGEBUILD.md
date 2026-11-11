@@ -12,7 +12,7 @@
 | 묶음 | 패키지 | 스크립트 | 결과(기본 위치) |
 |---|---|---|---|
 | skarnet.org | skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd, s6-dns, s6-networking | `dist/rpm/build-skarnet-rpms.sh` | `~/rpmbuild-skarnet/rpms` |
-| 본체 | uinitconverter, uinitconverterd, uinitconverter-gen, -runner, -timers, -user | `packages/build-rpms.sh` | `~/rpmbuild-uinitconverter/rpms` |
+| 본체 | uinitconverter, uinitconverterd, uinitconverter-gen, -runner, -timers | `packages/build-rpms.sh` | `~/rpmbuild-uinitconverter/rpms` |
 | 독립 도구 | uinitconverter-fdstore, -notify, -linkwatch, -journal-relay | `standalone/*/build-rpm.sh` | `~/rpmbuild-uinitconverter-standalone/rpms` |
 
 어느 스크립트도 아무것도 설치하지 않고 sudo도 쓰지 않습니다. Rust 크레이트를 소스 tarball에
@@ -25,7 +25,7 @@ vendor로 넣으므로 rpmbuild는 네트워크 없이 빌드합니다.
 | 용도 | 변경 시험: VM, 자기 컴퓨터 | GitHub에 배포 |
 | 본체 명령 | `packages/build-rpms.sh --test DIR` | `packages/github-release.sh` |
 | 작업 트리 | 커밋하지 않은 변경이 있어도 됨(릴리스 번호에 `.dirty`) | 커밋되어 있어야 함 |
-| 시간(본체 여섯 개) | 3-4분쯤, 캐시를 남겨 두면 더 짧음 | 11분쯤 |
+| 시간(본체 패키지) | 3-4분쯤, 캐시를 남겨 두면 더 짧음 | 11분쯤 |
 | rpmbuild 안의 `cargo test`(`%check`) | 건너뜀 | 실행 |
 | debuginfo/debugsource 패키지 | 없음 | 만듦(배포하지 않음) |
 | 버전 올리기, 변경 이력, 노트 | 아니요 | 예 |
@@ -74,7 +74,7 @@ for s in standalone/*/build-rpm.sh; do "$s"; done             # 독립 도구(�
 | `--nocheck` | rpmbuild가 `%check`를 건너뛰므로 그 안에서 `cargo test`가 실행되지 않습니다. 테스트는 작업 트리에서 직접 실행하세요(아래) |
 
 테스트 빌드에는 같은 `DIR`을 계속 쓰세요. 남겨 둔 캐시 덕분에 다음 빌드가 빨라집니다. 개발용
-컴퓨터에서 본체 여섯 개를 빌드한 시간: 옵션 없이 11분쯤, `--test`로 캐시가 비어 있을 때 253초,
+컴퓨터에서 본체를 빌드한 시간(당시 -user까지 여섯 개): 옵션 없이 11분쯤, `--test`로 캐시가 비어 있을 때 253초,
 캐시를 남겨 두었을 때 198초. 나머지 시간은 대부분 바이너리마다 하는 최적화(LTO) 링크입니다.
 
 빌드할 때마다 릴리스 번호가 새로 정해집니다: `1.YYYYMMDDHHMMSS.g커밋`. 커밋하지 않은 변경이 있으면
@@ -125,7 +125,7 @@ sudo dnf upgrade ~/uinitconverter-test/rpms/*.rpm
 sudo initconvert init --yes
 ```
 
-`rpms/`에는 마지막 빌드의 패키지만 남으므로 `*.rpm`은 언제나 서로 맞는 한 벌입니다(본체 여섯 개는 서로
+`rpms/`에는 마지막 빌드의 패키지만 남으므로 `*.rpm`은 언제나 서로 맞는 한 벌입니다(본체 다섯 개는 서로
 정확히 같은 버전-릴리스를 요구합니다).
 
 ## 2. 릴리스 빌드
@@ -143,7 +143,7 @@ skarnet.org 패키지는 들어가지 않습니다. 사용자가 0단계처럼 �
    날짜로 바꿉니다.
 4. **릴리스 노트 쌍.** `packages/release-notes/VERSION.md`와 `VERSION-us.md`를 씁니다(형식은 이전
    노트를 복사). `github-release.sh`가 이것을 릴리스 글에 넣습니다.
-5. **spec 변경 이력.** `packages/`의 spec 여섯 개 각각의 `%changelog`에 항목을 추가합니다. spec에는
+5. **spec 변경 이력.** `packages/`의 spec 다섯 개 각각의 `%changelog`에 항목을 추가합니다. spec에는
    버전과 릴리스를 적지 않습니다. `build-rpms.sh`가 정합니다.
 
 ### 2.2 릴리스 트리 테스트
@@ -210,7 +210,7 @@ vendor tarball이 들어 있어 그대로 네트워크 없이 다시 빌드됩�
 
 ```sh
 dist/rpm/build-skarnet-rpms.sh --srpm          # ~/rpmbuild-skarnet/srpms. skarnet.versions 순서대로 빌드
-packages/build-rpms.sh --srpm                  # ~/rpmbuild-uinitconverter/srpms. 여섯 개를 함께
+packages/build-rpms.sh --srpm                  # ~/rpmbuild-uinitconverter/srpms. 다섯 개를 함께
 standalone/uinitconverter-fdstore/build-rpm.sh --srpm
 ```
 

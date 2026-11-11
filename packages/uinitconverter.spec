@@ -184,6 +184,9 @@ fi
 %dir %attr(0750,root,wheel) %{_localstatedir}/log/uinitconverter
 
 %changelog
+* Wed Nov 11 2026 uinitconverter developers
+- 0.4.0, see CHANGELOG-us.md
+
 * Tue Nov 10 2026 uinitconverter developers
 - No longer Suggests uinitconverter-user (removed; user@UID runs
   systemd --user)

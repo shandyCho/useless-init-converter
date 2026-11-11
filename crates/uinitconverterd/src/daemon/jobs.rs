@@ -706,10 +706,19 @@ mod tests {
     /// database is either waiting for the next boot or for a reload.
     #[test]
     fn why_a_unit_is_not_managed() {
-        assert_eq!(not_managed_why(Some("no ExecStart="), true, true), "no ExecStart=");
+        assert_eq!(
+            not_managed_why(Some("no ExecStart="), true, true),
+            "no ExecStart="
+        );
         assert!(not_managed_why(None, true, true).contains("next boot"));
         assert!(not_managed_why(None, true, false).contains("daemon-reload"));
-        assert_eq!(not_managed_why(None, false, true), "not translated to s6-rc");
-        assert_eq!(not_managed_why(None, false, false), "not translated to s6-rc");
+        assert_eq!(
+            not_managed_why(None, false, true),
+            "not translated to s6-rc"
+        );
+        assert_eq!(
+            not_managed_why(None, false, false),
+            "not translated to s6-rc"
+        );
     }
 }

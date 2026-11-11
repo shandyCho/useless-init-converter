@@ -137,7 +137,10 @@ pub(super) fn s6_initramfs_blocker() -> Option<String> {
     let cmdline = read("/proc/cmdline").unwrap_or_default();
     let found = unassembled_root(&cmdline);
     if !found.is_empty() {
-        return Some(format!("the kernel command line asks for {}", found.join(" ")));
+        return Some(format!(
+            "the kernel command line asks for {}",
+            found.join(" ")
+        ));
     }
     if cmdline.split_whitespace().any(|w| w.starts_with("resume=")) {
         return Some("resume= (hibernation) is on the kernel command line".into());
@@ -172,7 +175,9 @@ pub(super) fn s6_initramfs_blocker() -> Option<String> {
 pub(super) fn root_stack_blocker(types: &str) -> Option<String> {
     types
         .split_whitespace()
-        .find(|t| *t == "lvm" || t.starts_with("raid") || *t == "md" || *t == "mpath" || *t == "loop")
+        .find(|t| {
+            *t == "lvm" || t.starts_with("raid") || *t == "md" || *t == "mpath" || *t == "loop"
+        })
         .map(|t| format!("the root is on {t}"))
 }
 

@@ -262,7 +262,8 @@ pub fn mkinitramfs(args: &[String]) -> ! {
         }
     }
     let out = out.unwrap_or_else(|| format!("/boot/initramfs-{kver}-s6.img"));
-    let src = PathBuf::from(src.unwrap_or_else(|| env("UINITCONVERTER_INITRAMFS_SOURCE", SHARE_TREE)));
+    let src =
+        PathBuf::from(src.unwrap_or_else(|| env("UINITCONVERTER_INITRAMFS_SOURCE", SHARE_TREE)));
     let kdir = PathBuf::from(format!("/lib/modules/{kver}"));
     if !src.is_dir() {
         die(&format!("{}: no initramfs tree", src.display()));

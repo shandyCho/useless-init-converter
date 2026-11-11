@@ -717,12 +717,17 @@ mod tests {
 
     #[test]
     fn boot_only_s6_auto() {
-        let o = parse_args(&args(&["--boot-only-s6=auto"])).unwrap().unwrap();
+        let o = parse_args(&args(&["--boot-only-s6=auto"]))
+            .unwrap()
+            .unwrap();
         assert_eq!(o.boot_only_s6, Some(None));
         let o = parse_args(&args(&["--boot-only-s6=no"])).unwrap().unwrap();
         assert_eq!(o.boot_only_s6, Some(Some(false)));
         // lsblk -s: the root first, then what it sits on.
-        assert_eq!(super::checks::root_stack_blocker("crypt\npart\ndisk\n"), None);
+        assert_eq!(
+            super::checks::root_stack_blocker("crypt\npart\ndisk\n"),
+            None
+        );
         assert_eq!(super::checks::root_stack_blocker("part\ndisk\n"), None);
         assert_eq!(
             super::checks::root_stack_blocker("lvm\ncrypt\npart\ndisk\n").as_deref(),
