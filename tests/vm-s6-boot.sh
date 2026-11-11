@@ -190,6 +190,10 @@ s6-rc -a list | grep -qx backlight && ok "backlight is up" || bad "backlight isn
 # Core dumps: systemd-coredump's listener, the coredump s6 service (rule 3:
 # abrt 2.17 reads systemd-coredump's journal entries, it doesn't replace it).
 [ "$(cat /proc/sys/kernel/core_pattern)" = "@@/run/systemd/coredumpd/kernel" ] && ok "core_pattern is systemd-coredump's socket" || bad "core_pattern: $(cat /proc/sys/kernel/core_pattern)"
+# Units wanted by devices: initconvert-devices (its own s6 service) asks the
+# daemon to start them.
+s6-rc -a list | grep -qx uinitconverter-devices && ok "uinitconverter-devices is up" || bad "uinitconverter-devices isn't up"
+until_ok 'logs | grep -q "wanted by device"' 20 && ok "units wanted by devices were started ($(logs | grep -c "wanted by device"))" || bad "no unit wanted by a device was started: $(head -3 /run/uinitconverter/devices 2>&1 | tr '\n' ' ')"
 w=$(logs | grep "uinitconverter early:" | sort -u)
 [ -z "$w" ] && ok "no early-boot warnings" || bad "early-boot warnings: $(echo "$w" | head -5 | tr '\n' ' ')"
 # The system bus (BUS=): its owner of org.freedesktop.DBus, and a service
