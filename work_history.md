@@ -13227,14 +13227,23 @@ The owner asked whether a reload may restart session services, under systemd and
   - The one failed check, round 1's `unable to chdir to systemd-hostnamed.service`, isn't the activation: in that reload s6-ftrigrd died with SIGSEGV (the s6 2.15.1.1 crash relink_supervised()'s comment describes), s6-rc-update failed with "unable to manage new service directories", and 136 supervisors died with `unable to chdir` (hostnamed among them; down and running services alike). gen relinked 137 scan links of supervisors that still ran and retried; the retry succeeded ("reloaded: 316 units"), logind and gdm stayed active. One crash in this boot's four reloads. Upstream behaviour, handled as designed; nothing to change.
   - is-system-running: degraded, mcelog.service only (as above).
 
+
+## 2026-11-11, part 239: a clearer error for a unit the running database doesn't have yet
+
+Part 238's next step 4, asked by the owner. A start (or bus activation) of a unit that has a unit file and that gen translates, but that isn't in the running s6 database, failed with "cannot be managed: not translated to s6-rc", which is false.
+
+- crates/uinitconverterd/src/daemon/jobs.rs: check_job's reason now comes from not_managed_why(gen's skip reason, gen translates it, the boot database differs from the running one). gen's own reason still comes first; otherwise a translated unit says "it is only in the s6 database for the next boot; the running system keeps an older one until then (a reload that would restart running services is not applied live)" when `/run/s6-rc/compiled` and the boot link resolve to different databases (a held-back reload, part 238, or a `uinitconverter.db=previous` boot), and "it is not in the running s6 database yet (run systemctl daemon-reload)" when they don't (a bus activation of a new unit file: activation never reloads, any user can trigger it). Only a unit gen doesn't translate keeps "not translated to s6-rc". next_boot_db_differs() compares the two canonical paths.
+- Docs pair: the held-back note quotes the new error.
+- Tests: `why_a_unit_is_not_managed` (the decision table). `cargo build` clean; `cargo test --workspace --no-fail-fast` 160 passed, 0 failed; sandbox suite 388 passed, 0 failed.
+- VM (RPMs from the working tree on 35eefdb, `tests/vm-s6-boot.sh default` with `VM_KEEP=yes`: 33 passed), scratchpad script heldback.sh as root: a drop-in giving systemd-logind.service a dependency on a new heldtest.service, `daemon-reload` held back (live != boot), then `systemctl start heldtest.service` failed with exit 6 and the "only in the s6 database for the next boot" message; logind kept its PID; the cleanup reload applied live. Then a new Type=dbus freshtest.service with a D-Bus service file and policy, activated with busctl: initconvertd logged "activation of freshtest.service failed: ... it is not in the running s6 database yet (run systemctl daemon-reload)" (09:16:25 and 09:16:45, two runs). The script's own check of that line failed both times: first it grepped `FreshTest` (the line names the unit in lower case), then s6-log rotated the catch-all `current` between the script's line count and its read; the lines were in the archived file. (The first run's busctl was refused by dbus-daemon's policy before the test added one.) is-system-running: degraded, mcelog.service only.
+
 ### Current state
 
-Not pushed: 287cf79, 2dc9aed, b16833a, part 237's and this part's commits. The laptop runs JOURNAL=no and RESOLVED=no.
+Not pushed: 287cf79, 2dc9aed, b16833a, and parts 237-239's commits. The laptop runs JOURNAL=no and RESOLVED=no.
 
 ### Next steps
 
 1. Owner: push.
 2. Maybe the same dependency-change check on the laptop (done in the VM).
 3. Owner: after the next RPM upgrade, check that uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`.
-4. Maybe: a clearer error when a unit exists only in a held-back database.
-5. A release (0.4.0).
+4. A release (0.4.0).

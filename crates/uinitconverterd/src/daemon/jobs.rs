@@ -192,11 +192,12 @@ impl Daemon {
                 let why = if self.cfg.is_excluded(&id) {
                     "excluded by uinitconverter configuration".to_string()
                 } else {
-                    gen::plan(&self.cfg)
-                        .skipped
-                        .get(&id)
-                        .cloned()
-                        .unwrap_or_else(|| "not translated to s6-rc".into())
+                    let plan = gen::plan(&self.cfg);
+                    not_managed_why(
+                        plan.skipped.get(&id).map(String::as_str),
+                        plan.units.contains_key(&id),
+                        self.next_boot_db_differs(),
+                    )
                 };
                 return Err(err(
                     E_LOAD_FAILED,
@@ -657,6 +658,35 @@ impl Daemon {
     }
 }
 
+/// Why a unit with a unit file has no s6 service in the running database.
+/// `skipped`: gen's reason for not translating it; `planned`: gen
+/// translates it; `held_back`: the boot database isn't the running one (a
+/// reload that would restart running services is installed for the next
+/// boot only, work_history part 238; or this boot runs
+/// `uinitconverter.db=previous`).
+pub(super) fn not_managed_why(skipped: Option<&str>, planned: bool, held_back: bool) -> String {
+    match (skipped, planned, held_back) {
+        (Some(why), _, _) => why.to_string(),
+        (None, true, true) => "it is only in the s6 database for the next boot; the running \
+             system keeps an older one until then (a reload that would restart running \
+             services is not applied live)"
+            .to_string(),
+        (None, true, false) => {
+            "it is not in the running s6 database yet (run systemctl daemon-reload)".to_string()
+        }
+        (None, false, _) => "not translated to s6-rc".to_string(),
+    }
+}
+
+impl Daemon {
+    /// Whether the boot database is another one than the running one.
+    fn next_boot_db_differs(&self) -> bool {
+        let live = std::fs::canonicalize(self.cfg.live_dir.join("compiled"));
+        let boot = std::fs::canonicalize(self.cfg.boot_db());
+        matches!((live, boot), (Ok(l), Ok(b)) if l != b)
+    }
+}
+
 /// systemd's job modes (JOB_MODE_*).
 pub(super) const JOB_MODES: &[&str] = &[
     "replace",
@@ -667,3 +697,19 @@ pub(super) const JOB_MODES: &[&str] = &[
     "ignore-dependencies",
     "ignore-requirements",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::not_managed_why;
+
+    /// gen's own reason first; a translated unit missing from the running
+    /// database is either waiting for the next boot or for a reload.
+    #[test]
+    fn why_a_unit_is_not_managed() {
+        assert_eq!(not_managed_why(Some("no ExecStart="), true, true), "no ExecStart=");
+        assert!(not_managed_why(None, true, true).contains("next boot"));
+        assert!(not_managed_why(None, true, false).contains("daemon-reload"));
+        assert_eq!(not_managed_why(None, false, true), "not translated to s6-rc");
+        assert_eq!(not_managed_why(None, false, false), "not translated to s6-rc");
+    }
+}

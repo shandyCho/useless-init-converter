@@ -701,8 +701,9 @@ Notes:
   Most reloads restart nothing and apply live (a new unit, a changed
   command line: s6 uses a longrun's new `run` at its next start). Until the
   next boot, the running database stays the old one: a unit only the new
-  one has can't be started, and every later reload is held back the same
-  way. The live state keeps the database it runs:
+  one has can't be started (its start fails with "it is only in the s6
+  database for the next boot"), and every later reload is held back the
+  same way. The live state keeps the database it runs:
   rc.init gives `s6-rc-init` the database's directory, not the boot link,
   and on a system booted before that, the reload first points the live
   state at its database with an `s6-rc-update` to that same database (which
