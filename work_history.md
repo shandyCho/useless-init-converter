@@ -13257,9 +13257,8 @@ The owner asked to prepare 0.4.0 (docs/PACKAGEBUILD pair, section 2).
 
 ### Current state
 
-Everything up to f1ad602 (part 240) is pushed (the owner, 2026-11-11); 06d83fb and the release commit aren't. The laptop runs JOURNAL=no and RESOLVED=no. 0.4.0 is committed; its assets are built (~/uinitconverter-release, part 241) but not published.
+Everything up to f3b19ae is pushed, and 0.4.0 is published on GitHub (the owner, 2026-11-11): tag v0.4.0 on 4a65724, the assets from ~/uinitconverter-release (part 241). The laptop runs JOURNAL=no and RESOLVED=no.
 
 ### Next steps
 
-1. Owner: push, then publish 0.4.0 with the `gh release create` line github-release.sh prints (tag v0.4.0 on the release commit).
-2. Maybe the same dependency-change check on the laptop (done in the VM), and a boot of the 0.4.0 RPMs there (every VM mode passed on them).
+1. Maybe the same dependency-change check on the laptop (done in the VM), and a boot of the 0.4.0 RPMs there (every VM mode passed on them).
