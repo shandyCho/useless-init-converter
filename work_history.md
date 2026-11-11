@@ -13032,10 +13032,10 @@ The owner's laptop (ThinkPad E16 Gen 3, s6 boot, s6 initramfs, e53bed7's RPMs): 
 - `early rfkill` run by hand blocks both and exits 0 (rfkill's syslog: `block set for id 0/1`); they stay blocked with bluetoothd and gsd-rfkill running. The code and the files are right.
 - At boot the oneshot ran at about 21.7 s (12:37:17.249-.268, no warning); both devices existed since 17.4 s (tpacpi_bluetooth_sw) and 17.7 s (hci0). bluetoothd (up about 21.9 s) powered hci0 at 22.9 s without an rfkill error, so hci0 was unblocked about a second after the restore, before any GNOME process (first /dev/rfkill user at 23.3 s, "rfkill: input handler disabled"). rsyslogd started 10 ms after the oneshot ended, so rfkill's own syslog lines from the boot are lost.
 - Leading guess, not proven: the restore skipped the devices silently (no ID_PATH from `udevadm info` at that moment): about 6 ms per device, one `udevadm info` (4 ms here) and no `rfkill`. 
-- Change (uncommitted): `early rfkill`/`rfkill-save` now log each device to stderr (the catch-all log): skipped without ID_PATH, no saved state, what it did and `soft` afterwards, what it saved.
+- Change (f6be011, RPMs built with `--nocheck` as 1.20261111130444.gf6be011): `early rfkill`/`rfkill-save` now log each device to stderr (the catch-all log): skipped without ID_PATH, no saved state, what it did and `soft` afterwards, what it saved.
 - Tests: `cargo build`; `cargo test --no-fail-fast` all pass but `uinitconverter-base` `index::tests::render_and_load_round_trip`, which fails without this change too: on a host booted on s6 `Index::load` reads the live database (`snapshot::live_holder`) instead of the test's state dir. A separate test-isolation bug, not fixed. Sandbox not run (only a log line added).
 
 ### Next steps
 
-1. Owner: commit, rebuild and install the RPMs, turn Bluetooth off, reboot into s6, then `sudo grep -a 'early: rfkill' /run/uncaught-logs/current` and `rfkill` (before logging in to GNOME, on a text console). The log says which case it is; then the fix.
+1. Owner: install the f6be011 RPMs (`sudo dnf upgrade ~/rpmbuild-uinitconverter/rpms/*.rpm`), turn Bluetooth off, reboot into s6, then `sudo grep -a 'early: rfkill' /run/uncaught-logs/current` and `rfkill` (before logging in to GNOME, on a text console). The log says which case it is; then the fix.
 2. The index test's isolation from the live s6-rc database.
