@@ -13244,10 +13244,9 @@ The owner did part 239's next step 3: after another RPM upgrade (the upgrade's `
 
 ### Current state
 
-Not pushed: 287cf79, 2dc9aed, b16833a, and parts 237-239's commits. The laptop runs JOURNAL=no and RESOLVED=no.
+Everything up to f1ad602 (part 240) is pushed (the owner, 2026-11-11). The laptop runs JOURNAL=no and RESOLVED=no.
 
 ### Next steps
 
-1. Owner: push.
-2. Maybe the same dependency-change check on the laptop (done in the VM).
-3. A release (0.4.0).
+1. Maybe the same dependency-change check on the laptop (done in the VM).
+2. A release (0.4.0).
