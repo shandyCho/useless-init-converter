@@ -13205,8 +13205,7 @@ Not pushed: 287cf79, 2dc9aed, b16833a and the work_history commits after them, u
 
 1. Owner: push.
 2. Whether a reload should be allowed to restart non-essential session services (logind, gdm) at all (owner).
-3. Not checked yet: a D-Bus activation during a reload (b16833a), on the laptop or in the VM.
-4. Owner: after the next RPM upgrade, check that uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`.
+3. Owner: after the next RPM upgrade, check that uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`.
 5. A release (0.4.0).
 
 
@@ -13223,6 +13222,11 @@ The owner asked whether a reload may restart session services, under systemd and
 - Rerun with `VM_KEEP=yes`: again 92 passed, 0 failed. The `degraded` is mcelog.service: `mcelog: ERROR: AMD Processor family 25: mcelog does not support this processor` (the VM gets the host's Ryzen). Both its conditions hold in the VM (`/dev/mcelog` exists, `edac_mce_amd` isn't loaded), so stock systemd would start it and see the same failure: the environment, not ours. The held-back step's log line listed ~70 services the update would have restarted (dbus and uinitconverterd among them, also systemd-logind and gdm), so the old guard would have held that one back too.
 - Dependency change in the kept VM (as root, scratchpad script deptest.sh): a new oneshot deptest.service and a drop-in giving systemd-logind.service `Requires=`/`After=deptest.service`, then `systemctl daemon-reload` (exit 0). logind (PID 1232) and gdm (1283) kept their PIDs, both active; tester's sessions stayed; the live database didn't change and the boot database is the new one; the daemon logged "not applied to the running system: the update would restart systemd-logind.service". Only logind was listed: gdm has no dependency on logind in the database, so the old behaviour would have restarted logind alone here. Removing the drop-in and reloading again applied live (live = boot), and logind and gdm still had the same PIDs. Not done on the laptop.
 
+- D-Bus activation during a reload (b16833a, part 235), in the VM: `tests/vm-s6-boot.sh ~/uinitconverter-vm default` with `VM_KEEP=yes` (33 passed, 0 failed), then a scratchpad script as root, three rounds of: `systemctl stop systemd-hostnamed.service`; a new unit file nobody depends on (so the update restarts nothing and applies live, part 238); `systemctl daemon-reload` in the background; once s6-rc-compile or s6-rc-update runs, `busctl call org.freedesktop.hostname1 ... Get Hostname` (bus activation). (Waiting for s6-rc-set-commit/-install by name didn't work: pgrep -x matches 15 characters; the activation still went out 245-275 ms into each reload.)
+  - All three: the activation answered (`gnome-vm`) right when the reload ended (reloads of 2073, 1310 and 1263 ms; answers at +2072, +1309, +1262 ms): it waited for `s6.lock` and started from the new database. No "starting it beside" line, the reload applied live (live = boot), hostnamed active with a PID and listed up by `s6-rc -a list`. 21 checks passed.
+  - The one failed check, round 1's `unable to chdir to systemd-hostnamed.service`, isn't the activation: in that reload s6-ftrigrd died with SIGSEGV (the s6 2.15.1.1 crash relink_supervised()'s comment describes), s6-rc-update failed with "unable to manage new service directories", and 136 supervisors died with `unable to chdir` (hostnamed among them; down and running services alike). gen relinked 137 scan links of supervisors that still ran and retried; the retry succeeded ("reloaded: 316 units"), logind and gdm stayed active. One crash in this boot's four reloads. Upstream behaviour, handled as designed; nothing to change.
+  - is-system-running: degraded, mcelog.service only (as above).
+
 ### Current state
 
 Not pushed: 287cf79, 2dc9aed, b16833a, part 237's and this part's commits. The laptop runs JOURNAL=no and RESOLVED=no.
@@ -13231,7 +13235,6 @@ Not pushed: 287cf79, 2dc9aed, b16833a, part 237's and this part's commits. The l
 
 1. Owner: push.
 2. Maybe the same dependency-change check on the laptop (done in the VM).
-3. Not checked yet: a D-Bus activation during a reload (b16833a), on the laptop or in the VM.
-4. Owner: after the next RPM upgrade, check that uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`.
-5. Maybe: a clearer error when a unit exists only in a held-back database.
-6. A release (0.4.0).
+3. Owner: after the next RPM upgrade, check that uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`.
+4. Maybe: a clearer error when a unit exists only in a held-back database.
+5. A release (0.4.0).
