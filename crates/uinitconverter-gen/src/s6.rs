@@ -18,10 +18,56 @@ use uinitconverter_base::automask;
 /// A logger's run script: s6-log into LOG_DIR/ID (`notify`: readiness on fd
 /// 3, s6-rc's loggers).
 pub fn logger_run(log_dir: &Path, id: &str, notify: bool) -> String {
-    let logdir = util::sh_quote(&log_dir.join(id).display().to_string());
-    let s6log = util::sh_quote(&tools::path("s6-log"));
+    let logdir = util::el_quote(&log_dir.join(id).display().to_string());
+    let s6log = util::el_quote(&tools::path("s6-log"));
     let d3 = if notify { " -d3" } else { "" };
-    format!("#!/bin/sh\nmkdir -p {logdir} || exit 1\nexec {s6log}{d3} n10 s1000000 T {logdir}\n")
+    format!(
+        "{}if {{ mkdir -p {logdir} }}\n{s6log}{d3} n10 s1000000 T {logdir}\n",
+        util::EXECLINE
+    )
+}
+
+/// A script that passes its arguments on to `words`: s6 runs `finish` with
+/// the exit code, the signal, the service name and the process group. In
+/// execline, unless a word holds a `$` (execline would substitute it):
+/// then, and only then, a shell script.
+fn passing_args(words: &[&str]) -> String {
+    if words.iter().all(|w| util::el_plain(w)) {
+        let w: Vec<String> = words.iter().map(|w| util::el_quote(w)).collect();
+        format!("{}{} $@\n", util::EXECLINE_ARGS, w.join(" "))
+    } else {
+        let w: Vec<String> = words.iter().map(|w| util::sh_quote(w)).collect();
+        format!("#!/bin/sh\nexec {} \"$@\"\n", w.join(" "))
+    }
+}
+
+/// `words` as one execline command line (an s6-rc oneshot's `up`/`down`).
+fn command_line(words: &[&str]) -> String {
+    let w: Vec<String> = words.iter().map(|w| util::el_quote(w)).collect();
+    format!("{}\n", w.join(" "))
+}
+
+/// A script that runs `words`.
+fn script(words: &[&str]) -> String {
+    format!("{}{}", util::EXECLINE, command_line(words))
+}
+
+/// The words of a tool's command line for a unit: the tool, its command,
+/// `--config PATH` if needed, the command's options, then the unit
+/// (index::unit_arg's two words).
+fn tool_words(cfg: &Config, tool: &Path, cmd: &str, opts: &[&str], id: &str) -> Vec<String> {
+    let mut w = vec![tool.display().to_string(), cmd.to_string()];
+    if let Some(path) = cfg.runner_args().strip_prefix(" --config ") {
+        w.push("--config".into());
+        w.push(path.into());
+    }
+    w.extend(opts.iter().map(|o| o.to_string()));
+    w.extend(unit_arg(id).split(' ').map(String::from));
+    w
+}
+
+fn refs(w: &[String]) -> Vec<&str> {
+    w.iter().map(String::as_str).collect()
 }
 
 /// The files of a longrun's directory that s6-rc's source format and a
@@ -34,25 +80,18 @@ pub fn longrun_files(
     t: &Timings,
     on_demand: bool,
 ) -> Vec<(&'static str, String, bool)> {
-    let args = cfg.runner_args();
-    let arg = unit_arg(id);
+    let words = |tool: &Path, cmd: &str| tool_words(cfg, tool, cmd, &[], id);
     if id.ends_with(".timer") || id.ends_with(".path") {
         let sub = if id.ends_with(".timer") {
             timers_cmd::TIMER_RUN
         } else {
             timers_cmd::PATH_RUN
         };
-        let timer_runner = cfg.timer_runner.display();
         return vec![
-            (
-                "run",
-                format!("#!/bin/sh\nexec {timer_runner} {sub}{args} {arg}\n"),
-                true,
-            ),
+            ("run", script(&refs(&words(&cfg.timer_runner, sub))), true),
             ("notification-fd", "3\n".into(), false),
         ];
     }
-    let runner = cfg.runner.display();
     // Accept=yes: s6-ipcserverd on the bound socket, one connection
     // instance per client. SIGTERM stops accepting; running connections
     // go on, as systemd's instances are units of their own.
@@ -60,39 +99,24 @@ pub fn longrun_files(
         return vec![
             (
                 "run",
-                format!(
-                    "#!/bin/sh\nexec {runner} {}{args} {arg}\n",
-                    runner_cmd::ACCEPT
-                ),
+                script(&refs(&words(&cfg.runner, runner_cmd::ACCEPT))),
                 true,
             ),
             (
                 "finish",
-                format!(
-                    "#!/bin/sh\nexec {runner} {}{args} {arg} \"$@\"\n",
-                    runner_cmd::ACCEPT_FINISH
-                ),
+                passing_args(&refs(&words(&cfg.runner, runner_cmd::ACCEPT_FINISH))),
                 true,
             ),
             ("notification-fd", "3\n".into(), false),
         ];
     }
-    let lazy = if on_demand { " --on-demand" } else { "" };
+    let lazy: &[&str] = if on_demand { &["--on-demand"] } else { &[] };
+    let run_words = tool_words(cfg, &cfg.runner, runner_cmd::RUN, lazy, id);
     let mut out = vec![
-        (
-            "run",
-            format!(
-                "#!/bin/sh\nexec {runner} {}{args}{lazy} {arg}\n",
-                runner_cmd::RUN
-            ),
-            true,
-        ),
+        ("run", script(&refs(&run_words)), true),
         (
             "finish",
-            format!(
-                "#!/bin/sh\nexec {runner} {}{args} {arg} \"$@\"\n",
-                runner_cmd::FINISH
-            ),
+            passing_args(&refs(&words(&cfg.runner, runner_cmd::FINISH))),
             true,
         ),
         ("notification-fd", "3\n".into(), false),
@@ -101,6 +125,9 @@ pub fn longrun_files(
         ("timeout-kill", format!("{}\n", t.down_ms), false),
         ("timeout-finish", format!("{}\n", t.finish_ms), false),
     ];
+    if let Some(n) = t.max_death_tally {
+        out.push(("max-death-tally", format!("{n}\n"), false));
+    }
     if let Some(sig) = &t.down_signal {
         out.push(("down-signal", format!("{sig}\n"), false));
     }
@@ -118,9 +145,6 @@ fn write_file(path: &Path, content: &str, exec: bool) -> std::io::Result<()> {
 pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     let ld = Loader::new(cfg);
-    let runner = cfg.runner.display().to_string();
-    let args = cfg.runner_args();
-
     for p in plan.units.values() {
         let sdir = dir.join(&p.id);
         fs::create_dir_all(&sdir)?;
@@ -150,17 +174,10 @@ pub fn write_source(cfg: &Config, plan: &Plan, dir: &Path) -> std::io::Result<()
         match p.kind {
             Kind::Bundle => {}
             Kind::Oneshot => {
-                let arg = unit_arg(&p.id);
-                write_file(
-                    &sdir.join("up"),
-                    &format!("{runner} {}{args} {arg}\n", runner_cmd::UP),
-                    false,
-                )?;
-                write_file(
-                    &sdir.join("down"),
-                    &format!("{runner} {}{args} {arg}\n", runner_cmd::DOWN),
-                    false,
-                )?;
+                for (file, cmd) in [("up", runner_cmd::UP), ("down", runner_cmd::DOWN)] {
+                    let w = tool_words(cfg, &cfg.runner, cmd, &[], &p.id);
+                    write_file(&sdir.join(file), &command_line(&refs(&w)), false)?;
+                }
                 write_file(
                     &sdir.join("timeout-up"),
                     &format!("{}\n", p.timings.up_ms),
@@ -239,12 +256,8 @@ fn write_holder(plan: &Plan, ld: &Loader, hdir: &Path, idx: &Index) -> std::io::
     let units = hdir.join(snapshot::HOLDER_UNITS);
     fs::create_dir_all(&units)?;
     write_file(&hdir.join("type"), "longrun\n", false)?;
-    let pause = util::sh_quote(&tools::path("s6-pause"));
-    write_file(
-        &hdir.join("run"),
-        &format!("#!/bin/sh\nexec {pause}\n"),
-        true,
-    )?;
+    let pause = tools::path("s6-pause");
+    write_file(&hdir.join("run"), &script(&[&pause]), true)?;
     write_file(&hdir.join(snapshot::HOLDER_INDEX), &idx.render(), false)?;
     for (id, u) in &plan.loaded {
         let own = plan.units.get(id).is_some_and(|p| p.kind == Kind::Longrun);
@@ -263,8 +276,6 @@ fn write_holder(plan: &Plan, ld: &Loader, hdir: &Path, idx: &Index) -> std::io::
 /// units that depend on it, its ExecStop= runs beside their stops rather
 /// than after them; the longrun itself still goes down last.
 fn write_stop_atom(cfg: &Config, plan: &Plan, p: &Planned, sdir: &Path) -> std::io::Result<()> {
-    let runner = cfg.runner.display().to_string();
-    let args = cfg.runner_args();
     fs::create_dir_all(sdir.join("dependencies.d"))?;
     write_file(&sdir.join("type"), "oneshot\n", false)?;
     fs::write(sdir.join("dependencies.d").join(&p.id), "")?;
@@ -272,11 +283,13 @@ fn write_stop_atom(cfg: &Config, plan: &Plan, p: &Planned, sdir: &Path) -> std::
     write_file(&sdir.join("up"), "", false)?;
     write_file(
         &sdir.join("down"),
-        &format!(
-            "{runner} {}{args} {}\n",
+        &command_line(&refs(&tool_words(
+            cfg,
+            &cfg.runner,
             runner_cmd::STOP_ATOM,
-            unit_arg(&p.id)
-        ),
+            &[],
+            &p.id,
+        ))),
         false,
     )?;
     // The runner ends ExecStop= at TimeoutStopSec= and always succeeds; a
@@ -1066,6 +1079,29 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
 
 #[cfg(test)]
 mod tests {
+
+    /// The generated scripts are execline; only a `$` in a word of a script
+    /// that passes its arguments on makes it a shell script.
+    #[test]
+    fn generated_scripts_are_execline() {
+        use super::{command_line, passing_args, script};
+        assert_eq!(
+            script(&["/usr/libexec/x/runner", "run", "--", "a.service"]),
+            "#!/usr/bin/execlineb -P\n/usr/libexec/x/runner run -- a.service\n"
+        );
+        assert_eq!(
+            command_line(&["/opt/my tools/runner", "up", "--config", "/etc/a\"b"]),
+            "\"/opt/my tools/runner\" up --config \"/etc/a\\\"b\"\n"
+        );
+        assert_eq!(
+            passing_args(&["/r", "finish", "--", "a.service"]),
+            "#!/usr/bin/execlineb -S0\n/r finish -- a.service $@\n"
+        );
+        assert_eq!(
+            passing_args(&["/opt/$x/r", "finish"]),
+            "#!/bin/sh\nexec '/opt/$x/r' finish \"$@\"\n"
+        );
+    }
 
     /// What s6-rc-update -n prints: its down transition, not the up
     /// transition; and the services s6-rc lists as up, whatever their flag.

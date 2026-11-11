@@ -19,6 +19,13 @@
   `tail`을 실행합니다). 더는 `initconvertd log`가 아닙니다.
 - **종료:** 요청 시 인스턴스는 `initconvertd stop-instances`가 아니라 `dbus-send`
   호출 하나(`initconvert rc stop-instances`)로 멈춥니다.
+- **생성되는 s6 스크립트가 execline입니다**(`run`, `finish`, 로거). 더는
+  `/bin/sh`가 아닙니다. `coredump` 서비스의 시작도 셸 스크립트에서
+  `initconvert svc coredump`로 옮겼습니다. 서비스를 시작할 때 셸이 실행되지 않습니다.
+- **시작 제한**(`StartLimitBurst=`/`StartLimitIntervalSec=`)은 러너가 따로 두던
+  목록 대신 s6-supervise의 death tally를 셉니다. 간격 안의 모든 종료를 세며,
+  수동 정지와 정상 종료도 포함됩니다. systemd가 모든 시작을 세는 것과 같습니다.
+  `systemctl reset-failed`가 tally를 지웁니다.
 
 ## 0.4.0 (2026-11-11)
 

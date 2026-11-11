@@ -59,6 +59,10 @@ pub struct Timings {
     pub down_ms: u64,
     pub finish_ms: u64,
     pub down_signal: Option<String>,
+    /// s6-supervise's max-death-tally, when StartLimitBurst= is beyond the
+    /// 100 deaths it records by default (the runner counts them, see
+    /// supervisor::recent_deaths).
+    pub max_death_tally: Option<u32>,
 }
 
 impl Timings {
@@ -95,6 +99,11 @@ impl Timings {
             down_ms: ms(unit.stop_timeout_usec()).min(u32::MAX as u64),
             finish_ms: ms(restart_sec).saturating_add(5000),
             down_signal,
+            max_death_tally: unit
+                .get("Unit", "StartLimitBurst")
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|&b| b >= 100)
+                .map(|b| b.saturating_add(1).min(4096)),
         }
     }
 }

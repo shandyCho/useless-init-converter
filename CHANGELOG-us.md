@@ -20,6 +20,13 @@ Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
 - **Shutdown:** the on-demand instances are stopped by one `dbus-send`
   call (`initconvert rc stop-instances`), not by `initconvertd
   stop-instances`.
+- **Generated s6 scripts are execline** (`run`, `finish`, the loggers), no
+  longer `/bin/sh`; the `coredump` service's start moved from a shell script
+  into `initconvert svc coredump`. No shell runs at a service's start.
+- **The start limit** (`StartLimitBurst=`/`StartLimitIntervalSec=`) counts
+  s6-supervise's death tally instead of a list of the runner's own. Every
+  death in the interval counts, manual stops and clean exits too, as systemd
+  counts every start. `systemctl reset-failed` clears the tally.
 
 ## 0.4.0 (2026-11-11)
 

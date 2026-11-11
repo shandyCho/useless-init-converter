@@ -81,7 +81,6 @@ pub mod keys {
     pub const INACTIVE_ENTER: &str = "inactive-enter";
     pub const INACTIVE_EXIT: &str = "inactive-exit";
     pub const NRESTARTS: &str = "nrestarts";
-    pub const RESTART_TIMES: &str = "restart-times";
     pub const INVOCATION: &str = "invocation";
     pub const CGROUP: &str = "cgroup";
     pub const NOTIFY_SOCKET: &str = "notify";

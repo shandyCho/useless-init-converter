@@ -706,29 +706,17 @@ impl Runner {
                 .get("Unit", "StartLimitBurst")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5);
-            let now = util::now_monotonic_usec();
-            // No limit: nothing to remember (the list would only grow).
+            // s6-supervise keeps the record (its death tally): more than
+            // StartLimitBurst= deaths within the interval, this one
+            // included, and the service is given up. `systemctl
+            // reset-failed` clears the tally (s6-svdt-clear).
             let limited = interval > 0 && burst > 0;
-            let mut times: Vec<u64> = self
-                .st
-                .get(keys::RESTART_TIMES)
-                .unwrap_or_default()
-                .split_whitespace()
-                .filter_map(|t| t.parse().ok())
-                .filter(|&t: &u64| limited && now.saturating_sub(t) < interval)
-                .collect();
-            if limited {
-                times.push(now);
-            }
-            self.st.set(
-                keys::RESTART_TIMES,
-                &times
-                    .iter()
-                    .map(|t| t.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            );
-            if limited && times.len() > burst {
+            let deaths = if limited {
+                crate::supervisor::recent_deaths(interval).unwrap_or(0)
+            } else {
+                0
+            };
+            if limited && deaths > burst {
                 log(self.id(), "start request repeated too quickly, giving up");
                 self.st.set(keys::RESULT, result::START_LIMIT_HIT);
                 self.st.stamp(keys::INACTIVE_ENTER);

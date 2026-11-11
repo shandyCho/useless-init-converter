@@ -400,6 +400,39 @@ pub fn signal_name(sig: i32) -> String {
         .unwrap_or_else(|| sig.to_string())
 }
 
+/// The interpreter line of a generated s6 script that passes its arguments
+/// on (`$@`), and of one that takes none.
+pub const EXECLINE_ARGS: &str = "#!/usr/bin/execlineb -S0\n";
+pub const EXECLINE: &str = "#!/usr/bin/execlineb -P\n";
+
+/// A word of an execline script. Without substitution (`execlineb -P`) any
+/// string can be written; with it (`-S0`) a `$` could be read as a
+/// positional parameter, so callers check [`el_plain`] first.
+pub fn el_quote(s: &str) -> String {
+    if !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"@%+=:,./-_".contains(&b))
+    {
+        return s.to_string();
+    }
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Whether a word is the same with and without execline's substitution.
+pub fn el_plain(s: &str) -> bool {
+    !s.contains('$')
+}
+
 /// Shell-quote a word for generated scripts.
 pub fn sh_quote(s: &str) -> String {
     if !s.is_empty()

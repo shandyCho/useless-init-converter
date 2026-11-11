@@ -13391,3 +13391,26 @@ Left as they are: `initconvert` as a multi-call binary (each link name does one 
 - `UINITCONVERTER_IFACE` moved to `uinitconverter-base` (config.rs), re-exported by the client crate, so rc.rs uses the constant without linking zbus.
 - Docs pair (the command table), CHANGELOG pair (`Unreleased`).
 - Tests: `cargo build` clean, `cargo fmt --check` clean; `cargo test --workspace` 160 passed, 0 failed; sandbox suite 388 passed, 0 failed (its shutdown checks go through the dbus-send call: stop-instances waits and returns 0 with no output, and is refused outside a shutdown). Not run yet: the VM (the real shutdown under SELinux enforcing: `initconvert rc shutdown` running dbus-send); it runs after this commit.
+
+
+## 2026-11-11, part 248: step 2 of part 246 — the runner and s6's own tools
+
+VM check of step 1 first (RPMs from 18b6711, `packages/build-rpms.sh --test`, `tests/vm-s6-boot.sh ~/uinitconverter-vm default`): 66 passed, 0 failed (33 on each s6 boot), no AVC denials; the console shows `uinitconverter: shutdown starts` and no failure line for the on-demand instances, so the dbus-send call returned 0 under SELinux enforcing.
+
+Step 2, what part 246's table marked "Replace", plus a leftover found on the way:
+
+- **Generated scripts are execline** (crates/uinitconverter-gen/src/s6.rs): a longrun's `run` (`#!/usr/bin/execlineb -P`), its `finish` and an Accept=yes socket's (`-S0`, passing `$@`), the timer/path runners, the s6-log logger (`if { mkdir -p DIR } s6-log ...`) and the holder's `s6-pause`. Words are quoted with the new `util::el_quote` (base), which also fixes paths with blanks: the old scripts and the oneshots' `up`/`down` wrote RUNNER and the config path unquoted. execline's rules were tried against the real execlineb first: under `-P` a `$` is literal; under `-S0` `${1}`, `$1` and `$@` are substituted and can't be written literally in every position, so a `finish` whose runner or config path holds a `$` stays a `/bin/sh` script (`passing_args`), the only shell left. The daemon's on-demand instances use the same functions.
+- **`dist/s6/coredump/run` was still a 30-line shell script** (it came back with 5b00340, after part 222's sweep). Now one line of execline into `initconvert svc coredump` (svc.rs): `--check-requirements`, `s6-svc -O .` when unusable, the socket wait and the `core_pattern` write in a grandchild (the shell's `( ... ) &` left the manager a child it never reaped), then `confine systemd-coredumpd.service`. `runner_confine` uses `runner_cmd::CONFINE`; the runner's `dist_scripts_use_listed_commands` test no longer requires a runner call in dist/s6 (there is none).
+- **The start limit reads s6-supervise's death tally** (crates/uinitconverter-runner/src/supervisor.rs `recent_deaths`: `s6-svdt .` in `finish`, where s6-supervise has already recorded the death; s6-supervise.c checked): deaths within `StartLimitIntervalSec=` before the latest one, compared stamp to stamp (no clock conversion). More than `StartLimitBurst=` gives up as before (result `start-limit-hit`, `OnFailure=`, finish exits 125). The runner's own `restart-times` state key is gone; `systemctl reset-failed` runs `s6-svdt-clear` on the service directory. gen writes `max-death-tally` when the burst is 100 or more (s6 keeps 100 by default, at most 4096). Behaviour change: every death in the interval counts (manual stops, clean exits of on-demand services), not only automatic restarts; systemd counts every start, so this is closer to it. `s6-permafailon` wasn't usable: it exits 125 before the result and `OnFailure=` are written.
+- Docs pair (the restart line, the execline note, the svc list, the contract table), CHANGELOG pair.
+- Tests: `cargo test --workspace` 162 passed, 0 failed (new: `generated_scripts_are_execline`, `deaths_in_the_interval_before_the_last_one`); sandbox suite 388 passed, 0 failed, and `SANDBOX_JOURNAL=no` 395 passed, 0 failed (the execline loggers; "flappy hit start limit" passes on the death tally). `cargo fmt` was applied after those runs (whitespace only; not rebuilt since). **Not finished when this was committed:** `tests/confine-vm.sh` (the coredump service in QEMU) was still running, its log is the scratchpad's confine.log; **not run:** `SANDBOX_FDSTORE=no`, the VM (`tests/vm-s6-boot.sh`) on step 2, and reset-failed clearing the tally has no test.
+
+### Current state
+
+Not pushed: 452ee7e (plan), 18b6711 (step 1, VM-checked) and step 2's commit. Steps 3 (the daemon runs `initconvert-gen`) and 4 (`initconvert-devices`) of part 246 are not started; for step 3 only the reload path was read (daemon/mod.rs reload_db uses gen::plan, gen::auto_masked and gen::regenerate_plan; it needs the unit count, the database directory and the set changes back, which `initconvert-gen reload --direct` already prints).
+
+### Next steps
+
+1. Step 2's missing checks: `cargo build && cargo test`, `tests/confine-vm.sh`, `SANDBOX_FDSTORE=no`, then RPMs and `tests/vm-s6-boot.sh default` (and `upgrade`: old databases keep their `/bin/sh` scripts until the reload).
+2. Step 3, then step 4, each as part 246 says.
+3. Owner: push; the getty/isolate decision (part 245); the held-back grep after the next Fedora update.

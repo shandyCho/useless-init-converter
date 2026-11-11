@@ -286,11 +286,10 @@ mod cmd_tests {
         assert_eq!(Cmd::parse("nope"), None);
     }
 
-    /// dist/s6's hand-written run scripts call the runner too (confine).
+    /// A hand-written run script in dist/s6 that calls the runner itself.
     #[test]
     fn dist_scripts_use_listed_commands() {
         let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/s6");
-        let mut seen = 0;
         let mut bad = Vec::new();
         for svc in std::fs::read_dir(&dist).unwrap().flatten() {
             for f in ["run", "finish", "up", "down"] {
@@ -301,7 +300,6 @@ mod cmd_tests {
                     let Some(rest) = line.split("initconvert-runner ").nth(1) else {
                         continue;
                     };
-                    seen += 1;
                     let cmd = rest.split_whitespace().next().unwrap_or("");
                     if Cmd::parse(cmd).is_none() {
                         bad.push(format!("{}/{f}:{}: {cmd}", svc.path().display(), n + 1));
@@ -309,7 +307,8 @@ mod cmd_tests {
                 }
             }
         }
-        assert!(seen > 0, "no runner calls found under {}", dist.display());
+        // None calls the runner any more (each run is `initconvert svc NAME`,
+        // which uses runner_cmd::CONFINE); one that does must use a command.
         assert!(bad.is_empty(), "not runner commands:\n{}", bad.join("\n"));
     }
 }

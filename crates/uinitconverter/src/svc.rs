@@ -28,7 +28,7 @@ fn exec(prog: &str, args: &[&str]) -> ! {
 }
 
 fn runner_confine(unit: &str, cmd: &[&str]) -> ! {
-    let mut a = vec!["confine", unit, "--"];
+    let mut a = vec![uinitconverter_base::config::runner_cmd::CONFINE, unit, "--"];
     a.extend_from_slice(cmd);
     exec(&format!("{LIBEXEC}/initconvert-runner"), &a)
 }
@@ -306,6 +306,67 @@ fn udevd() -> ! {
     }
 }
 
+/// systemd-coredumpd.service and systemd-coredump-register.service in one s6
+/// service: without a listener every core dump is thrown away. Fedora's
+/// default, systemd-coredump.socket, has Accept=yes on a socket only systemd
+/// can serve this way. Runs with the unit's sandbox; if that can't be
+/// applied it doesn't start, and s6 tries again. Without the kernel support
+/// (or the program) it stays down, and core_pattern stays what it was.
+fn coredump() -> ! {
+    const PROG: &str = "/usr/lib/systemd/systemd-coredump";
+    const SOCK: &str = "/run/systemd/coredumpd/kernel";
+    let usable = Command::new(PROG)
+        .arg("--check-requirements")
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !usable {
+        say(
+            "coredump",
+            "no kernel core dump socket or no systemd-coredump; not starting",
+        );
+        let _ = Command::new("s6-svc").args(["-O", "."]).status();
+        exit(0);
+    }
+    let _ = fs::remove_file(SOCK);
+    // What systemd-coredump-register.service does once the socket exists.
+    // Not its systemd-sysctl --save: a plain write is all that init_t needs.
+    // Crashes before this keep going to core_pattern's old handler, which
+    // drops them. A grandchild, so the manager has no child to reap.
+    unsafe {
+        let child = libc::fork();
+        if child == 0 {
+            if libc::fork() == 0 {
+                register_core_pattern(SOCK);
+            }
+            libc::_exit(0);
+        }
+        if child > 0 {
+            libc::waitpid(child, std::ptr::null_mut(), 0);
+        }
+    }
+    runner_confine("systemd-coredumpd.service", &[PROG, "--manager"])
+}
+
+/// Wait up to 10 s for the manager's socket, then point core_pattern at it.
+fn register_core_pattern(sock: &str) -> ! {
+    use std::os::unix::fs::FileTypeExt;
+    let is_socket = || fs::metadata(sock).is_ok_and(|m| m.file_type().is_socket());
+    for _ in 0..100 {
+        if is_socket() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if !is_socket() {
+        say("coredump", "no socket after 10 s, core_pattern not set");
+    } else if fs::write("/proc/sys/kernel/core_pattern", format!("@@{sock}\n")).is_err() {
+        say("coredump", "can't set core_pattern");
+    }
+    exit(0)
+}
+
 /// Words of a shell value as `eval "set -- $VALUE"` gives them for what
 /// /etc/default files hold: blanks separate, single and double quotes group
 /// (dropped), a backslash escapes the next character outside single quotes.
@@ -510,13 +571,14 @@ fn listen_exec(args: &[String]) -> ! {
 }
 
 const USAGE: &str =
-    "usage: initconvert svc dbus|syslog|udevd|earlyoom|journal-relay|fdstore|linkwatch|listen-exec";
+    "usage: initconvert svc dbus|syslog|udevd|coredump|earlyoom|journal-relay|fdstore|linkwatch|listen-exec";
 
 pub fn main(args: &[String]) -> ! {
     match args.first().map(String::as_str).unwrap_or("") {
         "dbus" => dbus(),
         "syslog" => syslog(),
         "udevd" => udevd(),
+        "coredump" => coredump(),
         "earlyoom" => earlyoom(),
         "journal-relay" => journal_relay(),
         "fdstore" => fdstore(),

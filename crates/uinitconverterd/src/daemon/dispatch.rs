@@ -273,7 +273,13 @@ impl Daemon {
         if st.take(keys::START_FAILED) {
             st.set(keys::PARKED, "1");
         }
-        st.clear(keys::RESTART_TIMES);
+        // The start limit counts s6-supervise's death tally: forget it.
+        let dir = self.cfg.live_dir.join("scandir").join(&id);
+        if dir.join("supervise").exists() {
+            let _ = std::process::Command::new(crate::tools::path("s6-svdt-clear"))
+                .arg(&dir)
+                .status();
+        }
     }
 
     pub(super) async fn kill_unit(
