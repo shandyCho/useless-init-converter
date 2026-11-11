@@ -13350,3 +13350,33 @@ Everything up to 5cba6ea is pushed if the owner pushed part 244; part 245 (docs 
 2. At the next release: tests/vm-s6-boot.sh `upgrade` from 0.4.0.
 3. After the next Fedora update and reboot: the grep above, to see how often a reload is held back.
 4. Owner's decision: the getty console settings (`TTYReset=`, `TTYVTDisallocate=`, `UtmpIdentifier=`) and isolate's `AllowIsolate=`/`IgnoreOnIsolate=`.
+
+
+## 2026-11-11, part 246: plan — rule 5 inside the tools, and the runner against s6's own tools
+
+The owner: refactor the project to follow the Unix philosophy; of the candidates shown (part 245's session), "do all", and for the runner: "if s6's ecosystem or s6's feature can do that, replace to s6 or s6's ecosystem. first, make a plan, and do work. committing is do each step end." This reopens part 212's question for the runner piece by piece (not "drop the runner for simple units", which stays decided).
+
+**Measured.** `initconvertd` links the generator (`uinitconverter-gen`, 2,900 lines) and reloads in its own process, while `initconvert-gen reload` on a running boot asks the daemon to do it; the daemon's binary also holds clients (`start|stop|restart`, `log`, `stop-instances`); the daemon reads udev's events itself (devices.rs, 612 lines), where timers and path units already have their own tool. Callers of the clients: `start|stop|restart` none (product, tests); `stop-instances` rc.rs and check.sh; `log` the docs.
+
+**The runner against s6 2.15.1.1's tools** (docs read from the tarball, with s6's own `unit-conversion.html`; Fedora's 384 service units counted on the laptop):
+
+| What the runner does | s6's tool | Finding |
+|---|---|---|
+| `Type=notify` readiness (notify.rs) | `s6-notify-fd-from-socket` | It understands only `READY=1` and binds its own socket ("extensions will not be added"). Ours also carries `MAINPID=`, `STATUS=`, `RELOADING=`/`STOPPING=`, `EXTEND_TIMEOUT_USEC=` and `FDSTORE=1` (logind). 59 Fedora units are notify/notify-reload. Kept. |
+| `Type=forking` (forking.rs) | `s6-background-watch` | Needs a pidfile: 6 of Fedora's 19 forking units have `PIDFile=`; the other 13 need the cgroup guess. It also replaces the supervised process, so nothing would run `ExecStartPost=` or write the unit's state. Kept. |
+| `User=`/`Group=` | `s6-applyuidgid`, `s6-setuidgid` | The switch sits between steps that must stay in the same process: before it limits and the sandbox, after it ambient capabilities (keep-caps), the user namespace and seccomp (last, so only execve needs allowing). A chain link there would need a second runner stage after it. Kept. |
+| `Limit*=` | `s6-softlimit` | Covers 10 of 16 limits (no LOCKS, SIGPENDING, MSGQUEUE, NICE, RTTIME); as a link before the runner it wouldn't reach the per-connection instances of `Accept=yes` (run inside `connection`). Both mechanisms would have to stay. Kept. |
+| `Environment=`, `WorkingDirectory=`, `UMask=` | `s6-envdir`, execline `export`/`cd`/`umask` | The values depend on the sandbox (a directory inside the namespace), specifiers and per-command variables (`$MAINPID`, `LISTEN_*`), and are set at the final execve. Kept. |
+| Restart limit (`StartLimitBurst=`/`IntervalSec=`): the runner's own `RESTART_TIMES` list | s6-supervise's death tally (`s6-svdt`, `s6-svdt-clear`) | s6 already records every death; ours re-models it. **Replace** (the runner still decides and records the result; `s6-permafailon` can't: it exits 125 before the result and `OnFailure=` are written). |
+| Generated `run`/`finish`/logger scripts: `#!/bin/sh` | execline | dist's scripts are execline since part 222; the generated ones still start a shell per service start. **Replace.** |
+| On-demand instances (dynamic.rs) | `s6-svlink`/`s6-svunlink` (used), `s6-instance-*` | Already s6's own way of adding a service directory at run time; `s6-instance-*` would add a nested s6-svscan per template and doesn't cover transient units. Kept. |
+| Service state from `supervise/status` (not `s6-svstat`) | `s6-svstat` | Decided in e6b865b for the cost of one process per unit per query. Kept; the owner can reopen it. |
+
+**Steps**, each: implement, `cargo test`, the sandbox suite (three variants), the VM where the boot or the reload is touched, docs pair, a work_history entry, commit:
+
+1. **initconvertd is only the daemon.** `start|stop|restart` go (no caller; `systemctl` and `s6-rc` do it); `log` moves to `initconvert`; `stop-instances` becomes one `dbus-send` call from `initconvert rc shutdown` (dbus-tools is already required).
+2. **The runner and s6** (the table): generated scripts in execline; the restart limit from s6's death tally.
+3. **The daemon runs `initconvert-gen`** for a reload and reads its text output; `uinitconverterd` Requires `uinitconverter-gen`; what both need of the layout (`Kind`, `stop_atom`, the longrun files) moves to `uinitconverter-base`.
+4. **`initconvert-devices`**: the udev watcher as its own tool and s6 service, asking the daemon to start what a device wants, as `initconvert-timers` does. A new RPM; the service gets no dependents (part 220's rule for updates).
+
+Left as they are: `initconvert` as a multi-call binary (each link name does one thing; splitting means five more RPMs for no gain at run time).
