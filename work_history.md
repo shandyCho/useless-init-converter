@@ -13319,11 +13319,34 @@ Decision: `upgrade` stays on 0.3.0 for now; nothing has changed since 0.4.0, so 
 
 Also seen: mdevd is installed on the laptop (part 242 left it out of its package list by accident).
 
+### Next steps
+
+1. Owner: push.
+2. At the next release: tests/vm-s6-boot.sh `upgrade` from 0.4.0.
+
+
+## 2026-11-11, part 245: the "Not implemented" list checked; held-back reloads and part 242's 22:14:01 start
+
+The owner asked for three things (part 244's suggestions): the "Not implemented" list item by item, how often a reload is held back in normal use, and what held s6-rc's lock at 22:14:01 in part 242.
+
+**"Not implemented" (docs/etc pair).** Every listed item checked against the code; all still true. The other way round: the keys gen accepts silently (UNIT_KEYS, TIMER_KEYS, PATH_KEYS, MOUNT_KEYS, SOCKET_KEYS, SERVICE_KEYS in crates/uinitconverter-gen/src/lib.rs) whose name appears nowhere else except the daemon's property tables, then Fedora's units (/usr/lib/systemd/system on the laptop) for each. Added to the list, both languages:
+- `TTYReset=`, `TTYVTDisallocate=`, `UtmpIdentifier=`/`UtmpMode=`: set by getty@, serial-getty@, kmsconvt@, console-getty, container-getty@. No effect: the terminal isn't reset before the program, a VT's scrollback isn't cleared after it, and the service manager writes no utmp/wtmp records (agetty and login write theirs; systemd's logout record at the program's exit is missing for text-console logins). GDM writes its own, so the laptop's `who`/`last` are right for graphical logins.
+- `AllowIsolate=`/`IgnoreOnIsolate=`: the isolate path (daemon/s6.rs do_start_inner, `s6-rc -p -u change`) checks neither; any target can be isolated, and s6-rc services outside it stop, `IgnoreOnIsolate=yes` ones too (rpc-statd.service). The "Isolate is supported" line links there now.
+- `ReadWriteOnly=` (.mount; no Fedora unit sets it): util-linux mount's read-only fallback, i.e. systemd's `ReadWriteOnly=no`.
+- `RestartMode=` (malcontent's four services set `RestartMode=debug`), `SyslogFacility=`, `TimeoutAbortSec=` (no Fedora unit): no effect.
+Not implemented here: the first two have Fedora callers (getty@ and friends; `systemctl isolate` is an admin verb), so whether to implement them is the owner's decision (scope, part 205/216).
+
+**Held-back reloads in normal use.** The owner ran a read-only scratchpad script (reloadlog.sh, root) over this boot's catch-all log and the last boot's (last-shutdown-console.log, which rc.rs builds from every archive plus `current`, so the whole boot). The last boot logged no reload by initconvertd at all; this one only part 242's two test reloads. live = boot. The upgrade's database at 22:11 came from `initconvert init --yes`, which runs gen itself (its output goes to init's terminal, not the catch-all), and the core RPMs' scriptlets reload nothing. The large Fedora update (dnf transaction 120, 435 packages, 2026-11-10) ran in a boot whose log is gone. So there is no data yet. To get it: after each boot, `sudo grep -h "not applied to the running system" /var/log/uinitconverter/last-shutdown-console.log` covers the boot before, Fedora updates included (systemd's file triggers call daemon-reload).
+
+**22:14:01 (part 242).** The window 22:13:50-22:14:05 holds only initconvertd's "starting it beside" line for dnf5daemon-server. beside_allowed() (daemon/s6.rs) is `!reloading && (our lock held || s6-rc's lock held)`, so a start also goes beside while another of initconvertd's own jobs holds its lock; and initconvertd runs `s6-rc` without `-v`, so its own changes log nothing, while any other s6-rc change that started or stopped something would have logged `s6-rc: info` lines. So it was initconvertd's own job, most likely for the greeter's login. Part 242's "some other s6-rc change held the lock then" is corrected by this; nothing to change.
+
 ### Current state
 
-Everything up to 0998188 is pushed; part 244 is not.
+Everything up to 5cba6ea is pushed if the owner pushed part 244; part 245 (docs pair, this entry) is not.
 
 ### Next steps
 
 1. Owner: push.
 2. At the next release: tests/vm-s6-boot.sh `upgrade` from 0.4.0.
+3. After the next Fedora update and reboot: the grep above, to see how often a reload is held back.
+4. Owner's decision: the getty console settings (`TTYReset=`, `TTYVTDisallocate=`, `UtmpIdentifier=`) and isolate's `AllowIsolate=`/`IgnoreOnIsolate=`.

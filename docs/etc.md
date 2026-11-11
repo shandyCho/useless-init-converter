@@ -224,7 +224,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - SELinux는 systemd에서와 같습니다. s6 트리 전체가 `init_t`로 실행되므로(정책 모듈 `dist/selinux/uinitconverter.cil`) 서비스는 각자의 도메인(`chronyd_t`, `xdm_t` 등)으로 들어가고, `user@.service`는 `systemd --user`를 사용자 도메인에서 시작할 수 있습니다. `RuntimeDirectory=` 등의 디렉터리와 소켓 파일은 file_contexts의 레이블을 받고, 소켓 유닛의 소켓은 그것을 쓰는 서비스의 레이블을 가집니다.
 
 **D-Bus API** (`systemctl`과 라이브러리가 호출하는 것)
-- 작업: `Start/Stop/Restart/TryRestart/Reload/ReloadOrRestart…Unit`, `JobNew`/`JobRemoved` 시그널, systemd의 작업 결과(`done`, `failed`, `dependency`, `timeout`). isolate도 지원합니다.
+- 작업: `Start/Stop/Restart/TryRestart/Reload/ReloadOrRestart…Unit`, `JobNew`/`JobRemoved` 시그널, systemd의 작업 결과(`done`, `failed`, `dependency`, `timeout`). isolate도 지원합니다(`AllowIsolate=`와 `IgnoreOnIsolate=`는 빼고. [아직 구현되지 않은 기능](#아직-구현되지-않은-기능) 참고).
 - 조회: `GetUnit`, `LoadUnit`, `GetUnitByPID`, `GetUnitByPIDFD`(polkitd가 호출자마다 묻습니다), `ListUnits*`, `ListJobs`, `GetUnitProcesses`. Unit, Service, Target, Scope, Job 속성을 제공하며 `GetAll("")`도 지원합니다. 순서는 systemd 262와 같습니다(Unit 인터페이스가 먼저, 그다음 각 인터페이스의 순서. `systemctl show -p A,B`는 이 순서로 출력합니다). 상태가 바뀌는 모든 유닛에 대해 `PropertiesChanged`(`ActiveState`, `SubState`)를 1초 안팎에 보내며, 그 유닛에 작업이 없을 때(종료한 서비스, `Conflicts=`나 `PartOf=`로 멈춘 유닛)도 마찬가지입니다.
 - 유닛 파일: `Enable/Disable/Reenable/Mask/Unmask/Preset*UnitFiles`, `GetUnitFileState`, `ListUnitFiles*`, `Get/SetDefaultTarget`.
 - 매니저: `Reload`/`Reexecute`(s6 데이터베이스 재생성 및 갱신), `KillUnit`, `ResetFailed*`, `Set/UnsetEnvironment`, `PowerOff/Reboot/Halt`.
@@ -253,6 +253,10 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - autofs: `.automount` 유닛은 바로 마운트됩니다.
 - systemd generator: 시스템의 generator는 s6 부팅에서 하나도 실행되지 않습니다(사용자 generator는 `systemd --user`가 실행합니다). `/etc/fstab`은 s6 서비스 `mount-fs`가 마운트하고, zram 스왑은 `zram` 서비스가 만듭니다. 다른 generator가 만들 유닛(예: `systemd-gpt-auto-generator`, `rc-local`)은 s6 부팅에 없습니다.
 - `AccuracySec=`(타이머를 묶지 않고 정시에 실행), `WakeSystem=`, `OnClockChange=`, `OnTimezoneChange=`. 이 타이머 키들은 허용되지만 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.
+- `.mount` 유닛의 `ReadWriteOnly=`. 허용되지만 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다. 읽기·쓰기로 마운트할 수 없으면 util-linux `mount`의 기본 동작대로 읽기 전용으로 마운트합니다(systemd의 `ReadWriteOnly=no`). 이 키를 쓰는 Fedora 유닛은 없습니다.
+- getty 계열 유닛(`getty@`, `serial-getty@`, `kmsconvt@`, `console-getty`, `container-getty@`)의 콘솔 설정: `TTYReset=`(프로그램 시작 전에 터미널을 초기화하지 않습니다), `TTYVTDisallocate=`(프로그램이 끝나도 VT의 스크롤백을 지우지 않습니다), `UtmpIdentifier=`/`UtmpMode=`(서비스 관리자가 utmp/wtmp 기록을 쓰지 않습니다. agetty와 login은 자기 기록을 쓰지만, systemd가 프로그램 종료 때 쓰는 로그아웃 기록이 텍스트 콘솔 로그인에서는 빠집니다). GDM은 자기 기록을 쓰므로 그래픽 로그인에는 영향이 없습니다. 허용되지만 효과가 없으며, 보고서에 무시됨(ignored)으로 나오지 않습니다.
+- `AllowIsolate=`와 `IgnoreOnIsolate=`. `systemctl isolate`는 어느 타깃에나 동작하며, 그 밖의 s6-rc 서비스를 모두 멈춥니다. `IgnoreOnIsolate=yes`인 서비스(예: `rpc-statd.service`)도 멈춥니다. systemd는 `AllowIsolate=yes`가 없는 타깃을 거부하고 그런 서비스는 그대로 둡니다.
+- `RestartMode=`(Fedora의 malcontent 서비스가 `RestartMode=debug`를 씁니다), `SyslogFacility=`, `TimeoutAbortSec=`. 허용되지만 효과가 없습니다.
 - 워치독, 자격 증명(`LoadCredential=`, `ImportCredential=`), `PrivatePIDs=`, `RemoveIPC=`, `KeyringMode=`, `RestrictFileSystems=`(systemd에서는 BPF LSM 프로그램), IP 사용량 집계(`IPAccounting=`).
 - 이미 실행 중인 작업의 취소.
 - 작업 모드: 한 유닛의 작업은 차례로 실행되므로 `replace`는 아직 기다리는 충돌 작업만 취소하고 실행 중인 작업은 취소하지 않습니다(systemd는 실행 중인 시작을 멈춥니다). `ignore-dependencies`와 `ignore-requirements`는 s6-rc 밖에서 실행되는 유닛(인스턴스, 임시 유닛, 사용자 유닛)만 의존성 없이 시작합니다. s6-rc 데이터베이스의 유닛은 s6-rc에 컴파일된 의존성을 여전히 따릅니다.
