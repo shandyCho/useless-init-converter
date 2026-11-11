@@ -19,11 +19,13 @@ usage: initconvert [--config PATH] COMMAND [ARGS]
        initconvert --version     this build and the installed tools' builds
 
   initconvert init [OPTIONS]  set up booting with s6 (see initconvert init --help)
+  initconvert log UNIT [-f]   show (or follow) a service's log: journalctl -u,
+                              or its s6-log directory with JOURNAL=no
 
 Each other command is handled by one uinitconverter tool (in /usr/libexec/uinitconverter):
 
   initconvert-gen        reload, plan, enable, disable, mask, unmask, preset, is-enabled
-  initconvertd           daemon, start, stop, restart, log
+  initconvertd           daemon
   initconvert-runner     run, finish, up, down, stop-exec, reload-exec
   initconvert-timers     timer-run, path-run
   initconvert-fdstore    fdstore           (standalone, optional)
@@ -41,7 +43,7 @@ fn tool_for(cmd: &str) -> Option<(&'static str, bool)> {
         "reload" | "plan" | "enable" | "disable" | "mask" | "unmask" | "preset" | "is-enabled" => {
             ("initconvert-gen", true)
         }
-        "daemon" | "start" | "stop" | "restart" | "log" => ("initconvertd", true),
+        "daemon" => ("initconvertd", true),
         "run" | "finish" | "up" | "down" | "stop-exec" | "reload-exec" => {
             ("initconvert-runner", true)
         }
@@ -131,6 +133,40 @@ fn version() -> ! {
     exit(if ok { 0 } else { 1 })
 }
 
+/// `initconvert log UNIT [-f]`: the unit's log, wherever this install keeps
+/// it: journalctl -u with JOURNAL=yes, else `tail` on the service's s6-log
+/// directory. `opts` is `--config PATH`, if given.
+fn log(opts: &[String], rest: &[String]) -> ! {
+    use uinitconverter_base::{config::Config, tools};
+    let die = |m: String| -> ! {
+        eprintln!("initconvert: {m}");
+        exit(1)
+    };
+    let cfg = Config::load(opts.get(1).map(PathBuf::from).as_deref()).unwrap_or_else(|e| die(e));
+    let follow = rest.iter().any(|a| a == "-f" || a == "--follow");
+    let Some(unit) = rest.iter().find(|a| !a.starts_with('-')) else {
+        die("usage: initconvert log UNIT [-f]".into())
+    };
+    if cfg.journal {
+        let mut j = Command::new(tools::path("journalctl"));
+        j.args(["-u", unit, "--no-pager"]);
+        j.arg(if follow { "-f" } else { "-n200" });
+        let err = j.exec();
+        die(format!("journalctl: {err}"))
+    }
+    let Some(dir) = &cfg.log_dir else {
+        die("LOG_DIR is not configured".into())
+    };
+    let file = dir.join(unit).join("current");
+    let mut tail = Command::new("tail");
+    tail.arg(if follow { "-F" } else { "-n" });
+    if !follow {
+        tail.arg("200");
+    }
+    let err = tail.arg(&file).exec();
+    die(format!("tail {}: {err}", file.display()))
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The early-boot steps of the s6 services (`up`/`down` run
@@ -199,6 +235,9 @@ fn main() {
     }
     if cmd == "init" {
         init::main(&args[i + 1..]);
+    }
+    if cmd == "log" {
+        log(&args[..i], &args[i + 1..]);
     }
     let Some((tool, with_cmd)) = tool_for(cmd) else {
         eprintln!("initconvert: unknown command {cmd} (see initconvert help)");

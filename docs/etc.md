@@ -139,11 +139,11 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | `initconvert-gen` | `reload`, `plan` | 모든 유닛을 s6-rc 스토어로 변환하고, 그것과 직접 작성한 스토어(`EXTRA_SOURCE`)로 s6-rc 저장소를 동기화한 뒤, 세트 `current`를 커밋해 부팅 및 live 데이터베이스로 설치합니다(`s6-rc-set-install`). 변환 보고서를 남깁니다. s6로 부팅된 상태에서는 `systemctl daemon-reload`처럼 `reload`를 initconvertd에 위임합니다. [`s6` 명령](#s6-명령-s6-frontend) 참고. |
 | | `enable/disable/mask/unmask/preset/is-enabled` | 오프라인 유닛 파일 관리입니다. |
 | `initconvertd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
-| | `start/stop/restart UNIT`, `log UNIT [-f]` | 데몬용 최소 클라이언트(private 소켓 또는 버스)와, 서비스 로그 보기(`journalctl -u`, `JOURNAL=no`이면 s6-log 디렉터리)입니다. |
-| | `stop-instances` | `rc.shutdown`이 실행합니다. s6-rc가 서비스를 멈추기 전에, 그 서비스들 뒤에 순서가 잡힌 요청 시 인스턴스(`user@UID` 등)를 멈추라고 데몬에 요청합니다. |
 | `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine`, `accept/accept-finish`, `connection` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 longrun의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. `confine UNIT -- COMMAND`는 s6가 직접 시작하는 프로그램에 유닛의 cgroup, 제한, 샌드박스를 적용합니다(`--bus=broker`의 시스템 버스). `accept`/`accept-finish`는 `Accept=yes` 소켓의 `run`/`finish`이고(s6-ipcserverd나 s6-tcpserverd를 exec합니다), 그 서버가 클라이언트마다 `connection`을 실행합니다. |
 | `initconvert-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
-| `initconvert` | 위의 모든 명령(`stop-instances`/`stop-atom`/`confine`/`accept`/`accept-finish`/`connection` 제외) | 사용자가 쓰는 명령(`/usr/bin/initconvert`)입니다. 해당 명령을 처리하는 도구를 실행하므로 `initconvert reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
+| `initconvert` | 위의 모든 명령(`stop-atom`/`confine`/`accept`/`accept-finish`/`connection` 제외) | 사용자가 쓰는 명령(`/usr/bin/initconvert`)입니다. 해당 명령을 처리하는 도구를 실행하므로 `initconvert reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
+| | `log UNIT [-f]` | 서비스 로그를 보여 줍니다. 이 설치가 로그를 두는 곳에 따라 `journalctl -u`이거나, `JOURNAL=no`이면 s6-log 디렉터리에 대한 `tail`입니다. 유닛을 시작하거나 멈출 때는 `systemctl`이나 `s6-rc`를 씁니다. `initconvertd`는 데몬 역할만 합니다. |
+| | `rc stop-instances` | `rc.shutdown`(`initconvert rc shutdown`)이 가장 먼저 하는 일입니다. `dbus-send` 호출 하나로, s6-rc가 서비스를 멈추기 전에 그 서비스들 뒤에 순서가 잡힌 요청 시 인스턴스(`user@UID` 등)를 멈추라고 데몬에 요청합니다. |
 | | `init` | s6 부팅 항목을 설정합니다([`initconvert init`이 하는 일](#initconvert-init이-하는-일) 참고). |
 | | `--version` | 자신의 빌드와 설치된 각 도구의 빌드를 보여 줍니다. 본체 도구가 서로 다른 빌드이면 그 사실을 표시하고 종료 상태 1로 끝납니다. 도구마다 `--version`도 있습니다. |
 

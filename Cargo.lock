@@ -755,7 +755,6 @@ dependencies = [
  "serde",
  "tokio",
  "uinitconverter-base",
- "uinitconverter-client",
  "uinitconverter-exec",
  "uinitconverter-gen",
  "uinitconverter-install",

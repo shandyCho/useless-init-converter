@@ -847,6 +847,8 @@ restart_daemon() {
 }
 grep -v '^ALLOW_UIDS=' "$W/uinitconverter.conf" > "$W/unpriv.conf"
 DAEMON=$(dirname "$(sed -n 's/^RUNNER=//p' "$W/uinitconverter.conf")")/initconvertd
+IC=$(dirname "$DAEMON")/initconvert
+BUSADDR=$(sed -n 's/^BUS_ADDRESS=//p' "$W/uinitconverter.conf")
 # On-demand instances outlive the daemon: a longrun (like user@UID) with the
 # oneshot it is bound to, and a oneshot alone (like systemd-backlight@).
 call StartUnit ss inst@b.service replace
@@ -971,7 +973,7 @@ sleep 0.5
 t0=$(date +%s)
 # As rc.shutdown: first stop-instances, while the daemon (and, on a real
 # system, logind) still runs.
-"$DAEMON" --config "$W/uinitconverter.conf" stop-instances > "$W/stop-instances.out" 2>&1 &
+"$IC" rc stop-instances --bus "$BUSADDR" > "$W/stop-instances.out" 2>&1 &
 sipid=$!
 # A StopUnit for the same unit while the daemon stops it (the bus is still
 # served then) waits for that stop instead of running ExecStop= again.
@@ -992,7 +994,7 @@ grep -qx "down c" "$R/prep.out" && ok "prep@c's ExecStop= ran, started by an ear
 [ ! -e "$R/run/dyn-oneshot/prep@c.service" ] && ok "its marker is gone" || bad "prep@c marker left"
 expect_eq "on-demand longrun's ExecStop= ran at shutdown" "$(cat "$R/prepl.out" 2>/dev/null)" "down d"
 rm -f "$R/run/shutting-down"
-if "$DAEMON" --config "$W/uinitconverter.conf" stop-instances 2>/dev/null; then
+if "$IC" rc stop-instances --bus "$BUSADDR" 2>/dev/null; then
     bad "stop-instances accepted outside a shutdown"
 else
     ok "stop-instances refused outside a shutdown"

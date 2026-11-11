@@ -5,6 +5,22 @@
 Versions apply to the core packages. The standalone tools have their own
 versions. Release notes: [packages/release-notes](packages/release-notes).
 
+## Unreleased
+
+Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
+
+### Removed
+- **`initconvertd start|stop|restart UNIT`**: the daemon's binary is only
+  the daemon now. Nothing in the product called them; use `systemctl` or
+  `s6-rc`.
+
+### Changed
+- **`initconvert log UNIT`** is `initconvert`'s own command (it runs
+  `journalctl -u` or `tail`), no longer `initconvertd log`.
+- **Shutdown:** the on-demand instances are stopped by one `dbus-send`
+  call (`initconvert rc stop-instances`), not by `initconvertd
+  stop-instances`.
+
 ## 0.4.0 (2026-11-11)
 
 Changes since 0.3.0. Details in `work_history.md`, parts 200-240.

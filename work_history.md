@@ -13380,3 +13380,14 @@ The owner: refactor the project to follow the Unix philosophy; of the candidates
 4. **`initconvert-devices`**: the udev watcher as its own tool and s6 service, asking the daemon to start what a device wants, as `initconvert-timers` does. A new RPM; the service gets no dependents (part 220's rule for updates).
 
 Left as they are: `initconvert` as a multi-call binary (each link name does one thing; splitting means five more RPMs for no gain at run time).
+
+
+## 2026-11-11, part 247: step 1 of part 246 — initconvertd is only the daemon
+
+- crates/uinitconverterd/src/main.rs: `start|stop|restart`, `stop-instances` and `log` are gone from the daemon's binary (its usage is `initconvertd [daemon] [OPTIONS]`); it no longer depends on `uinitconverter-client`.
+- `start|stop|restart UNIT`: removed, not moved. No caller in the product or the tests; `systemctl` and `s6-rc` do it.
+- `log UNIT [-f]`: now `initconvert`'s own command (crates/uinitconverter/src/main.rs): it execs `journalctl -u` or `tail` on the s6-log directory, as before.
+- `stop-instances`: `initconvert rc shutdown` (rc.rs) runs one `dbus-send --system --print-reply --reply-timeout=600000 --dest=org.freedesktop.systemd1 /org/freedesktop/systemd1 org.uinitconverter.Manager.StopInstances` under its 120 s limit, instead of starting `initconvertd stop-instances` (rule 2: dbus-tools, already required, does it; ~45 lines of client code gone). `initconvert rc stop-instances [--bus ADDRESS]` runs the same call alone; tests/check.sh uses it against the sandbox's bus. The bus policy (dist/dbus) already lets root send to the name.
+- `UINITCONVERTER_IFACE` moved to `uinitconverter-base` (config.rs), re-exported by the client crate, so rc.rs uses the constant without linking zbus.
+- Docs pair (the command table), CHANGELOG pair (`Unreleased`).
+- Tests: `cargo build` clean, `cargo fmt --check` clean; `cargo test --workspace` 160 passed, 0 failed; sandbox suite 388 passed, 0 failed (its shutdown checks go through the dbus-send call: stop-instances waits and returns 0 with no output, and is refused outside a shutdown). Not run yet: the VM (the real shutdown under SELinux enforcing: `initconvert rc shutdown` running dbus-send); it runs after this commit.

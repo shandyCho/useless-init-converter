@@ -55,7 +55,7 @@ const SELF_UNIT_PATH: &str = "/org/freedesktop/systemd1/unit/self";
 const JOB_PREFIX: &str = "/org/freedesktop/systemd1/job/";
 const PROPS_IFACE: &str = "org.freedesktop.DBus.Properties";
 
-use uinitconverter_client::UINITCONVERTER_IFACE;
+use uinitconverter_base::config::UINITCONVERTER_IFACE;
 
 use errors::*;
 use jobs::*;

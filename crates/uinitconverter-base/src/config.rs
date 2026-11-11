@@ -195,6 +195,10 @@ pub const REMOVED_KEYS: &[&str] = &[
     "USER_FALLBACK_ON",
 ];
 
+/// uinitconverter's own D-Bus methods (StopInstances, ...), on the manager's
+/// object path (not systemd's interface).
+pub const UINITCONVERTER_IFACE: &str = "org.uinitconverter.Manager";
+
 /// initconvert-runner's commands: the contract between the runner (parses
 /// them into its Cmd), initconvert-gen (writes them into the service
 /// scripts), initconvertd (runs them) and dist/s6's run scripts (confine).

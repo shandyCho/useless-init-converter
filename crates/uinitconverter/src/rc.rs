@@ -37,7 +37,11 @@ fn exec(prog: &str, args: &[String]) -> ! {
 /// Run PROG with a time limit, as `timeout -s KILL SECS`: its exit code,
 /// 137 when it was killed at the limit, None when it couldn't start.
 fn run_limited(secs: u64, prog: &str, args: &[&str]) -> Option<i32> {
-    let mut c = Command::new(prog).args(args).spawn().ok()?;
+    limited(secs, Command::new(prog).args(args))
+}
+
+fn limited(secs: u64, cmd: &mut Command) -> Option<i32> {
+    let mut c = cmd.spawn().ok()?;
     let end = Instant::now() + Duration::from_secs(secs);
     loop {
         if let Ok(Some(s)) = c.try_wait() {
@@ -128,20 +132,56 @@ fn init(args: &[String]) -> ! {
 /// s6-rc doesn't know: they are ordered after s6-rc services such as logind
 /// (stopped after it, each user@'s PAM close waited 45 s). Bounded too;
 /// what it leaves, initconvertd stops again when s6-rc takes it down.
+/// The call that asks initconvertd to stop the on-demand instances now
+/// (StopInstances, refused outside a shutdown): one dbus-send on the system
+/// bus, or on `bus`. The reply comes when they are down, so the D-Bus
+/// timeout is longer than any caller's own limit.
+fn stop_instances_cmd(bus: Option<&str>) -> Command {
+    let mut c = Command::new(uinitconverter_base::tools::path("dbus-send"));
+    match bus {
+        Some(a) => c.arg(format!("--bus={a}")),
+        None => c.arg("--system"),
+    };
+    c.args([
+        "--print-reply",
+        "--reply-timeout=600000",
+        "--dest=org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+    ]);
+    c.arg(format!(
+        "{}.StopInstances",
+        uinitconverter_base::config::UINITCONVERTER_IFACE
+    ));
+    c.stdout(std::process::Stdio::null());
+    c
+}
+
+/// `initconvert rc stop-instances [--bus ADDRESS]`: what the shutdown does
+/// first, on its own (the sandbox suite runs it against its own bus).
+fn stop_instances(args: &[String]) -> ! {
+    let bus = match args {
+        [] => None,
+        [o, a] if o == "--bus" => Some(a.as_str()),
+        _ => {
+            eprintln!("{USAGE}");
+            exit(100)
+        }
+    };
+    let err = stop_instances_cmd(bus).exec();
+    eprintln!("initconvert: dbus-send: {err}");
+    exit(111)
+}
+
 fn shutdown() -> ! {
     let _ = fs::create_dir_all("/run/uinitconverter");
     let _ = fs::write("/run/uinitconverter/shutting-down", "");
     kmsg(&format!("{SHUTDOWN_MARK}\n"));
     // No new unprivileged logins from here (systemd-user-sessions' stop).
     user_sessions(true);
-    match run_limited(
-        120,
-        "/usr/libexec/uinitconverter/initconvertd",
-        &["stop-instances"],
-    ) {
+    match limited(120, &mut stop_instances_cmd(None)) {
         Some(0) => {}
         Some(137) => kmsg("uinitconverter: on-demand instances still not down after 120 s\n"),
-        _ => kmsg("uinitconverter: initconvertd stop-instances failed\n"),
+        _ => kmsg("uinitconverter: asking initconvertd to stop the on-demand instances failed\n"),
     }
     let rc = run_limited(180, "s6-rc", &["-v2", "-t", "180000", "-bDa", "change"]).unwrap_or(111);
     match rc {
@@ -309,12 +349,14 @@ pub fn init_selinux(args: &[String]) -> ! {
     exec("/etc/s6-linux-init/current/bin/init", args)
 }
 
-const USAGE: &str = "usage: initconvert rc init RUNLEVEL | shutdown | shutdown-final";
+const USAGE: &str =
+    "usage: initconvert rc init RUNLEVEL | shutdown | shutdown-final | stop-instances [--bus ADDRESS]";
 
 pub fn main(args: &[String]) -> ! {
     match args.first().map(String::as_str).unwrap_or("") {
         "init" => init(&args[1..]),
         "shutdown" => shutdown(),
+        "stop-instances" => stop_instances(&args[1..]),
         "shutdown-final" => shutdown_final(),
         _ => {
             eprintln!("{USAGE}");

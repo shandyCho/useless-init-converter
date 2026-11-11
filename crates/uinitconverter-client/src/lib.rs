@@ -33,8 +33,7 @@ pub async fn connect(cfg: &Config) -> Result<Connection, String> {
         .map_err(|e| format!("connecting to D-Bus: {e}"))
 }
 
-/// uinitconverter's own methods, on the manager's object path (not systemd's).
-pub const UINITCONVERTER_IFACE: &str = "org.uinitconverter.Manager";
+pub use uinitconverter_base::config::UINITCONVERTER_IFACE;
 
 pub async fn manager_call<B>(
     conn: &Connection,

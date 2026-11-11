@@ -1,5 +1,5 @@
 //! initconvertd: serves org.freedesktop.systemd1 on top of s6-rc, so systemctl,
-//! libsystemd and logind keep working; also a minimal client for it.
+//! libsystemd and logind keep working.
 
 use std::path::PathBuf;
 use std::process::exit;
@@ -19,21 +19,13 @@ mod daemon;
 use config::Config;
 
 const USAGE: &str = "\
-usage: initconvertd [--config PATH] [COMMAND] [ARGS]
+usage: initconvertd [--config PATH] [daemon] [OPTIONS]
        initconvertd --version
 
   daemon [--system | --session | --address ADDR] [--ready-fd N]
                 serve org.freedesktop.systemd1 (default: system bus and
                 PRIVATE_SOCKET); with --ready-fd, write a newline to fd N
                 when ready. This is also what initconvertd does with no command.
-  start|stop|restart UNIT...
-                ask the running daemon (private socket or bus)
-  stop-instances
-                at shutdown (the shutting-down marker exists): ask the
-                daemon to stop the on-demand instances (user@UID, ...) now,
-                before s6-rc stops the services they are ordered after
-  log UNIT [-f] show (or follow) a service's log: journalctl -u, or its
-                s6-log directory with JOURNAL=no
 ";
 
 fn die(msg: &str) -> ! {
@@ -77,88 +69,6 @@ fn serve(cfg: Config, rest: &[String]) -> i32 {
     }
 }
 
-fn client(cfg: &Config, cmd: &str, units: &[String]) -> i32 {
-    let method = match cmd {
-        "start" => "StartUnit",
-        "stop" => "StopUnit",
-        _ => "RestartUnit",
-    };
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
-        let conn = uinitconverter_client::connect(cfg)
-            .await
-            .unwrap_or_else(|e| die(&e));
-        let mut code = 0;
-        for u in units {
-            if let Err(e) =
-                uinitconverter_client::manager_call(&conn, method, &(u.as_str(), "replace")).await
-            {
-                eprintln!("initconvertd: {u}: {e}");
-                code = 1;
-            }
-        }
-        code
-    })
-}
-
-/// rc.shutdown: stop the on-demand instances while the s6-rc services they
-/// are ordered after still run. Waits for them (no D-Bus call timeout).
-fn stop_instances(cfg: &Config) -> i32 {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
-        let conn = uinitconverter_client::connect(cfg)
-            .await
-            .unwrap_or_else(|e| die(&e));
-        let r = conn
-            .call_method(
-                Some("org.freedesktop.systemd1"),
-                "/org/freedesktop/systemd1",
-                Some(uinitconverter_client::UINITCONVERTER_IFACE),
-                "StopInstances",
-                &(),
-            )
-            .await;
-        match r {
-            Ok(_) => 0,
-            Err(e) => {
-                eprintln!("initconvertd: stop-instances: {e}");
-                1
-            }
-        }
-    })
-}
-
-fn log(cfg: &Config, rest: &[String]) -> ! {
-    let follow = rest.iter().any(|a| a == "-f" || a == "--follow");
-    let Some(unit) = rest.iter().find(|a| !a.starts_with('-')) else {
-        die("usage: initconvertd log UNIT [-f]")
-    };
-    if cfg.journal {
-        let mut j = std::process::Command::new(tools::path("journalctl"));
-        j.args(["-u", unit, "--no-pager"]);
-        j.arg(if follow { "-f" } else { "-n200" });
-        let err = std::os::unix::process::CommandExt::exec(&mut j);
-        die(&format!("journalctl: {err}"))
-    }
-    let Some(dir) = &cfg.log_dir else {
-        die("LOG_DIR is not configured")
-    };
-    let file = dir.join(unit).join("current");
-    let mut tail = std::process::Command::new("tail");
-    tail.arg(if follow { "-F" } else { "-n" });
-    if !follow {
-        tail.arg("200");
-    }
-    let err = std::os::unix::process::CommandExt::exec(tail.arg(&file));
-    die(&format!("tail {}: {err}", file.display()))
-}
-
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     // --config PATH before or after the command (generated scripts and the
@@ -192,9 +102,6 @@ fn main() {
     let code = match cmd.as_str() {
         "daemon" => serve(cfg, rest),
         o if o.starts_with("--") => serve(cfg, &args),
-        "start" | "stop" | "restart" => client(&cfg, &cmd, rest),
-        "stop-instances" => stop_instances(&cfg),
-        "log" => log(&cfg, rest),
         other => die(&format!("unknown command {other} (see initconvertd help)")),
     };
     exit(code);

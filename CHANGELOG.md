@@ -5,6 +5,21 @@
 버전은 본체 패키지의 버전입니다. 독립 도구는 버전이 따로 있습니다.
 릴리스 노트: [packages/release-notes](packages/release-notes).
 
+## Unreleased
+
+도구 내부에 규칙 5(유닉스 철학)를 적용합니다. `work_history.md` 246부부터.
+
+### 삭제
+- **`initconvertd start|stop|restart UNIT`**: 데몬 바이너리는 이제 데몬 역할만
+  합니다. 제품 안에서 이 명령을 부르는 곳이 없었습니다. `systemctl`이나 `s6-rc`를
+  쓰세요.
+
+### 변경
+- **`initconvert log UNIT`**은 `initconvert` 자체의 명령입니다(`journalctl -u`나
+  `tail`을 실행합니다). 더는 `initconvertd log`가 아닙니다.
+- **종료:** 요청 시 인스턴스는 `initconvertd stop-instances`가 아니라 `dbus-send`
+  호출 하나(`initconvert rc stop-instances`)로 멈춥니다.
+
 ## 0.4.0 (2026-11-11)
 
 0.3.0 이후의 변경. 자세한 내용은 `work_history.md` 200-240부에 있습니다.
