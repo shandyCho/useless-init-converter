@@ -710,20 +710,23 @@ fn commit_and_install(
     if !live {
         return install(&["--no-update"]).map(|_| false);
     }
-    // An update that would restart an essential service (dbus, initconvertd,
-    // the early boot) is left for the next boot, as systemd's daemon-reload
-    // restarts nothing: initconvertd runs this update, and s6-rc-update
-    // stopping it (or dbus, which it needs) left it waiting on its own stop,
-    // off the bus (work_history parts 214-215). -E doesn't help: s6-rc-update
-    // still unlinks such a service's old directory, which kills it.
-    match essential_restarts(cfg) {
-        Ok(ess) if !ess.is_empty() => {
+    // An update that would restart a service that is up is left for the
+    // next boot, as systemd's daemon-reload restarts nothing (work_history
+    // part 238). s6-rc-update restarts every service that gains a
+    // dependency on a new one: turning journald on restarted ~250 services,
+    // logind and gdm among them (part 231). For the essential ones it is
+    // worse: initconvertd runs this update, and s6-rc-update stopping it (or
+    // dbus, which it needs) left it waiting on its own stop, off the bus
+    // (parts 214-215); -E doesn't help, s6-rc-update still unlinks such a
+    // service's old directory, which kills it.
+    match running_restarts(cfg) {
+        Ok(up) if !up.is_empty() => {
             pin_live(cfg)?;
             install(&["--no-update"])?;
             changes.push(format!(
-                "not applied to the running system: the update would restart {} \
-                 (essential); the new database runs from the next boot",
-                ess.join(" ")
+                "not applied to the running system: the update would restart {}; \
+                 the new database runs from the next boot",
+                up.join(" ")
             ));
             return Ok(false);
         }
@@ -840,11 +843,10 @@ fn reopen_logins(cfg: &Config, changes: &mut Vec<String>) {
     }
 }
 
-/// The essential services that are up and that installing the set's
-/// compiled database live would stop: s6-rc-update's dry run (its down
-/// transition, as s6-rc-dryrun prints it) against s6-rc's flags of the
-/// live services.
-fn essential_restarts(cfg: &Config) -> Result<Vec<String>, String> {
+/// The services that are up and that installing the set's compiled
+/// database live would stop: s6-rc-update's dry run (its down transition,
+/// as s6-rc-dryrun prints it) against s6-rc's list of the live services.
+fn running_restarts(cfg: &Config) -> Result<Vec<String>, String> {
     let compiled = fs::canonicalize(cfg.repo_dir.join("compiled").join(&cfg.set_name))
         .map_err(|e| format!("the set's compiled database: {e}"))?;
     let dry = run(Command::new(tools::path("s6-rc-update"))
@@ -863,8 +865,8 @@ fn essential_restarts(cfg: &Config) -> Result<Vec<String>, String> {
         .arg("-a")
         .arg("-c")
         .arg("list"))?;
-    let essential = up_essentials(&list);
-    Ok(stopped.into_iter().filter(|n| essential.contains(n)).collect())
+    let up = up_services(&list);
+    Ok(stopped.into_iter().filter(|n| up.contains(n)).collect())
 }
 
 /// The services of s6-rc-update's down transition in its dry run's output
@@ -877,14 +879,14 @@ fn dry_run_stops(out: &str) -> Vec<String> {
         .collect()
 }
 
-/// The names flagged essential in `s6-rc -a -c list`
-/// (`NAME/TYPE/essential/up/...`).
-fn up_essentials(out: &str) -> BTreeSet<String> {
+/// The services that are up in `s6-rc -a -c list`
+/// (`NAME/TYPE/FLAG/up/explicit`, FLAG essential, recommended or empty).
+fn up_services(out: &str) -> BTreeSet<String> {
     out.lines()
         .filter_map(|l| {
             let mut f = l.split('/');
             let name = f.next()?;
-            (f.nth(1) == Some("essential")).then(|| name.to_string())
+            (f.nth(2) == Some("up")).then(|| name.to_string())
         })
         .collect()
 }
@@ -1062,10 +1064,10 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
 #[cfg(test)]
 mod tests {
 
-    /// What s6-rc-update -n prints: its down transition and the essential
-    /// services in it (dbus, initconvertd), not the up transition.
+    /// What s6-rc-update -n prints: its down transition, not the up
+    /// transition; and the services s6-rc lists as up, whatever their flag.
     #[test]
-    fn essential_restarts_from_the_dry_run() {
+    fn running_restarts_from_the_dry_run() {
         let dry = "s6-rc-dryrun: s6-rc -v 1 -t 0 -l /run/s6-rc -D -- change gdm.service uinitconverterd dbus\n\
                    s6-rc-dryrun: s6-rc -v 1 -t 0 -l /run/s6-rc -u -- change syslog dbus uinitconverterd gdm.service\n";
         assert_eq!(dry_run_stops(dry), ["gdm.service", "uinitconverterd", "dbus"]);
@@ -1073,11 +1075,13 @@ mod tests {
         let list = "dbus/longrun/essential/up/explicit\n\
                     uinitconverterd/longrun/essential/up/pulled\n\
                     gdm.service/longrun//up/explicit\n\
-                    sshd.service/longrun/recommended/up/explicit\n";
-        let ess = up_essentials(list);
+                    sshd.service/longrun/recommended/up/explicit\n\
+                    colord.service/longrun//down/\n\
+                    rbtest.service/oneshot/recommended/down/\n";
+        let up = up_services(list);
         assert_eq!(
-            ess.iter().map(String::as_str).collect::<Vec<_>>(),
-            ["dbus", "uinitconverterd"]
+            up.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["dbus", "gdm.service", "sshd.service", "uinitconverterd"]
         );
     }
 

@@ -689,14 +689,20 @@ Notes:
   (`flag-essential`, or membership in `uinitconverter-sysinit`, which
   `initconvert init` changes for syslog, journal-relay and resolv); a reload
   puts them back if a set moves them.
-- **A reload never restarts an essential service.** Before installing the
-  new database live, gen asks `s6-rc-update -n` (its dry run) what the
-  update would stop. If an essential service that is up is among it (dbus,
-  initconvertd, the early boot), the database is installed for the next
-  boot only, and the reload says so ("not applied to the running system: the
-  update would restart ..."): initconvertd runs the update, and stopping it
-  or dbus would leave it waiting on its own stop. systemd's daemon-reload
-  restarts nothing either. The live state keeps the database it runs:
+- **A reload never restarts a running service**, as systemd's daemon-reload
+  restarts nothing. Before installing the new database live, gen asks
+  `s6-rc-update -n` (its dry run) what the update would stop. If a service
+  that is up is among it, the database is installed for the next boot only,
+  and the reload says so ("not applied to the running system: the update
+  would restart ..."). s6-rc-update restarts every service that gains a
+  dependency on a new service: turning journald on would restart nearly
+  every service, logind and gdm among them; and initconvertd runs the
+  update, so stopping it or dbus would leave it waiting on its own stop.
+  Most reloads restart nothing and apply live (a new unit, a changed
+  command line: s6 uses a longrun's new `run` at its next start). Until the
+  next boot, the running database stays the old one: a unit only the new
+  one has can't be started, and every later reload is held back the same
+  way. The live state keeps the database it runs:
   rc.init gives `s6-rc-init` the database's directory, not the boot link,
   and on a system booted before that, the reload first points the live
   state at its database with an `s6-rc-update` to that same database (which

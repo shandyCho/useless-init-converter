@@ -598,11 +598,15 @@ uinitconverter의 저장소(repository), 스토어(store), 부팅 데이터베�
 - **초기 부팅 서비스**는 스토어에 그렇게 지정되어 있을 때(`flag-essential`, 또는 `initconvert init`이
   syslog, journal-relay, resolv에 대해 바꾸는 `uinitconverter-sysinit` 소속) 정확히 `always`입니다.
   세트에서 옮겨도 reload가 되돌립니다.
-- **reload는 essential 서비스를 재시작하지 않습니다.** gen은 새 데이터베이스를 라이브로 설치하기 전에
-  `s6-rc-update -n`(dry run)으로 업데이트가 무엇을 멈출지 확인합니다. 실행 중인 essential 서비스(dbus,
-  initconvertd, 초기 부팅)가 들어 있으면 다음 부팅용으로만 설치하고 그렇다고 알립니다("not applied to the
-  running system: the update would restart ..."). 업데이트를 실행하는 것이 initconvertd라서, 그것이나 dbus를
-  멈추면 자기 자신이 멈추기를 기다리게 됩니다. systemd의 daemon-reload도 아무것도 재시작하지 않습니다.
+- **reload는 실행 중인 서비스를 재시작하지 않습니다.** systemd의 daemon-reload도 아무것도 재시작하지
+  않습니다. gen은 새 데이터베이스를 라이브로 설치하기 전에 `s6-rc-update -n`(dry run)으로 업데이트가 무엇을
+  멈출지 확인합니다. 실행 중인 서비스가 들어 있으면 다음 부팅용으로만 설치하고 그렇다고 알립니다("not applied
+  to the running system: the update would restart ..."). s6-rc-update는 새 서비스에 대한 의존성이 생긴
+  서비스를 모두 재시작합니다. journald를 켜면 logind와 gdm을 포함해 거의 모든 서비스가 재시작되고, 업데이트를
+  실행하는 것이 initconvertd라서 그것이나 dbus를 멈추면 자기 자신이 멈추기를 기다리게 됩니다. 대부분의
+  reload는 아무것도 재시작하지 않으므로 라이브로 적용됩니다(새 유닛, 바뀐 명령줄: s6는 longrun의 새 `run`을
+  다음 시작 때 씁니다). 다음 부팅까지는 실행 중인 데이터베이스가 이전 것으로 남습니다. 새 데이터베이스에만 있는
+  유닛은 시작할 수 없고, 이후의 reload도 모두 같은 식으로 미뤄집니다.
   라이브 상태는 실행 중인 데이터베이스를 계속 씁니다. rc.init은 `s6-rc-init`에 부팅 링크가 아니라 데이터베이스
   디렉터리를 넘기고, 그 전에 부팅한 시스템에서는 reload가 먼저 같은 데이터베이스로 `s6-rc-update`를 실행해(아무것도
   재시작하지 않음) 라이브 상태를 그 데이터베이스에 고정합니다. 패키지는

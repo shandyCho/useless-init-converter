@@ -88,7 +88,7 @@ fn init(args: &[String]) -> ! {
         }
     }
     // The database itself, not the link: a reload that installs a database
-    // for the next boot only (it would restart an essential service)
+    // for the next boot only (it would restart a running service)
     // switches the link, and the live state must keep the database it runs.
     let link = boot_db(&cmdline());
     let db = fs::canonicalize(&link)

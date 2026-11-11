@@ -13208,3 +13208,27 @@ Not pushed: 287cf79, 2dc9aed, b16833a and the work_history commits after them, u
 3. Not checked yet: a D-Bus activation during a reload (b16833a), on the laptop or in the VM.
 4. Owner: after the next RPM upgrade, check that uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`.
 5. A release (0.4.0).
+
+
+## 2026-11-11, part 238: a reload never restarts a running service (part 236's open question 3)
+
+The owner asked whether a reload may restart session services, under systemd and under s6. systemd: no, `daemon-reload` restarts nothing; a running unit keeps running and changed dependencies only apply to later jobs. Ours: yes, everything but the essentials, because s6-rc-update restarts every service that gains a dependency on a new or down service (its doc, "Restarts"); that was part 231's wave. Options given: A, hold back any update that would restart a running service; B, add the session services (logind, gdm, `user@*`) to the guard; C, leave it. The owner chose A.
+
+- crates/uinitconverter-gen/src/s6.rs: essential_restarts()/up_essentials() became running_restarts()/up_services(): the dry run's down transition against the services `s6-rc -a -c list` shows as `up` (4th field, `NAME/TYPE/FLAG/up/...`, checked in s6-rc.c), whatever their flag. If any, the database is installed for the next boot only (pin_live, `--no-update`) and the reload says "not applied to the running system: the update would restart ...", the same path as before. The essentials are a subset, so parts 214-215's case stays covered.
+- What still applies live: anything that restarts nothing, e.g. a new unit nobody running depends on, or a changed command line (s6 keeps the supervisor; the new `run` is used at the next start, like systemd's "changed on disk").
+- Costs, written in the docs pair: until the next boot the running database stays the old one, so a unit only the new one has can't be started, and every later reload is held back too (the diff against the live database stays). A start of such a unit triggers a reload from check_job that is held back again, and the error then says "not translated to s6-rc", which is misleading; left as is for now.
+- rc.rs comment and the docs pair ("A reload never restarts a running service") updated.
+- Tests: `running_restarts_from_the_dry_run` (now with down services, which don't count). `cargo build` clean; `cargo test --workspace --no-fail-fast` 159 passed, 0 failed; sandbox suite 388 passed, 0 failed, and none of its reloads was held back (no "not applied" line in its logs), so the sandbox's ordinary reloads still apply live. Not run: tests/vm-s6-boot.sh (its `rollback` mode's `essential` step exercises this path through dbus and still applies), nor the laptop.
+
+### Current state
+
+Not pushed: 287cf79, 2dc9aed, b16833a, part 237's and this part's commits. The laptop runs JOURNAL=no and RESOLVED=no.
+
+### Next steps
+
+1. Owner: push.
+2. Run `tests/vm-s6-boot.sh ~/uinitconverter-vm rollback` (the held-back reload) and check on the laptop that a `daemon-reload` after a dependency change leaves logind and gdm running.
+3. Not checked yet: a D-Bus activation during a reload (b16833a), on the laptop or in the VM.
+4. Owner: after the next RPM upgrade, check that uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`.
+5. Maybe: a clearer error when a unit exists only in a held-back database.
+6. A release (0.4.0).
