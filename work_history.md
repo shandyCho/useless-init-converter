@@ -13190,3 +13190,21 @@ Not pushed: 287cf79, 2dc9aed, b16833a (parts 231-235). The laptop still runs JOU
 3. Whether a reload should be allowed to restart non-essential session services (logind, gdm) at all (owner).
 4. Not checked yet: a D-Bus activation during a reload (b16833a), on the laptop or in the VM.
 5. A release (0.4.0).
+
+## 2026-11-11, part 237: the part 232 fix checked on the laptop
+
+The owner did part 236's next step 2 (RPMs with 287cf79 and b16833a, `sudo initconvert init --journal=no --resolved=no`, reboot): /etc/uinitconverter/uinitconverter.conf ends with `JOURNAL=no` and `RESOLVED=no`. The laptop runs the configuration the owner chose again (part 231's state is gone), and init now writes both keys, as part 232 intended.
+
+Not shown by this check: the bug itself was an upgrade *after* `init` re-adding `yes`. Here `%post` ran before `init`, so the fix's real proof is the next RPM upgrade: the file should still end with `JOURNAL=no` and `RESOLVED=no` afterwards.
+
+### Current state
+
+Not pushed: 287cf79, 2dc9aed, b16833a and the work_history commits after them, unless the owner has pushed since. The laptop runs JOURNAL=no and RESOLVED=no.
+
+### Next steps
+
+1. Owner: push.
+2. Whether a reload should be allowed to restart non-essential session services (logind, gdm) at all (owner).
+3. Not checked yet: a D-Bus activation during a reload (b16833a), on the laptop or in the VM.
+4. Owner: after the next RPM upgrade, check that uinitconverter.conf still ends with `JOURNAL=no` and `RESOLVED=no`.
+5. A release (0.4.0).
