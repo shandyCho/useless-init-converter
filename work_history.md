@@ -13143,9 +13143,17 @@ The owner chose option A over B (B: `%post` compares the release it upgrades fro
 - `cargo build` clean; `cargo test --workspace --no-fail-fast`: 156 passed, 1 failed: `index::tests::render_and_load_round_trip`, which fails without this change too (it reads the live s6-rc database on this host, booted under s6; next step 4). Sandbox and VM suites not run: the change is confined to init's config text, and tests/vm-s6-boot.sh's upgrade check (`the update kept RESOLVED=yes` from 0.3.0) still holds by the reasoning above, not re-run.
 - Not committed yet.
 
+- Committed as 287cf79.
+
+## 2026-11-11, part 233: the index test no longer reads the host's live s6-rc database
+
+- Cause: `index::tests::render_and_load_round_trip` set `state_dir` and `repo_dir` to its temporary directory but left `live_dir` at the default `/run/s6-rc`. `Index::load()` reads the live database's holder first (`snapshot::live_holder`), so on a host booted under s6 (this laptop) it loaded the real index (~300 units) instead of the test's three.
+- Fix: the test sets `cfg.live_dir` inside its temporary directory too.
+- Checked the other tests built on `Config::defaults()` (automask, snapshot, gen's plan tests, install): none reads the live state (plan, the loader and install don't use `live_dir`; snapshot's holder test and gen's relink test already use temporary live directories).
+- Tests: `cargo test --workspace --no-fail-fast` 157 passed, 0 failed, on this s6-booted host; each standalone project's tests pass (fdstore 10, journal-relay 7, linkwatch 6, notify 10).
+
 ### Next steps
 
-1. Owner: build and install the RPMs with this fix, then `sudo initconvert init --journal=no --resolved=no` and a reboot (not a reload: removing journald live restarts everything again, part 231). Check that uinitconverter.conf ends with `JOURNAL=no` and `RESOLVED=no` under init's markers.
-2. Whether a reload should be allowed to restart non-essential session services (logind, gdm) at all.
-3. The chdir deaths during the update (part 231).
-4. The index test's isolation from the live s6-rc database.
+1. Owner: build and install the RPMs with 287cf79, then `sudo initconvert init --journal=no --resolved=no` and a reboot (not a reload: removing journald live restarts everything again, part 231). Check that uinitconverter.conf ends with `JOURNAL=no` and `RESOLVED=no` under init's markers.
+2. The chdir deaths during the update (part 231): whether initconvertd's beside starts rescan during s6-rc-update's switch.
+3. Whether a reload should be allowed to restart non-essential session services (logind, gdm) at all (owner).

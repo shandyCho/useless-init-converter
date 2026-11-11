@@ -153,6 +153,9 @@ mod tests {
         let mut cfg = Config::defaults();
         cfg.state_dir = dir.join("state");
         cfg.repo_dir = dir.join("repo");
+        // Not the host's /run/s6-rc: on an s6 boot load() reads the live
+        // database's holder first.
+        cfg.live_dir = dir.join("live");
         let mut idx = Index::default();
         idx.units.insert(
             "a.service".into(),
