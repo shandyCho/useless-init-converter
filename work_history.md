@@ -13307,3 +13307,23 @@ Everything up to 8e43611 is pushed; part 243 (the doc fixes) is not.
 
 1. Owner: push.
 2. Maybe: tests/vm-s6-boot.sh's `upgrade` mode still upgrades from 0.3.0; from now on the release users upgrade from is 0.4.0 (owner's call).
+
+
+## 2026-11-11, part 244: the upgrade from 0.3.0 on the laptop; the upgrade test stays on 0.3.0
+
+Everything up to 0998188 is pushed (the owner; part 243's "Current state" was written before that).
+
+Part 243's next step 2 (tests/vm-s6-boot.sh `upgrade` from 0.3.0 or 0.4.0): the owner upgraded the laptop from 0.3.0 to 0.4.0. `dnf history` shows it: transaction 121 (2026-11-11 09:20 KST, actions O, U; `uinitconverterd` obsoleting `uinitconverter-user`), then development builds of 0.4.0 up to the release build from b5a563d (part 242). So the 0.3.0 → 0.4.0 path has passed in the VM (part 241, on the release RPMs) and on real hardware.
+
+Decision: `upgrade` stays on 0.3.0 for now; nothing has changed since 0.4.0, so an upgrade from it would reinstall the same version. When the next release is prepared, OLD_RPMS's default moves to 0.4.0's RPMs; the 0.3.0 checks (the `uinitconverter-user` removal) stay possible with OLD_RPMS=.
+
+Also seen: mdevd is installed on the laptop (part 242 left it out of its package list by accident).
+
+### Current state
+
+Everything up to 0998188 is pushed; part 244 is not.
+
+### Next steps
+
+1. Owner: push.
+2. At the next release: tests/vm-s6-boot.sh `upgrade` from 0.4.0.
