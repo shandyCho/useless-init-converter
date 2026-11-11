@@ -13152,8 +13152,25 @@ The owner chose option A over B (B: `%post` compares the release it upgrades fro
 - Checked the other tests built on `Config::defaults()` (automask, snapshot, gen's plan tests, install): none reads the live state (plan, the loader and install don't use `live_dir`; snapshot's holder test and gen's relink test already use temporary live directories).
 - Tests: `cargo test --workspace --no-fail-fast` 157 passed, 0 failed, on this s6-booted host; each standalone project's tests pass (fdstore 10, journal-relay 7, linkwatch 6, notify 10).
 
+## 2026-11-11, part 234: the `unable to chdir` deaths during part 226's update are s6-svscan respawning supervisors s6-rc-update had just ended
+
+Read from s6-rc 0.8.0.2's s6-rc-update.c and libs6rc, s6 2.15.1.1's s6_supervise_unlink.c and s6-svscan.c (tarballs only, nothing changed), the laptop's scan directory, and the full catch-all log from part 226's session (no line between 13:16:58.99 and 13:17:03.54, so s6-rc-update succeeded at its first attempt: no retry and no relink_supervised()).
+
+- The scan directory's links point at the live directory's real path (`/run/s6-rc:s6-rc-init:NzltAA/servicedirs/NAME`), not through the `/run/s6-rc` symlink.
+- s6-rc-update's make_new_livedir(): it switches the `/run/s6-rc` symlink, then calls s6rc_servicedir_unsupervise() for each old longrun, which is s6_supervise_unlink(): unlink `scandir/NAME`, then write `xd` to its supervisor through the path it opened before the unlink. Through the real path that still reaches the old supervisor, which exits.
+- s6-svscan's reaper (s6-svscan.c, around line 379): when a supervisor exits and its entry is still active (no rescan since the unlink), it schedules a restart at `sv->start`, the last start + 1 s, long past, so start_iter() spawns `s6-supervise NAME` at once. Its chdir finds no link: `unable to chdir to NAME: No such file or directory`. It retries every second until a rescan (s6_supervise_link_names()' `a`, or the final `an`) marks the entry gone. Then s6rc_servicedir_manage() links the new directories and the up transition starts them (13:17:03.6 onwards).
+- So every longrun an update restarts or removes logs one or more of these lines; the classes in part 226's list match (restarted: systemd-logind, gdm, polkit; removed: the `NAME.log` loggers, absent from the new database). The deaths are noise, not a separate fault, and they scale with the restart wave (part 231). It is upstream behaviour (rule: no skarnet changes); nothing to fix on our side beyond not causing the wave.
+- Separate finding, a real one: start_beside() (crates/uinitconverterd/src/daemon/s6.rs) goes ahead when initconvertd's own s6 lock is taken, and reload_db() holds that lock across s6-rc-update. So during a reload, a D-Bus activation starts a service beside s6-rc-update: colord (13:16:58.7) and NetworkManager-dispatcher (58.99) were brought up with `s6-svc -u` right after s6-rc-update's down transition had stopped them, in the old directories, and the switch's `xd` ended them again (both are in the chdir list). start_beside() is meant for a change that isn't ours (the boot's `s6-rc change` holding s6-rc's lock); during our own reload a start should wait for the lock and run against the new database.
+
+## 2026-11-11, part 235: no start beside initconvertd's own reload
+
+The owner approved part 234's proposal.
+
+- crates/uinitconverterd/src/daemon/s6.rs: `State` gets a private `reloading` flag and `reloading()`, which sets it and returns a guard that clears it on drop (also on reload_db()'s early `?` returns). reload_db() (daemon/mod.rs) takes the guard right after `s6.lock`, for the whole update and the index reload. start_beside() and start_bundle_beside() now ask may_start_beside(), i.e. beside_allowed(our lock free, s6-rc's lock held, reloading): start beside only while another change holds a lock and never during our own reload. Otherwise the job falls through to its `s6-rc -u change`, which waits for `s6.lock` and starts the unit from the new database, as systemd queues jobs during daemon-reload.
+- Not covered: an update run by `initconvert-gen` without the daemon (no `reloading` flag; it looks like any other change, as before). The daemon's only s6-rc-update is reload_db().
+- Tests: `beside_only_while_another_change_runs` (the decision table) and `reloading_guard_clears_on_drop`. `cargo build` clean (clippy isn't installed on this host); `cargo test --workspace --no-fail-fast` 159 passed, 0 failed; sandbox suite (`tests/sandbox.sh DIR && tests/check.sh DIR`) 388 passed, 0 failed. Not checked on the laptop or in the VM: a D-Bus activation during a reload.
+
 ### Next steps
 
 1. Owner: build and install the RPMs with 287cf79, then `sudo initconvert init --journal=no --resolved=no` and a reboot (not a reload: removing journald live restarts everything again, part 231). Check that uinitconverter.conf ends with `JOURNAL=no` and `RESOLVED=no` under init's markers.
-2. The chdir deaths during the update (part 231): whether initconvertd's beside starts rescan during s6-rc-update's switch.
-3. Whether a reload should be allowed to restart non-essential session services (logind, gdm) at all (owner).
+2. Whether a reload should be allowed to restart non-essential session services (logind, gdm) at all (owner).

@@ -422,6 +422,8 @@ impl Daemon {
         let cfg = self.cfg.clone();
         let res = {
             let _guard = self.s6.lock.lock().await;
+            // No start beside the update (s6.rs, beside_allowed()).
+            let _reloading = self.s6.reloading();
             // s6-rc-update must see those units as up, or it keeps them down.
             self.reconcile_beside_locked().await;
             let res = tokio::task::spawn_blocking(move || gen::regenerate_plan(&cfg, plan, true))

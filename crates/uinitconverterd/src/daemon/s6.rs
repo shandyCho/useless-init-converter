@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,8 @@ pub struct State {
     /// Longruns started with s6-svc while another s6-rc change held the
     /// lock, not yet recorded in s6-rc's state (see start_beside).
     pub beside: Mutex<BTreeSet<String>>,
+    /// Set while reload_db() holds `lock` (see reloading()).
+    reloading: AtomicBool,
     /// (compiled db path, atom names in live state order)
     pub atom_order: Mutex<Option<(PathBuf, Vec<String>)>>,
     /// Short-lived s6-svstat answers, with when they were taken and the
@@ -48,6 +51,32 @@ impl State {
     pub fn database_changed(&self) {
         *self.state_reader.lock().unwrap() = (None, None);
     }
+
+    /// Marks a database update in progress until the guard is dropped:
+    /// start_beside() then leaves the start to wait for `lock`. Taken by
+    /// reload_db() while it holds `lock`.
+    pub fn reloading(&self) -> ReloadingGuard<'_> {
+        self.reloading.store(true, Ordering::SeqCst);
+        ReloadingGuard(&self.reloading)
+    }
+}
+
+pub struct ReloadingGuard<'a>(&'a AtomicBool);
+
+impl Drop for ReloadingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Whether start_beside() may start a longrun with s6-svc: only while an
+/// s6-rc change holds the lock (the boot's `s6-rc change`, or another of
+/// our jobs), never during our own database update: s6-rc-update has just
+/// stopped what it restarts and ends the old directories' supervisors at
+/// its switch, so a service started there in the old database went down
+/// again (colord and NetworkManager-dispatcher, work_history part 234).
+fn beside_allowed(our_lock_free: bool, s6rc_lock_held: bool, reloading: bool) -> bool {
+    !reloading && (!our_lock_free || s6rc_lock_held)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -659,6 +688,16 @@ impl Daemon {
         }
     }
 
+    /// beside_allowed() for this moment.
+    fn may_start_beside(&self) -> bool {
+        let our_lock_free = self.s6.lock.try_lock().is_ok();
+        beside_allowed(
+            our_lock_free,
+            self.s6rc_lock_held(),
+            self.s6.reloading.load(Ordering::SeqCst),
+        )
+    }
+
     /// Whether some process (the boot's `s6-rc change`, or one of ours) holds
     /// s6-rc's change lock.
     fn s6rc_lock_held(&self) -> bool {
@@ -695,7 +734,7 @@ impl Daemon {
         if self.cfg.run_dir.join("shutting-down").exists() {
             return None;
         }
-        if self.s6.lock.try_lock().is_ok() && !self.s6rc_lock_held() {
+        if !self.may_start_beside() {
             return None;
         }
         let deps = self.all_dependencies(id).await?;
@@ -756,7 +795,7 @@ impl Daemon {
     /// `s6-rc change`; otherwise it starts the rest (oneshots, longruns whose
     /// dependencies are not up, native s6 services).
     async fn start_bundle_beside(&self, id: &str) -> bool {
-        if self.s6.lock.try_lock().is_ok() && !self.s6rc_lock_held() {
+        if !self.may_start_beside() {
             return false;
         }
         let active = self.active_atoms().await;
@@ -1484,5 +1523,35 @@ impl Daemon {
     pub(super) fn can_reload(unit: &Unit) -> bool {
         !unit.get_all("Service", "ExecReload").is_empty()
             || unit.get("Service", "Type").as_deref() == Some("notify-reload")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn beside_only_while_another_change_runs() {
+        // Nothing holds a lock: s6-rc starts it.
+        assert!(!beside_allowed(true, false, false));
+        // The boot's `s6-rc change` holds s6-rc's lock, or another of our
+        // jobs holds ours: start beside it.
+        assert!(beside_allowed(true, true, false));
+        assert!(beside_allowed(false, false, false));
+        assert!(beside_allowed(false, true, false));
+        // Our own reload (it holds our lock, s6-rc-update holds s6-rc's):
+        // wait for it (work_history part 234).
+        assert!(!beside_allowed(false, true, true));
+        assert!(!beside_allowed(false, false, true));
+    }
+
+    #[test]
+    fn reloading_guard_clears_on_drop() {
+        let s = State::default();
+        {
+            let _g = s.reloading();
+            assert!(s.reloading.load(Ordering::SeqCst));
+        }
+        assert!(!s.reloading.load(Ordering::SeqCst));
     }
 }
