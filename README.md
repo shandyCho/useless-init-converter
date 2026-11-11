@@ -29,7 +29,7 @@ D-Bus 클라이언트가 계속 동작하므로 dnf, SELinux enforcing, GNOME도
 |---|---|---|---|
 | s6와 관련 도구 | skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd | 필수 | 직접 빌드(2단계) |
 | TCP 슈퍼서버 | s6-dns, s6-networking | 선택: `sshd.socket` 같은 TCP `Accept=yes` 소켓에만 필요 | 2단계에서 빌드. 빼려면 `dnf install` 전에 그 `.rpm` 파일을 지우세요 |
-| 본체 | `uinitconverter`, `uinitconverterd`, `uinitconverter-gen`, `uinitconverter-runner`, `uinitconverter-timers` | 필수 | 릴리스 또는 소스(3단계) |
+| 본체 | `uinitconverter`, `uinitconverterd`, `uinitconverter-gen`, `uinitconverter-runner`, `uinitconverter-timers`, `uinitconverter-devices` | 필수 | 릴리스 또는 소스(3단계) |
 | 독립 도구 | 아래 네 가지 | 선택 | 릴리스 또는 소스(3단계) |
 
 독립 도구는 별도 프로젝트입니다. 각각 따로 빌드, 설치, 실행할 수 있고 본체는 이들 없이도

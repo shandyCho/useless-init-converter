@@ -155,6 +155,7 @@ on its own, and the core works without them.
 | `initconvertd` | `daemon` | Serves `org.freedesktop.systemd1` on the system bus **and** on `/run/systemd/private` (systemd ≥ 259's `systemctl` uses only that socket when run as root). |
 | `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine`, `accept/accept-finish`, `connection` | Called by the generated s6 scripts and the daemon; does what systemd does between `fork()` and `exec()`. `stop-atom` is the `down` of a longrun's `UNIT.stop` oneshot (its `ExecStop=`). `confine UNIT -- COMMAND` gives a program s6 starts itself the unit's cgroup, limits and sandbox (the system bus with `--bus=broker`). `accept`/`accept-finish` are the `run`/`finish` of an `Accept=yes` socket (they exec s6-ipcserverd or s6-tcpserverd), which runs `connection` for each client. |
 | `initconvert-timers` | `timer-run`, `path-run` | Runs one `.timer` (computes elapses) or `.path` unit (inotify) as an s6 longrun and asks the daemon to start the unit. |
+| `initconvert-devices` | (none) | The s6 longrun `uinitconverter-devices`: reads udev's database and udevd's events and asks the daemon to start the units devices want (`SYSTEMD_WANTS`), with `StartWanted` on uinitconverter's own D-Bus interface (a start that never reloads). The daemon itself doesn't watch devices. |
 | `initconvert` | any of the above (not `stop-atom`/`confine`/`accept`/`accept-finish`/`connection`) | The command users know (`/usr/bin/initconvert`): runs the tool that handles the command, so `initconvert reload` still works. `fdstore`, `journal-relay`, `linkwatch` and `notify` run the standalone tools when they are installed. |
 | | `log UNIT [-f]` | A service's log, wherever this install keeps it: `journalctl -u`, or `tail` on its s6-log directory with `JOURNAL=no`. To start or stop a unit use `systemctl` or `s6-rc`; `initconvertd` itself is only the daemon. |
 | | `rc stop-instances` | What `rc.shutdown` does first (`initconvert rc shutdown`): one `dbus-send` call asking the daemon to stop the on-demand instances (`user@UID`, ...) before s6-rc stops the services they are ordered after. |
@@ -285,7 +286,7 @@ everything ordered after it. uinitconverter therefore uses s6-rc only for orderi
 - Jobs on the same unit run one after another; queued jobs can be cancelled.
 - Units wanted by devices (udev's `SYSTEMD_WANTS`, e.g. `bluetooth.target` for a
   Bluetooth adapter, `sound.target`, `bolt.service`) start when the device
-  appears, from udevd's events and, at startup, from udev's database. Excluded
+  appears: `initconvert-devices` (its own s6 service) reads udevd's events and, when it starts, udev's database, and asks the daemon to start them. Excluded
   units among them (`systemd-backlight@`, `systemd-rfkill`,
   `systemd-vconsole-setup`) are skipped.
 
@@ -788,10 +789,10 @@ crates/                    the core (one Cargo workspace)
                            connection.rs (Accept=yes: accept and connection)
     supervisor.rs          what the runner asks of s6-supervise
   uinitconverter-timers/         timer and path unit runners (tool initconvert-timers)
+  uinitconverter-devices/        units wanted by devices, from udev (tool initconvert-devices)
   uinitconverterd/               D-Bus API: dispatch, properties, s6 backend, private socket,
                            on-demand instances (dynamic.rs), systemd-run (transient.rs),
-                           units wanted by devices (devices.rs), SELinux access
-                           checks (access.rs) (tool initconvertd)
+                           SELinux access checks (access.rs) (tool initconvertd)
     daemon/mod.rs          the Daemon type, unit loading, the main loop
     daemon/                dispatch.rs, manager.rs (Manager methods), jobs.rs,
                            scopes.rs (StartTransientUnit), accept.rs (Accept=yes

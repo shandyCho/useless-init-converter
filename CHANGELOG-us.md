@@ -31,6 +31,13 @@ Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
   longer contains the generator: for `daemon-reload` it holds its locks and
   runs `initconvert-gen reload --direct`, reading what it prints. The
   `uinitconverterd` package now requires `uinitconverter-gen`.
+- **Units wanted by devices are started by a tool of their own**,
+  `initconvert-devices` (package `uinitconverter-devices`, s6 service
+  `uinitconverter-devices`), which reads udev and asks the daemon; the
+  daemon no longer watches udev. A sixth core package: `dnf upgrade ./*.rpm`
+  installs it with the others (`uinitconverter` requires it). After an
+  update, the units of newly plugged devices start once the new service
+  runs: at once if the reload applies live, else from the next boot.
 
 ## 0.4.0 (2026-11-11)
 

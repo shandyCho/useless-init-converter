@@ -1,21 +1,17 @@
 //! Units wanted by devices. udev rules set SYSTEMD_WANTS on devices tagged
 //! "systemd" (99-systemd.rules: bluetooth.target for an hci device,
 //! printer.target, sound.target, ...), and systemd starts those units when the
-//! device appears. We do the same from udevd's netlink events, and at startup
-//! from udev's database for devices that appeared before the daemon.
+//! device appears. This reads the same from udevd's netlink events, and at
+//! startup from udev's database for devices that appeared before it.
 //!
-//! The devices already seen are kept in RUN_DIR/devices, so a restarted
-//! daemon does not start their units again (one the admin stopped stays
-//! stopped). Like systemd, a "change" event starts only units newly added to
-//! SYSTEMD_WANTS.
+//! The devices already seen are kept in RUN_DIR/devices, so a restart does
+//! not start their units again (one the admin stopped stays stopped). Like
+//! systemd, a "change" event starts only units newly added to SYSTEMD_WANTS.
 
 use std::collections::BTreeMap;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
-use std::sync::Arc;
-
-use super::{job_path, op, Daemon, MANAGER_IFACE, MANAGER_PATH};
 
 /// Netlink multicast group udevd sends processed events to.
 const UDEV_GROUP: u32 = 2;
@@ -33,97 +29,50 @@ pub struct Event {
     pub wants: Vec<String>,
 }
 
-enum Msg {
+pub enum Msg {
     Event(Event),
     /// Events were lost (receive buffer overflow): resync from the database.
     Rescan,
 }
 
 /// device id -> the wants already started for it
-type Plugged = BTreeMap<String, Vec<String>>;
+pub type Plugged = BTreeMap<String, Vec<String>>;
 
-impl Daemon {
-    pub(super) async fn watch_devices(self: Arc<Self>) {
-        let Some(udev_dir) = self.cfg.udev_dir.clone() else {
-            return;
-        };
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        // Listen before scanning, so nothing between the two is missed.
-        if self.cfg.udev_monitor {
-            match open_monitor() {
-                Ok(fd) => {
-                    std::thread::spawn(move || monitor_loop(fd, tx));
-                }
-                Err(e) => eprintln!("initconvertd: cannot listen to udev events: {e}"),
-            }
-        } else {
-            drop(tx);
-        }
-        let state = self.cfg.run_dir.join("devices");
-        let mut plugged = load_plugged(&state);
-        self.sync_devices(&mut plugged, scan_db(&udev_dir));
-        save_plugged(&state, &plugged);
-        while let Some(m) = rx.recv().await {
-            match m {
-                Msg::Event(e) => self.device_event(&mut plugged, e),
-                Msg::Rescan => self.sync_devices(&mut plugged, scan_db(&udev_dir)),
-            }
-            save_plugged(&state, &plugged);
-        }
+/// What an event changes: the units to start for it (those newly wanted),
+/// with `plugged` brought up to date.
+pub fn newly_wanted(plugged: &mut Plugged, e: Event) -> Vec<String> {
+    if !e.present {
+        plugged.remove(&e.id);
+        return Vec::new();
     }
-
-    /// Make `plugged` match the devices udev's database lists.
-    fn sync_devices(self: &Arc<Self>, plugged: &mut Plugged, current: Vec<Event>) {
-        plugged.retain(|id, _| current.iter().any(|e| e.present && &e.id == id));
-        for e in current {
-            self.device_event(plugged, e);
-        }
-    }
-
-    fn device_event(self: &Arc<Self>, plugged: &mut Plugged, e: Event) {
-        if !e.present {
-            plugged.remove(&e.id);
-            return;
-        }
-        let old = plugged.get(&e.id);
-        let new: Vec<String> = e
-            .wants
-            .iter()
-            .filter(|w| !old.is_some_and(|o| o.contains(w)))
-            .cloned()
-            .collect();
-        for name in new {
-            let d = self.clone();
-            let dev = e.id.clone();
-            tokio::spawn(async move { d.start_wanted(name, dev).await });
-        }
-        plugged.insert(e.id, e.wants);
-    }
-
-    async fn start_wanted(&self, name: String, dev: String) {
-        // systemd-backlight@, systemd-rfkill and the like: not ours to run.
-        if self.cfg.is_excluded(&name) {
-            return;
-        }
-        match self.check_job(&name, "start", false, false).await {
-            Ok((id, unit)) => {
-                let job = self.new_job(&id, "start");
-                self.emit(
-                    MANAGER_PATH,
-                    MANAGER_IFACE,
-                    "JobNew",
-                    &(job, op(job_path(job)), id.clone()),
-                )
-                .await;
-                let r = self.execute_job(job, &id, &unit, "start", "replace").await;
-                eprintln!("initconvertd: {id} wanted by device {dev}: {r}");
-            }
-            Err(e) => eprintln!("initconvertd: device {dev} wants {name}: {}", e.msg),
-        }
-    }
+    let old = plugged.get(&e.id);
+    let new = e
+        .wants
+        .iter()
+        .filter(|w| !old.is_some_and(|o| o.contains(w)))
+        .cloned()
+        .collect();
+    plugged.insert(e.id, e.wants);
+    new
 }
 
-fn load_plugged(path: &Path) -> Plugged {
+/// Make `plugged` match the devices udev's database lists; returns
+/// (device, unit) for every unit to start.
+pub fn sync(plugged: &mut Plugged, current: Vec<Event>) -> Vec<(String, String)> {
+    plugged.retain(|id, _| current.iter().any(|e| e.present && &e.id == id));
+    let mut out = Vec::new();
+    for e in current {
+        let dev = e.id.clone();
+        out.extend(
+            newly_wanted(plugged, e)
+                .into_iter()
+                .map(|u| (dev.clone(), u)),
+        );
+    }
+    out
+}
+
+pub fn load_plugged(path: &Path) -> Plugged {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     text.lines()
         .filter_map(|l| {
@@ -134,7 +83,7 @@ fn load_plugged(path: &Path) -> Plugged {
         .collect()
 }
 
-fn save_plugged(path: &Path, plugged: &Plugged) {
+pub fn save_plugged(path: &Path, plugged: &Plugged) {
     let mut text = String::new();
     for (id, wants) in plugged {
         text.push_str(id);
@@ -146,7 +95,7 @@ fn save_plugged(path: &Path, plugged: &Plugged) {
     }
     let tmp = path.with_extension("tmp");
     if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, path)) {
-        eprintln!("initconvertd: cannot write {}: {e}", path.display());
+        eprintln!("initconvert-devices: cannot write {}: {e}", path.display());
     }
 }
 
@@ -180,7 +129,7 @@ pub fn parse_wants(v: &str, syspath: Option<&str>) -> Vec<String> {
             Some((prefix, suffix)) => syspath.map(|p| {
                 format!(
                     "{prefix}@{}.{suffix}",
-                    crate::util::unit_name_path_escape(p)
+                    uinitconverter_base::util::unit_name_path_escape(p)
                 )
             }),
             None => Some(w),
@@ -238,7 +187,7 @@ pub fn event_from_props(p: &BTreeMap<String, String>) -> Option<Event> {
     let tags = get("CURRENT_TAGS").or(get("TAGS")).unwrap_or("");
     let present = get("ACTION") != Some("remove")
         && has_tag(tags, "systemd")
-        && get("SYSTEMD_READY").and_then(crate::unit::parse_bool) != Some(false);
+        && get("SYSTEMD_READY").and_then(uinitconverter_base::unit::parse_bool) != Some(false);
     let syspath = format!("/sys{devpath}");
     Some(Event {
         id,
@@ -264,7 +213,7 @@ pub fn event_from_db(id: &str, text: &str, syspath: Option<&str>) -> Event {
         } else if let Some(v) = line.strip_prefix("E:SYSTEMD_WANTS=") {
             wants = parse_wants(v, syspath);
         } else if let Some(v) = line.strip_prefix("E:SYSTEMD_READY=") {
-            ready = crate::unit::parse_bool(v) != Some(false);
+            ready = uinitconverter_base::unit::parse_bool(v) != Some(false);
         }
     }
     let tags = if current.is_empty() { tags } else { current };
@@ -276,7 +225,7 @@ pub fn event_from_db(id: &str, text: &str, syspath: Option<&str>) -> Event {
 }
 
 /// Every device tagged "systemd" in udev's database.
-fn scan_db(udev_dir: &Path) -> Vec<Event> {
+pub fn scan_db(udev_dir: &Path) -> Vec<Event> {
     let Ok(dir) = std::fs::read_dir(udev_dir.join("tags/systemd")) else {
         return Vec::new();
     };
@@ -404,7 +353,7 @@ pub fn recv_message(fd: &OwnedFd) -> io::Result<Option<BTreeMap<String, String>>
     Ok(parse_message(&buf[..n as usize]))
 }
 
-fn monitor_loop(fd: OwnedFd, tx: tokio::sync::mpsc::UnboundedSender<Msg>) {
+pub fn monitor_loop(fd: OwnedFd, tx: tokio::sync::mpsc::UnboundedSender<Msg>) {
     loop {
         let msg = match recv_message(&fd) {
             Ok(Some(props)) => match event_from_props(&props) {
@@ -415,7 +364,7 @@ fn monitor_loop(fd: OwnedFd, tx: tokio::sync::mpsc::UnboundedSender<Msg>) {
             Err(e) if e.raw_os_error() == Some(libc::ENOBUFS) => Msg::Rescan,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => {
-                eprintln!("initconvertd: udev monitor: {e}");
+                eprintln!("initconvert-devices: udev monitor: {e}");
                 return;
             }
         };

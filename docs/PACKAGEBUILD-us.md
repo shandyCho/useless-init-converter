@@ -134,7 +134,7 @@ sudo initconvert init --yes
 ```
 
 `rpms/` holds only the last build's packages, so `*.rpm` is always one
-matching set (the five core packages require each other's exact
+matching set (the six core packages require each other's exact
 version-release).
 
 ## 2. Release build
@@ -157,7 +157,7 @@ not in it: users build them as in step 0.
 4. **Release notes pair.** Write `packages/release-notes/VERSION.md` and
    `VERSION-us.md` (copy the previous ones for the layout). `github-release.sh`
    puts them in the release text.
-5. **Spec changelogs.** Add an entry to the `%changelog` of each of the five
+5. **Spec changelogs.** Add an entry to the `%changelog` of each of the six
    specs in `packages/`. The specs carry no version or release;
    `build-rpms.sh` sets them.
 
@@ -231,7 +231,7 @@ so they rebuild offline as they are:
 
 ```sh
 dist/rpm/build-skarnet-rpms.sh --srpm          # ~/rpmbuild-skarnet/srpms; build in skarnet.versions order
-packages/build-rpms.sh --srpm                  # ~/rpmbuild-uinitconverter/srpms; the five go together
+packages/build-rpms.sh --srpm                  # ~/rpmbuild-uinitconverter/srpms; the six go together
 standalone/uinitconverter-fdstore/build-rpm.sh --srpm
 ```
 

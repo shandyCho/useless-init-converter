@@ -13427,3 +13427,28 @@ Not pushed: 452ee7e, 18b6711, 5265f2c and this commit. Steps 1-3 of part 246 are
 1. The VM on step 3: `vm-s6-boot.sh default`, `rollback`, `upgrade`.
 2. Step 4.
 3. Owner: push; the getty/isolate decision (part 245); the held-back grep after the next Fedora update.
+
+
+## 2026-11-12, part 250: step 3's VM runs; step 4 of part 246 — initconvert-devices
+
+**VM on step 3** (RPMs of 74afcbe): `vm-s6-boot.sh default` 66 passed, 0 failed; `rollback` 92 passed, 0 failed (its held-back reload included: "the daemon says why" from the child's output); no AVC denials, so initconvertd running `initconvert-gen` works under SELinux enforcing. `upgrade` from 0.3.0: first run 53 passed, **3 failed**, all in the step after the update and before the reboot: `systemctl daemon-reload` answered "Reload daemon failed: " with an empty message, twice (the boot database was still installed, the live one stayed, the daemon and dbus kept running); the boot after it passed 30 of 30. A second run with `VM_KEEP=yes` on the same RPMs: 56 passed, 0 failed. So it is intermittent, and the cause is not known: the failing run's log went with its VM.
+- What was wrong for sure, and fixed here: the empty message. `run_gen_reload` took the last line of the tool's stderr, and gen's error for a failed command ends in that command's output and a newline, so the last line was blank. It now returns everything from the tool's last `initconvert-gen: ` line on. With it the next occurrence names the failing command (tests/vm-s6-boot.sh prints systemctl's stderr). Whether the failure itself is new with step 3 or older and rare is open: the in-process code ran the same commands.
+
+**Step 4: the udev watcher is its own tool.**
+- New crate `crates/uinitconverter-devices` (tool `initconvert-devices [--config PATH] [--ready-fd N]`): the daemon's devices.rs moved there (udev database scan, the netlink monitor, `SYSTEMD_WANTS` parsing, RUN_DIR/devices, its tests), with the decision as plain functions (`newly_wanted`, `sync`). For each newly wanted unit it calls `StartWanted(unit, device)` and logs the result; the daemon not answering is retried for a minute, the daemon's own error for a unit is final. Same state file as before, so an update doesn't start already plugged devices' units again.
+- The daemon: devices.rs and its task are gone; `org.uinitconverter.Manager.StartWanted(ss) -> s` (dispatch.rs) is what the task did per unit: excluded units skipped (empty result), `check_job(.., allow_reload=false, manual=false)`, a start job, the "wanted by device" log line. Why a method of our own and not `StartUnit`, as the timers use: StartUnit reloads for a unit that isn't in the database, so a device wanting a unit gen doesn't translate would regenerate the database at every event; and RefuseManualStart= must not apply. Named caller: initconvert-devices. Allowed for the daemon's own user (root on a real boot; the sandbox's unprivileged daemon) and otherwise like StartUnit. Our interface, not the frozen systemd surface (part 216).
+- s6 service `dist/s6/uinitconverter-devices`: longrun, one execline line, readiness on fd 3, depends on `uinitconverterd`, `flag-recommended`; nothing depends on it and it is not in `uinitconverter-sysinit` (part 220's rule for updates).
+- Packaging: `packages/uinitconverter-devices.spec` (Requires uinitconverterd), in `build-rpms.sh`'s list; `uinitconverter` Requires it; `initconvert --version` checks it; the SELinux file context `/usr/libexec/uinitconverter/[^/]+` already covers it. Six core packages: docs/PACKAGEBUILD, packages README, README and TESTING pairs, github-release.sh's comment. tests: sandbox.sh starts the tool beside the daemon (devices.pid), check.sh's restart_daemon restarts it; vm-s6-boot.sh and vm-user-manager.sh install the sixth RPM (0.3.0's list for `upgrade` is its own five and `-user`).
+- Update path: after `dnf upgrade` and `initconvert init --yes` the new daemon doesn't watch udev and the new service runs once the new database is live: at once when the reload applies live, else from the next boot (CHANGELOG). Not checked yet which of the two an upgrade from 0.4.0 gets.
+- Docs pair (tool table, the device paragraph, layout tree), CHANGELOG pair.
+- Tests: `cargo build`, `cargo fmt --check` clean; `cargo test --workspace` 164 passed, 0 failed; sandbox 388 / `SANDBOX_JOURNAL=no` 395 / `SANDBOX_FDSTORE=no` 376 passed, 0 failed (the "units wanted by devices" checks through the tool: started, not started for SYSTEMD_READY=0 and without the current tag, recorded, only the new one after a restart). Not run yet: the VM on step 4.
+
+### Current state
+
+Not pushed: 452ee7e, 18b6711, 5265f2c, 74afcbe and this commit. All four steps of part 246 are implemented. Open: the VM on step 4, and the intermittent reload failure in `upgrade`.
+
+### Next steps
+
+1. VM on step 4: `vm-s6-boot.sh default`, `rollback`, `upgrade` (more than once, for the intermittent failure's message), `BOOT=s6 vm-user-manager.sh session`; check that `uinitconverter-devices` is up and bluetooth.target/sound.target still start.
+2. An upgrade from 0.4.0 (the release RPMs in ~/uinitconverter-release) to this tree: is the reload held back, and does the devices service come up before the reboot.
+3. Owner: push; the getty/isolate decision (part 245); the held-back grep after the next Fedora update.

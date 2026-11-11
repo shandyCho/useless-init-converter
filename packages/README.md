@@ -3,7 +3,7 @@
 [English](README-us.md)
 
 본체(`crates/`)의 실행 파일은 각각 RPM 패키지 하나가 됩니다. 소스는 Cargo 작업공간
-하나에 그대로 있고, 다섯 패키지 모두 같은 소스 타르볼로 빌드합니다. 라이브러리
+하나에 그대로 있고, 여섯 패키지 모두 같은 소스 타르볼로 빌드합니다. 라이브러리
 크레이트(`uinitconverter-base`, `uinitconverter-install`, `uinitconverter-exec`, `uinitconverter-client`)는
 실행 파일에 정적으로 링크되므로 빌드할 때만 쓰이고, 따로 패키지가 되지 않습니다.
 
@@ -12,6 +12,7 @@
 | `uinitconverter-runner` | `initconvert-runner` | s6, shadow-utils. `uinitconverterd`는 권장(`OnFailure=`/`OnSuccess=` 유닛을 데몬으로 시작) |
 | `uinitconverterd` | `initconvertd`, D-Bus 정책(`uinitconverter.conf`) | s6, `uinitconverter-runner`, `uinitconverter-gen`(reload가 실행합니다). `uinitconverter-timers`는 권장(`systemd-run --on-calendar`). `uinitconverter-user`(0.3.0 뒤에 삭제된 s6 사용자 매니저, docs/etc 참고)를 Obsoletes |
 | `uinitconverter-timers` | `initconvert-timers` | `uinitconverterd` (타이머가 유닛을 데몬으로 시작) |
+| `uinitconverter-devices` | `initconvert-devices` | `uinitconverterd` (장치가 요청하는 유닛을 데몬으로 시작) |
 | `uinitconverter-gen` | `initconvert-gen`, `/var/lib/uinitconverter` | s6-rc, `uinitconverter-runner`, `uinitconverter-timers` (생성된 서비스가 실행) |
 | `uinitconverter` | `initconvert` 명령(부팅 설정 `initconvert init` 포함), `early`, 설정, s6 서비스, s6-linux-init 골격, SELinux 모듈, kernel-install 플러그인, `/var/log/uinitconverter` | s6, s6-linux-init, s6-rc, execline, dbus-daemon, util-linux, policycoreutils-python-utils, grubby, 그리고 위의 도구 패키지 네 개 |
 
@@ -41,7 +42,7 @@ packages/build-rpms.sh --test     # 테스트용 빠른 빌드(아래 참고)
 sudo도 쓰지 않습니다. 필요한 것: `rpm-build`, `cargo`, `rust`.
 
 **테스트용 빠른 빌드.** spec마다 자기 트리에서 빌드하므로, 보통 빌드는 모든 크레이트를
-다섯 번 컴파일하고 spec마다 `%check`에서 `cargo test`를 실행합니다. VM 등에서 시험만 할
+여섯 번 컴파일하고 spec마다 `%check`에서 `cargo test`를 실행합니다. VM 등에서 시험만 할
 RPM이라면 다음 옵션으로 줄일 수 있습니다(기본은 꺼짐):
 
 | 옵션 | 효과 |
@@ -64,8 +65,8 @@ spec에는 버전을 적지 않습니다. 스크립트가 정해서 전달하므
   변경이 있으면 끝에 `.dirty`가 붙습니다. 예: `uinitconverter-gen-0.1.0-1.20261021071849.g0023111.fc45`.
   빌드 시각이 앞에 오므로, 버전을 그대로 두고 Rust 코드만 수정해서 다시 빌드해도 dnf는
   새 빌드를 업그레이드로 봅니다.
-- 다섯 패키지는 같은 버전-릴리스끼리만 맞도록 묶여 있고, 스크립트는 언제나 다섯 개를
-  함께 빌드합니다. `rpms/`에는 마지막 빌드의 다섯 개만 남습니다.
+- 여섯 패키지는 같은 버전-릴리스끼리만 맞도록 묶여 있고, 스크립트는 언제나 여섯 개를
+  함께 빌드합니다. `rpms/`에는 마지막 빌드의 여섯 개만 남습니다.
 - RPM으로 빌드한 도구의 `--version`은 패키지의 버전-릴리스를 보여 줍니다(예:
   `initconvert-gen 0.1.0-1.20261021073517.gc8aabf8.fc45`). 소스에서 빌드하면
   `0.1.0 (git c8aabf8)`처럼 커밋을 보여 줍니다.
@@ -90,7 +91,7 @@ packages/github-release.sh DIR         # 다른 위치
 커밋된 트리가 필요하고, 새로 만든 `DIR/work`에서 `packages/build-rpms.sh`와
 `standalone/*/build-rpm.sh`를 실행한 뒤 다음을 모읍니다.
 
-- `DIR/assets/`: 바이너리 RPM(본체 다섯 패키지와 독립 도구. debuginfo 패키지는 빼고)과
+- `DIR/assets/`: 바이너리 RPM(본체 여섯 패키지와 독립 도구. debuginfo 패키지는 빼고)과
   `SHA256SUMS`. skarnet.org 패키지는 릴리스에 넣지 않습니다. 사용자가 각자
   `dist/rpm/build-skarnet-rpms.sh`로 빌드합니다.
 - `DIR/NOTES.md`: 릴리스 본문. 커밋, RPM을 빌드한 Fedora 릴리스와 아키텍처, 설치 명령,
@@ -219,4 +220,4 @@ sudo rm -rf /var/lib/sdcompat /var/log/sdcompat
 `sdcompat.conf`만 `uinitconverter.conf`가 됩니다).
 
 제거: `sudo initconvert init --uninstall` 다음
-`dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverterd`.
+`dnf remove uinitconverter uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverter-devices uinitconverterd`.

@@ -141,6 +141,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 | `initconvertd` | `daemon` | 시스템 버스 **그리고** `/run/systemd/private`에서 `org.freedesktop.systemd1`을 제공합니다(systemd 259 이상의 `systemctl`은 root로 실행될 때 이 소켓만 사용합니다). |
 | `initconvert-runner` | `run/finish/up/down`, `stop-exec`, `reload-exec`, `stop-atom`, `confine`, `accept/accept-finish`, `connection` | 생성된 s6 스크립트와 데몬이 호출합니다. systemd가 `fork()`와 `exec()` 사이에서 하는 일을 합니다. `stop-atom`은 longrun의 `UNIT.stop` oneshot의 `down`(그 `ExecStop=`)입니다. `confine UNIT -- COMMAND`는 s6가 직접 시작하는 프로그램에 유닛의 cgroup, 제한, 샌드박스를 적용합니다(`--bus=broker`의 시스템 버스). `accept`/`accept-finish`는 `Accept=yes` 소켓의 `run`/`finish`이고(s6-ipcserverd나 s6-tcpserverd를 exec합니다), 그 서버가 클라이언트마다 `connection`을 실행합니다. |
 | `initconvert-timers` | `timer-run`, `path-run` | `.timer`(다음 실행 시각 계산)나 `.path` 유닛(inotify 감시) 하나를 s6 longrun으로 실행하고, 데몬에 유닛 시작을 요청합니다. |
+| `initconvert-devices` | (없음) | s6 longrun `uinitconverter-devices`입니다. udev 데이터베이스와 udevd 이벤트를 읽고, 장치가 요청하는 유닛(`SYSTEMD_WANTS`)을 시작하라고 데몬에 요청합니다. uinitconverter 자체 D-Bus 인터페이스의 `StartWanted`(reload를 일으키지 않는 시작)를 씁니다. 데몬은 장치를 직접 감시하지 않습니다. |
 | `initconvert` | 위의 모든 명령(`stop-atom`/`confine`/`accept`/`accept-finish`/`connection` 제외) | 사용자가 쓰는 명령(`/usr/bin/initconvert`)입니다. 해당 명령을 처리하는 도구를 실행하므로 `initconvert reload`도 그대로 동작합니다. `fdstore`, `journal-relay`, `linkwatch`, `notify`는 설치되어 있으면 독립 도구를 실행합니다. |
 | | `log UNIT [-f]` | 서비스 로그를 보여 줍니다. 이 설치가 로그를 두는 곳에 따라 `journalctl -u`이거나, `JOURNAL=no`이면 s6-log 디렉터리에 대한 `tail`입니다. 유닛을 시작하거나 멈출 때는 `systemctl`이나 `s6-rc`를 씁니다. `initconvertd`는 데몬 역할만 합니다. |
 | | `rc stop-instances` | `rc.shutdown`(`initconvert rc shutdown`)이 가장 먼저 하는 일입니다. `dbus-send` 호출 하나로, s6-rc가 서비스를 멈추기 전에 그 서비스들 뒤에 순서가 잡힌 요청 시 인스턴스(`user@UID` 등)를 멈추라고 데몬에 요청합니다. |
@@ -242,8 +243,8 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 - D-Bus 활성화 요청은 버스 데몬 자신이 보낸 것만 받아들이며, 활성화 때문에 데이터베이스를 다시 만들지 않습니다.
 - 같은 유닛의 작업은 차례로 실행되며, 대기 중인 작업은 취소할 수 있습니다.
 - 장치가 요청하는 유닛(udev의 `SYSTEMD_WANTS`, 예: 블루투스 어댑터의 `bluetooth.target`,
-  `sound.target`, `bolt.service`)은 장치가 나타나면 시작됩니다. udevd의 이벤트와, 데몬이
-  시작할 때는 udev 데이터베이스를 봅니다. 그중 제외된 유닛(`systemd-backlight@`,
+  `sound.target`, `bolt.service`)은 장치가 나타나면 시작됩니다. `initconvert-devices`(별도의 s6 서비스)가
+  udevd의 이벤트와, 시작할 때는 udev 데이터베이스를 읽고 데몬에 시작을 요청합니다. 그중 제외된 유닛(`systemd-backlight@`,
   `systemd-rfkill`)은 건너뜁니다.
 
 ## 아직 구현되지 않은 기능
@@ -687,10 +688,10 @@ crates/                    본체 (Cargo 작업공간 하나)
                            connection.rs(Accept=yes: accept와 connection)
     supervisor.rs          러너가 s6-supervise에 묻는 것
   uinitconverter-timers/         타이머와 path 유닛 러너 (도구 initconvert-timers)
+  uinitconverter-devices/        장치가 요청하는 유닛, udev에서 (도구 initconvert-devices)
   uinitconverterd/               D-Bus API: 디스패치, 속성, s6 백엔드, private 소켓,
                            요청 시 인스턴스(dynamic.rs), systemd-run(transient.rs),
-                           장치가 요청하는 유닛(devices.rs), SELinux 접근 검사
-                           (access.rs) (도구 initconvertd)
+                           SELinux 접근 검사(access.rs) (도구 initconvertd)
     daemon/mod.rs          Daemon 타입, 유닛 불러오기, 메인 루프
     daemon/                dispatch.rs, manager.rs(Manager 메서드), jobs.rs,
                            scopes.rs(StartTransientUnit), accept.rs(Accept=yes

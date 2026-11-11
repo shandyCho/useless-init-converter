@@ -829,7 +829,7 @@ expect_state devwant.service active/running
 expect_state devnotready.service inactive/dead 1
 expect_state devuntagged.service inactive/dead 1
 expect_eq "devices recorded" "$(cat "$R/run/devices")" "+test:dev0 devwant.service"
-# A restarted daemon starts only what is new: devwant stays stopped.
+# A restarted initconvert-devices starts only what is new: devwant stays stopped.
 call StopUnit ss devwant.service replace
 expect_state devwant.service inactive/dead
 touch "$W/udev/tags/systemd/+test:dev3"
@@ -844,6 +844,10 @@ restart_daemon() {
     "$DAEMON" --config "$1" daemon --address "unix:path=$R/bus" >>"$W/daemon.log" 2>&1 &
     echo $! > "$W/daemon.pid"
     sleep 1
+    # initconvert-devices with it (it reads udev's database when it starts).
+    kill "$(cat "$W/devices.pid")" 2>/dev/null
+    "$(dirname "$DAEMON")/initconvert-devices" --config "$1" >>"$W/daemon.log" 2>&1 &
+    echo $! > "$W/devices.pid"
 }
 grep -v '^ALLOW_UIDS=' "$W/uinitconverter.conf" > "$W/unpriv.conf"
 DAEMON=$(dirname "$(sed -n 's/^RUNNER=//p' "$W/uinitconverter.conf")")/initconvertd

@@ -72,7 +72,8 @@ fn tool_path(name: &str) -> PathBuf {
 }
 
 /// The core tools, whose builds should match this one.
-const CORE_TOOLS: [&str; 4] = [
+const CORE_TOOLS: [&str; 5] = [
+    "initconvert-devices",
     "initconvert-gen",
     "initconvert-runner",
     "initconvert-timers",

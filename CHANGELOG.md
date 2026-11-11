@@ -30,6 +30,12 @@
   생성기를 품지 않습니다. `daemon-reload` 때 잠금을 잡은 채
   `initconvert-gen reload --direct`를 실행하고 그 출력을 읽습니다.
   `uinitconverterd` 패키지가 이제 `uinitconverter-gen`을 요구합니다.
+- **장치가 요청하는 유닛은 별도 도구가 시작합니다.** `initconvert-devices`(패키지
+  `uinitconverter-devices`, s6 서비스 `uinitconverter-devices`)가 udev를 읽고 데몬에
+  요청합니다. 데몬은 더는 udev를 감시하지 않습니다. 본체 패키지가 여섯 개가 됩니다.
+  `dnf upgrade ./*.rpm`이 나머지와 함께 설치합니다(`uinitconverter`가 요구합니다).
+  업데이트 뒤 새로 꽂은 장치의 유닛은 새 서비스가 실행된 뒤에 시작됩니다. reload가
+  바로 적용되면 즉시, 아니면 다음 부팅부터입니다.
 
 ## 0.4.0 (2026-11-11)
 

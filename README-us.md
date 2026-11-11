@@ -30,7 +30,7 @@ commands are `initconvert` (`initconvert init`, `initconvert reload`, ...) and
 |---|---|---|---|
 | s6 and related tools | skalibs, execline, s6, s6-rc, s6-linux-init, s6-frontend, mdevd | Yes | You build them (step 2) |
 | TCP super-server | s6-dns, s6-networking | Optional: only for `Accept=yes` TCP sockets such as `sshd.socket` | Built in step 2; to leave them out, delete their `.rpm` files before `dnf install` |
-| Core | `uinitconverter`, `uinitconverterd`, `uinitconverter-gen`, `uinitconverter-runner`, `uinitconverter-timers` | Yes | Release or source (step 3) |
+| Core | `uinitconverter`, `uinitconverterd`, `uinitconverter-gen`, `uinitconverter-runner`, `uinitconverter-timers`, `uinitconverter-devices` | Yes | Release or source (step 3) |
 | Standalone tools | The four below | Optional | Release or source (step 3) |
 
 The standalone tools are separate projects. Each one builds, installs and runs

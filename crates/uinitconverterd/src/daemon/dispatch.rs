@@ -184,6 +184,37 @@ impl Daemon {
             self.stop_dynamic_at_shutdown().await;
             return self.reply(c, msg, &()).await;
         }
+        if path == MANAGER_PATH && iface == UINITCONVERTER_IFACE && member == "StartWanted" {
+            // initconvert-devices: a unit a device wants (udev's
+            // SYSTEMD_WANTS), named with the device. A start like any
+            // other, except that it never reloads (a device event must not
+            // regenerate the database for a unit gen doesn't translate) and
+            // RefuseManualStart= doesn't apply, as for systemd's own device
+            // jobs. The reply is the job's result, empty for a unit this
+            // install excludes (systemd-backlight@, systemd-rfkill, ...).
+            let (name, dev): (String, String) = Self::args(msg)?;
+            self.mac_unit(c, msg, &name, "start").await?;
+            // initconvert-devices runs as the daemon's own user (root on a
+            // real boot); anyone else needs what StartUnit needs.
+            if self.caller_uid(c, msg).await != Some(unsafe { libc::getuid() }) {
+                self.require_privileged(c, msg).await?;
+            }
+            if self.cfg.is_excluded(&name) {
+                return self.reply(c, msg, &("",)).await;
+            }
+            let (id, unit) = self.check_job(&name, "start", false, false).await?;
+            let job = self.new_job(&id, "start");
+            self.emit(
+                MANAGER_PATH,
+                MANAGER_IFACE,
+                "JobNew",
+                &(job, op(job_path(job)), id.clone()),
+            )
+            .await;
+            let r = self.execute_job(job, &id, &unit, "start", "replace").await;
+            eprintln!("initconvertd: {id} wanted by device {dev}: {r}");
+            return self.reply(c, msg, &(r,)).await;
+        }
         if path == MANAGER_PATH && (iface.is_empty() || iface == MANAGER_IFACE) {
             return self.manager_method(c, msg, member).await;
         }

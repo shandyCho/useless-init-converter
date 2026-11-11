@@ -65,7 +65,7 @@ if [ "$BOOT" = s6 ]; then
     CORE=${CORE_RPMS:-$D/rpmbuild/core/rpms} STANDALONE=${STANDALONE_RPMS:-$D/rpmbuild/standalone/rpms}
     RPMS=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/rpms}
     pkgs="core:uinitconverter core:uinitconverterd core:uinitconverter-gen core:uinitconverter-runner
-        core:uinitconverter-timers standalone:uinitconverter-fdstore
+        core:uinitconverter-timers core:uinitconverter-devices standalone:uinitconverter-fdstore
         standalone:uinitconverter-notify standalone:uinitconverter-linkwatch standalone:uinitconverter-journal-relay
         skarnet:skalibs skarnet:execline skarnet:s6 skarnet:s6-rc skarnet:s6-linux-init skarnet:s6-frontend
         skarnet:mdevd skarnet:s6-dns skarnet:s6-networking"

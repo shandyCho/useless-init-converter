@@ -35,7 +35,7 @@ if [ "${2:-}" = stop ]; then
     # Only processes of this sandbox (their command line names $W or $R):
     # a PID in an old file may belong to anything by now, the machine's own
     # s6 tree included.
-    for pid in $(cat "$W/pids" "$W/daemon.pid" 2>/dev/null); do
+    for pid in $(cat "$W/pids" "$W/daemon.pid" "$W/devices.pid" 2>/dev/null); do
         cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null) || continue
         case $cmd in
         *"$W"* | *"$R"*) kill "$pid" 2>/dev/null ;;
@@ -1108,6 +1108,9 @@ fi
 "$DAEMON" $C daemon --address "unix:path=$R/bus" >"$W/daemon.log" 2>&1 &
 echo $! > "$W/daemon.pid"
 sleep 0.5
+# The units devices want (the uinitconverter-devices s6 service on a real boot).
+"$BIN/initconvert-devices" $C >>"$W/daemon.log" 2>&1 &
+echo $! > "$W/devices.pid"
 
 echo "sandbox ready"
 echo "  bus:     unix:path=$R/bus"

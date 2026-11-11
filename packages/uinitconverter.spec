@@ -33,6 +33,7 @@ Requires:       grubby
 Requires:       uinitconverter-gen = %{version}-%{release}
 Requires:       uinitconverter-runner = %{version}-%{release}
 Requires:       uinitconverter-timers = %{version}-%{release}
+Requires:       uinitconverter-devices = %{version}-%{release}
 Requires:       uinitconverterd = %{version}-%{release}
 Requires(post): policycoreutils
 Requires(postun): policycoreutils
@@ -60,7 +61,7 @@ the uinitconverter command, which passes each subcommand to the tool that handle
 it, and the boot setup: `sudo initconvert init` adds a GRUB entry that boots
 with s6, from this package's configuration, hand-written s6-rc services,
 s6-linux-init skeleton, SELinux policy module and kernel-install plugin. The tools come in their own packages: uinitconverter-gen, uinitconverter-runner,
-uinitconverter-timers and uinitconverterd.
+uinitconverter-timers, uinitconverter-devices and uinitconverterd.
 
 %prep
 %autosetup -n uinitconverter-%{version}

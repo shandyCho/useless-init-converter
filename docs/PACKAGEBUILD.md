@@ -125,7 +125,7 @@ sudo dnf upgrade ~/uinitconverter-test/rpms/*.rpm
 sudo initconvert init --yes
 ```
 
-`rpms/`에는 마지막 빌드의 패키지만 남으므로 `*.rpm`은 언제나 서로 맞는 한 벌입니다(본체 다섯 개는 서로
+`rpms/`에는 마지막 빌드의 패키지만 남으므로 `*.rpm`은 언제나 서로 맞는 한 벌입니다(본체 여섯 개는 서로
 정확히 같은 버전-릴리스를 요구합니다).
 
 ## 2. 릴리스 빌드
@@ -143,7 +143,7 @@ skarnet.org 패키지는 들어가지 않습니다. 사용자가 0단계처럼 �
    날짜로 바꿉니다.
 4. **릴리스 노트 쌍.** `packages/release-notes/VERSION.md`와 `VERSION-us.md`를 씁니다(형식은 이전
    노트를 복사). `github-release.sh`가 이것을 릴리스 글에 넣습니다.
-5. **spec 변경 이력.** `packages/`의 spec 다섯 개 각각의 `%changelog`에 항목을 추가합니다. spec에는
+5. **spec 변경 이력.** `packages/`의 spec 여섯 개 각각의 `%changelog`에 항목을 추가합니다. spec에는
    버전과 릴리스를 적지 않습니다. `build-rpms.sh`가 정합니다.
 
 ### 2.2 릴리스 트리 테스트
@@ -210,7 +210,7 @@ vendor tarball이 들어 있어 그대로 네트워크 없이 다시 빌드됩�
 
 ```sh
 dist/rpm/build-skarnet-rpms.sh --srpm          # ~/rpmbuild-skarnet/srpms. skarnet.versions 순서대로 빌드
-packages/build-rpms.sh --srpm                  # ~/rpmbuild-uinitconverter/srpms. 다섯 개를 함께
+packages/build-rpms.sh --srpm                  # ~/rpmbuild-uinitconverter/srpms. 여섯 개를 함께
 standalone/uinitconverter-fdstore/build-rpm.sh --srpm
 ```
 

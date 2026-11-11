@@ -63,14 +63,16 @@ newest() {
     find "$1" -maxdepth 1 -name "$2-[0-9]*.rpm" | sort | tail -1
 }
 mkdir "$S/rpms" "$S/new"
-core=(uinitconverter uinitconverterd uinitconverter-gen uinitconverter-runner uinitconverter-timers)
+core=(uinitconverter uinitconverterd uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverter-devices)
 for p in "${core[@]}"; do
     f=$(newest "$CORE" $p)
     [ -n "$f" ] || { echo "no $p RPM in $CORE (packages/build-rpms.sh)" >&2; exit 1; }
     if [ "$MODE" = upgrade ]; then cp "$f" "$S/new/"; else cp "$f" "$S/rpms/"; fi
 done
 if [ "$MODE" = upgrade ]; then
-    for p in "${core[@]}" uinitconverter-user; do
+    # 0.3.0's packages: no uinitconverter-devices yet (the daemon watched
+    # udev itself), and the s6 user manager.
+    for p in uinitconverter uinitconverterd uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverter-user; do
         f=$(newest "$OLD" $p)
         [ -n "$f" ] || { echo "no $p RPM in $OLD (0.3.0's)" >&2; exit 1; }
         cp "$f" "$S/rpms/"

@@ -1,0 +1,3 @@
+#!/usr/bin/execlineb -P
+# Starts the units udev's devices want (SYSTEMD_WANTS), through initconvertd.
+/usr/libexec/uinitconverter/initconvert-devices --ready-fd 3

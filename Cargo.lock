@@ -687,6 +687,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "uinitconverter-devices"
+version = "0.4.0"
+dependencies = [
+ "libc",
+ "tokio",
+ "uinitconverter-base",
+ "uinitconverter-client",
+ "uinitconverter-version",
+ "zbus",
+]
+
+[[package]]
 name = "uinitconverter-exec"
 version = "0.4.0"
 dependencies = [

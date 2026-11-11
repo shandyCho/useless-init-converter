@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the uinitconverter RPMs (uinitconverter, uinitconverter-gen, uinitconverter-runner,
-# uinitconverter-timers, uinitconverterd) from the core workspace. They share one source
+# uinitconverter-timers, uinitconverter-devices, uinitconverterd) from the core workspace. They share one source
 # tarball with the crates vendored, so rpmbuild needs no network.
 #
 #   packages/build-rpms.sh [OUTDIR]          # default: ~/rpmbuild-uinitconverter
@@ -49,7 +49,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 OUT=${1:-$HOME/rpmbuild-uinitconverter}
-PACKAGES=(uinitconverter-runner uinitconverterd uinitconverter-timers uinitconverter-gen uinitconverter)
+PACKAGES=(uinitconverter-runner uinitconverterd uinitconverter-timers uinitconverter-devices uinitconverter-gen uinitconverter)
 
 die() { echo "error: $*" >&2; exit 1; }
 command -v rpmbuild >/dev/null || die "rpmbuild missing: sudo dnf install rpm-build"

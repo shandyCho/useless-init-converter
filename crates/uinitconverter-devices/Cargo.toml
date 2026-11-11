@@ -1,0 +1,18 @@
+[package]
+name = "uinitconverter-devices"
+version.workspace = true
+edition.workspace = true
+description = "Start the units udev's devices want (SYSTEMD_WANTS) under s6 (initconvert-devices)"
+
+# The command is initconvert-devices; the crate and the package keep their names.
+[[bin]]
+name = "initconvert-devices"
+path = "src/main.rs"
+
+[dependencies]
+uinitconverter-version.workspace = true
+uinitconverter-base.workspace = true
+uinitconverter-client.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+libc.workspace = true

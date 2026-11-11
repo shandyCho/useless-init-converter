@@ -8,7 +8,6 @@
 mod accept;
 mod access;
 mod caller;
-mod devices;
 mod dispatch;
 mod dynamic;
 mod errors;
@@ -396,8 +395,8 @@ impl Daemon {
 
     /// The reload itself: `initconvert-gen reload --direct`, with s6.lock
     /// held by the caller. Its stdout is the result (genout::Reloaded);
-    /// its stderr goes to our log, and its last line is the error when it
-    /// fails.
+    /// its stderr goes to our log, and its last message is the error when
+    /// it fails.
     async fn run_gen_reload(&self) -> Result<crate::genout::Reloaded, String> {
         let out = self
             .gen_command(&["reload", "--direct"])
@@ -415,11 +414,22 @@ impl Daemon {
         );
         match parsed {
             Some(r) if out.status.success() => Ok(r),
-            _ => Err(stderr
-                .lines()
-                .last()
-                .map(|l| l.trim_start_matches("initconvert-gen: ").to_string())
-                .unwrap_or_else(|| format!("initconvert-gen reload: {}", out.status))),
+            _ => {
+                // The tool's last message: from its last "initconvert-gen: "
+                // line to the end (a failed command's output has more lines).
+                let lines: Vec<&str> = stderr.lines().collect();
+                let from = lines
+                    .iter()
+                    .rposition(|l| l.starts_with("initconvert-gen: "))
+                    .unwrap_or(0);
+                let text = lines[from..].join("\n");
+                let text = text.trim_start_matches("initconvert-gen: ").trim();
+                Err(if text.is_empty() {
+                    format!("initconvert-gen reload: {}", out.status)
+                } else {
+                    text.to_string()
+                })
+            }
         }
     }
 
@@ -692,8 +702,6 @@ pub async fn run(cfg: Config, bus: Bus, ready_fd: Option<i32>) -> Result<(), Str
             rec.reconcile_stop_atoms().await;
         }
     });
-
-    tokio::spawn(daemon.clone().watch_devices());
 
     let gc = daemon.clone();
     tokio::spawn(async move {
