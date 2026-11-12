@@ -4,7 +4,7 @@
 # build time and git commit, so each rebuild is an upgrade for dnf. Plain
 # rpmbuild on such a tarball gives release 1.
 Name:           uinitconverter-linkwatch
-Version:        0.2.0
+Version:        0.3.0
 Release:        %{?build_release}%{!?build_release:1}%{?dist}
 Summary:        Unblocks s6-rc-update waits that missed a supervisor's start
 # Choose a license before distributing.
@@ -38,6 +38,10 @@ install -Dm0755 target/release/initconvert-linkwatch %{buildroot}%{_libexecdir}/
 %{_libexecdir}/uinitconverter/initconvert-linkwatch
 
 %changelog
+* Thu Nov 12 2026 uinitconverter developers - 0.3.0-1
+- Also unblocks a start whose s6-svc -u reached no supervisor (s6-svlisten
+  waiting for a service nobody asked up): sends the s6-svc -u again
+
 * Mon Nov 09 2026 uinitconverter developers - 0.2.0-1
 - The command is now initconvert-linkwatch (the package keeps its name)
 

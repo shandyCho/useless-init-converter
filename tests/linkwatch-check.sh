@@ -12,11 +12,16 @@
 # directory must be left alone and time out. /run/uinitconverter is init_var_run_t,
 # which linkwatch (init_t) may write; in /tmp the fifos would be user_tmp_t
 # and the check would fail on SELinux instead. Everything it creates is
+# Then a start that lost its command: `s6-svlisten -u ... s6-svc -u` on a
+# second throwaway directory whose supervisor only starts afterwards (as
+# s6-svscan replaces supervisors after an s6-rc-update), so nobody asked
+# the service up and the wait would last until its timeout; linkwatch must
+# send the s6-svc -u again. Everything it creates is
 # removed at the end; no real service is touched.
 set -u
 
 usage() {
-    sed -n '2,15s/^# \{0,1\}//p' "$0" >&2
+    sed -n '2,20s/^# \{0,1\}//p' "$0" >&2
     exit 2
 }
 
@@ -34,6 +39,7 @@ bad() { echo "FAIL: $1"; fail=1; }
 
 cleanup() {
     s6-svc -x "$T/svc" 2>/dev/null
+    s6-svc -dx "$T/svc2" 2>/dev/null
     sleep 1
     rm -rf "$T" "$B"
 }
@@ -73,6 +79,29 @@ if [ $rc != 0 ]; then
     ok "a plain s6-ftrig-wait was left alone (exit $rc after $took s)"
 else
     bad "linkwatch sent an event to a waiter that is not s6-rc-update or s6-svlink"
+fi
+
+# A start whose s6-svc -u reached no supervisor.
+mkdir -p "$T/svc2"
+cp "$T/svc/run" "$T/svc2/run"
+touch "$T/svc2/down"
+s6-supervise "$T/svc2" >/dev/null 2>&1 &
+tries=25
+while [ $tries -gt 0 ] && ! s6-svok "$T/svc2" 2>/dev/null; do tries=$((tries - 1)); sleep 0.2; done
+s6-svc -x "$T/svc2"
+tries=25
+while [ $tries -gt 0 ] && s6-svok "$T/svc2" 2>/dev/null; do tries=$((tries - 1)); sleep 0.2; done
+t0=$(date +%s)
+s6-svlisten -u -t 30000 -- "$T/svc2" "" s6-svc -u -- "$T/svc2" >/dev/null 2>&1 &
+lpid=$!
+sleep 1
+s6-supervise "$T/svc2" >/dev/null 2>&1 &
+wait $lpid
+rc=$? took=$(($(date +%s) - t0))
+if [ $rc = 0 ] && [ $took -lt 25 ] && [ "$(s6-svstat -o up "$T/svc2" 2>/dev/null)" = true ]; then
+    ok "a start that lost its s6-svc -u came up after $took s"
+else
+    bad "the lost start: exit $rc after $took s, $(s6-svstat "$T/svc2" 2>&1)"
 fi
 
 if grep -q "initconvert-linkwatch: .*$T/svc" /run/uncaught-logs/current; then

@@ -13,6 +13,16 @@
 //! touched: a fifo whose event already came gets a duplicate, which the
 //! waiter has stopped looking at.
 //!
+//! The same window has a second victim: a start. `s6-rc change` runs
+//! `s6-svlisten -u|-U ... DIR s6-svc -u -- DIR`; when DIR's supervisor is
+//! not running at that moment (s6-svscan is replacing it after an
+//! s6-rc-update), s6-svc's command reaches nobody, and s6-svlisten waits for
+//! an up event of a service nobody asked up, until its timeout, holding
+//! s6-rc's lock. When such a wait has lasted --after seconds, the service's
+//! supervisor runs, and `s6-svstat` says it was never started and isn't
+//! wanted up, this runs `s6-svc -u -- DIR` again: the command the waiter
+//! sent. A service that ran and went down is left alone.
+//!
 //! Only waiters that run entirely as our own user are considered (root on
 //! the real system): a process's name is anyone's to choose. The event is
 //! written through the waiter's own descriptor (/proc/PID/fd/N), never by
@@ -42,6 +52,47 @@ usage: initconvert-linkwatch [--after SECONDS] [--interval SECONDS] [--under DIR
 
 /// The programs whose s6-ftrigrd waits in s6_supervise_link_names().
 const WAITERS: [&str; 2] = ["s6-rc-update", "s6-svlink"];
+/// The program whose s6-ftrigrd waits for a service to come up.
+const START_WAITER: &str = "s6-svlisten";
+
+/// Whether a command line (NUL-separated, /proc/PID/cmdline) is an
+/// s6-svlisten that sent `s6-svc -u`: `... -- DIR s6-svc -u -- DIR`.
+fn sends_up(cmdline: &[u8]) -> bool {
+    let args: Vec<&[u8]> = cmdline.split(|&b| b == 0).collect();
+    args.windows(2)
+        .any(|w| w[1] == b"-u" && (w[0] == b"s6-svc" || w[0].ends_with(b"/s6-svc")))
+}
+
+/// Whether `s6-svstat`'s line is that of a service that was never started
+/// and isn't wanted up: "down (not started yet) N seconds", with no
+/// "want up".
+fn never_asked_up(svstat: &str) -> bool {
+    svstat.starts_with("down (not started yet)") && !svstat.contains("want up")
+}
+
+/// Send the start command the waiter's s6-svc lost: `s6-svc -u -- DIR`, if
+/// s6-svstat still says nobody asked DIR up.
+fn send_up(svc: &Path) -> Result<bool, String> {
+    let out = std::process::Command::new("s6-svstat")
+        .arg("--")
+        .arg(svc)
+        .output()
+        .map_err(|e| format!("s6-svstat: {e}"))?;
+    if !out.status.success() || !never_asked_up(&String::from_utf8_lossy(&out.stdout)) {
+        return Ok(false);
+    }
+    let st = std::process::Command::new("s6-svc")
+        .arg("-u")
+        .arg("--")
+        .arg(svc)
+        .status()
+        .map_err(|e| format!("s6-svc: {e}"))?;
+    if st.success() {
+        Ok(true)
+    } else {
+        Err(format!("s6-svc -u: {st}"))
+    }
+}
 
 fn die(msg: &str) -> ! {
     eprintln!("initconvert-linkwatch: {msg}");
@@ -153,10 +204,18 @@ impl Watch {
             else {
                 continue;
             };
-            let Some(parent) = comm(&self.proc_dir, ppid).filter(|c| WAITERS.contains(&c.as_str()))
+            let Some(parent) = comm(&self.proc_dir, ppid)
+                .filter(|c| WAITERS.contains(&c.as_str()) || c == START_WAITER)
             else {
                 continue;
             };
+            let start_waiter = parent == START_WAITER;
+            if start_waiter
+                && !fs::read(self.proc_dir.join(ppid.to_string()).join("cmdline"))
+                    .is_ok_and(|c| sends_up(&c))
+            {
+                continue;
+            }
             if !runs_as(&self.proc_dir, pid, self.uid) || !runs_as(&self.proc_dir, ppid, self.uid) {
                 continue;
             }
@@ -187,6 +246,20 @@ impl Watch {
                     continue;
                 }
                 self.sent.insert((pid, fifo.clone()));
+                if start_waiter {
+                    match send_up(svc) {
+                        Ok(true) => {
+                            eprintln!(
+                                "initconvert-linkwatch: {parent} (pid {ppid}) waited {waited:.0} s for {} to come up, but nobody asked it up (its supervisor started after the command): sent s6-svc -u",
+                                svc.display()
+                            );
+                            done.push(fifo);
+                        }
+                        Ok(false) => {}
+                        Err(err) => eprintln!("initconvert-linkwatch: {}: {err}", svc.display()),
+                    }
+                    continue;
+                }
                 match send_event(&fd_link, &fifo, self.uid) {
                     Ok(()) => {
                         eprintln!(
@@ -307,6 +380,30 @@ mod tests {
             Some(rustix::io::Errno::NXIO.raw_os_error())
         );
         let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn a_start_that_lost_its_command() {
+        assert!(sends_up(
+            b"s6-svlisten\0-U\0-t\0105000\0--\0/run/s6-rc/servicedirs/a\0\0s6-svc\0-u\0--\0/run/s6-rc/servicedirs/a\0"
+        ));
+        assert!(sends_up(
+            b"s6-svlisten\0-u\0--\0/d\0\0/usr/bin/s6-svc\0-u\0--\0/d\0"
+        ));
+        // A stop, and a listener that sends nothing.
+        assert!(!sends_up(
+            b"s6-svlisten\0-D\0--\0/d\0\0s6-svc\0-d\0--\0/d\0"
+        ));
+        assert!(!sends_up(b"s6-svlisten\0-u\0--\0/d\0\0true\0"));
+        assert!(never_asked_up("down (not started yet) 6 seconds\n"));
+        // Asked up (it will come), or it ran and went down: not ours.
+        assert!(!never_asked_up(
+            "down (not started yet) 6 seconds, want up\n"
+        ));
+        assert!(!never_asked_up(
+            "down (exitcode 1) 6 seconds, normally up, ready 6 seconds\n"
+        ));
+        assert!(!never_asked_up("up (pid 12 pgid 12) 6 seconds\n"));
     }
 
     #[test]

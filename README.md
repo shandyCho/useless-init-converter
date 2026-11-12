@@ -37,7 +37,7 @@ D-Bus 클라이언트가 계속 동작하므로 dnf, SELinux enforcing, GNOME도
 
 | 도구 | 하는 일 | 없을 때 |
 |---|---|---|
-| [`uinitconverter-linkwatch`](standalone/uinitconverter-linkwatch/README.md) | s6 경쟁 상태로 멈춘 daemon-reload를 풀어 줍니다 | 멈춘 `s6-rc-update`를 죽일 때까지 그 reload와 이후의 모든 s6-rc 명령이 멈춥니다 |
+| [`uinitconverter-linkwatch`](standalone/uinitconverter-linkwatch/README.md) | s6 경쟁 상태로 멈춘 daemon-reload나 그 직후의 시작을 풀어 줍니다 | 멈춘 `s6-rc-update`를 죽일 때까지 그 reload와 이후의 모든 s6-rc 명령이 멈춥니다. 멈춘 시작은 유닛의 시작 타임아웃까지 s6-rc의 잠금을 잡고 있습니다 |
 | [`uinitconverter-fdstore`](standalone/uinitconverter-fdstore/README.md) | 서비스가 저장한 파일 디스크립터와 수신 소켓을 보관합니다 | `initconvertd`가 재시작할 때 사라지고, 요청 시 시작하는 서비스가 부팅 때 시작됩니다 |
 | [`uinitconverter-notify`](standalone/uinitconverter-notify/README.md) | `systemd-notify` 대체 도구입니다 | 프로그램들이 계속 설치되어 있는 `systemd-notify`를 씁니다 |
 | [`uinitconverter-journal-relay`](standalone/uinitconverter-journal-relay/README.md) | journald가 없을 때(기본값) journald의 클라이언트 소켓을 대신합니다 | `--journal=yes`(journald)만 쓸 수 있습니다 |

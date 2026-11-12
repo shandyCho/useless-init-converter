@@ -44,6 +44,15 @@ Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
   /run/s6-rc ... Device or resource busy": another s6-rc change or query at
   that moment). The reload's `s6-rc-update`, `s6-rc-set-install` and `s6-rc`
   calls now wait for the lock (`-b`), as the daemon's own calls did.
+- **A start right after a reload could hang for the unit's start timeout**
+  (90 s by default), holding s6-rc's lock: s6-rc-update returns while
+  s6-svscan may still be replacing supervisors, and a start's `s6-svc -u`
+  then reaches nobody. Seen as PackageKit's bus activation at the end of
+  `dnf upgrade`, with the reload after it failing or waiting. A reload now
+  waits until every live service directory has its supervisor, and
+  `initconvert-linkwatch` 0.3.0 sends the lost `s6-svc -u` again for a
+  start that is already stuck (also after an update from 0.3.0 or 0.4.0,
+  whose running daemons don't have the first fix).
 
 ## 0.4.0 (2026-11-11)
 

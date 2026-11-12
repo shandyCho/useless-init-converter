@@ -159,7 +159,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 |---|---|---|
 | `initconvert-fdstore` | `FDSTORE=` fd와 리스닝 소켓을 별도 프로세스에서 보관합니다. 설정 파일과 유닛 파일을 읽지 않습니다. | initconvertd가 직접 보관합니다. initconvertd를 다시 시작하면 사라집니다. |
 | `initconvert-journal-relay` | `JOURNAL=no`일 때 journald의 클라이언트 소켓(`/run/systemd/journal/socket`과 `stdout`)을 열고 받은 내용을 rsyslog로 전달합니다. `systemd --user`의 세션 버스인 dbus-broker는 이 소켓이 없으면 시작하지 않습니다. | `JOURNAL=no`에는 꼭 필요합니다. `JOURNAL=yes`(기본값)에서는 영향이 없습니다. |
-| `initconvert-linkwatch` | 새 감독자(supervisor)의 시작 이벤트가 수신 대기 전에 발생해 끝나지 않는 daemon-reload(`s6-rc-update`)나 `s6-svlink`의 대기를 해제합니다(s6의 경쟁 조건입니다. 이 대기는 끝나지 않으며 s6-rc의 잠금을 계속 보유합니다). 2초마다 `/proc`를 확인해 10초를 넘긴 대기를 처리합니다. | 해당 reload가 멈추고, 멈춘 `s6-rc-update`를 강제 종료할 때까지 이후의 모든 s6-rc 명령도 멈춥니다. |
+| `initconvert-linkwatch` | 새 감독자(supervisor)의 시작 이벤트가 수신 대기 전에 발생해 끝나지 않는 daemon-reload(`s6-rc-update`)나 `s6-svlink`의 대기를 해제합니다(s6의 경쟁 조건입니다. 이 대기는 끝나지 않으며 s6-rc의 잠금을 계속 보유합니다). `s6-svc -u`가 감독자에 닿지 못한 시작도 처리합니다(업데이트 뒤 s6-svscan이 감독자를 바꾸는 중이었을 때). 그 `s6-rc change`는 유닛의 시작 타임아웃까지 잠금을 잡은 채 서비스를 기다리게 되는데, linkwatch가 `s6-svc -u`를 다시 보냅니다. 2초마다 `/proc`를 확인해 10초를 넘긴 대기를 처리합니다. reload 자체도 모든 live 서비스 디렉터리에 감독자가 생길 때까지 기다린 뒤 끝나므로, reload 뒤에 줄 서 있던 시작에는 이 틈이 없습니다. | 해당 reload가 멈추고, 멈춘 `s6-rc-update`를 강제 종료할 때까지 이후의 모든 s6-rc 명령도 멈춥니다. 멈춘 시작은 타임아웃까지 s6-rc의 잠금을 잡고 있습니다. |
 | `initconvert-notify` | `systemd-notify` 대체입니다. `$NOTIFY_SOCKET`을 설정하는 어떤 서비스 관리자 아래에서도 동작합니다. | 계속 설치되어 있는 `systemd-notify`를 쓰면 됩니다. |
 
 각각의 빌드·설치·실행 방법: [standalone/uinitconverter-fdstore](../standalone/uinitconverter-fdstore/README.md),

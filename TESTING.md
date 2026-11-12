@@ -377,7 +377,7 @@ GNOME에 로그인한 뒤 터미널을 열고 다음을 차례로 확인하세�
 | 스왑(zram) | `swapon --show`와 `s6-rc -a list \| grep -x zram` | 우선순위 `100`인 `/dev/zram0`, 크기는 systemd 부팅과 같음(기본 `min(ram, 8 GiB)`). `zram`이 나옵니다 |
 | 무선 상태(rfkill) | GNOME 설정에서 블루투스를 끄고 s6 항목으로 재부팅한 뒤 `rfkill`과 `s6-rc -a list \| grep -x rfkill` | 재부팅 뒤에도 블루투스가 `blocked`. `rfkill`이 나옵니다(systemd-rfkill이 아니라 oneshot) |
 | reload 감시 | `sudo s6-svstat /run/service/uinitconverter-linkwatch`와 `sudo grep -h initconvert-linkwatch /run/uncaught-logs/current` | `up (pid …)`. 로그 줄은 reload가 멈췄을 때만 나옵니다(`… sent its start event`) |
-| reload 감시의 대기 해제 | `sudo tests/linkwatch-check.sh` (약 30초 걸립니다. /run/uinitconverter/lwtest에 임시 supervisor를 만들고 끝나면 지웁니다) | `ok:` 다섯 줄과 종료 코드 0: s6-rc-update라는 이름으로 대기하는 프로세스가 약 10초 뒤 놓친 시작 이벤트를 받고, 일반 s6-ftrig-wait는 시간 초과되며, linkwatch가 보낸 것을 로그에 남기고, 거부가 없습니다 |
+| reload 감시의 대기 해제 | `sudo tests/linkwatch-check.sh` (약 30초 걸립니다. /run/uinitconverter/lwtest에 임시 supervisor를 만들고 끝나면 지웁니다) | `ok:` 여섯 줄과 종료 코드 0: s6-rc-update라는 이름으로 대기하는 프로세스가 약 10초 뒤 놓친 시작 이벤트를 받고, 일반 s6-ftrig-wait는 시간 초과되며, `s6-svc -u`가 감독자를 찾지 못한 시작은 약 10초 뒤에 올라오고, linkwatch가 보낸 것을 로그에 남기고, 거부가 없습니다 |
 | 패키지 업데이트 시 재시작 | `systemctl show -p MainPID chronyd`, 이어서 `sudo dnf reinstall -y chrony`, 그다음 첫 명령을 다시 | MainPID가 바뀝니다(업데이트가 chronyd에 needs-restart를 표시하고 `systemctl enqueue-marked`가 재시작합니다) |
 | 패키지 업데이트 시 사용자 매니저 | `sudo systemctl --user -M $USER@ is-system-running`, 이어서 `sudo /usr/lib/systemd/systemd-update-helper user-reload-restart; echo $?` | `running` 또는 `degraded`(`systemd-run --pipe`를 거쳐 도달), 그다음 `0` |
 | 공유 마운트 전파 | `findmnt -no PROPAGATION /` | `shared`(systemd와 같습니다. `private`이면 나중에 한 마운트, 예를 들어 USB 메모리가 유닛·flatpak 앱·컨테이너에 보이지 않습니다) |

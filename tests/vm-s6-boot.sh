@@ -24,6 +24,8 @@
 # SKARNET_RPMS: default ~/rpmbuild-skarnet/rpms (devel packages left out).
 # OLD_RPMS (upgrade): 0.3.0's core RPMs, uinitconverter-user among them;
 # default DIR/rpmbuild/core-0.3.0.
+# UPGRADE_HOOK=FILE (upgrade): a script run as root in the VM between the
+# `dnf upgrade` and `initconvert init --yes`, to look at that mixed state.
 # SELINUX=permissive|enforcing (default enforcing) is init's --selinux=.
 # BUS=daemon|broker (default daemon) is init's --bus=, SYSLOG=rsyslog|syslog-ng
 # (default rsyslog) its --syslog= (syslog-ng is installed for it); the checks
@@ -296,6 +298,13 @@ done
 echo "   is-system-running: $(timeout 30 systemctl is-system-running 2>&1)"
 echo "-- initconvertd's lines since dnf:"
 timeout 30 journalctl -b --no-pager -o short-monotonic --since "@$t0" 2>/dev/null | grep -E "initconvert|s6-rc" | tail -40 | cut -c1-220 | sed 's/^/   /'
+# UPGRADE_HOOK (a script copied in as in/upgrade-hook.sh): run here, in the
+# state between the update and `initconvert init`: 0.3.0's daemon and
+# database still run, the new tools are on disk.
+if [ -e /home/tester/in/upgrade-hook.sh ]; then
+    echo "== upgrade hook"
+    bash /home/tester/in/upgrade-hook.sh 2>&1 | sed 's/^/   /'
+fi
 echo "== initconvert init --yes"
 timeout 600 initconvert init --yes 2>&1 | tail -15 | sed 's/^/   /'
 echo "   init: exit ${PIPESTATUS[0]}"
@@ -464,6 +473,10 @@ reboot_vm() {
 "$VM" start "$D"
 ssh_up
 "$VM" copy "$D" "$S/setup.sh" "$S/check.sh" "$S/upgrade.sh" "$S/rollback.sh"
+if [ "$MODE" = upgrade ] && [ -n "${UPGRADE_HOOK:-}" ]; then
+    cp "$UPGRADE_HOOK" "$S/upgrade-hook.sh"
+    "$VM" copy "$D" "$S/upgrade-hook.sh"
+fi
 "$VM" copy "$D" "$S"/rpms/*
 echo "== install and init (systemd boot)"
 "$VM" ssh "$D" sudo bash in/setup.sh "$MODE" "$SELINUX" "$BOOT_ONLY_S6" "$BUS" "$SYSLOG"

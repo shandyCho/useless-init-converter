@@ -821,6 +821,49 @@ fn relink_supervised(live: &Path) {
     }
 }
 
+/// After an update of the live database: wait until every live service
+/// directory has its supervisor. s6-rc-update returns while s6-svscan may
+/// still be replacing supervisors; a start in that window sends its
+/// `s6-svc -u` to nobody, and its `s6-rc change` then waits for an up event
+/// that can't come, holding s6-rc's lock until the service's start timeout
+/// (seen in the VM: PackageKit, bus-activated right after a reload, 105 s).
+/// Starts wait for a reload, so waiting here closes the window. Bounded:
+/// after 10 s it says which are missing and goes on.
+fn wait_supervised(live: &Path) {
+    let missing = || -> Vec<String> {
+        let Ok(dir) = fs::read_dir(live.join("servicedirs")) else {
+            return Vec::new();
+        };
+        dir.flatten()
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            .filter(|e| !uinitconverter_base::util::lock_held(&e.path().join("supervise/lock")))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect()
+    };
+    let mut left = missing();
+    if left.is_empty() {
+        return;
+    }
+    // Have s6-svscan look now rather than at its next scan.
+    if let Ok(scan) = fs::canonicalize(live.join("scandir")) {
+        let _ = Command::new(tools::path("s6-svscanctl"))
+            .arg("-a")
+            .arg(scan)
+            .status();
+    }
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        left = missing();
+        if left.is_empty() {
+            return;
+        }
+    }
+    eprintln!(
+        "uinitconverter: no supervisor yet for {} (a start of them may wait for its timeout)",
+        left.join(" ")
+    );
+}
+
 /// Plan and write the generated store, sync the repository with it, then
 /// commit the set and install it (as the live database too when
 /// `update_live` and a live s6-rc state exists).
@@ -862,6 +905,9 @@ pub fn regenerate(cfg: &Config, plan: Plan, update_live: bool) -> Result<GenResu
         .and_then(|_| commit_and_install(cfg, update_live, &mut set_changes));
     let updated_live = match res {
         Ok(r) => {
+            if r {
+                wait_supervised(&cfg.live_dir);
+            }
             if r && user_sessions_live && !plan.units.contains_key(USER_SESSIONS) {
                 reopen_logins(cfg, &mut set_changes);
             }

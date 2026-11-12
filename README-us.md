@@ -39,7 +39,7 @@ says:
 
 | Tool | What it does | Without it |
 |---|---|---|
-| [`uinitconverter-linkwatch`](standalone/uinitconverter-linkwatch/README-us.md) | Unblocks a daemon-reload stuck on an s6 race | Such a reload hangs, and so does every s6-rc command after it, until the stuck `s6-rc-update` is killed |
+| [`uinitconverter-linkwatch`](standalone/uinitconverter-linkwatch/README-us.md) | Unblocks a daemon-reload, or a start right after one, stuck on an s6 race | Such a reload hangs, and so does every s6-rc command after it, until the stuck `s6-rc-update` is killed; such a start holds s6-rc's lock until the unit's start timeout |
 | [`uinitconverter-fdstore`](standalone/uinitconverter-fdstore/README-us.md) | Holds services' stored file descriptors and listening sockets | They are lost when `initconvertd` restarts, and on-demand services start at boot |
 | [`uinitconverter-notify`](standalone/uinitconverter-notify/README-us.md) | `systemd-notify` replacement | Programs use `systemd-notify`, which stays installed |
 | [`uinitconverter-journal-relay`](standalone/uinitconverter-journal-relay/README-us.md) | Stands in for journald's client sockets without journald (the default) | Only `--journal=yes` (journald) can be used |

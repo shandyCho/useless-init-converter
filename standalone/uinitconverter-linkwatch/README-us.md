@@ -3,7 +3,8 @@
 **English** | [한국어](README.md)
 
 Unblocks `s6-rc-update` (a daemon-reload) and `s6-svlink` when they wait for a
-new supervisor's start event that came before they listened.
+new supervisor's start event that came before they listened, and a start
+(`s6-rc change`) whose `s6-svc -u` reached no supervisor.
 
 A standalone tool split out of uinitconverter. It reads no configuration and builds,
 installs and runs without the other uinitconverter parts. Its only dependency is
@@ -27,10 +28,21 @@ is `s6-rc-update` or `s6-svlink` and which has run for `--after` seconds or
 more (the subscribing takes milliseconds, so such a process is waiting). For
 each `event/ftrig1:*` fifo that s6-ftrigrd holds, if the service directory's
 `supervise/lock` is held (its supervisor runs, so its start event has been
-sent), it writes `s` into that fifo, once. Nothing else is touched: other
-programs' waits (s6-rc waiting for a service, s6-svwait) are left alone, and a
-fifo whose event already came gets a duplicate that the waiter no longer looks
-at.
+sent), it writes `s` into that fifo, once. A fifo whose event already came
+gets a duplicate that the waiter no longer looks at.
+
+The same window has a second victim, a start. `s6-rc change` runs
+`s6-svlisten ... DIR s6-svc -u -- DIR`; when DIR's supervisor isn't running at
+that moment (s6-svscan is replacing it after an s6-rc-update), s6-svc only
+warns ("supervisor not listening") and s6-svlisten waits for an up event of a
+service nobody asked up, until its timeout (the unit's start timeout),
+holding s6-rc's lock. So it also looks for an `s6-ftrigrd` whose parent is an
+`s6-svlisten` that sent `s6-svc -u` and has waited `--after` seconds: if the
+service's supervisor runs and `s6-svstat` says the service was never started
+and isn't wanted up, it runs `s6-svc -u -- DIR` again, once. A service that
+ran and went down, or that is wanted up, is left alone. Nothing else is
+touched: other programs' waits (s6-svwait, an s6-svlisten for a stop) stay as
+they are. This part runs s6's `s6-svstat` and `s6-svc` (from `PATH`).
 
 It needs to read the waiting processes' `/proc/PID/fd`: run it as the same
 user as they are (root on a real system). Waiters that don't run entirely
