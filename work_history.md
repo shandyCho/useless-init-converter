@@ -13500,3 +13500,23 @@ Not pushed: 452ee7e, 18b6711, 5265f2c, 74afcbe, dba8403, baee9aa, e5143b1, 72515
 1. An upgrade from 0.4.0's release RPMs to this tree (the new `uinitconverter-devices` service; `wait_supervised`'s first real use comes one release later). At the next release the `upgrade` mode moves to 0.4.0 (part 244).
 2. `sudo tests/linkwatch-check.sh` on the laptop once these RPMs are installed (six `ok:` lines).
 3. Owner: push; the getty/isolate decision (part 245); the held-back grep after the next Fedora update; `supervise/status` or `s6-svstat` (part 246's table).
+
+
+## 2026-11-12, part 253: the tests not re-run since steps 3 and 4
+
+Pushed up to 2f88b89 (the owner). On the tree at 2f88b89 and the RPMs of 9af46aa (they differ by work_history only), the four tests part 251 listed as not re-run:
+
+- `tests/confine-vm.sh`: 115 passed, 0 failed.
+- `tests/initramfs.sh`: 20 passed, 0 failed.
+- `BOOT=s6 tests/vm-user-manager.sh lifecycle`: 70 passed, 0 failed (stages 20, 8, 7, 4, 9, 5, 5, 8, 4).
+- `BOOT=s6 tests/vm-user-manager.sh confined`: 7 passed, 0 failed.
+
+### Current state
+
+Everything up to 2f88b89 is pushed; this entry is not. Every test of the project has passed on the tree after part 246's four steps and part 252's fix, except `sudo tests/linkwatch-check.sh` (root on an s6 boot) and anything on real hardware.
+
+### Next steps
+
+1. Owner: RPMs of this tree on the laptop (an upgrade from 0.4.0, not tested anywhere yet), a reboot, `sudo tests/linkwatch-check.sh` (six `ok:` lines), the devices service on real devices.
+2. Owner's decisions: the getty console settings and isolate's keys (part 245); `supervise/status` or `s6-svstat` (part 246's table).
+3. Then a release (0.5.0: a sixth package, `initconvertd start|stop|restart` removed, linkwatch 0.3.0); the `upgrade` mode moves to 0.4.0 (part 244).
