@@ -13670,3 +13670,20 @@ The owner chose to find the cause before releasing.
 ### Next steps
 
 1. Owner: release 0.5.0 with this known issue described (a few running services may be stopped or restarted when it happens), the test counting a restart after s6-rc-update's failure as that known issue (part 261 wrote and withdrew both); or look for a workaround on uinitconverter's side first (narrowing the window between the failed update and gen's relink).
+
+## 2026-11-13, part 263: release 0.5.0 built
+
+The owner chose to release with part 262's known issue.
+
+- The release notes pair's second known issue now says that when s6-ftrigrd crashes a few running services can be stopped or restarted before gen relinks them (seen: hostnamed restarted, localed stopped, on the first live reload after the update from 0.4.0). `tests/vm-s6-boot.sh`'s essential step reports a restart after "unable to manage new service directories" as `KNOWN` (no failure); any other restart fails. `bash -n` and shellcheck pass; this exact check hasn't run in the VM (the runs of parts 261-262 used its earlier forms).
+- "Release 0.5.0" is 4cbcb7c; release-0.5.0 fast-forwarded onto main. `packages/github-release.sh` on it, exit 0: 10 RPMs in ~/uinitconverter-release/assets (core 0.5.0-1.20261113070431.g4cbcb7c.fc45: uinitconverter, uinitconverterd, -devices, -gen, -runner, -timers; standalone fdstore, journal-relay, notify 0.2.0 and linkwatch 0.3.0) and SHA256SUMS, `sha256sum -c` 10 OK; NOTES.md carries the 0.5.0 notes. 0.4.0's assets in that directory are replaced; its core RPMs stay in ~/uinitconverter-vm/rpmbuild/core-0.4.0.
+- Publish line: `gh release create v0.5.0 -R shandyCho/useless-init-converter --target 4cbcb7c17c0e6d74cc00ae761a0e8685823f8b49 --title "uinitconverter 0.5.0" --notes-file ~/uinitconverter-release/NOTES.md ~/uinitconverter-release/assets/*`.
+
+### Current state
+
+0.5.0 is built, not published: main (up to this entry) is not pushed; no credentials here.
+
+### Next steps
+
+1. Owner: push main, then the publish line above.
+2. The release RPMs on the laptop, `sudo initconvert init --yes`, a reboot.
