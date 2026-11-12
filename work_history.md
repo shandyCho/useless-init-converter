@@ -13473,3 +13473,30 @@ Not pushed: 452ee7e, 18b6711, 5265f2c, 74afcbe, dba8403, baee9aa, e5143b1 and th
 1. The stuck start under a daemon restart (above): reproduce outside the upgrade (a slow Type=dbus start, `s6-svc -r` on uinitconverterd), then decide.
 2. An upgrade from 0.4.0's release RPMs (~/uinitconverter-release) to this tree: the new `uinitconverter-devices` service and the held-back reload before the reboot. At the next release the `upgrade` mode moves to 0.4.0 anyway (part 244).
 3. Owner: push; the getty/isolate decision (part 245); the held-back grep after the next Fedora update; whether `supervise/status` goes back to `s6-svstat` (part 246's table).
+
+
+## 2026-11-12, part 252: the stuck start behind the upgrade failure — found and fixed
+
+The owner asked to fix the one `upgrade` failure of part 251 (a start of packagekit.service holding s6-rc's lock for 105 s).
+
+**Finding it.**
+- Not a daemon restart under a start: in the sandbox a slow Type=notify start survives a daemon restart (the orphaned `s6-rc change` ends when the service is ready); in the VM on the current database, a PackageKit activation with the daemon restarted 0, 0.05, 0.2 and 0.5 s into it was ready within 2 s each time; the same three times in the mixed state after `dnf upgrade` (0.3.0's database; first 0.3.0's daemon restarted, then the new one). `tests/vm-s6-boot.sh` got `UPGRADE_HOOK=FILE` for this: a script run in the VM between the `dnf upgrade` and `initconvert init --yes`.
+- The pattern over ten earlier `upgrade` runs: the reload step failed exactly in the three runs where 0.3.0's daemon logged no "relinked ... (its supervisor still runs)" during the update's reload, i.e. where s6-rc-update succeeded at once; the seven with the s6-ftrigrd crash and the retry passed.
+- Caught with a hook that dumps the state when an `s6-rc change` is older than 5 s: packagekit.service `down (not started yet)`, its unit state only `start-requested`, the change's `s6-svlisten -U -t 105000 -- DIR s6-svc -u -- DIR` 6 s old and DIR's `s6-supervise` 5 s old. **The supervisor started after the command.** s6-rc-update returns while s6-svscan may still be replacing supervisors (the catch-all log has a burst of "s6-supervise NAME: fatal: another instance of s6-supervise is already running" at that moment); a start in that window (dnf bus-activates PackageKit 0.2 s after the reload) sends `s6-svc -u` to nobody (`s6-svc: warning: unable to control ...: supervisor not listening`, exit status ignored by s6-svlisten), and s6-svlisten waits for an up event of a service nobody asked up, until timeout-up (TimeoutStartSec + 15 s), holding s6-rc's lock. The mirror of the race linkwatch exists for (a supervisor's start event that came before the listener). Reproduced unprivileged with a throwaway s6-svscan tree.
+
+**Fixes (9af46aa), both on our side:**
+- gen (`wait_supervised`, s6.rs): after an update of the live database, wait until every directory in live/servicedirs has its supervisor (`supervise/lock` held), with one `s6-svscanctl -a`; at most 10 s, then it names the missing ones and goes on. Starts queue behind a reload (s6.lock; bus activations since b16833a), so this closes the window for the daemon that has it.
+- `initconvert-linkwatch` 0.3.0 (standalone): a second pattern beside the missed start event. An `s6-ftrigrd` whose parent is an `s6-svlisten` that sent `s6-svc -u` (its command line) and has waited `--after` seconds; if the directory's supervisor runs and `s6-svstat` says "down (not started yet)" without "want up", it runs `s6-svc -u -- DIR` again, once. A service that ran and went down, or is wanted up, is left alone; s6's own tools do the asking and the sending. This also covers a start that is already stuck, and updates from 0.3.0 and 0.4.0, whose running daemons do the update's reload without the first fix. Unit test for the two text checks; README pair, spec 0.3.0.
+- tests/linkwatch-check.sh: a sixth check, a start whose `s6-svc -u` found no supervisor comes up (root, on an s6 boot; not run here, the same commands were run unprivileged in the scratchpad: linkwatch sent the command after 5 s and the listener ended). TESTING pair, README pair (the linkwatch row), docs pair, CHANGELOG pair.
+- Tests: `cargo test --workspace` 164 passed; linkwatch 7 passed; sandbox 388 passed, 0 failed (no "no supervisor yet" line). VM on RPMs of 9af46aa with linkwatch 0.3.0: `default` 70 passed, 0 failed; `rollback` 96 passed, 0 failed; `upgrade` eight times, all 58 passed, 0 failed. Seven of them took the crash-and-retry path. **The eighth hit the stuck start** (hook: `STUCK: s6-rc 3836; down (not started yet)`), and linkwatch logged "s6-svlisten (pid 3837) waited 10 s for .../packagekit.service to come up, but nobody asked it up (its supervisor started after the command): sent s6-svc -u"; the change ended 11 s after it began, packagekit up and ready, and the run's reload step passed.
+- Not shown by a test: gen's `wait_supervised` making a difference. In `upgrade` the reload at fault is 0.3.0's, and the sandbox and the other VM modes never had the window open. It is cheap and bounded; its proof would be an update from a release that has it.
+
+### Current state
+
+Not pushed: 452ee7e, 18b6711, 5265f2c, 74afcbe, dba8403, baee9aa, e5143b1, 7251534, 9af46aa and this entry. Part 246's four steps are done; the upgrade failure of part 251 is explained and fixed. Core 0.4.0 (unreleased changes in CHANGELOG), linkwatch 0.3.0, six core packages.
+
+### Next steps
+
+1. An upgrade from 0.4.0's release RPMs to this tree (the new `uinitconverter-devices` service; `wait_supervised`'s first real use comes one release later). At the next release the `upgrade` mode moves to 0.4.0 (part 244).
+2. `sudo tests/linkwatch-check.sh` on the laptop once these RPMs are installed (six `ok:` lines).
+3. Owner: push; the getty/isolate decision (part 245); the held-back grep after the next Fedora update; `supervise/status` or `s6-svstat` (part 246's table).
