@@ -10,8 +10,9 @@
 #   tests/vm-s6-boot.sh DIR old-config  # USER_MANAGER=s6 left in uinitconverter.conf (as
 #                                       # 0.3.0's s6 user manager wrote it): ignored,
 #                                       # user@ runs systemd --user
-#   tests/vm-s6-boot.sh DIR upgrade     # 0.3.0 (OLD_RPMS) with its s6 user manager on,
-#                                       # booted with s6; `dnf upgrade` to these RPMs and
+#   tests/vm-s6-boot.sh DIR upgrade     # the previous release (OLD_RPMS; 0.3.0 with its s6
+#                                       # user manager on), booted with s6; `dnf upgrade` to
+#                                       # these RPMs and
 #                                       # `initconvert init --yes` there, as the README
 #                                       # updates; checks, then a reboot and the same checks
 #   tests/vm-s6-boot.sh DIR rollback    # a new unit enabled and daemon-reload (a second
@@ -22,8 +23,9 @@
 # standalone ones, default DIR/rpmbuild/core/rpms and
 # DIR/rpmbuild/standalone/rpms (the newest build of each package);
 # SKARNET_RPMS: default ~/rpmbuild-skarnet/rpms (devel packages left out).
-# OLD_RPMS (upgrade): 0.3.0's core RPMs, uinitconverter-user among them;
-# default DIR/rpmbuild/core-0.3.0.
+# OLD_RPMS (upgrade): the previous release's core RPMs, default
+# DIR/rpmbuild/core-0.4.0; DIR/rpmbuild/core-0.3.0 (uinitconverter-user among
+# them) checks the s6 user manager's removal too.
 # UPGRADE_HOOK=FILE (upgrade): a script run as root in the VM between the
 # `dnf upgrade` and `initconvert init --yes`, to look at that mixed state.
 # SELINUX=permissive|enforcing (default enforcing) is init's --selinux=.
@@ -44,7 +46,7 @@ D=$(cd "$D" && pwd)
 MODE=${2:-default}
 case $MODE in default | old-config | upgrade | rollback) ;; *) echo "unknown mode $MODE" >&2; exit 2 ;; esac
 CORE=${CORE_RPMS:-$D/rpmbuild/core/rpms}
-OLD=${OLD_RPMS:-$D/rpmbuild/core-0.3.0}
+OLD=${OLD_RPMS:-$D/rpmbuild/core-0.4.0}
 STANDALONE=${STANDALONE_RPMS:-$D/rpmbuild/standalone/rpms}
 SKARNET=${SKARNET_RPMS:-$HOME/rpmbuild-skarnet/rpms}
 SELINUX=${SELINUX:-enforcing}
@@ -72,11 +74,13 @@ for p in "${core[@]}"; do
     if [ "$MODE" = upgrade ]; then cp "$f" "$S/new/"; else cp "$f" "$S/rpms/"; fi
 done
 if [ "$MODE" = upgrade ]; then
-    # 0.3.0's packages: no uinitconverter-devices yet (the daemon watched
-    # udev itself), and the s6 user manager.
-    for p in uinitconverter uinitconverterd uinitconverter-gen uinitconverter-runner uinitconverter-timers uinitconverter-user; do
+    # The old release's packages: no uinitconverter-devices yet (the daemon
+    # watched udev itself); 0.3.0's also the s6 user manager.
+    old=(uinitconverter uinitconverterd uinitconverter-gen uinitconverter-runner uinitconverter-timers)
+    [ -z "$(newest "$OLD" uinitconverter-user)" ] || old+=(uinitconverter-user)
+    for p in "${old[@]}"; do
         f=$(newest "$OLD" $p)
-        [ -n "$f" ] || { echo "no $p RPM in $OLD (0.3.0's)" >&2; exit 1; }
+        [ -n "$f" ] || { echo "no $p RPM in $OLD (the old release's)" >&2; exit 1; }
         cp "$f" "$S/rpms/"
     done
 fi
@@ -105,7 +109,8 @@ mkdir -p /etc/uinitconverter
 if [ "$1" = old-config ]; then
     printf 'USER_MANAGER=s6\nUSER_FALLBACK_ON=gnome-session-shutdown.target\n' >>/etc/uinitconverter/uinitconverter.conf
 fi
-if [ "$1" = upgrade ]; then
+# 0.3.0 (mode upgrade): its s6 user manager on.
+if [ "$1" = upgrade ] && command -v initconvert-user-setup >/dev/null; then
     initconvert-user-setup on
 fi
 if [ "${5:-rsyslog}" = syslog-ng ]; then
@@ -275,8 +280,9 @@ EOS
 
 cat >"$S/upgrade.sh" <<'EOS'
 #!/bin/bash
-# As root in the VM, on 0.3.0's s6 boot (mode upgrade). $1...: the new core
-# RPMs' file names in ~tester/in. The README's update: dnf upgrade, init.
+# As root in the VM, on the old release's s6 boot (mode upgrade). $1...: the
+# new core RPMs' file names in ~tester/in. The README's update: dnf upgrade,
+# init. 0.3.0 adds the checks of its s6 user manager's removal.
 set -uo pipefail
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "PASS $*"; }
@@ -286,14 +292,23 @@ bad() { fail=$((fail + 1)); echo "FAIL $*"; }
 logs() { journalctl -b --no-pager -o cat 2>/dev/null; cat /run/uncaught-logs/current 2>/dev/null; }
 u=$(id -u tester)
 cd ~tester/in
-echo "== 0.3.0's s6 boot"
+ov=$(rpm -q --qf '%{VERSION}' uinitconverter)
+echo "== $ov's s6 boot"
 c=$(cat /proc/1/comm)
 [ "$c" = s6-svscan ] && ok "PID 1 is s6-svscan" || bad "PID 1 is $c"
-rpm -q uinitconverter-user >/dev/null && ok "uinitconverter-user is installed" || bad "no uinitconverter-user"
 main=$(systemctl show -p MainPID --value "user@$u.service")
 echo "   user@$u.service: $(systemctl is-active "user@$u.service"), PID $main: $(tr '\0' ' ' <"/proc/$main/cmdline" 2>/dev/null)"
-[ -e /etc/systemd/system/user@.service.d/90-uinitconverter.conf ] && ok "initconvert-user-setup's drop-in is there" || bad "no drop-in"
-[ -e /run/s6-rc/servicedirs/uinitconverter-units ] && bad "0.3.0's database has the holder" || ok "0.3.0's database has no holder"
+if [ "${ov%.*}" = 0.3 ]; then
+    rpm -q uinitconverter-user >/dev/null && ok "uinitconverter-user is installed" || bad "no uinitconverter-user"
+    [ -e /etc/systemd/system/user@.service.d/90-uinitconverter.conf ] && ok "initconvert-user-setup's drop-in is there" || bad "no drop-in"
+    [ -e /run/s6-rc/servicedirs/uinitconverter-units ] && bad "0.3.0's database has the holder" || ok "0.3.0's database has no holder"
+else
+    rpm -q uinitconverter-devices >/dev/null && bad "$ov has uinitconverter-devices" || ok "$ov has no uinitconverter-devices"
+fi
+# The config and the sysinit bundle before the update: it keeps both.
+conf0=$(grep -E '^(JOURNAL|RESOLVED)=' /etc/uinitconverter/uinitconverter.conf | sort)
+sysinit=/etc/uinitconverter/s6/uinitconverter-sysinit/contents.d
+in0=" $(ls "$sysinit" 2>/dev/null | tr '\n' ' ')"
 # The daemon's state: its process, s6's view, its bus name, the live
 # database (all with time limits: a daemon off the bus hangs systemctl).
 daemon() {
@@ -315,24 +330,31 @@ echo "== dnf upgrade to the new RPMs"
 timeout 900 dnf -y -q upgrade --nogpgcheck "$@" 2>&1 | tail -20 | sed 's/^/   /'
 echo "   dnf took $(($(date +%s) - t0)) s"
 rpm -qa 'uinitconverter*' | sort | sed 's/^/   /'
-rpm -q uinitconverter-user >/dev/null && bad "uinitconverter-user is still installed" || ok "uinitconverter-user is gone (Obsoletes)"
-[ -e /etc/systemd/system/user@.service.d/90-uinitconverter.conf ] && bad "the drop-in is still there" || ok "the drop-in is gone"
-# RESOLVED's default became no: the update keeps this install's resolved.
-grep -q '^RESOLVED=yes' /etc/uinitconverter/uinitconverter.conf && ok "the update kept RESOLVED=yes" || bad "no RESOLVED=yes after the update"
+rpm -q uinitconverter-devices >/dev/null && ok "uinitconverter-devices is installed" || bad "no uinitconverter-devices"
+if [ "${ov%.*}" = 0.3 ]; then
+    rpm -q uinitconverter-user >/dev/null && bad "uinitconverter-user is still installed" || ok "uinitconverter-user is gone (Obsoletes)"
+    [ -e /etc/systemd/system/user@.service.d/90-uinitconverter.conf ] && bad "the drop-in is still there" || ok "the drop-in is gone"
+    # RESOLVED's default became no in 0.4.0: the update keeps this install's resolved.
+    grep -q '^RESOLVED=yes' /etc/uinitconverter/uinitconverter.conf && ok "the update kept RESOLVED=yes" || bad "no RESOLVED=yes after the update"
+else
+    c=$(grep -E '^(JOURNAL|RESOLVED)=' /etc/uinitconverter/uinitconverter.conf | sort)
+    [ "$c" = "$conf0" ] && ok "the update kept JOURNAL= and RESOLVED= ($(echo $c))" || bad "JOURNAL=/RESOLVED= were '$(echo $conf0)', now '$(echo $c)'"
+fi
 echo "-- right after dnf, before init:"
 daemon
-# The 0.3.0 package's %preun reloaded (the drop-in was there): the daemon
-# must have stayed up and on the bus through it.
+# The old packages' scriptlets reloaded (0.3.0's %preun: the drop-in was
+# there): the daemon must have stayed up and on the bus through it.
 o=$(timeout 10 busctl status org.freedesktop.systemd1 2>/dev/null | sed -n 's/^PID=//p')
 [ -n "$o" ] && [ "$o" = "$(pgrep -x initconvertd)" ] && ok "initconvertd stayed on the bus" || bad "initconvertd off the bus: $(s6-svstat /run/service/uinitconverterd 2>&1)"
 for m in syslog journal-relay; do
-    [ -e /etc/uinitconverter/s6/uinitconverter-sysinit/contents.d/$m ] && bad "the update put $m back into uinitconverter-sysinit" || ok "$m isn't back in uinitconverter-sysinit"
+    case $in0 in *" $m "*) continue ;; esac
+    [ -e "$sysinit/$m" ] && bad "the update put $m back into uinitconverter-sysinit" || ok "$m isn't back in uinitconverter-sysinit"
 done
 echo "   is-system-running: $(timeout 30 systemctl is-system-running 2>&1)"
 echo "-- initconvertd's lines since dnf:"
 timeout 30 journalctl -b --no-pager -o short-monotonic --since "@$t0" 2>/dev/null | grep -E "initconvert|s6-rc" | tail -40 | cut -c1-220 | sed 's/^/   /'
 # UPGRADE_HOOK (a script copied in as in/upgrade-hook.sh): run here, in the
-# state between the update and `initconvert init`: 0.3.0's daemon and
+# state between the update and `initconvert init`: the old daemon and
 # database still run, the new tools are on disk.
 if [ -e /home/tester/in/upgrade-hook.sh ]; then
     echo "== upgrade hook"
@@ -346,7 +368,8 @@ s=$(timeout 30 systemctl is-system-running 2>&1)
 case $s in running | degraded) ok "is-system-running: $s" ;; *) bad "is-system-running: $s" ;; esac
 echo "   holder in the live database: $([ -e /run/s6-rc/servicedirs/uinitconverter-units ] && echo yes || echo no)"
 # 0.3.0's database had systemd-user-sessions.service; the update removes
-# it, its stop writes /run/nologin, and gen opens the logins again.
+# it, its stop writes /run/nologin, and gen opens the logins again. From
+# 0.4.0 nothing may close them either.
 [ ! -e /run/nologin ] && ok "logins stay open after the update" || bad "/run/nologin after the update: $(cat /run/nologin)"
 s=$(systemctl is-active sshd.service)
 [ "$s" = active ] && ok "sshd.service is active" || bad "sshd.service: $s"
@@ -465,11 +488,43 @@ essential)
         for f in /run/uncaught-logs/current /var/log/messages; do echo "   $f: $(grep -c "not applied" "$f" 2>&1)"; done
         echo "   journal: $(journalctl -b --no-pager -o cat 2>&1 | grep -c "not applied")"
     }
+    # The supervised services that are up, with their PIDs: a reload that
+    # applies live must not restart any of them.
+    ups() { for d in /run/service/*/; do p=$(s6-svstat -o up,pid "$d" 2>/dev/null) && case $p in true\ *) echo "$(basename "$d") ${p#true }" ;; esac; done | sort; }
+    u0=$(ups)
+    echo "   up before the reload: $(echo "$u0" | grep -E 'hostnamed|localed|timerd' | tr '\n' ' ')"
+    n0=$(wc -l </run/uncaught-logs/current)
     timeout 180 systemctl daemon-reload && ok "a reload without it" || bad "the reload without it failed"
+    # Restarted: up before and after, with another PID. A service that is
+    # down after it may have exited by itself in the meantime (hostnamed,
+    # localed: on idle), so those are only listed.
+    u1=$(ups)
+    restarted=$(join <(echo "$u0") <(echo "$u1") | awk '$2 != $3 {printf "%s ", $1}')
+    gone=$(join -v1 <(echo "$u0") <(echo "$u1") | cut -d' ' -f1 | tr '\n' ' ')
     if [ "$current" = yes ]; then
         [ "$(live)" = "$(readlink -f /var/lib/uinitconverter/compiled)" ] && ok "applied live again" || bad "live $(live), boot $(readlink -f /var/lib/uinitconverter/compiled)"
+        echo "   restarted by the reload's time: ${restarted:-none}; down since: ${gone:-none}"
     else
-        [ "$(live)" = "$l0" ] && ok "still held back until the reboot (the live database was older)" || bad "the live database changed before the reboot: $(live)"
+        # The live database was older (an update without a reboot): each
+        # reload is held back if installing it live would restart a running
+        # service, and applies live if it restarts none.
+        echo "   the reloads' results on this boot:"
+        logs | grep -E "not applied to the running system" | cut -c1-240 | sed 's/^/     /'
+        if [ "$(live)" = "$l0" ]; then
+            ok "still held back until the reboot (the live database was older)"
+        else
+            for n in $gone $restarted; do
+                echo "   changed by the reload's time: $n ($(s6-svstat "/run/service/$n" 2>&1)); its log:"
+                tail -6 "/var/log/uinitconverter/$n/current" 2>/dev/null | cut -c1-200 | sed 's/^/     /'
+            done
+            if [ -n "$gone$restarted" ]; then
+                echo "   the catch-all log since the reload, without s6-supervise's chdir lines:"
+                tail -n +"$((n0 + 1))" /run/uncaught-logs/current | grep -v 'unable to chdir' | cut -c1-300 | sed 's/^/     /' | head -60
+                echo "   their lines before the reload:"
+                head -n "$n0" /run/uncaught-logs/current | grep -E "$(echo $gone $restarted | tr ' ' '|')" | tail -10 | cut -c1-300 | sed 's/^/     /'
+            fi
+            [ -z "$restarted" ] && ok "applied live, restarting nothing" || bad "applied live and restarted: $restarted"
+        fi
     fi
     s=$(timeout 30 systemctl is-system-running 2>&1)
     case $s in running | degraded) ok "is-system-running: $s" ;; *) bad "is-system-running: $s" ;; esac
@@ -523,7 +578,7 @@ if [ "$MODE" = upgrade ]; then
     new=()
     for f in "$S"/new/*; do new+=("./$(basename "$f")"); done
     timeout 2400 "$VM" ssh "$D" sudo bash in/upgrade.sh "${new[@]}" || rc=$?
-    # Still booted by 0.3.0's rc.init (the live state on the boot link): a
+    # Still booted by the old release's rc.init (the live state on the boot link): a
     # deferred install must pin it first.
     timeout 600 "$VM" ssh "$D" sudo bash in/rollback.sh essential || rc=$?
     echo "== reboot after the upgrade"

@@ -13639,3 +13639,21 @@ The owner ran part 259's row on the laptop (RPMs of 64ff341, s6 boot).
 ### Next steps
 
 1. A release (0.5.0); the `upgrade` mode moves to 0.4.0 (part 244).
+
+## 2026-11-13, part 261: release 0.5.0 prepared, held by a restart found in the upgrade test
+
+The owner asked to prepare 0.5.0 (docs/PACKAGEBUILD pair, section 2). On branch release-0.5.0.
+
+- Version 0.5.0 (Cargo.toml, Cargo.lock), README pair `VERSION=0.5.0`, CHANGELOG pair: `Unreleased` became `0.5.0 (2026-11-13)` ("parts 242-260"); release notes pair `packages/release-notes/0.5.0*.md` (known issues carried from 0.4.0); a `%changelog` entry in all six specs. Standalone: linkwatch 0.3.0 (since 9af46aa), the others stay 0.2.0.
+- Part 244's decision applied: `tests/vm-s6-boot.sh upgrade` starts from 0.4.0 by default (`DIR/rpmbuild/core-0.4.0`, the published v0.4.0 core RPMs copied from ~/uinitconverter-release/assets, `sha256sum -c` OK, before the release build replaces them). The 0.3.0-only checks (uinitconverter-user, the drop-in, no holder, RESOLVED=yes) run when the old version is 0.3.x; from 0.4.0 it checks that uinitconverter-devices is installed and that JOURNAL=/RESOLVED= and the sysinit bundle are kept. TESTING pair, CLAUDE.md.
+- Tests on the release tree: `cargo fmt --check` clean; `cargo test --workspace` 169 passed; standalone fdstore 10, journal-relay 7, linkwatch 7, notify 10; sandbox 396 / `SANDBOX_JOURNAL=no` 403 / `SANDBOX_FDSTORE=no` 384, 0 failed. VM on `build-rpms.sh --test` RPMs (0.5.0-1.20261113005213.gcc35e4c.dirty): vm-s6-boot default 41/0 and 41/0, rollback 41, 5, 7, 41, 4, 10 passed 0 failed, old-config 41/0; `BOOT=s6 vm-user-manager.sh` session 20+2, lifecycle 9 steps, confined 7, all 0 failed.
+- **upgrade from 0.4.0: 10/0, essential step 9/1, 41/0 after the reboot, in five runs.** After `dnf upgrade` and `initconvert init` the live database is still 0.4.0's. The essential step's first reload (a down service in dbus's bundle) is held back as it should be. The second one ("a reload without it") applies live, and the old check required it held back (true from 0.3.0, where every reload until the reboot would restart services). The check now allows a live apply if no supervised service that was up is up with another PID afterwards (`s6-svstat -o up,pid` of /run/service/* before and after), and prints the reload results, the services that changed and the catch-all log since the reload.
+  - Result: that reload restarts **systemd-hostnamed** and **systemd-localed** (up 1-2 s after it, or localed down "exitcode 0"; malcontent-timerd also changed, but its own log says inactivity timeout). In every one of the five runs. A live reload in mode rollback (no update) restarted nothing.
+  - Not the s6-ftrigrd crash: in one run s6-ftrigrd crashed and gen retried, in the last run nothing failed and they still restarted. (A test exemption for the crash case and a release-note line built on that theory were written and taken back.)
+  - Seen in the last run's catch-all log during the reload: `s6-fdholder-retrieve: fatal: unable to connect to a fd-holder daemon at ../s6rc-fdholder/s` (three), `initconvert-runner: systemd-localed.service: unit systemd-localed.service: not in the live database`, and many `s6-supervise X: fatal: another instance of s6-supervise is already running`. Both were started by s6-rc at boot ("service systemd-hostnamed.service successfully started"), so s6-rc had them up; the dry run (running_restarts) didn't list them. Cause not found yet. s6-rc-update (0.8.0.2, read) restarts a longrun only for a convert-file restart, a type change, or a new dependency that isn't up; it doesn't restart for a changed service directory.
+- Not done: the "Release 0.5.0" commit, `packages/github-release.sh`. The ~/uinitconverter-release assets are still 0.4.0's.
+
+### Next steps
+
+1. Owner: release 0.5.0 with this as a known issue (the first live reload after updating from 0.4.0, before the reboot, may restart hostnamed and localed; both are on-demand D-Bus services), or find the cause first.
+2. The cause: why s6-rc-update restarts those two (a dependency they gain in 0.5.0's database? s6-rc-db on both databases), and why running_restarts' dry run doesn't show it.

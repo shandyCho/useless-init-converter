@@ -5,9 +5,10 @@
 버전은 본체 패키지의 버전입니다. 독립 도구는 버전이 따로 있습니다.
 릴리스 노트: [packages/release-notes](packages/release-notes).
 
-## Unreleased
+## 0.5.0 (2026-11-13)
 
-도구 내부에 규칙 5(유닉스 철학)를 적용합니다. `work_history.md` 246부부터.
+0.4.0 이후의 변경: 도구 내부에 규칙 5(유닉스 철학) 적용, isolate의 키, 콘솔
+getty의 설정. 자세한 내용은 `work_history.md` 242-260부에 있습니다.
 
 ### 삭제
 - **`initconvertd start|stop|restart UNIT`**: 데몬 바이너리는 이제 데몬 역할만

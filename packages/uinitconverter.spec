@@ -185,6 +185,9 @@ fi
 %dir %attr(0750,root,wheel) %{_localstatedir}/log/uinitconverter
 
 %changelog
+* Fri Nov 13 2026 uinitconverter developers
+- 0.5.0, see CHANGELOG-us.md
+
 * Wed Nov 11 2026 uinitconverter developers
 - 0.4.0, see CHANGELOG-us.md
 

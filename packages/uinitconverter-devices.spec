@@ -56,5 +56,8 @@ install -Dm0755 target/release/initconvert-devices %{buildroot}%{_libexecdir}/ui
 %{_libexecdir}/uinitconverter/initconvert-devices
 
 %changelog
+* Fri Nov 13 2026 uinitconverter developers
+- 0.5.0, see CHANGELOG-us.md
+
 * Thu Nov 12 2026 uinitconverter developers
 - Split out of uinitconverterd (the daemon read udev's events itself)

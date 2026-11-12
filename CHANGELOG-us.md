@@ -5,9 +5,11 @@
 Versions apply to the core packages. The standalone tools have their own
 versions. Release notes: [packages/release-notes](packages/release-notes).
 
-## Unreleased
+## 0.5.0 (2026-11-13)
 
-Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
+Changes since 0.4.0: rule 5 (the Unix philosophy) inside the tools, isolate's
+keys, the console gettys' settings. Details in `work_history.md`, parts
+242-260.
 
 ### Removed
 - **`initconvertd start|stop|restart UNIT`**: the daemon's binary is only
