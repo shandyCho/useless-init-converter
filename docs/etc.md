@@ -172,7 +172,7 @@ uinitconverter는 역할별로 나뉘어 있습니다. **본체**는 Cargo 작�
 **변환** (`.service` → longrun/oneshot, `.target` → bundle, `.timer`/`.path` → longrun, `.mount`/`.swap` → oneshot)
 - `Requires=`, `Requisite=`, `BindsTo=`, 그리고 `After=`/`Before=`와 함께 쓰인 `Wants=`는 s6-rc 의존성이 됩니다. 타깃은 `Wants=` 대상을 모두 포함합니다.
 - `.wants/`, `.requires/`, `.upholds/` 디렉터리, 별칭, 템플릿/인스턴스, 마스킹, 드롭인, 지정자(specifier).
-- 암묵적 의존성: `DefaultDependencies=` → `sysinit.target`, `Type=dbus` → `dbus.socket`. `BusName=`이 있는(다른 `Type=`의) 서비스도 `dbus.socket` 다음에 시작합니다. systemd는 이런 서비스를 버스 활성화로 시작하지만, 여기서는 소켓 유닛이 부팅 때 시작할 수 있기 때문입니다.
+- 암묵적 의존성: 타깃을 뺀 모든 유닛은 `mount-api` 초기 단계(API 파일 시스템, `/run` 레이블 재지정)에 의존합니다. `DefaultDependencies=no`인 유닛도 마찬가지입니다. systemd의 PID 1이 어느 유닛보다 먼저 이것들을 준비하기 때문입니다. `DefaultDependencies=` → `sysinit.target`, `Type=dbus` → `dbus.socket`. `BusName=`이 있는(다른 `Type=`의) 서비스도 `dbus.socket` 다음에 시작합니다. systemd는 이런 서비스를 버스 활성화로 시작하지만, 여기서는 소켓 유닛이 부팅 때 시작할 수 있기 때문입니다.
 - 의존성 순환은 컴파일을 실패시키는 대신 끊고 보고합니다.
 - `DEP_MAP`은 systemd 유닛을 직접 작성한 s6 서비스에 대응시킵니다. 예: `dbus.service` → `dbus`.
 - 활성화된 `.socket`은 자신의 서비스도 함께 포함합니다. 소켓은 러너가 바인드하며, 이름 또는 `Service=`로 짝을 찾습니다. 부팅에서 소켓을 통해서만 포함되는 서비스(sockets.target이 `virtlogd.socket`을 요구하고 `virtlogd.service`를 요구하는 유닛은 없음)는 요청 시(on-demand) 서비스입니다. 러너는 소켓만 바인드하고 기다립니다(`run --on-demand`, `initconvert plan`의 "on demand").

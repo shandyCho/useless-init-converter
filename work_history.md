@@ -13577,3 +13577,22 @@ Not pushed: parts 253-256 and their commits. The owner's decisions of parts 245 
 1. rpc-statd-notify before `early` (above): why its After= on local-fs.target/network-online.target gives no dependency, and whether every DefaultDependencies=no unit should wait for the sysinit bundle's /run relabel.
 2. Owner: the text-console row of TESTING on the laptop (Ctrl+Alt+F3, log in, exit, `last -n 3 tty3`).
 3. A release (0.5.0); the `upgrade` mode moves to 0.4.0 (part 244).
+
+
+## 2026-11-12, part 257: every unit waits for mount-api (the sm-notify race)
+
+The owner asked to fix part 256's sm-notify denial.
+
+- **Cause:** `/run` is relabelled by `early mount-api`, and only a dependency orders anything in s6-rc. rpc-statd-notify.service has `DefaultDependencies=no` and only `After=local-fs.target network-online.target nss-lookup.target`, which it neither requires nor wants, so they gave no dependency: its closure was its logger and s6rc-fdholder, and at boot sm-notify could create sm-notify.pid in a still `tmpfs_t` /run. On the laptop's database (0.4.0 of this tree) 50 of 225 translated units did not have mount-api in their closure.
+- **Fix (gen):** every translated unit but a target depends on `mount-api` when that dist service exists (`MOUNT_API_SERVICE`), DefaultDependencies=no ones included. That is systemd's own behaviour: PID 1 mounts and labels /proc, /sys, /dev and /run before it starts any unit. No cycle: mount-api depends only on s6rc-oneshot-runner. Without the dist service (the sandbox) nothing changes. Considered and left alone: making `After=` on always-up targets (local-fs.target, ...) a dependency in general; that is a wider change to the translation, with no failure seen from it.
+- Tests: unit test `units_depend_on_mount_api` (a DefaultDependencies=no service with only After= targets gets it, a target doesn't, none without the dist service); `cargo test --workspace` 170 passed, 0 failed; sandbox 396 / `SANDBOX_JOURNAL=no` 403 / `SANDBOX_FDSTORE=no` 384 passed, 0 failed. VM: a new check in vm-s6-boot.sh, every `.service/.socket/.timer/.path/.mount/.swap` in the live database has mount-api in `s6-rc-db all-dependencies` (on the laptop's current database it reports the 50). `default` 41/0 and 41/0; `rollback` 41, 5, 7, 41, 4, 10 passed, 0 failed; no AVC denials on any boot (the race was seen once in six boots before, so the structural check is the proof, not the absence of the denial).
+- Docs pair (implicit dependencies), CHANGELOG pair (Fixed).
+
+### Current state
+
+Not pushed: parts 253-257 and their commits (a068c8e, a364e89, this one). Parts 245/246's decisions are done and the sm-notify race is fixed.
+
+### Next steps
+
+1. Owner: these RPMs on the laptop and a reboot (the mount-api dependency applies from that boot); the text-console row of TESTING (Ctrl+Alt+F3, log in, exit, `last -n 3 tty3`).
+2. A release (0.5.0); the `upgrade` mode moves to 0.4.0 (part 244).

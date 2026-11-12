@@ -51,6 +51,12 @@ Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
   text-console logouts). Before, these were accepted without effect.
 
 ### Fixed
+- **A unit with `DefaultDependencies=no` could start before `/run` was
+  labelled** at boot: `rpc-statd-notify.service`'s sm-notify was denied
+  creating its pid file (SELinux). Every unit now waits for the
+  `mount-api` early step, as systemd's PID 1 mounts and labels the API
+  file systems before any unit. Applies from the next boot after the
+  update.
 - **A reload failed when s6-rc's lock was busy** ("unable to take lock on
   /run/s6-rc ... Device or resource busy": another s6-rc change or query at
   that moment). The reload's `s6-rc-update`, `s6-rc-set-install` and `s6-rc`

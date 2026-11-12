@@ -47,6 +47,11 @@
   텍스트 콘솔 로그아웃이 나옵니다). 전에는 허용만 되고 효과가 없었습니다.
 
 ### 수정
+- **`DefaultDependencies=no`인 유닛이 부팅 때 `/run`의 레이블이 정해지기 전에 시작할 수
+  있었습니다.** `rpc-statd-notify.service`의 sm-notify가 pid 파일을 만들다가 거부됐습니다
+  (SELinux). 이제 모든 유닛이 `mount-api` 초기 단계를 기다립니다. systemd의 PID 1이 어느
+  유닛보다 먼저 API 파일 시스템을 마운트하고 레이블을 정하는 것과 같습니다. 업데이트 뒤
+  다음 부팅부터 적용됩니다.
 - **s6-rc의 잠금이 사용 중이면 reload가 실패했습니다**("unable to take lock on
   /run/s6-rc ... Device or resource busy": 그 순간의 다른 s6-rc 변경이나 조회).
   reload의 `s6-rc-update`, `s6-rc-set-install`, `s6-rc` 호출이 이제 잠금을

@@ -225,6 +225,14 @@ if ! grep -q '^[[:space:]]*JOURNAL=yes' /etc/uinitconverter/uinitconverter.conf;
     logger -t "$tag" "through /dev/log"
     until_ok 'grep -q "$tag" /var/log/messages' 10 && ok "/dev/log reaches /var/log/messages ($d)" || bad "the message on /dev/log isn't in /var/log/messages"
 fi
+# Every translated unit waits for mount-api (API file systems, /run
+# relabelled), DefaultDependencies=no ones too (rpc-statd-notify's sm-notify
+# wrote into an unlabelled /run before it).
+miss=""
+for a in $(s6-rc-db list services 2>/dev/null | grep -E '\.(service|socket|timer|path|mount|swap)$'); do
+    s6-rc-db all-dependencies "$a" 2>/dev/null | grep -qx mount-api || miss="$miss $a"
+done
+[ -z "$miss" ] && ok "every translated unit depends on mount-api" || bad "units not after mount-api:$(echo "$miss" | cut -c1-300)"
 # getty@'s console settings (the runner: UtmpIdentifier=, TTYReset=,
 # TTYVTDisallocate=): the records of agetty's pid in utmp and wtmp, the
 # logout record when it stops, and the VT's old screen gone after it.
