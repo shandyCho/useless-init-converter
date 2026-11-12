@@ -13613,3 +13613,15 @@ Not pushed: parts 253-258 and their commits (a068c8e, a364e89, 805293f, this one
 
 1. Owner: these RPMs on the laptop and a reboot (rc.init's mount-api change applies from that boot); the text-console row of TESTING (Ctrl+Alt+F3, log in, exit, `last -n 3 tty3`).
 2. A release (0.5.0); the `upgrade` mode moves to 0.4.0 (part 244).
+
+## 2026-11-13, part 259: the text-console row on the laptop; tty3 is kmscon
+
+The owner installed the RPMs of 64ff341, rebooted, logged in on tty3 (Ctrl+Alt+F3), exited, and ran `last -n3 p tty3` (the stray `p` is just one more name to match): no tty3 entries.
+
+- **Not a runner bug.** On the laptop logind's autovt@ is kmsconvt@ (kmscon's unit, `Alias=autovt@.service`, `Conflicts=getty@%i`), not getty@. The runner wrote the right record for it: wtmp/utmp `[5] INIT_PROCESS` id tty3, line tty3, pid 5168 = kmscon. kmscon is a terminal emulator: its `/bin/login` runs on a pty, so the login is `[7] USER_PROCESS` on pts/0 (pid 5369, 00:29:55), not on tty3, and `last tty3` has nothing to print (it doesn't list INIT records). Nobody writes that pty's logout record (login doesn't, kmscon has no utempter), so `last pts/0` shows "gone - no logout"; the same on a systemd boot, where PID 1 writes DEAD_PROCESS only when kmscon itself exits.
+- The TESTING pair's row now starts `getty@tty8.service` with systemctl and uses tty8 (above NAutoVTs=6, so logind doesn't start kmsconvt@tty8, which would conflict with it), and says why not tty1-6.
+
+### Next steps
+
+1. Owner: the new text-console row (getty@tty8) on the laptop.
+2. A release (0.5.0); the `upgrade` mode moves to 0.4.0 (part 244).
