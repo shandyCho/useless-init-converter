@@ -33,6 +33,7 @@ mod notify;
 mod sockets;
 mod status;
 mod stdio;
+mod tty;
 
 pub use connection::{accept_finish, accept_main, connection_main};
 use environment::*;
@@ -452,6 +453,7 @@ impl Runner {
         if let Some(fd) = self.notify_fd.take() {
             unsafe { libc::close(fd) };
         }
+        self.tty_start(pid);
         if let (Some(service), true) = (self.unit.get("Service", "PAMName"), self.is_root) {
             return self.exec_with_pam(&service, &main);
         }
@@ -655,6 +657,9 @@ impl Runner {
         let clean = clean_exit && result == result::SUCCESS;
 
         self.cleanup(&result, status, stopping);
+        // After the leftovers are gone, as systemd's service_enter_dead():
+        // nobody holds the tty when it is hung up and deallocated.
+        self.tty_finish(status);
 
         if stopping {
             self.st.set(keys::RESULT, &result);

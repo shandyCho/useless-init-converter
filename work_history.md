@@ -13553,3 +13553,27 @@ The owner decided part 245's and 246's open questions: implement `AllowIsolate=`
 - Bug found by the new check: a longrun started beside a busy change (start_beside) is in the daemon's `beside` set but not yet in s6-rc's state, so `-p` didn't stop it. The isolate now takes the s6 lock, runs `reconcile_beside_locked` and then the change under the same lock.
 - Tests: unit test `isolate_needs_allow_isolate_and_a_start`; sandbox section "isolate" (isokeep.service with IgnoreOnIsolate=yes, isodrop.service plain; t.target refused, a stop with mode isolate refused, isolate of multi-user.target stops isodrop and keeps isokeep and hello). `cargo test --workspace` 165 passed, 0 failed; sandbox 396 / `SANDBOX_JOURNAL=no` 403 / `SANDBOX_FDSTORE=no` 384 passed, 0 failed. The VM isn't touched (no boot path isolates).
 - Docs pair (the jobs line; the "Not implemented" entry removed), CHANGELOG pair.
+
+
+## 2026-11-12, part 256: the getty console settings in the runner
+
+Part 255's second decision: the runner does `TTYReset=`, `TTYVTDisallocate=` and `UtmpIdentifier=`/`UtmpMode=` (rule 6: no s6 tool covers them; skarnet's utmps is for musl, glibc's utmp is used here). Callers: getty@, serial-getty@, console-getty, container-getty@, kmsconvt@, whose agetty runs with `--noreset --noclear` because the service manager does this.
+
+- New `crates/uinitconverter-runner/src/runner/tty.rs`, systemd's exec_context_tty_reset() and utmp-wtmp.c:
+  - `tty_start(pid)` in `cmd_run` before the main command: TTYReset= (TIOCNXCL, KDSKBMODE K_UNICODE, KDSETMODE KD_TEXT, systemd's termios values, tcflush), TTYVTDisallocate= (`VT_DISALLOCATE` through /dev/tty0; a busy VT or a non-VT gets the clear-screen sequence), and the `INIT_PROCESS` record (ut_id the identifier's last 4 bytes, ut_line TTYPath= without /dev/; UtmpMode=login/user add LOGIN_PROCESS/USER_PROCESS) in /run/utmp and /var/log/wtmp (`updwtmpx` declared from glibc; the libc crate lacks it). TTYVHangup= stays where stdio.rs opens the tty.
+  - `tty_finish(status)` in `cmd_finish`, **after `cleanup()`** (leftovers killed, as systemd's service_enter_dead()): the `DEAD_PROCESS` record with the exit status, only if the utmp entry's pid is MAIN_PID (login keeps agetty's pid, so a console login gets its logout record); then reset, vhangup (in a child: vhangup() needs the tty as controlling terminal) and VT_DISALLOCATE. A failed or busy deallocation is logged ("TTYVTDisallocate=: ...").
+  - Not done: giving the tty back to root:tty (systemd's chown in exec_context_revert_tty); agetty does it when it starts again.
+- **Found in the VM:** VT_DISALLOCATE succeeds (strace of the finish: `ioctl(3, VT_DISALLOCATE, 0x3) = 0`), and ~100 ms later systemd-logind opens /dev/tty1-6 again (it preallocates NAutoVTs= VTs on the vcs removal event; strace of logind). The same on the stock boot. So the VT always comes back; what TTYVTDisallocate= guarantees is an empty screen and scrollback. The VM check writes a marker to tty3 while agetty runs and checks it is gone from /dev/vcs3 after the stop (by hand in the VM: gone after the stop, a control VT keeps its text). An earlier version of the check used `fuser`, whose socket scans were denied (unconfined_t getattr on init's sockets): the test's own denials, removed.
+- Tests: unit tests for vt_number, ut_id, the termios values and init-then-dead records in files of the test's own (a dead record for another pid leaves the entry alone); `cargo test --workspace` 169 passed, 0 failed; sandbox 396 / `SANDBOX_JOURNAL=no` 403 / `SANDBOX_FDSTORE=no` 384 passed, 0 failed (no sandbox unit sets these keys). VM `vm-s6-boot.sh default` (two s6 boots) with the new checks: utmp entry for agetty's pid, wtmp INIT_PROCESS, wtmp and utmp DEAD_PROCESS after the stop, screen cleared; all passed on both boots; first boot 39/1, second 40/0.
+- **The one failure, not from this change:** an AVC denial on the first boot, `sm-notify` (rpcd_t) creating sm-notify.pid in a `tmpfs_t` /run. rpc-statd-notify.service has `DefaultDependencies=no` and `After=local-fs.target network-online.target nss-lookup.target`, and its s6-rc closure is only its logger and s6rc-fdholder (`s6-rc-db all-dependencies` on the laptop), so it can run before `early` relabels /run. A boot-order race older than this cycle, seen once in six s6 boots today. Not fixed here.
+- Docs pair (the StandardInput line now lists the console settings; the "Not implemented" entry removed), TESTING pair (a manual row: text-console login, `last`, utmpdump, a fresh screen), CHANGELOG pair.
+
+### Current state
+
+Not pushed: parts 253-256 and their commits. The owner's decisions of parts 245 and 246 are done: isolate's keys (a068c8e), the getty settings (this commit), `supervise/status` kept.
+
+### Next steps
+
+1. rpc-statd-notify before `early` (above): why its After= on local-fs.target/network-online.target gives no dependency, and whether every DefaultDependencies=no unit should wait for the sysinit bundle's /run relabel.
+2. Owner: the text-console row of TESTING on the laptop (Ctrl+Alt+F3, log in, exit, `last -n 3 tty3`).
+3. A release (0.5.0); the `upgrade` mode moves to 0.4.0 (part 244).

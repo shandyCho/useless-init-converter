@@ -41,6 +41,10 @@
   `AllowIsolate=yes`가 없는 타깃은 거부하고("unit may not be isolated"),
   `IgnoreOnIsolate=yes`인 실행 중 유닛(`rpc-statd.service` 등)은 그대로 둡니다.
   전에는 어느 타깃이든 isolate할 수 있었고 그 밖의 s6-rc 서비스를 모두 멈췄습니다.
+- **getty@와 다른 콘솔 getty**는 러너에서 systemd의 콘솔 설정을 받습니다.
+  `TTYReset=`, `TTYVTDisallocate=`(로그아웃 뒤 VT와 스크롤백을 해제합니다),
+  `UtmpIdentifier=`(시작할 때 utmp/wtmp 기록, 끝날 때 로그아웃 기록. 그래서 `last`에
+  텍스트 콘솔 로그아웃이 나옵니다). 전에는 허용만 되고 효과가 없었습니다.
 
 ### 수정
 - **s6-rc의 잠금이 사용 중이면 reload가 실패했습니다**("unable to take lock on

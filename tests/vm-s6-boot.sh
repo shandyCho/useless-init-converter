@@ -225,6 +225,30 @@ if ! grep -q '^[[:space:]]*JOURNAL=yes' /etc/uinitconverter/uinitconverter.conf;
     logger -t "$tag" "through /dev/log"
     until_ok 'grep -q "$tag" /var/log/messages' 10 && ok "/dev/log reaches /var/log/messages ($d)" || bad "the message on /dev/log isn't in /var/log/messages"
 fi
+# getty@'s console settings (the runner: UtmpIdentifier=, TTYReset=,
+# TTYVTDisallocate=): the records of agetty's pid in utmp and wtmp, the
+# logout record when it stops, and the VT's old screen gone after it.
+systemctl start getty@tty3.service
+until_ok '[ "$(systemctl is-active getty@tty3.service)" = active ]' 20 || true
+gp=$(systemctl show -p MainPID --value getty@tty3.service)
+until_ok 'utmpdump /run/utmp 2>/dev/null | grep -E "^\[[56]\] \[0*$gp\] \[tty3\]" >/dev/null' 10 \
+    && ok "utmp has tty3's entry for agetty ($gp)" || bad "utmp for tty3 ($gp): $(utmpdump /run/utmp 2>/dev/null | grep tty3 | tr '\n' ' ')"
+utmpdump /var/log/wtmp 2>/dev/null | grep -E "^\[5\] \[0*$gp\] \[tty3\]" >/dev/null \
+    && ok "wtmp has the INIT_PROCESS record of getty@tty3" || bad "no INIT_PROCESS for tty3 ($gp) in wtmp: $(utmpdump /var/log/wtmp 2>/dev/null | grep tty3 | tail -3 | tr '\n' ' ')"
+mark="vmtest-vt-$$-$RANDOM"
+echo "$mark" >/dev/tty3
+case $(tr -d '\0' </dev/vcs3 2>/dev/null) in *"$mark"*) ;; *) bad "the marker didn't reach tty3's screen" ;; esac
+systemctl stop getty@tty3.service
+utmpdump /var/log/wtmp 2>/dev/null | grep -E "^\[8\] \[0*$gp\] \[tty3\]" >/dev/null \
+    && ok "wtmp has the DEAD_PROCESS record after the stop" || bad "no DEAD_PROCESS for tty3 ($gp) in wtmp: $(utmpdump /var/log/wtmp 2>/dev/null | grep tty3 | tail -3 | tr '\n' ' ')"
+utmpdump /run/utmp 2>/dev/null | grep -E "^\[8\] \[0*$gp\] \[tty3\]" >/dev/null \
+    && ok "utmp's tty3 entry is DEAD_PROCESS" || bad "utmp for tty3 after the stop: $(utmpdump /run/utmp 2>/dev/null | grep tty3 | tr '\n' ' ')"
+# logind preallocates tty1-6 again at once (NAutoVTs=, as on the stock boot),
+# so the VT is back: what TTYVTDisallocate= leaves is an empty screen.
+case $(tr -d '\0' </dev/vcs3 2>/dev/null) in
+*"$mark"*) bad "tty3's old screen is still there after the stop: $(logs | grep 'TTYVTDisallocate' | tail -2 | tr '\n' ' ')" ;;
+*) ok "tty3's screen and scrollback were cleared (TTYVTDisallocate=)" ;;
+esac
 # Known and not ours: syslog-ng's execmem, denied on the stock systemd boot
 # as well (Fedora 45's policy and syslog-ng 4.12).
 known='comm="syslog-ng-main".*execmem|execmem.*comm="syslog-ng-main"'

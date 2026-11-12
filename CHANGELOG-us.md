@@ -44,6 +44,11 @@ Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
   isolated"), and running units with `IgnoreOnIsolate=yes`
   (`rpc-statd.service`, ...) are kept. Before, any target could be
   isolated and every s6-rc service outside it was stopped.
+- **getty@ and the other console gettys** get systemd's console settings
+  from the runner: `TTYReset=`, `TTYVTDisallocate=` (the VT and its
+  scrollback are freed after a logout) and `UtmpIdentifier=` (utmp/wtmp
+  records at the start and a logout record at the exit, so `last` shows
+  text-console logouts). Before, these were accepted without effect.
 
 ### Fixed
 - **A reload failed when s6-rc's lock was busy** ("unable to take lock on
