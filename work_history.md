@@ -13634,7 +13634,8 @@ The owner ran part 259's row on the laptop (RPMs of 64ff341, s6 boot).
 - uncaught-logs: "TTYVTDisallocate=: /dev/tty8 is in use: its screen was cleared instead" twice (the finish and the next start, 20 ms apart): the owner was looking at VT8, and the foreground VT can't be deallocated (EBUSY); systemd falls back to clearing the screen too. Expected, not an error.
 - Also seen: a login on tty9 shows "gone - no logout". That agetty is s6-linux-init's early getty (`s6-linux-init-early-getty`), run by s6-linux-init outside s6-rc and the runner, so nothing writes its DEAD record; `login` replaced its `[6]` with `[7]`, and the respawned agetty added a new `[6]` beside it. A gap in the boot setup, not in the runner; no change made (the early getty is a rescue console; recording it would need a utmp writer in its run script, rule 1/6 to weigh).
 
+**Owner's decision (same day):** the early getty on tty9 stays as it is, without utmp/wtmp records.
+
 ### Next steps
 
-1. Owner: whether the early getty on tty9 should get utmp/wtmp records (above), or stays as it is.
-2. A release (0.5.0); the `upgrade` mode moves to 0.4.0 (part 244).
+1. A release (0.5.0); the `upgrade` mode moves to 0.4.0 (part 244).
