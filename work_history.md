@@ -13520,3 +13520,24 @@ Everything up to 2f88b89 is pushed; this entry is not. Every test of the project
 1. Owner: RPMs of this tree on the laptop (an upgrade from 0.4.0, not tested anywhere yet), a reboot, `sudo tests/linkwatch-check.sh` (six `ok:` lines), the devices service on real devices.
 2. Owner's decisions: the getty console settings and isolate's keys (part 245); `supervise/status` or `s6-svstat` (part 246's table).
 3. Then a release (0.5.0: a sixth package, `initconvertd start|stop|restart` removed, linkwatch 0.3.0); the `upgrade` mode moves to 0.4.0 (part 244).
+
+
+## 2026-11-12, part 254: the RPMs of this tree on the laptop
+
+The owner installed the RPMs of 2f88b89 (core 0.4.0, six packages; standalone builds of 9220775, linkwatch 0.3.0) on the laptop over 0.4.0's release and rebooted. Checked after the boot:
+
+- PID 1 `s6-svscan`; `initconvert --version` lists all six core tools and four standalone ones. `systemctl is-system-running` running, no failed units; `systemctl --user` running, no failed units; the GNOME session on tty2.
+- `uinitconverter-devices` up (s6-rc's active set; the catch-all log: "starting", "successfully started", no fatal or warning line in the boot's log). Its state file recorded the real hardware: hci0 -> bluetooth.target, the three sound cards -> sound.target, thunderbolt -> bolt.service, configfs/fuse -> sys-kernel-config.mount and sys-fs-fuse-connections.mount, the TPM -> tpm2.target, and the backlights/rfkill units, which are excluded (`early` does them) and stay inactive by design. bluetooth.service, bolt.service, both mounts, tpm2.target and the alsa services are active.
+- `sudo tests/linkwatch-check.sh`: six `ok:` lines (missed start event after 12 s; plain s6-ftrig-wait left alone; a start that lost its `s6-svc -u` came up after 11 s, with linkwatch's log line; no SELinux denials). This is the first run of part 252's sixth check as root on an s6 boot.
+- Seen, not changed: bluetooth.target, sound.target (and printer, smartcard, the sleep targets) report `inactive` while their contents run. They have StopWhenUnneeded=yes and `stop_unneeded` (relations.rs) stops them right after the device's start, since no device unit holds them as on systemd. Not new with step 4 (part 245 saw the same on this laptop); only the reported state differs. No named caller reads these targets' state, so nothing is added (scope, part 205).
+- Not seen: whether 0.4.0's daemon held back the update's reload before the reboot (the logs of that boot are gone).
+
+### Current state
+
+Everything up to 2f88b89 is pushed; parts 253 and 254 are not. Every test of the project has passed on this tree, now including `tests/linkwatch-check.sh` as root and a boot on real hardware with the devices service.
+
+### Next steps
+
+1. Owner's decisions: the getty console settings and isolate's keys (part 245); `supervise/status` or `s6-svstat` (part 246's table).
+2. Then a release (0.5.0: a sixth package, `initconvertd start|stop|restart` removed, linkwatch 0.3.0); the `upgrade` mode moves to 0.4.0 (part 244).
+3. If a caller turns up that reads a device-wanted StopWhenUnneeded target's state: count a recorded device as a dependent in `stop_unneeded`.
