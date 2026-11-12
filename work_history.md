@@ -13596,3 +13596,20 @@ Not pushed: parts 253-257 and their commits (a068c8e, a364e89, this one). Parts 
 
 1. Owner: these RPMs on the laptop and a reboot (the mount-api dependency applies from that boot); the text-console row of TESTING (Ctrl+Alt+F3, log in, exit, `last -n 3 tty3`).
 2. A release (0.5.0); the `upgrade` mode moves to 0.4.0 (part 244).
+
+## 2026-11-13, part 258: mount-api first, by rc.init instead of a dependency in every unit
+
+The owner asked to make part 257's sm-notify fix more s6-like.
+
+- **Change:** part 257's gen rule (every translated unit but a target depends on `mount-api`) is reverted; gen is back to its state before 805293f. Instead rc.init (`initconvert rc init`, crates/uinitconverter/src/rc.rs) runs `s6-rc -v2 -u change mount-api` after s6-rc-init and before the runlevel script's `-up change`. Why: the boot environment (the API file systems, /run relabelled) is stage 2's job in s6-linux-init, done before the service set comes up, as systemd's PID 1 does before any unit; the s6-rc database keeps only the dependencies the unit files say, not a synthetic edge in ~225 units. A failed change is logged ("rc.init: s6-rc change mount-api failed") and the boot goes on, as before. Nothing else runs s6-rc then: initconvertd (the only beside-starter) depends on the sysinit bundle, so it comes later. Unchanged from before part 257: an isolate whose closure lacks mount-api (emergency.target) marks it down with `-p`; it has no down script, so /run keeps its labels.
+- Tests: `cargo test --workspace` 169 passed, 0 failed (part 257's gen test removed); sandbox 396 passed, 0 failed (it has no rc.init). VM: the per-boot check now reads s6-rc's `-v2` lines in /run/uncaught-logs/current: "service mount-api successfully started" must come before the first ".service/.socket/.timer/.path/.mount/.swap: starting" line, and there must be such a line. `default` 41/0 and 41/0 (twice: before and after the check also required a translated start); `rollback` 41, 5, 7, 41, 4, 10 passed, 0 failed; no AVC denials.
+- Docs pair (implicit dependencies: DefaultDependencies=no units still start after mount-api at boot, via rc.init), CHANGELOG pair (Fixed entry reworded).
+
+### Current state
+
+Not pushed: parts 253-258 and their commits (a068c8e, a364e89, 805293f, this one). Parts 245/246's decisions are done and the sm-notify race is fixed by rc.init's order.
+
+### Next steps
+
+1. Owner: these RPMs on the laptop and a reboot (rc.init's mount-api change applies from that boot); the text-console row of TESTING (Ctrl+Alt+F3, log in, exit, `last -n 3 tty3`).
+2. A release (0.5.0); the `upgrade` mode moves to 0.4.0 (part 244).

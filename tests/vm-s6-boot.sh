@@ -225,14 +225,15 @@ if ! grep -q '^[[:space:]]*JOURNAL=yes' /etc/uinitconverter/uinitconverter.conf;
     logger -t "$tag" "through /dev/log"
     until_ok 'grep -q "$tag" /var/log/messages' 10 && ok "/dev/log reaches /var/log/messages ($d)" || bad "the message on /dev/log isn't in /var/log/messages"
 fi
-# Every translated unit waits for mount-api (API file systems, /run
-# relabelled), DefaultDependencies=no ones too (rpc-statd-notify's sm-notify
-# wrote into an unlabelled /run before it).
-miss=""
-for a in $(s6-rc-db list services 2>/dev/null | grep -E '\.(service|socket|timer|path|mount|swap)$'); do
-    s6-rc-db all-dependencies "$a" 2>/dev/null | grep -qx mount-api || miss="$miss $a"
-done
-[ -z "$miss" ] && ok "every translated unit depends on mount-api" || bad "units not after mount-api:$(echo "$miss" | cut -c1-300)"
+# rc.init brings mount-api (API file systems, /run relabelled) up in a
+# change of its own before the boot's change, so it is up before s6-rc
+# starts any translated unit, DefaultDependencies=no ones too
+# (rpc-statd-notify's sm-notify wrote into an unlabelled /run before it).
+# s6-rc -v2 logs each start in the catch-all log.
+order=$(awk '/s6-rc: info: service mount-api successfully started/ && !api { api = NR }
+    /s6-rc: info: service [^ ]*\.(service|socket|timer|path|mount|swap): starting/ && !first { first = NR; name = $0 }
+    END { if (!api) print "no mount-api start"; else if (!first) print "no translated unit start logged"; else if (first < api) print name }' /run/uncaught-logs/current 2>/dev/null)
+[ -z "$order" ] && ok "mount-api was up before any translated unit started" || bad "boot order: $order"
 # getty@'s console settings (the runner: UtmpIdentifier=, TTYReset=,
 # TTYVTDisallocate=): the records of agetty's pid in utmp and wtmp, the
 # logout record when it stops, and the VT's old screen gone after it.

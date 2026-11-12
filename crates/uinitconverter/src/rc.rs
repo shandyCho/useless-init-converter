@@ -15,6 +15,9 @@ use crate::early::{cmdline, output, quiet, run, user_sessions};
 const STATE: &str = "/var/lib/uinitconverter";
 const LOG_DIR: &str = "/var/log/uinitconverter";
 const SHUTDOWN_MARK: &str = "uinitconverter: shutdown starts";
+/// dist's first early step (dist/s6/mount-api): /proc, /sys, /dev and /run
+/// mounted, /run relabelled.
+const MOUNT_API: &str = "mount-api";
 
 fn kmsg(msg: &str) {
     if let Ok(mut f) = fs::OpenOptions::new().write(true).open("/dev/kmsg") {
@@ -70,8 +73,8 @@ fn boot_db(cmdline: &str) -> String {
     format!("{STATE}/compiled")
 }
 
-/// Stage 2 (rc.init RUNLEVEL): the database to boot, s6-rc-init, then the
-/// runlevel script. Kernel command line option: uinitconverter.db=previous
+/// Stage 2 (rc.init RUNLEVEL): the database to boot, s6-rc-init, mount-api,
+/// then the runlevel script. Kernel command line option: uinitconverter.db=previous
 /// boots the database installed before the last one. Nothing is
 /// regenerated here; unit files changed while the system was down (e.g.
 /// from a systemd boot) are picked up by the next daemon-reload.
@@ -104,6 +107,14 @@ fn init(args: &[String]) -> ! {
     ) {
         Some(0) => {}
         r => exit(r.unwrap_or(111)),
+    }
+    // The API file systems and /run's labels first, in a change of their
+    // own: systemd's PID 1 sets them up before any unit, and s6-rc orders
+    // only by dependency, which units with DefaultDependencies=no don't
+    // have on the sysinit bundle (rpc-statd-notify's sm-notify created its
+    // pid file in a /run not yet relabelled, work_history part 258).
+    if run("s6-rc", &["-v2", "-u", "change", MOUNT_API]) != Some(0) {
+        eprintln!("rc.init: s6-rc change {MOUNT_API} failed");
     }
     // Offline updates (dnf system-upgrade / dnf offline): like systemd's
     // system-update generator, boot into system-update.target instead.

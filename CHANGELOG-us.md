@@ -53,9 +53,10 @@ Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
 ### Fixed
 - **A unit with `DefaultDependencies=no` could start before `/run` was
   labelled** at boot: `rpc-statd-notify.service`'s sm-notify was denied
-  creating its pid file (SELinux). Every unit now waits for the
-  `mount-api` early step, as systemd's PID 1 mounts and labels the API
-  file systems before any unit. Applies from the next boot after the
+  creating its pid file (SELinux). rc.init now brings up the `mount-api`
+  early step in a change of its own before the boot's change
+  (`s6-rc -u change mount-api`), as systemd's PID 1 mounts and labels the
+  API file systems before any unit. Applies from the next boot after the
   update.
 - **A reload failed when s6-rc's lock was busy** ("unable to take lock on
   /run/s6-rc ... Device or resource busy": another s6-rc change or query at

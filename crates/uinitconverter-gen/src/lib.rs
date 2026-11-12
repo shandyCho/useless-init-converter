@@ -77,9 +77,6 @@ pub struct Plan {
 
 /// The s6 service (dist/s6) that serves the fd store.
 const FDSTORE_SERVICE: &str = "uinitconverter-fdstore";
-/// dist's first early step: /proc, /sys, /dev and /run mounted, and /run
-/// relabelled (early mount-api).
-const MOUNT_API_SERVICE: &str = "mount-api";
 
 const UNIT_KEYS: &[&str] = &[
     "Description",
@@ -731,15 +728,6 @@ pub fn plan(cfg: &Config) -> Plan {
             }
         }
         deps.remove(id);
-        // systemd's PID 1 mounts and labels the API file systems before it
-        // starts any unit, DefaultDependencies=no ones included. Here that
-        // is mount-api, which only a dependency orders: rpc-statd-notify
-        // (DefaultDependencies=no, only After= targets it doesn't pull in)
-        // ran before it and created its pid file in an unlabelled /run
-        // (work_history part 257).
-        if !is_target && plan.extra_names.contains(MOUNT_API_SERVICE) {
-            deps.insert(MOUNT_API_SERVICE.into());
-        }
         // Timers and path units start their unit through the daemon.
         if matches!(unit.utype(), "timer" | "path")
             && plan.extra_names.contains(&cfg.daemon_service)
@@ -1112,37 +1100,6 @@ mod tests {
         let plan = plan(&cfg);
         assert!(plan.units["named.service"].deps.contains("dbus"));
         assert!(!plan.units["plain.service"].deps.contains("dbus"));
-        let _ = fs::remove_dir_all(&tmp);
-    }
-
-    /// Every unit but a target waits for mount-api (the API file systems,
-    /// /run relabelled), DefaultDependencies=no ones too: rpc-statd-notify
-    /// has only After= targets it doesn't pull in.
-    #[test]
-    fn units_depend_on_mount_api() {
-        let tmp =
-            std::env::temp_dir().join(format!("uinitconverter-gen-api-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&tmp);
-        let (units, extra) = (tmp.join("units"), tmp.join("extra"));
-        fs::create_dir_all(&units).unwrap();
-        fs::create_dir_all(extra.join(MOUNT_API_SERVICE)).unwrap();
-        fs::write(extra.join(MOUNT_API_SERVICE).join("type"), "oneshot\n").unwrap();
-        let write = |n: &str, s: &str| fs::write(units.join(n), s).unwrap();
-        write(
-            "notify.service",
-            "[Unit]\nDefaultDependencies=no\nAfter=local-fs.target network-online.target\n[Service]\nType=oneshot\nExecStart=/bin/true\n",
-        );
-        write("t.target", "[Unit]\nWants=notify.service\n");
-        let mut cfg = Config::defaults();
-        cfg.unit_path = vec![units.clone()];
-        cfg.extra_source = vec![extra];
-        let p = plan(&cfg);
-        assert!(p.units["notify.service"].deps.contains(MOUNT_API_SERVICE));
-        assert!(!p.units["t.target"].deps.contains(MOUNT_API_SERVICE));
-        // Without the dist service (the sandbox), no such dependency.
-        cfg.extra_source = vec![];
-        let p = plan(&cfg);
-        assert!(!p.units["notify.service"].deps.contains(MOUNT_API_SERVICE));
         let _ = fs::remove_dir_all(&tmp);
     }
 
