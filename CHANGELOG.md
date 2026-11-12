@@ -37,6 +37,11 @@
   업데이트 뒤 새로 꽂은 장치의 유닛은 새 서비스가 실행된 뒤에 시작됩니다. reload가
   바로 적용되면 즉시, 아니면 다음 부팅부터입니다.
 
+- **`systemctl isolate`**가 `AllowIsolate=`와 `IgnoreOnIsolate=`를 따릅니다.
+  `AllowIsolate=yes`가 없는 타깃은 거부하고("unit may not be isolated"),
+  `IgnoreOnIsolate=yes`인 실행 중 유닛(`rpc-statd.service` 등)은 그대로 둡니다.
+  전에는 어느 타깃이든 isolate할 수 있었고 그 밖의 s6-rc 서비스를 모두 멈췄습니다.
+
 ### 수정
 - **s6-rc의 잠금이 사용 중이면 reload가 실패했습니다**("unable to take lock on
   /run/s6-rc ... Device or resource busy": 그 순간의 다른 s6-rc 변경이나 조회).

@@ -39,6 +39,12 @@ Rule 5 (the Unix philosophy) inside the tools; `work_history.md`, parts 246-.
   update, the units of newly plugged devices start once the new service
   runs: at once if the reload applies live, else from the next boot.
 
+- **`systemctl isolate`** follows `AllowIsolate=` and `IgnoreOnIsolate=`:
+  a target without `AllowIsolate=yes` is refused ("unit may not be
+  isolated"), and running units with `IgnoreOnIsolate=yes`
+  (`rpc-statd.service`, ...) are kept. Before, any target could be
+  isolated and every s6-rc service outside it was stopped.
+
 ### Fixed
 - **A reload failed when s6-rc's lock was busy** ("unable to take lock on
   /run/s6-rc ... Device or resource busy": another s6-rc change or query at

@@ -1390,6 +1390,34 @@ if [ -n "$SR" ]; then
         && ok "systemctl status shows Listen: and the connection counts" || bad "systemctl status echo.socket: $st"
 fi
 
+section "isolate"
+# AllowIsolate=: t.target has none, so isolating it is refused and stops
+# nothing; multi-user.target has it. IgnoreOnIsolate=yes keeps a unit up,
+# the other one outside multi-user.target is stopped.
+call StartUnit ss isokeep.service replace || bad "start isokeep.service"
+call StartUnit ss isodrop.service replace || bad "start isodrop.service"
+expect_state isokeep.service active/running
+expect_state isodrop.service active/running
+if $B call $MGR StartUnit ss t.target isolate >/dev/null 2>"$W/last-error"; then
+    bad "isolate of t.target (no AllowIsolate=) accepted"
+else
+    grep -q 'may not be isolated' "$W/last-error" && ok "isolate refused without AllowIsolate=" \
+        || bad "isolate of t.target: $(cat "$W/last-error")"
+fi
+if $B call $MGR StopUnit ss multi-user.target isolate >/dev/null 2>"$W/last-error"; then
+    bad "isolate mode accepted for a stop"
+else
+    grep -q 'only valid for start' "$W/last-error" && ok "isolate refused for a stop" \
+        || bad "isolate stop: $(cat "$W/last-error")"
+fi
+expect_state isodrop.service active/running
+call StartUnit ss multi-user.target isolate || bad "isolate multi-user.target"
+tries=100
+while [ $tries -gt 0 ] && ! $B call $MGR ListJobs | grep -qx 'a(usssoo) 0'; do tries=$((tries - 1)); sleep 0.2; done
+expect_state isodrop.service inactive/dead
+expect_state isokeep.service active/running
+expect_state hello.service active/running
+
 section "end state"
 # A job that never finishes (logind's stop of user@0 did) holds everyone
 # waiting behind it.

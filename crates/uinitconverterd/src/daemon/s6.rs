@@ -261,6 +261,26 @@ impl Daemon {
         v
     }
 
+    /// The database's units with IgnoreOnIsolate=yes that are up now, which
+    /// an isolate leaves alone (systemd: rpc-statd.service, ...).
+    pub(super) async fn ignored_on_isolate(&self) -> Vec<String> {
+        let ids: Vec<String> = self.index.read().unwrap().units.keys().cloned().collect();
+        let mut out = Vec::new();
+        for n in ids {
+            let (id, unit) = self.load_unit(&n);
+            if self.kind_of(&id).is_none()
+                || !unit.get_bool("Unit", "IgnoreOnIsolate", false)
+                || out.contains(&id)
+            {
+                continue;
+            }
+            if self.is_up(&id, &unit).await {
+                out.push(id);
+            }
+        }
+        out
+    }
+
     async fn bundle_atoms_uncached(&self, bundle: &str) -> Vec<String> {
         let out = Command::new(tools::path("s6-rc-db"))
             .arg("-l")
@@ -1224,6 +1244,12 @@ impl Daemon {
                     if active.contains("uinitconverterd") {
                         names.push("uinitconverterd".into());
                     }
+                    // IgnoreOnIsolate=yes units that are up stay up: in the
+                    // selection, -p keeps them and what they depend on.
+                    for n in self.ignored_on_isolate().await {
+                        eprintln!("initconvertd: isolate {id}: keeping {n} (IgnoreOnIsolate=yes)");
+                        names.push(n);
+                    }
                     // -p stops what is outside the selection: also the .stop
                     // oneshot of a longrun that stays, running its ExecStop=.
                     let order = self.atom_order().await;
@@ -1239,7 +1265,16 @@ impl Daemon {
                         }
                     }
                 }
-                if let Err(e) = self.s6rc(&args, &names).await {
+                let res = if isolate {
+                    // -p stops only what s6-rc knows is up: record the
+                    // longruns started beside a change first.
+                    let _guard = self.s6.lock.lock().await;
+                    self.reconcile_beside_locked().await;
+                    self.s6rc_locked(&args, &names).await
+                } else {
+                    self.s6rc(&args, &names).await
+                };
+                if let Err(e) = res {
                     eprintln!("initconvertd: start {id}: {e}");
                     // Wanted units failing does not fail a target.
                 }

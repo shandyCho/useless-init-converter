@@ -516,6 +516,7 @@ impl Daemon {
             .await?;
         self.require_unit(c, msg, &id, jtype).await?;
         let (id, unit) = self.check_job(name, jtype, true, true).await?;
+        check_isolate(&unit, jtype, mode)?;
         self.apply_job_mode(&id, jtype, mode)?;
         let job = self.new_job(&id, jtype);
         if mode == "replace-irreversibly" {
@@ -696,6 +697,25 @@ impl Daemon {
     }
 }
 
+/// The isolate mode's two refusals, as systemd's manager_add_job(): only a
+/// start, and only of a unit with AllowIsolate=yes (systemctl isolate's
+/// targets: multi-user, graphical, rescue, emergency, ...).
+pub(super) fn check_isolate(unit: &Unit, jtype: &str, mode: &str) -> R<()> {
+    if mode != "isolate" {
+        return Ok(());
+    }
+    if jtype != "start" {
+        return Err(err(E_INVALID_ARGS, "Isolate is only valid for start."));
+    }
+    if !unit.get_bool("Unit", "AllowIsolate", false) {
+        return Err(err(
+            E_NO_ISOLATION,
+            "Operation refused, unit may not be isolated.",
+        ));
+    }
+    Ok(())
+}
+
 /// systemd's job modes (JOB_MODE_*).
 pub(super) const JOB_MODES: &[&str] = &[
     "replace",
@@ -709,7 +729,36 @@ pub(super) const JOB_MODES: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::not_managed_why;
+    use super::{check_isolate, not_managed_why};
+    use uinitconverter_base::loader::{LoadState, Unit};
+    use uinitconverter_base::unit::UnitFile;
+
+    fn unit(text: &str) -> Unit {
+        let mut file = UnitFile::default();
+        file.parse_str(text);
+        Unit {
+            id: "t.target".into(),
+            names: vec!["t.target".into()],
+            fragment: None,
+            dropins: Vec::new(),
+            load_state: LoadState::Loaded,
+            load_error: None,
+            file,
+        }
+    }
+
+    /// systemd's two refusals for the isolate mode; other modes pass.
+    #[test]
+    fn isolate_needs_allow_isolate_and_a_start() {
+        let allowed = unit("[Unit]\nAllowIsolate=yes\n");
+        let plain = unit("[Unit]\nDescription=x\n");
+        assert!(check_isolate(&allowed, "start", "isolate").is_ok());
+        assert!(check_isolate(&plain, "start", "replace").is_ok());
+        let e = check_isolate(&plain, "start", "isolate").err().unwrap();
+        assert_eq!(e.name, super::E_NO_ISOLATION);
+        let e = check_isolate(&allowed, "stop", "isolate").err().unwrap();
+        assert_eq!(e.name, super::E_INVALID_ARGS);
+    }
 
     /// gen's own reason first; a translated unit missing from the running
     /// database is either waiting for the next boot or for a reload.

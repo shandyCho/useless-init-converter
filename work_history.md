@@ -13541,3 +13541,15 @@ Everything up to 2f88b89 is pushed; parts 253 and 254 are not. Every test of the
 1. Owner's decisions: the getty console settings and isolate's keys (part 245); `supervise/status` or `s6-svstat` (part 246's table).
 2. Then a release (0.5.0: a sixth package, `initconvertd start|stop|restart` removed, linkwatch 0.3.0); the `upgrade` mode moves to 0.4.0 (part 244).
 3. If a caller turns up that reads a device-wanted StopWhenUnneeded target's state: count a recorded device as a dependent in `stop_unneeded`.
+
+
+## 2026-11-12, part 255: the owner's decisions on part 245 and 246; isolate's two keys
+
+The owner decided part 245's and 246's open questions: implement `AllowIsolate=`/`IgnoreOnIsolate=`; the runner does the getty console settings (`TTYReset=`, `TTYVTDisallocate=`, the utmp/wtmp records); the daemon keeps reading `supervise/status` (part 246's table: measured in part 186, unit tests against s6-svstat, s6-svstat as the fallback for another format). Named callers: `systemctl isolate` (an admin verb; Fedora's isolatable targets carry `AllowIsolate=yes`) and rpc-statd.service's `IgnoreOnIsolate=yes`; for the getty settings getty@, serial-getty@, console-getty, container-getty@ and kmsconvt@.
+
+**Isolate** (daemon):
+- `check_isolate` (jobs.rs), in `job_method` after `check_job`: the isolate mode only for a start (`InvalidArgs` "Isolate is only valid for start.") and only of a unit with `AllowIsolate=yes` (`org.freedesktop.systemd1.NoIsolation` "Operation refused, unit may not be isolated."), systemd's manager_add_job() checks and messages.
+- `ignored_on_isolate` (s6.rs): the database's units with `IgnoreOnIsolate=yes` that are up go into the `s6-rc -p -u change` selection, so -p keeps them and what they need (and their `.stop` oneshots, through the existing loop). Logged: "isolate T: keeping U (IgnoreOnIsolate=yes)".
+- Bug found by the new check: a longrun started beside a busy change (start_beside) is in the daemon's `beside` set but not yet in s6-rc's state, so `-p` didn't stop it. The isolate now takes the s6 lock, runs `reconcile_beside_locked` and then the change under the same lock.
+- Tests: unit test `isolate_needs_allow_isolate_and_a_start`; sandbox section "isolate" (isokeep.service with IgnoreOnIsolate=yes, isodrop.service plain; t.target refused, a stop with mode isolate refused, isolate of multi-user.target stops isodrop and keeps isokeep and hello). `cargo test --workspace` 165 passed, 0 failed; sandbox 396 / `SANDBOX_JOURNAL=no` 403 / `SANDBOX_FDSTORE=no` 384 passed, 0 failed. The VM isn't touched (no boot path isolates).
+- Docs pair (the jobs line; the "Not implemented" entry removed), CHANGELOG pair.

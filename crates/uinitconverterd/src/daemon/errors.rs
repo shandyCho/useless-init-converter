@@ -7,6 +7,7 @@ pub(super) const E_LOAD_FAILED: &str = "org.freedesktop.systemd1.LoadFailed";
 pub(super) const E_NOT_APPLICABLE: &str = "org.freedesktop.systemd1.JobTypeNotApplicable";
 pub(super) const E_INACTIVE: &str = "org.freedesktop.systemd1.UnitInactive";
 pub(super) const E_ONLY_BY_DEP: &str = "org.freedesktop.systemd1.OnlyByDependency";
+pub(super) const E_NO_ISOLATION: &str = "org.freedesktop.systemd1.NoIsolation";
 pub(super) const E_NO_UNIT_FOR_PID: &str = "org.freedesktop.systemd1.NoUnitForPID";
 pub(super) const E_DESTRUCTIVE: &str = "org.freedesktop.systemd1.TransactionIsDestructive";
 pub(super) const E_ACCESS: &str = "org.freedesktop.DBus.Error.AccessDenied";

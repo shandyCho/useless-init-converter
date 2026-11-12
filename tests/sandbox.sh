@@ -565,6 +565,17 @@ After=t.target
 [Service]
 ExecStart=/bin/sleep 1000
 EOF
+# isolate (check.sh): one kept by IgnoreOnIsolate=yes, one stopped.
+cat > "$U/isokeep.service" <<EOF
+[Unit]
+IgnoreOnIsolate=yes
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
+cat > "$U/isodrop.service" <<EOF
+[Service]
+ExecStart=/bin/sleep 1000
+EOF
 cat > "$U/cond2.service" <<EOF
 [Unit]
 ConditionPathExists=$R/cond-flag
